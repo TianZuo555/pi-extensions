@@ -39,6 +39,7 @@ function statusGlyph(snap: TerminalSnapshot, theme: Theme) {
     case "done":
       return theme.fg("success", "■");
     case "failed":
+    case "timed_out":
       return theme.fg("error", "■");
     case "killed":
       return theme.fg("muted", "■");
@@ -53,6 +54,8 @@ function statusWord(snap: TerminalSnapshot, theme: Theme) {
       return theme.fg("success", "done");
     case "failed":
       return theme.fg("error", "failed");
+    case "timed_out":
+      return theme.fg("error", "timed out");
     case "killed":
       return theme.fg("muted", "killed");
   }
@@ -569,7 +572,7 @@ class TerminalDetailView implements Component {
         truncateToWidth(
           theme.fg(
             "dim",
-            `first ${formatSize(buffer.truncatedBytes)} dropped from view — full log: ${buffer.spillPath ?? "(unavailable)"}`,
+              `${formatSize(buffer.truncatedBytes)} omitted from middle — full log: ${buffer.spillPath ?? "(unavailable)"}`,
           ),
           width,
         ),

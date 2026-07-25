@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createDeferredResultDelivery } from "./src/result-delivery.ts";
 
-test("a result consumed by a kill/status is not delivered", () => {
+test("a result consumed by the initial bash wait is not delivered", () => {
   const delivery = createDeferredResultDelivery<{
     id: string;
     output: string;

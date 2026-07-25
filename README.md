@@ -10,7 +10,7 @@ A small collection of [pi coding agent](https://pi.dev) extensions.
 | **image-cache** | `Ctrl+V`, `/images`, `/image-cache-clear` | Caches pasted/clipboard images as `[Image#NNN]` placeholders and attaches them to your messages (macOS clipboard support). |
 | **ask-user** | tool `ask_user` | Lets the model ask you a single multiple-choice question (2–5 options plus a free-form "write my own answer") in a popup. |
 | **usage** | `/usage` | Show **OpenAI Codex** and **GitHub Copilot** account usage in a menu, plus a compact footer meter for the active provider. |
-| **background-terminals** | `/ps`, tools `bg_start`, `bg_status`, `bg_list`, `bg_kill` | Start, inspect, and stop long-running background shell processes (no stdin). Notifies the model exactly once on exit; `/ps` opens a live output viewer. |
+| **background-terminals** | `/ps`, overrides tool `bash` | Replace Pi's built-in Bash with one no-stdin execution path: quick commands return normally, long commands automatically continue in the background and notify the model exactly once. `/ps` provides live inspection and user-owned termination. |
 
 Selections for the per-repo extensions are stored centrally and keyed by git
 root, so each repository keeps its own preferences without touching global
@@ -231,11 +231,14 @@ The repository is an npm workspace with one publishable package per extension:
 | `packages/pi-usage` | `pi-tian-usage` |
 | `packages/pi-background-terminals` | `pi-tian-background-terminals` |
 
-Install dependencies, typecheck every workspace, and inspect their tarballs:
+Install dependencies, typecheck every workspace, run the managed-terminal suite,
+and inspect publishable tarballs:
 
 ```bash
 npm install
 npm run typecheck
+npm run check -w pi-tian-background-terminals
+npm test -w pi-tian-background-terminals
 npm run pack:check
 ```
 
@@ -259,10 +262,11 @@ at runtime.
 ### Automated (GitHub Actions)
 
 The [`Publish`](.github/workflows/publish.yml) workflow publishes packages to npm
-automatically. On every push to `main` that touches `packages/**`, it checks each
-workspace's version against npm and publishes only the ones whose version is not
-yet published (so bumping a single `package.json` version is all that's needed to
-release it). Packages are published with [npm provenance](https://docs.npmjs.com/generating-provenance-statements).
+automatically. On every push to `main` that touches `packages/**`, it runs both
+TypeScript checks and the background-terminals test suite, then checks each
+workspace's version against npm and publishes only versions not yet present
+(so bumping one `package.json` version is enough to release it). Packages are
+published with [npm provenance](https://docs.npmjs.com/generating-provenance-statements).
 
 Requirements:
 
@@ -283,6 +287,7 @@ npm publish --workspace packages/pi-token-speed
 npm publish --workspace packages/pi-image-cache
 npm publish --workspace packages/pi-ask-user
 npm publish --workspace packages/pi-usage
+npm publish --workspace packages/pi-background-terminals
 ```
 
 Version and publish only the package that changed, or bump them all together for

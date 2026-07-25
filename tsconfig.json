@@ -11,5 +11,8 @@
     "types": ["node"]
   },
   "include": ["extensions/**/*.ts", "packages/**/*.ts"],
-  "exclude": ["packages/pi-background-terminals/**/*.ts"]
+  "exclude": [
+    "extensions/background-terminals.ts",
+    "packages/pi-background-terminals/**/*.ts"
+  ]
 }

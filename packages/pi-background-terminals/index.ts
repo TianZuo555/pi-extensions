@@ -1,13 +1,11 @@
 /**
- * Background terminals — start long-running shell processes the model can
- * inspect and stop, but never write to (stdin is ignored at the OS level).
+ * Background terminals — execute no-stdin shell commands that automatically
+ * yield into the background when they outlive a bounded initial wait.
  *
- * Tools (for the LLM):
- * - bg_start: fire-and-forget spawn (command, title, working_dir). Max 8
- *   running at once. The model is notified exactly once when a process exits.
- * - bg_status: peek at one terminal's status + tail-truncated output.
- * - bg_list: list all tracked terminals (running and settled).
- * - bg_kill: SIGTERM→SIGKILL the whole process tree; returns final state.
+ * One tool for the LLM:
+ * - bash: overrides Pi's built-in bash, returns final output when the command
+ *   finishes promptly, otherwise returns a terminal id and notifies exactly
+ *   once when it exits. Inspection and termination remain user-owned via /ps.
  *
  * While ≥1 process runs, a one-line widget above the editor shows
  * "N background terminal(s) running • /ps to view". `/ps` opens a two-stage
@@ -25,24 +23,28 @@ import type {
   ExtensionContext,
   ExtensionUIContext,
 } from "@earendil-works/pi-coding-agent";
-import { getMarkdownTheme } from "@earendil-works/pi-coding-agent";
+import {
+  createBashToolDefinition,
+  getAgentDir,
+  getMarkdownTheme,
+  SettingsManager,
+} from "@earendil-works/pi-coding-agent";
 import { Markdown, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import type { TerminalSnapshot } from "./src/domain.ts";
-import { TerminalManager, type TerminalManagerShape } from "./src/manager.ts";
+import { SpawnError, type TerminalSnapshot } from "./src/domain.ts";
 import {
-  BG_KILL_PARAMETER_DESCRIPTIONS,
-  BG_KILL_TOOL_DESCRIPTION,
-  BG_LIST_TOOL_DESCRIPTION,
-  BG_START_PARAMETER_DESCRIPTIONS,
-  BG_START_PROMPT_GUIDELINES,
-  BG_START_PROMPT_SNIPPET,
-  BG_START_TOOL_DESCRIPTION,
-  BG_STATUS_PARAMETER_DESCRIPTIONS,
-  BG_STATUS_TOOL_DESCRIPTION,
-  buildKillReport,
-  buildStartResult,
-  buildStatusResult,
+  DEFAULT_YIELD_TIME_MS,
+  MAX_RUNTIME_TIMEOUT_SECONDS,
+  TerminalManager,
+  type TerminalManagerShape,
+} from "./src/manager.ts";
+import {
+  BASH_PARAMETER_DESCRIPTIONS,
+  BASH_PROMPT_GUIDELINES,
+  BASH_PROMPT_SNIPPET,
+  BASH_TOOL_DESCRIPTION,
+  buildBashProgress,
+  buildBashResult,
   buildTerminalResultMessage,
   describeTerminal,
 } from "./src/prompt.ts";
@@ -56,8 +58,65 @@ import { sanitizeText } from "./src/ui/output-view.ts";
 import { openTerminalPicker } from "./src/ui/ps.ts";
 
 const WIDGET_KEY = "background-terminals";
+const UPDATE_THROTTLE_MS = 100;
+const SESSION_ENV_KEYS = [
+  "PI_SESSION_ID",
+  "PI_SESSION_FILE",
+  "PI_PROVIDER",
+  "PI_MODEL",
+  "PI_REASONING_LEVEL",
+] as const;
 
-export default function (pi: ExtensionAPI) {
+function getPiShellEnv(): NodeJS.ProcessEnv {
+  // Mirrors Pi's internal getShellEnv(), which is not exported from the
+  // package root. Keep Pi-managed tools such as fd and rg visible to Bash.
+  const binDir = path.join(getAgentDir(), "bin");
+  const pathKey =
+    Object.keys(process.env).find((key) => key.toLowerCase() === "path") ??
+    "PATH";
+  const currentPath = process.env[pathKey] ?? "";
+  const hasBinDir = currentPath
+    .split(path.delimiter)
+    .filter(Boolean)
+    .includes(binDir);
+
+  return {
+    ...process.env,
+    [pathKey]: hasBinDir
+      ? currentPath
+      : [binDir, currentPath].filter(Boolean).join(path.delimiter),
+  };
+}
+
+export interface BackgroundTerminalsDependencies {
+  readonly createRuntime?: typeof createTerminalRuntime;
+  readonly createForegroundBash?: typeof createBashToolDefinition;
+  readonly resolveShellSettings?: (ctx: ExtensionContext) => {
+    readonly shellPath?: string;
+    readonly commandPrefix?: string;
+  };
+}
+
+/** Dependency injection is public only so the pre-spawn fallback is testable. */
+export function createBackgroundTerminalsExtension(
+  dependencies: BackgroundTerminalsDependencies = {},
+) {
+  const makeRuntime = dependencies.createRuntime ?? createTerminalRuntime;
+  const makeForegroundBash =
+    dependencies.createForegroundBash ?? createBashToolDefinition;
+  const resolveShellSettings =
+    dependencies.resolveShellSettings ??
+    ((ctx: ExtensionContext) => {
+      const settings = SettingsManager.create(ctx.cwd, undefined, {
+        projectTrusted: ctx.isProjectTrusted(),
+      });
+      return {
+        shellPath: settings.getShellPath(),
+        commandPrefix: settings.getShellCommandPrefix(),
+      };
+    });
+
+  return function backgroundTerminals(pi: ExtensionAPI) {
   let runtime: TerminalRuntime | undefined;
   let managerPromise: Promise<TerminalManagerShape> | undefined;
   let sessionContext: ExtensionContext | undefined;
@@ -65,7 +124,7 @@ export default function (pi: ExtensionAPI) {
   let unsubStatus: (() => void) | undefined;
   const resultDelivery = createDeferredResultDelivery<TerminalSnapshot>();
 
-  const getRuntime = () => (runtime ??= createTerminalRuntime());
+  const getRuntime = () => (runtime ??= makeRuntime());
 
   /** Resolve the manager service once per runtime and wire the extension hooks. */
   const getManager = () => {
@@ -141,7 +200,9 @@ export default function (pi: ExtensionAPI) {
     } catch (error) {
       // Session may be shutting down, but retain the snapshot so any later
       // agent-settled flush can retry instead of silently dropping it.
-      console.error("background-terminals: failed to deliver result", error);
+      if (sessionContext?.mode !== "tui") {
+        console.error("background-terminals: failed to deliver result", error);
+      }
       return false;
     }
   };
@@ -154,7 +215,7 @@ export default function (pi: ExtensionAPI) {
 
   const onSettled = (snap: TerminalSnapshot, consumed: boolean) => {
     if (consumed) {
-      // An in-flight bg_kill is returning this settlement itself.
+      // The initial bash wait is returning this settlement itself.
       resultDelivery.consume([snap.id]);
       return;
     }
@@ -201,158 +262,248 @@ export default function (pi: ExtensionAPI) {
     await closing?.dispose();
   });
 
-  // --- Tools -------------------------------------------------------------
+  // --- Tool --------------------------------------------------------------
 
   pi.registerTool({
-    name: "bg_start",
-    label: "Start Background Terminal",
-    description: BG_START_TOOL_DESCRIPTION,
-    promptSnippet: BG_START_PROMPT_SNIPPET,
-    promptGuidelines: BG_START_PROMPT_GUIDELINES,
+    // Registering the built-in name is Pi's supported override mechanism.
+    // The model sees one canonical shell tool, not a second execution lane.
+    name: "bash",
+    label: "bash",
+    description: BASH_TOOL_DESCRIPTION,
+    promptSnippet: BASH_PROMPT_SNIPPET,
+    promptGuidelines: BASH_PROMPT_GUIDELINES,
     parameters: Type.Object({
       command: Type.String({
-        description: BG_START_PARAMETER_DESCRIPTIONS.command,
+        description: BASH_PARAMETER_DESCRIPTIONS.command,
       }),
-      title: Type.String({
-        description: BG_START_PARAMETER_DESCRIPTIONS.title,
-      }),
+      timeout: Type.Optional(
+        Type.Number({
+          exclusiveMinimum: 0,
+          maximum: MAX_RUNTIME_TIMEOUT_SECONDS,
+          description: BASH_PARAMETER_DESCRIPTIONS.timeout,
+        }),
+      ),
+      title: Type.Optional(
+        Type.String({
+          description: BASH_PARAMETER_DESCRIPTIONS.title,
+        }),
+      ),
       working_dir: Type.Optional(
         Type.String({
-          description: BG_START_PARAMETER_DESCRIPTIONS.workingDir,
+          description: BASH_PARAMETER_DESCRIPTIONS.workingDir,
+        }),
+      ),
+      yield_time_ms: Type.Optional(
+        Type.Integer({
+          description: BASH_PARAMETER_DESCRIPTIONS.yieldTimeMs,
         }),
       ),
     }),
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const manager = await getManager();
+    async execute(toolCallId, params, signal, onUpdate, ctx) {
+      // Preserve the exact command text. Trimming here can break heredocs and
+      // multiline scripts; trim only for validation and the display title.
+      const command = params.command;
+      if (!command.trim()) throw new Error("command must not be empty.");
 
-      const command = params.command.trim();
-      if (!command) throw new Error("command must not be empty.");
+      if (
+        params.timeout !== undefined &&
+        (!Number.isFinite(params.timeout) ||
+          params.timeout <= 0 ||
+          params.timeout > MAX_RUNTIME_TIMEOUT_SECONDS)
+      ) {
+        throw new Error(
+          `timeout must be a finite number of seconds in (0, ${MAX_RUNTIME_TIMEOUT_SECONDS}].`,
+        );
+      }
 
       const cwd = path.resolve(ctx.cwd, params.working_dir ?? ".");
-      if (!fs.existsSync(cwd) || !fs.statSync(cwd).isDirectory()) {
+      try {
+        if (!fs.statSync(cwd).isDirectory()) {
+          throw new Error("not a directory");
+        }
+      } catch {
         throw new Error(`working_dir is not a directory: ${cwd}`);
       }
 
-      // Collapse whitespace (a newline inside a one-line UI row desyncs the
-      // TUI renderer) before bounding the length.
+      // Preserve Pi's built-in shellPath and shellCommandPrefix settings even
+      // though this extension replaces the built-in definition.
+      const { shellPath, commandPrefix } = resolveShellSettings(ctx);
+      const executionCommand = commandPrefix
+        ? `${commandPrefix}\n${command}`
+        : command;
+
+      // Collapse whitespace before bounding: titles render in one-line rows.
       const title =
-        params.title.replace(/\s+/g, " ").trim().slice(0, 80) || "terminal";
-      const snap = await runTool(
-        getRuntime(),
-        manager.start({ command, title, cwd }),
-      );
+        (params.title ?? command).replace(/\s+/g, " ").trim().slice(0, 80) ||
+        "command";
 
-      return {
-        content: [{ type: "text", text: buildStartResult(snap) }],
-        details: { id: snap.id, title: snap.title, cwd, pid: snap.pid },
+      const runForegroundFallback = async (
+        reason: unknown,
+        resetManagedRuntime: boolean,
+      ) => {
+        if (resetManagedRuntime) {
+          const brokenRuntime = runtime;
+          runtime = undefined;
+          managerPromise = undefined;
+          await brokenRuntime?.dispose().catch(() => {});
+        }
+        const reasonText = reason instanceof Error ? reason.message : String(reason);
+        const warning =
+          `[Managed bash unavailable before spawn; using Pi's foreground bash fallback. ` +
+          `Automatic yielding and /ps tracking are unavailable for this call. Reason: ${reasonText.slice(0, 500)}]`;
+        if (ctx.hasUI) ctx.ui.notify(warning, "warning");
+
+        const fallback = makeForegroundBash(cwd, {
+          shellPath,
+          commandPrefix,
+        });
+        try {
+          const result = await fallback.execute(
+            toolCallId,
+            { command, timeout: params.timeout },
+            signal,
+            onUpdate,
+            ctx,
+          );
+          return {
+            ...result,
+            content: [
+              { type: "text" as const, text: warning },
+              ...result.content,
+            ],
+          };
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          throw new Error(`${warning}\n\n${message}`);
+        }
       };
-    },
-  });
 
-  pi.registerTool({
-    name: "bg_status",
-    label: "Check Background Terminal",
-    description: BG_STATUS_TOOL_DESCRIPTION,
-    parameters: Type.Object({
-      id: Type.String({ description: BG_STATUS_PARAMETER_DESCRIPTIONS.id }),
-    }),
-    async execute(_toolCallId, params) {
-      const manager = await getManager();
-      const snap = manager.view.get(params.id);
-      if (!snap) {
-        const known = manager.view.list().map((s) => s.id);
-        throw new Error(
-          `Unknown terminal id "${params.id}". Known: ${known.join(", ") || "none"}.`,
-        );
+      let manager: TerminalManagerShape;
+      try {
+        manager = await getManager();
+      } catch (managerError) {
+        // Manager resolution precedes start(), so no child can exist yet.
+        return await runForegroundFallback(managerError, true);
       }
 
-      // This status is returning the settlement itself; a pending automatic
-      // follow-up for the same settle would be a duplicate.
-      if (snap.status !== "running") resultDelivery.consume([snap.id]);
+      const env = getPiShellEnv();
+      for (const key of SESSION_ENV_KEYS) delete env[key];
+      env.PI_SESSION_ID = ctx.sessionManager.getSessionId();
+      const sessionFile = ctx.sessionManager.getSessionFile();
+      if (sessionFile) env.PI_SESSION_FILE = sessionFile;
+      if (ctx.model) {
+        env.PI_PROVIDER = ctx.model.provider;
+        env.PI_MODEL = ctx.model.id;
+      }
+      const thinkingLevel = pi.getThinkingLevel();
+      if (thinkingLevel) env.PI_REASONING_LEVEL = thinkingLevel;
 
-      return {
-        content: [{ type: "text", text: buildStatusResult(snap) }],
-        details: {
-          id: snap.id,
-          status: snap.status,
-          pid: snap.pid,
-          exitCode: snap.exitCode,
-          signal: snap.signal,
-        },
+      let started: TerminalSnapshot;
+      try {
+        started = await runTool(
+          getRuntime(),
+          manager.start({
+            command,
+            executionCommand,
+            shellPath,
+            title,
+            cwd,
+            env,
+            timeoutMs:
+              params.timeout === undefined ? undefined : params.timeout * 1000,
+          }),
+        );
+      } catch (error) {
+        if (error instanceof SpawnError && error.fallbackSafe) {
+          return await runForegroundFallback(error, false);
+        }
+        // Concurrency, shutdown, asynchronous spawn failure, non-zero exit,
+        // timeout, and abort are never retried.
+        throw error;
+      }
+
+      let updateTimer: NodeJS.Timeout | undefined;
+      let updateDirty = false;
+      let lastUpdateAt = 0;
+      const emitUpdate = () => {
+        if (!onUpdate || !updateDirty) return;
+        updateDirty = false;
+        lastUpdateAt = Date.now();
+        const snap = manager.view.get(started.id);
+        if (!snap || snap.status !== "running") return;
+        try {
+          onUpdate({
+            content: [{ type: "text", text: buildBashProgress(snap) }],
+            details: undefined,
+          });
+        } catch {
+          // A display update must never affect command execution.
+        }
       };
-    },
-  });
+      const scheduleUpdate = () => {
+        if (!onUpdate) return;
+        updateDirty = true;
+        const delay = UPDATE_THROTTLE_MS - (Date.now() - lastUpdateAt);
+        if (delay <= 0) {
+          if (updateTimer) clearTimeout(updateTimer);
+          updateTimer = undefined;
+          emitUpdate();
+          return;
+        }
+        updateTimer ??= setTimeout(() => {
+          updateTimer = undefined;
+          emitUpdate();
+        }, delay);
+      };
+      const unsubscribe = manager.view.subscribeTo(started.id, scheduleUpdate);
+      if (onUpdate) {
+        try {
+          onUpdate({ content: [], details: undefined });
+        } catch {
+          // Same display-only boundary.
+        }
+      }
 
-  pi.registerTool({
-    name: "bg_list",
-    label: "List Background Terminals",
-    description: BG_LIST_TOOL_DESCRIPTION,
-    parameters: Type.Object({}),
-    async execute() {
-      const manager = await getManager();
-      const terminals = manager.view.list();
-      const text =
-        terminals.length === 0
-          ? "No background terminals."
-          : terminals.map((snap) => describeTerminal(snap)).join("\n");
+      let waited;
+      try {
+        waited = await runTool(
+          getRuntime(),
+          manager.waitForSettlement(
+            started.id,
+            params.yield_time_ms ?? DEFAULT_YIELD_TIME_MS,
+          ),
+          {
+            signal,
+            interruptMessage: `Initial wait aborted; ${started.id} continues in the background and will report when it exits.`,
+          },
+        );
+      } finally {
+        unsubscribe();
+        if (updateTimer) clearTimeout(updateTimer);
+      }
+      const snap = waited.snapshot;
+
+      // A quick completion is returned by this tool call. Remove any already
+      // deferred result from the tiny start→wait registration race.
+      if (waited.settled || snap.status !== "running") {
+        resultDelivery.consume([snap.id]);
+      }
+
+      const text = buildBashResult(snap);
+      if (
+        snap.status === "failed" ||
+        snap.status === "timed_out" ||
+        snap.status === "killed"
+      ) {
+        // Match Pi's built-in bash contract: unsuccessful foreground results
+        // are tool errors. Yielded failures arrive later as completion messages.
+        throw new Error(text);
+      }
       return {
         content: [{ type: "text", text }],
-        details: {
-          terminals: terminals.map((snap) => ({
-            id: snap.id,
-            title: snap.title,
-            status: snap.status,
-            pid: snap.pid,
-          })),
-        },
-      };
-    },
-  });
-
-  pi.registerTool({
-    name: "bg_kill",
-    label: "Kill Background Terminals",
-    description: BG_KILL_TOOL_DESCRIPTION,
-    parameters: Type.Object({
-      ids: Type.Array(Type.String(), {
-        description: BG_KILL_PARAMETER_DESCRIPTIONS.ids,
-      }),
-    }),
-    async execute(_toolCallId, params, signal) {
-      const manager = await getManager();
-      const ids = [...new Set(params.ids)];
-      if (ids.length === 0)
-        throw new Error("Provide at least one terminal id.");
-
-      const known = manager.view.list().map((snap) => snap.id);
-      const unknown = ids.filter((id) => !manager.view.get(id));
-      if (unknown.length > 0) {
-        throw new Error(
-          `Unknown terminal id(s): ${unknown.join(", ")}. Known: ${known.join(", ") || "none"}.`,
-        );
-      }
-
-      const report = await runTool(getRuntime(), manager.kill(ids), {
-        signal,
-        interruptMessage:
-          "Kill wait aborted; termination continues in the background.",
-      });
-
-      // Settlement may have happened before this kill began (or during it,
-      // via the killInterest consumed flag). Remove any deferred automatic
-      // delivery now that this tool returns the final state itself.
-      resultDelivery.consume(ids);
-
-      return {
-        content: [{ type: "text", text: buildKillReport(report) }],
-        details: {
-          results: report.map((entry) => ({
-            id: entry.id,
-            title: entry.title,
-            status: entry.status,
-            killed: entry.killed,
-          })),
-        },
+        // Exact BashToolDetails-compatible shape. Paths remain in bounded text
+        // because stdout and stderr have separate complete spill files.
+        details: undefined,
       };
     },
   });
@@ -370,15 +521,18 @@ export default function (pi: ExtensionAPI) {
         signal?: string;
       };
       const failed = details.status === "failed";
+      const timedOut = details.status === "timed_out";
       const killed = details.status === "killed";
-      const icon = failed
+      const icon = failed || timedOut
         ? theme.fg("error", "x")
         : killed
           ? theme.fg("muted", "■")
           : theme.fg("success", "■");
       const how = killed
         ? "killed"
-        : (details.signal ?? `exit ${details.exitCode ?? "?"}`);
+        : timedOut
+          ? "timed out"
+          : (details.signal ?? `exit ${details.exitCode ?? "?"}`);
       const header =
         `${icon} ` +
         theme.fg("accent", theme.bold(`terminal ${details.id ?? "?"}`)) +
@@ -436,7 +590,7 @@ export default function (pi: ExtensionAPI) {
       }
       if (manager.view.size() === 0) {
         ctx.ui.notify(
-          "No background terminals yet. The agent starts them with bg_start.",
+          "No background terminals yet. Long bash runs appear here.",
           "info",
         );
         return;
@@ -444,4 +598,7 @@ export default function (pi: ExtensionAPI) {
       await openTerminalPicker(ctx, manager.view);
     },
   });
+  };
 }
+
+export default createBackgroundTerminalsExtension();

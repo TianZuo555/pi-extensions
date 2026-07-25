@@ -4,7 +4,7 @@
  * disposeAll → every process tree is killed).
  */
 
-import { Cause, Exit, ManagedRuntime, type Effect } from "effect";
+import { Cause, Exit, ManagedRuntime, Result, type Effect } from "effect";
 import { TerminalManagerLive } from "./manager.ts";
 
 export function createTerminalRuntime() {
@@ -31,6 +31,11 @@ export async function runTool<A, E>(
   if (Cause.hasInterruptsOnly(exit.cause)) {
     throw new Error(options.interruptMessage ?? "Operation was aborted.");
   }
+  // Preserve typed Effect failures so callers can make narrow, safety-aware
+  // decisions (notably: foreground fallback only when SpawnError proves that
+  // no child was created). Defects still become ordinary Errors.
+  const failure = Cause.findFail(exit.cause);
+  if (Result.isSuccess(failure)) throw failure.success.error;
   const [first] = Cause.prettyErrors(exit.cause);
   throw new Error(first?.message ?? Cause.pretty(exit.cause));
 }

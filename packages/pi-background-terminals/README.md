@@ -1,69 +1,102 @@
 # pi-tian-background-terminals
 
-Start, inspect, and stop long-running background shell processes from inside
-the [pi coding agent](https://pi.dev).
+A managed replacement for Pi's built-in `bash` tool.
 
-The model can kick off a dev server, build, or watcher, keep working, and be
-notified **exactly once** when the process exits — with the final output. It
-can peek at output at any time and kill a process, but it can **never** write to
-a process's stdin (processes are launched with `stdin: "ignore"`; there is no
-input surface at all).
+Every model shell command follows one path: start it, wait briefly, and return
+its final output if it finishes. If it outlives the initial wait, return control
+to the model while the command continues as a session-scoped background
+terminal. Its final result is delivered automatically exactly once.
 
 ```text
 ■ 2 background terminals running • /ps to view
 ```
 
-## Tools (for the model)
+## Canonical `bash` override
 
-- **`bg_start`** — start a shell command in the background (`command`, `title`,
-  optional `working_dir`). Fire-and-forget: returns immediately with an id such
-  as `bt-1`, and a follow-up message with the final output arrives when the
-  process exits. Max **8** running at once.
-- **`bg_status`** — peek at one terminal's status and current output
-  (tail-truncated), without blocking.
-- **`bg_list`** — list all tracked terminals (running and settled) with pid,
-  elapsed time, exit status, and output sizes.
-- **`bg_kill`** — stop one or more terminals (SIGTERM to the whole process tree,
-  escalating to SIGKILL). Returns each terminal's final state.
+Pi officially supports replacing a built-in tool by registering the same name.
+This extension registers `bash`, so the model no longer chooses between normal
+Bash and a separate background tool. Pi may display an expected startup warning
+that the built-in has been overridden.
+
+Parameters:
+
+- `command` — Bash script to execute.
+- `timeout` — optional hard total runtime timeout in seconds. When reached, the
+  whole process tree is terminated. There is no default runtime timeout.
+- `working_dir` — optional working directory; defaults to the current directory.
+- `title` — optional short `/ps` label; defaults to a bounded one-line command.
+- `yield-time_ms` — optional initial wait, default **10 seconds**. Integer values
+  are clamped to **250–30,000 ms** rather than rejected when out of range.
+
+Behavior:
+
+1. Resolve Bash using Pi's normal platform logic and preserve Pi's configured
+   `shellPath` and `shellCommandPrefix` settings.
+2. Preserve Pi's managed `PATH` (`<agent-dir>/bin` is prepended unless already
+   present) and inject the same `PI_SESSION_ID`, `PI_SESSION_FILE`, `PI_PROVIDER`,
+   `PI_MODEL`, and `PI_REASONING_LEVEL` values as built-in Bash.
+3. Start the command with no interactive stdin and stream bounded progress in
+   the normal Bash tool row.
+4. If it exits during `yield_time_ms`, return its final status and bounded
+   head+tail output. Non-zero exits and hard timeouts are Bash tool errors.
+5. If it remains alive, return an id such as `bt-1`. The model should continue
+   working rather than poll. A follow-up message wakes it exactly once when the
+   process exits.
+
+There are no model-facing status, list, kill, polling, or stdin tools. The user
+owns inspection and termination through `/ps`.
+
+### Safe foreground fallback
+
+If the managed Effect runtime cannot initialize—or `start()` returns a typed
+spawn error proving no child was created—the extension falls back to Pi's
+standard foreground Bash implementation. The result includes a warning that
+automatic yielding and `/ps` tracking were unavailable.
+
+The extension deliberately never retries through fallback after a spawn,
+non-zero exit, timeout, or abort. Re-executing an arbitrary shell command could
+duplicate destructive side effects.
 
 ## `/ps` viewer
 
-While ≥1 terminal is running, a one-line widget renders directly above the
-editor. `/ps` opens a two-stage full-screen overlay:
+While at least one terminal runs, a one-line widget renders above the editor.
+`/ps` opens a two-stage full-screen overlay:
 
-1. **List** — every tracked terminal; `↑/↓`/`j`/`k` select, `Enter` inspect,
-   `x` kill the selected running terminal, `Esc` close.
-2. **Detail** (read-only) — metadata header, a `t`-toggled stdout/stderr view
-   with a live tail, scrolling (`↑/↓`, `PgUp/PgDn`, `g`/`G`), and `x` to kill.
+1. **List** — every tracked terminal, newest first; `↑/↓`/`j`/`k` select,
+   `Enter` inspect, `x` stop the selected running terminal, `Esc` close.
+2. **Detail** — metadata, `t`-toggled stdout/stderr, live tailing, scrolling
+   (`↑/↓`, `PgUp/PgDn`, `g`/`G`), and `x` to stop.
 
-## How it works
+## Design
 
-- **Exactly-once completion, no polling.** On exit the model is woken via
-  `pi.sendMessage(..., { deliverAs: "followUp", triggerTurn: true })`. Delivery
-  is keyed by terminal id in a drain-once map, and a `consumed` flag suppresses
-  the auto-message when `bg_kill`/`bg_status` already returned the final state —
-  so a completion is never delivered twice or mid-turn.
-- **Bounded memory + full capture.** Each stream keeps a 2 MiB in-memory tail
-  (head-dropped on a UTF-8 boundary) and spills the complete log to an
-  owner-only file (`0600` in a `0700` per-session temp dir). Everything shown to
-  the model is tail-truncated with pi's truncation utilities; the `/ps` viewer
-  and spill files hold the rest.
-- **Process-tree kill.** On POSIX children run in their own process group
-  (`detached: true`) so a kill signals the whole tree (dev servers,
-  grandchildren); Windows uses `taskkill /T`. Termination escalates
-  SIGTERM → 2 s → SIGKILL.
-- **Settle on stream close.** The completion notification fires on the child's
-  `close` (stdio flushed), not `exit`, so the final output tail is always
-  present.
-- **Session-scoped.** Terminals do not survive `/new`, `/resume`, `/fork`,
-  `/reload`, or quit — the session teardown kills every process tree and removes
-  the spill directory.
+- **Automatic yielding, no polling.** Quick commands return directly; only
+  commands that outlive the initial wait become background work. Completion
+  uses `pi.sendMessage(..., { deliverAs: "followUp", triggerTurn: true })`.
+- **Exactly-once completion.** A race-safe waiter token decides whether the
+  initial Bash call or the later follow-up owns settlement. A drain-once map
+  handles delivery retries without duplicates.
+- **Bounded head+tail memory plus full capture.** Each stdout/stderr stream
+  retains a stable **256 KiB startup head** and rolling tail within a **2 MiB**
+  cap. Omitted middle bytes are marked. Complete output spills from byte zero
+  to an owner-only file (`0600` in a `0700` session directory), capped at
+  256 MiB per stream. A terminal's spill files are deleted when it is pruned
+  from the 32-entry history.
+- **Separate stdout and stderr.** Both streams are independently retained,
+  spilled, inspected, and formatted.
+- **No interactive stdin.** Normal commands see EOF. The legacy WSL Bash
+  transport may receive the script over stdin, but that pipe is closed
+  immediately and cannot be used interactively.
+- **Process-tree termination.** POSIX children use their own process group;
+  Windows uses `taskkill /T`. Shutdown and hard timeouts send SIGTERM and
+  escalate to SIGKILL after two seconds. A synchronous process-exit tracker
+  also kills managed trees when a Pi crash bypasses normal extension cleanup.
+- **Session scoped.** `/new`, `/resume`, `/fork`, `/reload`, and quit terminate
+  every process tree and remove the remaining spill directory.
 
-The async core is built on [Effect](https://effect.website) v4 (a
-`ManagedRuntime` holding one `TerminalManager` service); Node's `child_process`
-stream plumbing stays plain callbacks. See
-[`docs/implementation-guide.md`](./docs/implementation-guide.md) for the full
-design.
+The async core uses [Effect](https://effect.website) v4. Node
+`child_process` output remains callback-driven. See
+[`docs/implementation-guide.md`](./docs/implementation-guide.md) for internal
+invariants.
 
 ## Install
 
@@ -71,18 +104,18 @@ design.
 pi install npm:pi-tian-background-terminals
 ```
 
-Restart pi or run `/reload` afterwards.
+Restart Pi or run `/reload` afterwards.
 
 ## Development
 
-This package uses Effect v4 (beta) and therefore TypeScript 7 (`tsgo`), so it is
-built and checked in isolation from the rest of the repo:
+This workspace pins Effect `4.0.0-beta.101` and uses TypeScript 7 (`tsgo`), so
+it is checked in isolation:
 
 ```bash
 npm install -w pi-tian-background-terminals
 cd packages/pi-background-terminals
-npm run check   # tsc (TS7) --noEmit
-npm test        # node --test across manager/output/prompt/result-delivery/ps
+npm run check
+npm test
 ```
 
 ## Credits

@@ -3,7 +3,7 @@
  * terminals.
  *
  * Each terminal is a raw `node:child_process` spawn (own process group on
- * POSIX, stdin ignored) whose stdout/stderr 'data' callbacks fold into two
+ * POSIX, no interactive stdin) whose stdout/stderr 'data' callbacks fold into two
  * bounded OutputBuffers. Closing a terminal's scope kills the whole process
  * tree (SIGTERM → SIGKILL escalation).
  *
@@ -16,6 +16,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { getShellConfig } from "@earendil-works/pi-coding-agent";
 import {
   Context,
   Deferred,
@@ -34,12 +35,21 @@ import {
   type TerminalStatus,
 } from "./domain.ts";
 import { OutputBuffer } from "./output.ts";
+import { createDetachedChildTracker } from "./process-tracker.ts";
 
 export const MAX_RUNNING = 8;
 export const MAX_TRACKED = 32;
+export const DEFAULT_YIELD_TIME_MS = 10_000;
+export const MIN_YIELD_TIME_MS = 250;
+export const MAX_YIELD_TIME_MS = 30_000;
+/** Same upper bound as Pi's built-in bash timeout (Node timer maximum). */
+export const MAX_RUNTIME_TIMEOUT_MS = 2_147_483_647;
+export const MAX_RUNTIME_TIMEOUT_SECONDS = MAX_RUNTIME_TIMEOUT_MS / 1000;
 const MAX_SETTLED_HISTORY = MAX_TRACKED * 4;
 /** In-memory retained cap per stream. */
 export const RETAINED_PER_STREAM = 2 * 1024 * 1024;
+/** Stable startup prefix within the retained cap; the remainder is rolling tail. */
+export const HEAD_RETAINED_PER_STREAM = 256 * 1024;
 /** Private full-log spills are bounded so a firehose cannot fill the temp disk. */
 export const MAX_SPILL_BYTES_PER_STREAM = 256 * 1024 * 1024;
 const STOP_TIMEOUT_MS = 5_000;
@@ -83,6 +93,8 @@ interface Entry {
   stdoutBuf: OutputBuffer;
   stderrBuf: OutputBuffer;
   spillStreams: fs.WriteStream[];
+  /** Immutable file ownership retained even if a spill becomes unavailable. */
+  spillPaths: string[];
   /** Set in the same synchronous effect that sends SIGTERM so a natural exit
    * before signaling keeps its truthful status. */
   killSignaled: boolean;
@@ -96,6 +108,10 @@ interface Entry {
   stdioClosed: boolean;
   /** A settle-after-spill-flush is in flight; don't start a second one. */
   settling: boolean;
+  /** Hard runtime deadline won before a natural process exit. */
+  timedOut: boolean;
+  /** Cleared on every settle/disposal path. */
+  timeoutHandle?: NodeJS.Timeout;
   /** The shell exited without stdio closing; a bounded scope close is queued
    * to reap descendants that still hold the inherited pipes open. */
   exitCleanupStarted: boolean;
@@ -108,6 +124,20 @@ export interface StartOptions {
   readonly command: string;
   readonly title: string;
   readonly cwd: string;
+  /** Exact script sent to Bash after Pi's configured command prefix. */
+  readonly executionCommand?: string;
+  /** Pi's configured Bash path, when present. */
+  readonly shellPath?: string;
+  /** Environment resolved at the tool boundary, including current PI_* state. */
+  readonly env?: NodeJS.ProcessEnv;
+  /** Optional hard total runtime timeout. The yield wait is independent. */
+  readonly timeoutMs?: number;
+}
+
+export interface SettlementWaitResult {
+  readonly snapshot: TerminalSnapshot;
+  /** True when the process settled before this wait yielded. */
+  readonly settled: boolean;
 }
 
 export interface KillResult {
@@ -128,6 +158,7 @@ export interface KillResult {
 
 /** Synchronous bridge for the TUI. Snapshots are live objects; do not mutate. */
 export interface TerminalReadModel {
+  /** Tracked terminals ordered by creation time, newest first. */
   list(): ReadonlyArray<TerminalSnapshot>;
   get(id: string): TerminalSnapshot | undefined;
   size(): number;
@@ -139,8 +170,8 @@ export interface TerminalReadModel {
    * settle still flows back to the model as a follow-up message. */
   requestKill(id: string): void;
   /**
-   * Register the settle hook. `consumed` is true when an active bg_kill is
-   * collecting the result (so it must not also be delivered as a follow-up).
+   * Register the settle hook. `consumed` is true when a manager operation is
+   * returning that same final state, so it must not also become a follow-up.
    */
   setOnSettled(
     hook: ((snap: TerminalSnapshot, consumed: boolean) => void) | undefined,
@@ -153,9 +184,14 @@ export interface TerminalManagerShape {
   start(
     options: StartOptions,
   ): Effect.Effect<TerminalSnapshot, SpawnError | ConcurrencyLimitError>;
+  waitForSettlement(
+    id: string,
+    timeoutMs: number,
+  ): Effect.Effect<SettlementWaitResult, UnknownTerminalError>;
   status(id: string): Effect.Effect<TerminalSnapshot, UnknownTerminalError>;
   /** Kill running terminals; resolves only after they have settled. */
   kill(ids: ReadonlyArray<string>): Effect.Effect<ReadonlyArray<KillResult>>;
+  /** Tracked terminals ordered by creation time, newest first. */
   readonly list: Effect.Effect<ReadonlyArray<TerminalSnapshot>>;
   readonly disposeAll: Effect.Effect<void>;
   readonly view: TerminalReadModel;
@@ -168,12 +204,18 @@ export class TerminalManager extends Context.Service<
 
 // --- Process helpers ------------------------------------------------------------
 
-function shellInvocation(command: string) {
-  if (process.platform === "win32") {
-    const shell = process.env.ComSpec ?? "cmd.exe";
-    return { shell, args: ["/d", "/s", "/c", command] };
-  }
-  return { shell: "/bin/sh", args: ["-c", command] };
+function shellInvocation(command: string, shellPath?: string) {
+  // Match Pi's built-in bash resolution: installations expect Bash syntax on
+  // every platform (Git Bash/MSYS/Cygwin on Windows, Bash→sh fallback on
+  // POSIX). Legacy WSL bash accepts the script over a one-shot stdin
+  // transport; it is closed immediately and never becomes interactive.
+  const config = getShellConfig(shellPath);
+  const commandFromStdin = config.commandTransport === "stdin";
+  return {
+    shell: config.shell,
+    args: commandFromStdin ? config.args : [...config.args, command],
+    commandInput: commandFromStdin ? command : undefined,
+  };
 }
 
 /** Signal the whole process group on POSIX so descendants (servers a shell
@@ -277,6 +319,10 @@ const makeManager = Effect.gen(function* () {
   // close interrupts any work that outlives the bounded disposeAll wait.
   const cleanupFibers = yield* FiberSet.make();
   const runCleanup = yield* FiberSet.runtime(cleanupFibers)();
+  const detachedChildren = yield* Effect.acquireRelease(
+    Effect.sync(createDetachedChildTracker),
+    (tracker) => Effect.sync(() => tracker.dispose()),
+  );
 
   const entries = new Map<string, Entry>();
   /** Small immutable tombstones preserve truthful kill reports if pruning
@@ -285,8 +331,10 @@ const makeManager = Effect.gen(function* () {
     string,
     Pick<KillResult, "title" | "status" | "exit">
   >();
-  /** ids with an in-flight kill() collecting the result (settle → consumed). */
+  /** Internal kill() callers collecting a result (settle → consumed). */
   const killInterest = new Map<string, number>();
+  /** Initial bash waits currently entitled to return a settlement. */
+  const settlementWaiters = new Map<string, Set<{ consumed: boolean }>>();
   const listeners = new Set<() => void>();
   const idListeners = new Map<string, Set<() => void>>();
   let counter = 0;
@@ -332,6 +380,19 @@ const makeManager = Effect.gen(function* () {
   const closeEntryScope = (entry: Entry) =>
     Scope.close(entry.scope, Exit.void).pipe(Effect.ignore);
 
+  const removeEntrySpills = (entry: Entry) =>
+    Effect.sync(() => {
+      for (const spillPath of entry.spillPaths) {
+        try {
+          fs.rmSync(spillPath, { force: true });
+        } catch {
+          // Best effort: disposeAll still removes the complete session dir.
+        }
+      }
+      entry.stdoutBuf.spillPath = undefined;
+      entry.stderrBuf.spillPath = undefined;
+    });
+
   const pruneSettled = () => {
     if (entries.size <= MAX_TRACKED) return;
     const candidates = [...entries.values()]
@@ -347,7 +408,9 @@ const makeManager = Effect.gen(function* () {
     for (const entry of candidates) {
       if (entries.size <= MAX_TRACKED) break;
       entries.delete(entry.snapshot.id);
-      runCleanup(closeEntryScope(entry));
+      runCleanup(
+        closeEntryScope(entry).pipe(Effect.andThen(removeEntrySpills(entry))),
+      );
     }
   };
 
@@ -388,14 +451,20 @@ const makeManager = Effect.gen(function* () {
   const settle = (entry: Entry) => {
     const s = entry.snapshot;
     if (s.status !== "running") return;
+    if (entry.timeoutHandle) {
+      clearTimeout(entry.timeoutHandle);
+      entry.timeoutHandle = undefined;
+    }
     s.settledAt = Date.now();
-    s.status = entry.killSignaled
-      ? "killed"
-      : entry.processErrored
-        ? "failed"
-        : s.exitCode === 0
-          ? "done"
-          : "failed";
+    s.status = entry.timedOut
+      ? "timed_out"
+      : entry.killSignaled
+        ? "killed"
+        : entry.processErrored
+          ? "failed"
+          : s.exitCode === 0
+            ? "done"
+            : "failed";
     settledHistory.set(s.id, {
       title: s.title,
       status: s.status,
@@ -406,10 +475,12 @@ const makeManager = Effect.gen(function* () {
       if (oldest === undefined) break;
       settledHistory.delete(oldest);
     }
-    // Completing the Deferred can immediately resume kill waiters, whose
-    // ensuring blocks release interest. Snapshot consumption first so the
-    // settle hook observes the interest that existed when settlement won.
-    const consumed = (killInterest.get(s.id) ?? 0) > 0;
+    // Mark bash waiters before completing the Deferred: whichever side of
+    // the yield/settle race wins owns the result without a duplicate follow-up.
+    const waiters = settlementWaiters.get(s.id);
+    for (const waiter of waiters ?? []) waiter.consumed = true;
+    const consumed =
+      (killInterest.get(s.id) ?? 0) > 0 || (waiters?.size ?? 0) > 0;
     Deferred.doneUnsafe(entry.settled, Effect.void);
     notify(s.id);
     try {
@@ -538,11 +609,12 @@ const makeManager = Effect.gen(function* () {
           if (disposed) {
             return new SpawnError({
               message: "Background terminal manager is shutting down.",
+              fallbackSafe: false,
             });
           }
           if (runningCount() + reserved >= MAX_RUNNING) {
             return new ConcurrencyLimitError({
-              message: `Max ${MAX_RUNNING} background terminals can run concurrently. Stop one with bg_kill before starting another.`,
+              message: `Max ${MAX_RUNNING} background terminals can run concurrently. Stop one from /ps before starting another.`,
             });
           }
           reserved++;
@@ -551,20 +623,49 @@ const makeManager = Effect.gen(function* () {
       );
 
       const doStart = Effect.gen(function* () {
-        const { shell, args } = shellInvocation(options.command);
-        const child = yield* Effect.try({
+        const invocation = yield* Effect.try({
           try: () =>
-            spawn(shell, args, {
+            shellInvocation(
+              options.executionCommand ?? options.command,
+              options.shellPath,
+            ),
+          catch: (error) =>
+            new SpawnError({
+              message: boundedError(error),
+              fallbackSafe: true,
+            }),
+        });
+        const child = yield* Effect.try({
+          try: () => {
+            const spawned = spawn(invocation.shell, invocation.args, {
               cwd: options.cwd,
-              env: process.env,
-              // stdin IGNORED: there is no input surface, ever. A process
-              // that reads stdin sees EOF immediately.
-              stdio: ["ignore", "pipe", "pipe"],
+              env: options.env ?? process.env,
+              // No interactive stdin. The sole exception is legacy WSL Bash's
+              // one-shot script transport, which is closed immediately below.
+              stdio: [
+                invocation.commandInput === undefined ? "ignore" : "pipe",
+                "pipe",
+                "pipe",
+              ],
               // Own process group on POSIX → group kill takes the whole tree.
               detached: process.platform !== "win32",
+              windowsHide: true,
+            });
+            if (invocation.commandInput !== undefined) {
+              spawned.stdin?.on("error", () => {});
+              spawned.stdin?.end(invocation.commandInput);
+            }
+            return spawned;
+          },
+          catch: (error) =>
+            new SpawnError({
+              message: boundedError(error),
+              fallbackSafe: true,
             }),
-          catch: (error) => new SpawnError({ message: boundedError(error) }),
         });
+
+        const childPid = child.pid;
+        if (childPid) detachedChildren.track(childPid);
 
         const id = `bt-${++counter}`;
         const entryRef = () => entries.get(id);
@@ -577,10 +678,12 @@ const makeManager = Effect.gen(function* () {
         const stdoutBuf = new OutputBuffer(
           RETAINED_PER_STREAM,
           stdoutSpill?.write,
+          HEAD_RETAINED_PER_STREAM,
         );
         const stderrBuf = new OutputBuffer(
           RETAINED_PER_STREAM,
           stderrSpill?.write,
+          HEAD_RETAINED_PER_STREAM,
         );
         stdoutBuf.spillPath = stdoutSpill?.spillPath;
         stderrBuf.spillPath = stderrSpill?.spillPath;
@@ -593,6 +696,7 @@ const makeManager = Effect.gen(function* () {
           pid: child.pid,
           status: "running",
           createdAt: Date.now(),
+          timeoutMs: options.timeoutMs,
           get stdout() {
             return stdoutBuf.view();
           },
@@ -612,11 +716,15 @@ const makeManager = Effect.gen(function* () {
           spillStreams: [stdoutSpill?.file, stderrSpill?.file].filter(
             (file): file is fs.WriteStream => file !== undefined,
           ),
+          spillPaths: [stdoutSpill?.spillPath, stderrSpill?.spillPath].filter(
+            (spillPath): spillPath is string => spillPath !== undefined,
+          ),
           killSignaled: false,
           processErrored: false,
           exited: false,
           stdioClosed: false,
           settling: false,
+          timedOut: false,
           exitCleanupStarted: false,
           settled,
         };
@@ -655,6 +763,7 @@ const makeManager = Effect.gen(function* () {
           scheduleExitCleanup(entry);
         });
         child.once("close", (code, signal) => {
+          if (childPid) detachedChildren.untrack(childPid);
           entry.exited = true;
           entry.stdioClosed = true;
           // Only trust close's code/signal when 'exit' never fired (a spawn
@@ -705,6 +814,7 @@ const makeManager = Effect.gen(function* () {
                 yield* flushSpillStreams(entry);
                 settle(entry);
               }
+              if (childPid) detachedChildren.untrack(childPid);
             }),
           ),
           scope,
@@ -717,9 +827,30 @@ const makeManager = Effect.gen(function* () {
           yield* closeEntryScope(entry);
           return yield* new SpawnError({
             message: "Background terminal manager shut down while starting.",
+            fallbackSafe: false,
           });
         }
         entries.set(id, entry);
+        if (options.timeoutMs !== undefined) {
+          entry.timeoutHandle = setTimeout(() => {
+            if (entry.snapshot.status !== "running") return;
+            // Preserve a natural exit that already won but whose descendants
+            // still hold stdout/stderr open; the timeout may reap that tree,
+            // but must not rewrite the truthful final status.
+            entry.timedOut ||= !entry.exited;
+            if (entry.timedOut) {
+              entry.snapshot.errorText ??=
+                `Command exceeded its ${options.timeoutMs}-ms runtime timeout`;
+            }
+            runCleanup(
+              closeEntryScope(entry).pipe(
+                Effect.timeout(STOP_TIMEOUT_MS),
+                Effect.ignore,
+              ),
+            );
+          }, options.timeoutMs);
+          entry.timeoutHandle.unref();
+        }
         notify(id);
         return snapshot as TerminalSnapshot;
       });
@@ -737,6 +868,63 @@ const makeManager = Effect.gen(function* () {
         ),
       );
     });
+
+  const waitForSettlement = (id: string, timeoutMs: number) =>
+    Effect.suspend(
+      (): Effect.Effect<SettlementWaitResult, UnknownTerminalError> => {
+        const entry = entries.get(id);
+        if (!entry) {
+          const known = [...entries.keys()];
+          return new UnknownTerminalError({
+            message: `Unknown terminal id "${id}". Known: ${known.join(", ") || "none"}.`,
+          });
+        }
+        if (entry.snapshot.status !== "running") {
+          return Effect.succeed({
+            snapshot: entry.snapshot as TerminalSnapshot,
+            settled: true,
+          });
+        }
+
+        const waiter = { consumed: false };
+        const removeWaiter = () => {
+          const current = settlementWaiters.get(id);
+          current?.delete(waiter);
+          if (current?.size === 0) settlementWaiters.delete(id);
+        };
+        const finish = Effect.sync((): SettlementWaitResult => {
+          // This synchronous removal linearizes timeout vs settle: a later
+          // settle sees no waiter and is therefore delivered as a follow-up.
+          removeWaiter();
+          return {
+            snapshot: entry.snapshot as TerminalSnapshot,
+            settled:
+              waiter.consumed || entry.snapshot.status !== "running",
+          };
+        });
+        const waitMs = Math.max(
+          MIN_YIELD_TIME_MS,
+          Math.min(MAX_YIELD_TIME_MS, timeoutMs),
+        );
+
+        return Effect.sync(() => {
+          let waiters = settlementWaiters.get(id);
+          if (!waiters) {
+            waiters = new Set();
+            settlementWaiters.set(id, waiters);
+          }
+          waiters.add(waiter);
+        }).pipe(
+          Effect.andThen(
+            Effect.raceFirst(
+              Deferred.await(entry.settled),
+              Effect.sleep(waitMs),
+            ).pipe(Effect.andThen(finish)),
+          ),
+          Effect.ensuring(Effect.sync(removeWaiter)),
+        );
+      },
+    );
 
   const status = (id: string) =>
     Effect.suspend(
@@ -831,6 +1019,12 @@ const makeManager = Effect.gen(function* () {
     disposed = true;
     const all = [...entries.values()];
     entries.clear();
+    for (const entry of all) {
+      if (entry.timeoutHandle) {
+        clearTimeout(entry.timeoutHandle);
+        entry.timeoutHandle = undefined;
+      }
+    }
     yield* Effect.forEach(
       all,
       (entry) =>
@@ -855,8 +1049,11 @@ const makeManager = Effect.gen(function* () {
     yield* Effect.sync(() => notify());
   });
 
+  const listNewestFirst = () =>
+    Array.from(entries.values(), (entry) => entry.snapshot).reverse();
+
   const view: TerminalReadModel = {
-    list: () => [...entries.values()].map((entry) => entry.snapshot),
+    list: listNewestFirst,
     get: (id) => entries.get(id)?.snapshot,
     size: () => entries.size,
     subscribe: (listener) => {
@@ -893,9 +1090,10 @@ const makeManager = Effect.gen(function* () {
 
   return TerminalManager.of({
     start,
+    waitForSettlement,
     status,
     kill,
-    list: Effect.sync(() => [...entries.values()].map((e) => e.snapshot)),
+    list: Effect.sync(listNewestFirst),
     disposeAll,
     view,
   });

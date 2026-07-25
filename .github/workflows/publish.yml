@@ -43,6 +43,12 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      - name: Typecheck background terminals
+        run: npm run check -w pi-tian-background-terminals
+
+      - name: Test background terminals
+        run: npm test -w pi-tian-background-terminals
+
       - name: Publish changed packages
         env:
           DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || 'false' }}

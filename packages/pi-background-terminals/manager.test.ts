@@ -7,23 +7,30 @@
  */
 
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { Effect } from "effect";
 import type { TerminalSnapshot } from "./src/domain.ts";
 import {
+  HEAD_RETAINED_PER_STREAM,
   MAX_RUNNING,
   MAX_TRACKED,
+  RETAINED_PER_STREAM,
   TerminalManager,
   type TerminalManagerShape,
 } from "./src/manager.ts";
 import { createTerminalRuntime, runTool } from "./src/runtime.ts";
 
 const cwd = process.cwd();
+const crashExitFixture = fileURLToPath(
+  new URL("./crash-exit.fixture.ts", import.meta.url),
+);
 
-/** Quote a `node -e` script for sh -c. */
+/** Quote a `node -e` script for Bash. */
 function nodeCmd(script: string) {
   return `node -e '${script}'`;
 }
@@ -72,6 +79,25 @@ function processGone(pid: number) {
   }
 }
 
+function forceKillTree(pid: number) {
+  if (process.platform === "win32") {
+    spawnSync("taskkill", ["/F", "/T", "/PID", String(pid)], {
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    return;
+  }
+  try {
+    process.kill(-pid, "SIGKILL");
+  } catch {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {
+      // Already gone.
+    }
+  }
+}
+
 async function pollUntil(check: () => boolean, timeoutMs = 5_000) {
   const deadline = Date.now() + timeoutMs;
   while (!check()) {
@@ -80,6 +106,39 @@ async function pollUntil(check: () => boolean, timeoutMs = 5_000) {
   }
   return true;
 }
+
+test("process exit safety net kills managed process groups", async () => {
+  const result = spawnSync(
+    process.execPath,
+    ["--experimental-strip-types", crashExitFixture],
+    {
+      cwd,
+      encoding: "utf8",
+      timeout: 15_000,
+      windowsHide: true,
+    },
+  );
+  const pid = Number(result.stdout.trim().split(/\s+/).at(-1));
+
+  try {
+    assert.equal(
+      result.error,
+      undefined,
+      result.error?.message ?? result.stderr,
+    );
+    assert.equal(result.status, 23, result.stderr);
+    assert.equal(Number.isSafeInteger(pid) && pid > 0, true, result.stdout);
+    assert.equal(
+      await pollUntil(() => processGone(pid)),
+      true,
+      `managed process ${pid} survived its parent process exit`,
+    );
+  } finally {
+    if (Number.isSafeInteger(pid) && pid > 0 && !processGone(pid)) {
+      forceKillTree(pid);
+    }
+  }
+});
 
 test("happy path: stdout and stderr captured separately, settles done, hook fires once unconsumed", async () => {
   await withManager(async (manager, runtime) => {
@@ -134,6 +193,166 @@ test("happy path: stdout and stderr captured separately, settles done, hook fire
         "err-line\n",
       );
     }
+  });
+});
+
+test("lists the newest terminals first", async () => {
+  await withManager(async (manager, runtime) => {
+    const started: TerminalSnapshot[] = [];
+    for (const title of ["first", "second", "third"]) {
+      started.push(
+        await runTool(
+          runtime,
+          manager.start({
+            command: nodeCmd("setInterval(() => {}, 1000)"),
+            title,
+            cwd,
+          }),
+        ),
+      );
+    }
+
+    const expected = started.map((snap) => snap.id).reverse();
+    assert.deepEqual(
+      manager.view.list().map((snap) => snap.id),
+      expected,
+    );
+    assert.deepEqual(
+      (await runTool(runtime, manager.list)).map((snap) => snap.id),
+      expected,
+    );
+  });
+});
+
+test("initial wait returns a quick settlement and marks its follow-up consumed", async () => {
+  await withManager(async (manager, runtime) => {
+    const settled: Array<{ id: string; consumed: boolean }> = [];
+    manager.view.setOnSettled((snap, consumed) =>
+      settled.push({ id: snap.id, consumed }),
+    );
+
+    const started = await runTool(
+      runtime,
+      manager.start({
+        command: nodeCmd('setTimeout(() => console.log("done"), 50)'),
+        title: "quick",
+        cwd,
+      }),
+    );
+    const result = await runTool(
+      runtime,
+      manager.waitForSettlement(started.id, 1_000),
+    );
+
+    assert.equal(result.settled, true);
+    assert.equal(result.snapshot.status, "done");
+    assert.match(result.snapshot.stdout.text, /done/);
+    assert.deepEqual(settled, [{ id: started.id, consumed: true }]);
+  });
+});
+
+test("initial wait yields a live process whose later settlement is unconsumed", async () => {
+  await withManager(async (manager, runtime) => {
+    const settled: Array<{ id: string; consumed: boolean }> = [];
+    manager.view.setOnSettled((snap, consumed) =>
+      settled.push({ id: snap.id, consumed }),
+    );
+
+    const started = await runTool(
+      runtime,
+      manager.start({
+        command: nodeCmd('setTimeout(() => console.log("later"), 500)'),
+        title: "yielded",
+        cwd,
+      }),
+    );
+    const result = await runTool(
+      runtime,
+      manager.waitForSettlement(started.id, 250),
+    );
+
+    assert.equal(result.settled, false);
+    assert.equal(result.snapshot.status, "running");
+    const { snap: done } = await settlement(manager, started.id);
+    assert.equal(done.status, "done");
+    assert.deepEqual(settled, [{ id: started.id, consumed: false }]);
+  });
+});
+
+test("aborting the initial wait leaves the process running and its completion deliverable", async () => {
+  await withManager(async (manager, runtime) => {
+    const settled: Array<{ id: string; consumed: boolean }> = [];
+    manager.view.setOnSettled((snap, consumed) =>
+      settled.push({ id: snap.id, consumed }),
+    );
+
+    const started = await runTool(
+      runtime,
+      manager.start({
+        command: nodeCmd('setTimeout(() => console.log("after abort"), 500)'),
+        title: "aborted-wait",
+        cwd,
+      }),
+    );
+    const controller = new AbortController();
+    const waiting = runTool(
+      runtime,
+      manager.waitForSettlement(started.id, 30_000),
+      { signal: controller.signal, interruptMessage: "wait aborted" },
+    );
+    controller.abort();
+    await assert.rejects(waiting, /wait aborted/);
+    assert.equal(manager.view.get(started.id)?.status, "running");
+
+    const { snap: done } = await settlement(manager, started.id);
+    assert.equal(done.status, "done");
+    assert.deepEqual(settled, [{ id: started.id, consumed: false }]);
+  });
+});
+
+test("hard runtime timeout terminates the tree and settles timed_out", async () => {
+  await withManager(async (manager, runtime) => {
+    const settled: Array<{ status: string; consumed: boolean }> = [];
+    manager.view.setOnSettled((snap, consumed) =>
+      settled.push({ status: snap.status, consumed }),
+    );
+
+    const started = await runTool(
+      runtime,
+      manager.start({
+        command: nodeCmd("setInterval(() => {}, 1000)"),
+        title: "deadline",
+        cwd,
+        timeoutMs: 100,
+      }),
+    );
+    const result = await runTool(
+      runtime,
+      manager.waitForSettlement(started.id, 1_000),
+    );
+
+    assert.equal(result.settled, true);
+    assert.equal(result.snapshot.status, "timed_out");
+    assert.equal(result.snapshot.timeoutMs, 100);
+    assert.match(result.snapshot.errorText ?? "", /runtime timeout/);
+    assert.deepEqual(settled, [{ status: "timed_out", consumed: true }]);
+  });
+});
+
+test("manager invokes Bash syntax and passes the requested environment", async () => {
+  await withManager(async (manager, runtime) => {
+    const started = await runTool(
+      runtime,
+      manager.start({
+        command: '[[ -n "$BASH_VERSION" ]] && printf "%s" "$PI_TEST_VALUE"',
+        title: "bash env",
+        cwd,
+        env: { ...process.env, PI_TEST_VALUE: "bash-ok" },
+      }),
+    );
+    const { snap: done } = await settlement(manager, started.id);
+    assert.equal(done.status, "done");
+    assert.equal(done.stdout.text, "bash-ok");
   });
 });
 
@@ -545,13 +764,20 @@ test("pruning drops the oldest settled entries past MAX_TRACKED, never running o
     );
 
     const settledIds: string[] = [];
+    let earliestSpillPaths: string[] = [];
+    let latestSpillPaths: string[] = [];
     for (let i = 0; i < MAX_TRACKED + 4; i++) {
       const snap = await runTool(
         runtime,
         manager.start({ command: "true", title: `quick-${i}`, cwd }),
       );
       settledIds.push(snap.id);
-      await settlement(manager, snap.id);
+      const { snap: done } = await settlement(manager, snap.id);
+      const spillPaths = [done.stdout.spillPath, done.stderr.spillPath].filter(
+        (spillPath): spillPath is string => spillPath !== undefined,
+      );
+      if (i === 0) earliestSpillPaths = spillPaths;
+      if (i === MAX_TRACKED + 3) latestSpillPaths = spillPaths;
     }
 
     const remaining = manager.view.list().map((snap) => snap.id);
@@ -562,6 +788,22 @@ test("pruning drops the oldest settled entries past MAX_TRACKED, never running o
     assert.equal(remaining.includes(settledIds[0]), false);
     // The latest settled entries survive.
     assert.equal(remaining.includes(settledIds[settledIds.length - 1]), true);
+    if (earliestSpillPaths.length > 0) {
+      assert.equal(
+        await pollUntil(() =>
+          earliestSpillPaths.every((spillPath) => !fs.existsSync(spillPath)),
+        ),
+        true,
+        "pruning removed the earliest terminal's spill files",
+      );
+    }
+    if (latestSpillPaths.length > 0) {
+      assert.equal(
+        latestSpillPaths.every((spillPath) => fs.existsSync(spillPath)),
+        true,
+        "still-tracked terminal spill files remain available",
+      );
+    }
 
     const [historical] = await runTool(runtime, manager.kill([settledIds[0]]));
     assert.equal(historical.title, "quick-0");
@@ -660,12 +902,15 @@ test("the spill file holds the complete capture when the settle hook fires, beyo
     assert.equal(done.id, snap.id);
     assert.equal(done.status, "done");
     assert.equal(done.stdout.totalBytes, totalBytes);
-    // In-memory retention is bounded; the head was dropped.
-    assert.ok(done.stdout.truncatedBytes > 0, "head was truncated in memory");
+    // In-memory retention is bounded; startup head and recent tail survive.
+    assert.ok(done.stdout.truncatedBytes > 0, "middle was omitted in memory");
     assert.ok(
-      Buffer.byteLength(done.stdout.text) <= 2 * 1024 * 1024,
-      "retained text within the cap",
+      Buffer.byteLength(done.stdout.head) + Buffer.byteLength(done.stdout.tail) <=
+        RETAINED_PER_STREAM,
+      "retained head and tail stay within the cap",
     );
+    assert.equal(done.stdout.head, "x".repeat(HEAD_RETAINED_PER_STREAM));
+    assert.ok(done.stdout.tail.endsWith("x".repeat(64 * 1024)));
     if (done.stdout.spillPath) {
       assert.equal(
         spillSizeAtSettle,

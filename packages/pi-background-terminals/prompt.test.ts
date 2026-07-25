@@ -2,25 +2,30 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { OutputView, TerminalSnapshot } from "./src/domain.ts";
 import {
-  BG_START_PARAMETER_DESCRIPTIONS,
-  BG_START_TOOL_DESCRIPTION,
-  buildKillReport,
-  buildStatusResult,
+  BASH_PARAMETER_DESCRIPTIONS,
+  BASH_TOOL_DESCRIPTION,
+  buildBashResult,
   buildTerminalResultMessage,
 } from "./src/prompt.ts";
 
-test("start descriptions identify the platform-specific shell contract", () => {
-  assert.match(BG_START_TOOL_DESCRIPTION, /sh -c on POSIX/);
-  assert.match(BG_START_TOOL_DESCRIPTION, /cmd\.exe \/d \/s \/c on Windows/);
-  assert.match(BG_START_PARAMETER_DESCRIPTIONS.command, /sh -c on POSIX/);
-  assert.match(
-    BG_START_PARAMETER_DESCRIPTIONS.command,
-    /cmd\.exe \/d \/s \/c on Windows/,
-  );
+test("bash descriptions identify managed yielding, timeout, and no-stdin contracts", () => {
+  assert.match(BASH_TOOL_DESCRIPTION, /one managed execution path/);
+  assert.match(BASH_TOOL_DESCRIPTION, /continue as a session-scoped background terminal/);
+  assert.match(BASH_TOOL_DESCRIPTION, /do not poll/i);
+  assert.match(BASH_PARAMETER_DESCRIPTIONS.command, /no interactive stdin/);
+  assert.match(BASH_PARAMETER_DESCRIPTIONS.yieldTimeMs, /clamped to 250-30000 ms/);
+  assert.match(BASH_PARAMETER_DESCRIPTIONS.timeout, /hard total runtime timeout/);
 });
 
 function view(overrides: Partial<OutputView> = {}): OutputView {
-  return { text: "", totalBytes: 0, truncatedBytes: 0, ...overrides };
+  return {
+    text: "",
+    head: "",
+    tail: "",
+    totalBytes: 0,
+    truncatedBytes: 0,
+    ...overrides,
+  };
 }
 
 function snap(overrides: Partial<TerminalSnapshot> = {}): TerminalSnapshot {
@@ -40,86 +45,104 @@ function snap(overrides: Partial<TerminalSnapshot> = {}): TerminalSnapshot {
   };
 }
 
-test("kill report distinguishes killed / raced natural exit / already settled", () => {
-  const report = buildKillReport([
-    {
-      id: "bt-1",
-      title: "a",
-      status: "killed",
-      wasRunning: true,
-      killed: true,
-      exit: "SIGTERM",
-    },
-    {
-      id: "bt-2",
-      title: "b",
-      status: "done",
-      wasRunning: true,
-      killed: false,
-      exit: "exit 0",
-    },
-    {
-      id: "bt-3",
-      title: "c",
-      status: "failed",
-      wasRunning: false,
-      killed: false,
-      exit: "exit 1",
-    },
-  ]);
-  const lines = report.split("\n");
-  assert.equal(lines[0], 'Killed bt-1 "a" (SIGTERM).');
-  assert.match(lines[1], /exited on its own before the kill landed \(exit 0\)/);
-  assert.match(lines[2], /was already failed \(exit 1\)/);
+test("yielded result tells the model not to poll and points the user to /ps", () => {
+  const text = buildBashResult(
+    snap({
+      status: "running",
+      settledAt: undefined,
+      exitCode: undefined,
+      stdout: view({ text: "ready\n", head: "ready\n", totalBytes: 6 }),
+    }),
+  );
+  assert.match(text, /still running as background terminal bt-1/);
+  assert.match(text, /do not poll/);
+  assert.match(text, /user can inspect or stop it with \/ps/);
+  assert.match(text, /stdout:\nready/);
 });
 
-test("status result marks head-truncated output with a pointer at the full log", () => {
-  const text = buildStatusResult(
+test("quick completion returns final exit and omits empty stderr", () => {
+  const text = buildBashResult(
     snap({
+      stdout: view({ text: "done\n", head: "done\n", totalBytes: 5 }),
+    }),
+  );
+  assert.match(text, /Command finished in 5s \(exit 0\)/);
+  assert.match(text, /stdout:\ndone/);
+  assert.ok(!text.includes("stderr:\n"), "empty stderr section omitted");
+});
+
+test("model-facing output preserves bounded startup head and recent tail", () => {
+  const head = `startup\n${"h".repeat(20 * 1024)}`;
+  const tail = `${"t".repeat(20 * 1024)}\nlatest failure`;
+  const totalBytes = 5 * 1024 * 1024;
+  const text = buildBashResult(
+    snap({
+      status: "failed",
+      exitCode: 1,
       stdout: view({
-        text: "tail of the log\n",
-        totalBytes: 5 * 1024 * 1024,
-        truncatedBytes: 5 * 1024 * 1024 - 16,
+        text: `${head}\n... middle omitted ...\n${tail}`,
+        head,
+        tail,
+        totalBytes,
+        truncatedBytes:
+          totalBytes - Buffer.byteLength(head) - Buffer.byteLength(tail),
         spillPath: "/tmp/bt-1.stdout.log",
       }),
     }),
   );
-  assert.match(text, /stdout truncated: showing last /);
+
+  assert.match(text, /startup/);
+  assert.match(text, /latest failure/);
+  assert.match(text, /omitted/);
+  assert.match(text, /bounded head\+tail/);
   assert.match(text, /Full log: \/tmp\/bt-1\.stdout\.log/);
 });
 
-test("completion message reports kill vs exit and omits empty stderr", () => {
+test("completion message reports kill vs exit", () => {
   const killed = buildTerminalResultMessage(
     snap({ status: "killed", exitCode: undefined, signal: "SIGTERM" }),
   );
   assert.match(killed, /was killed after/);
-  assert.ok(!killed.includes("stderr"), "empty stderr section omitted");
 
   const failed = buildTerminalResultMessage(
     snap({
       status: "failed",
       exitCode: 3,
-      stderr: view({ text: "boom\n", totalBytes: 5 }),
+      stderr: view({ text: "boom\n", head: "boom\n", totalBytes: 5 }),
     }),
   );
   assert.match(failed, /exited \(exit 3\)/);
   assert.match(failed, /stderr:\nboom/);
+
+  const timedOut = buildTerminalResultMessage(
+    snap({
+      status: "timed_out",
+      timeoutMs: 1_000,
+      exitCode: undefined,
+      signal: "SIGTERM",
+    }),
+  );
+  assert.match(timedOut, /timed out after/);
 });
 
-test("completion output is a shorter tail than the detailed status view", () => {
+test("completion output is shorter than the initial bash result", () => {
   const output = Array.from(
-    { length: 100 },
+    { length: 1_000 },
     (_, index) => `line-${index + 1}`,
   ).join("\n");
   const terminal = snap({
-    stdout: view({ text: output, totalBytes: Buffer.byteLength(output) }),
+    stdout: view({
+      text: output,
+      head: output,
+      totalBytes: Buffer.byteLength(output),
+    }),
   });
 
   const completion = buildTerminalResultMessage(terminal);
-  const status = buildStatusResult(terminal);
+  const initial = buildBashResult(terminal);
 
-  assert.ok(!completion.includes("line-1\n"));
-  assert.match(completion, /line-100/);
-  assert.match(completion, /stdout truncated/);
-  assert.match(status, /line-1\n/);
+  assert.ok(completion.length < initial.length);
+  assert.match(completion, /line-1/);
+  assert.match(completion, /line-1000/);
+  assert.match(completion, /bounded head\+tail/);
 });

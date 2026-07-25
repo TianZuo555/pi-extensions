@@ -30,7 +30,8 @@
       "extensions/image-cache.ts",
       "extensions/token-speed.ts",
       "extensions/ask-user.ts",
-      "extensions/usage.ts"
+      "extensions/usage.ts",
+      "extensions/background-terminals.ts"
     ]
   },
   "scripts": {

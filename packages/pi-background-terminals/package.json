@@ -1,7 +1,7 @@
 {
   "name": "pi-tian-background-terminals",
-  "version": "0.1.0",
-  "description": "Start, inspect, and stop long-running background shell processes from the pi coding agent (no stdin), with exactly-once completion notifications and a /ps viewer.",
+  "version": "0.1.1",
+  "description": "Replace Pi's built-in Bash with automatic background yielding, exactly-once completion notifications, and a /ps viewer.",
   "type": "module",
   "keywords": [
     "pi",
@@ -26,7 +26,8 @@
   },
   "files": [
     "index.ts",
-    "src"
+    "src",
+    "docs"
   ],
   "pi": {
     "extensions": [
@@ -36,10 +37,10 @@
   "scripts": {
     "check": "tsc --noEmit -p .",
     "prepare": "effect-tsgo patch",
-    "test": "node --test --experimental-strip-types manager.test.ts output.test.ts prompt.test.ts result-delivery.test.ts ps.test.ts"
+    "test": "node --test --experimental-strip-types index.test.ts manager.test.ts output.test.ts prompt.test.ts result-delivery.test.ts ps.test.ts"
   },
   "dependencies": {
-    "effect": "^4.0.0-beta.99"
+    "effect": "4.0.0-beta.101"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
