@@ -9,6 +9,8 @@ import {
   commitWithMessage,
   NoStagedChangesError,
   openGitRepository,
+  pushCurrentBranch,
+  readDefaultRemote,
   readLatestCommitSummary,
   readStagedSnapshot,
   RepositoryChangedError,
@@ -133,4 +135,81 @@ test("stage-all includes untracked files and commitWithMessage creates the revie
   assert.match(await readLatestCommitSummary(repository), /test: commit every change$/);
   assert.equal(git(directory, ["status", "--porcelain"]), "");
   assert.equal(await readFile(path.join(directory, "new file.txt"), "utf8"), "new content\n");
+});
+
+async function createBareRemote(t: TestContext): Promise<string> {
+  const remoteDir = await mkdtemp(path.join(os.tmpdir(), "pi-commit-remote-"));
+  t.after(async () => rm(remoteDir, { recursive: true, force: true }));
+  git(remoteDir, ["init", "--quiet", "--bare"]);
+  return remoteDir;
+}
+
+test("readDefaultRemote prefers origin over other remotes", async (t) => {
+  const directory = await createRepository(t);
+  const remoteA = await createBareRemote(t);
+  const remoteB = await createBareRemote(t);
+  git(directory, ["remote", "add", "upstream", remoteA]);
+  git(directory, ["remote", "add", "origin", remoteB]);
+
+  const repository = await openGitRepository(testExec, directory);
+  assert.equal(await readDefaultRemote(repository), "origin");
+});
+
+test("pushCurrentBranch sets upstream on the first push and pushes afterwards", async (t) => {
+  const directory = await createRepository(t);
+  git(directory, ["branch", "-M", "main"]);
+  const remoteDir = await createBareRemote(t);
+  git(directory, ["remote", "add", "origin", remoteDir]);
+
+  await writeFile(path.join(directory, "tracked.txt"), "changed\n", "utf8");
+  git(directory, ["add", "tracked.txt"]);
+
+  const repository = await openGitRepository(testExec, directory);
+  const commitResult = await commitWithMessage(repository, "change for push");
+  assert.equal(commitResult.code, 0, commitResult.stderr);
+
+  const firstPush = await pushCurrentBranch(repository);
+  assert.equal(firstPush.code, 0, firstPush.stderr);
+  assert.equal(
+    git(directory, ["rev-parse", "--abbrev-ref", "@{upstream}"]),
+    "origin/main",
+  );
+  assert.equal(
+    git(remoteDir, ["log", "-1", "--pretty=format:%s"]),
+    "change for push",
+  );
+
+  // A second push has an upstream configured, so it runs a plain `git push`.
+  await writeFile(path.join(directory, "tracked.txt"), "changed again\n", "utf8");
+  git(directory, ["add", "tracked.txt"]);
+  const secondCommit = await commitWithMessage(repository, "second change");
+  assert.equal(secondCommit.code, 0, secondCommit.stderr);
+
+  const secondPush = await pushCurrentBranch(repository);
+  assert.equal(secondPush.code, 0, secondPush.stderr);
+  assert.equal(
+    git(remoteDir, ["log", "-1", "--pretty=format:%s"]),
+    "second change",
+  );
+});
+
+test("pushCurrentBranch targets the only configured remote when origin is absent", async (t) => {
+  const directory = await createRepository(t);
+  git(directory, ["branch", "-M", "feature"]);
+  const remoteDir = await createBareRemote(t);
+  git(directory, ["remote", "add", "company", remoteDir]);
+
+  await writeFile(path.join(directory, "tracked.txt"), "changed\n", "utf8");
+  git(directory, ["add", "tracked.txt"]);
+
+  const repository = await openGitRepository(testExec, directory);
+  const commitResult = await commitWithMessage(repository, "feature change");
+  assert.equal(commitResult.code, 0, commitResult.stderr);
+
+  const pushResult = await pushCurrentBranch(repository);
+  assert.equal(pushResult.code, 0, pushResult.stderr);
+  assert.equal(
+    git(directory, ["rev-parse", "--abbrev-ref", "@{upstream}"]),
+    "company/feature",
+  );
 });

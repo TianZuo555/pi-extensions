@@ -23,6 +23,7 @@ import {
   ensureNoUnmergedEntries,
   hasWorkingTreeChanges,
   openGitRepository,
+  pushCurrentBranch,
   readLatestCommitSummary,
   readStagedSnapshot,
   stageAllChanges,
@@ -33,7 +34,6 @@ import {
 } from "./lib/git.ts";
 import {
   buildCommitPrompt,
-  commitMessagePreview,
   COMMIT_SYSTEM_PROMPT,
   MAX_PATCH_BYTES,
   normalizeEditedCommitMessage,
@@ -252,11 +252,15 @@ async function runCommitWorkflow(
     }
     const message = normalizeEditedCommitMessage(edited);
 
-    const confirmed = await ctx.ui.confirm(
-      "Create commit?",
-      `Branch: ${snapshot.branch}\nModel: ${resolvedModel.reference.value}\n\n${commitMessagePreview(message)}`,
-    );
-    if (!confirmed) {
+    const CHOICE_PUSH = "Commit and push";
+    const CHOICE_COMMIT = "Commit only";
+    const CHOICE_CANCEL = "Cancel";
+    const choice = await ctx.ui.select(`Commit ${snapshot.branch}?`, [
+      CHOICE_PUSH,
+      CHOICE_COMMIT,
+      CHOICE_CANCEL,
+    ]);
+    if (choice === undefined || choice === CHOICE_CANCEL) {
       ctx.ui.notify(cancellationNotice(stageAllWasRun), "info");
       return;
     }
@@ -271,12 +275,28 @@ async function runCommitWorkflow(
       return;
     }
 
+    let summary: string;
     try {
-      const summary = await readLatestCommitSummary(repository);
-      ctx.ui.notify(`Committed ${summary}`, "info");
+      summary = await readLatestCommitSummary(repository);
     } catch {
       ctx.ui.notify("Commit created successfully.", "info");
+      return;
     }
+
+    if (choice === CHOICE_PUSH) {
+      const pushResult = await pushCurrentBranch(repository);
+      if (pushResult.code !== 0) {
+        ctx.ui.notify(
+          `${describeGitFailure("Pushing commit", pushResult)}\nCommit ${summary} was created locally.`,
+          "error",
+        );
+        return;
+      }
+      ctx.ui.notify(`Committed and pushed ${summary}`, "info");
+      return;
+    }
+
+    ctx.ui.notify(`Committed ${summary}`, "info");
   } catch (error) {
     ctx.ui.notify(`${compactError(error)}${failureSuffix(stageAllWasRun)}`, "error");
   }

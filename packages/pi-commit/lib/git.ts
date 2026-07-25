@@ -267,3 +267,46 @@ export async function readLatestCommitSummary(repository: GitRepository): Promis
     "Reading created commit",
   );
 }
+
+/** Read the configured default remote, preferring "origin". Falls back to "origin". */
+export async function readDefaultRemote(repository: GitRepository): Promise<string> {
+  const result = await runGit(repository, ["remote"]);
+  if (result.code === 0) {
+    const remotes = result.stdout
+      .split("\n")
+      .map((remote) => remote.trim())
+      .filter(Boolean);
+    if (remotes.includes("origin")) return "origin";
+    if (remotes.length > 0) return remotes[0];
+  }
+  return "origin";
+}
+
+async function currentBranchHasUpstream(repository: GitRepository): Promise<boolean> {
+  const result = await runGit(repository, [
+    "rev-parse",
+    "--verify",
+    "--quiet",
+    "@{upstream}",
+  ]);
+  return result.code === 0 && result.stdout.trim().length > 0;
+}
+
+/**
+ * Push the current branch.
+ *
+ * When the branch already tracks an upstream, runs a plain `git push`. When no
+ * upstream is configured, pushes with `--set-upstream` to the default remote
+ * (origin, or the only configured remote) so the first push establishes tracking.
+ */
+export async function pushCurrentBranch(repository: GitRepository): Promise<ExecResult> {
+  if (await currentBranchHasUpstream(repository)) {
+    return runGit(repository, ["push"], MUTATION_TIMEOUT_MS);
+  }
+  const remote = await readDefaultRemote(repository);
+  return runGit(
+    repository,
+    ["push", "--set-upstream", remote, "HEAD"],
+    MUTATION_TIMEOUT_MS,
+  );
+}

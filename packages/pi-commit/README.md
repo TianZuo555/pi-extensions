@@ -15,7 +15,11 @@ Examples:
 /commit-all use the repository's conventional commit style
 ```
 
-Both commands show the generated message in a multiline editor and ask for final confirmation before running `git commit`.
+Both commands show the generated message in a multiline editor, then ask how to finish: **Commit and push**, **Commit only**, or **Cancel**.
+
+- **Commit and push** runs `git commit` and then pushes the current branch. If the branch has no upstream, the push sets it (`--set-upstream`) on the default remote — `origin`, or the only configured remote when `origin` is absent.
+- **Commit only** runs `git commit` and stops there.
+- **Cancel** (or dismissing the prompt) leaves everything staged; for `/commit-all` the staged files stay staged.
 
 ## Model setting
 
@@ -54,6 +58,7 @@ When the setting is absent, the default is `deepseek/deepseek-v4-flash`. Invalid
 - The staged Git tree and `HEAD` are fingerprinted. If either changes while the message is being generated or reviewed, the commit is aborted.
 - Unresolved merge conflicts are rejected.
 - Normal Git hooks and signing configuration are honored. A failed commit leaves staged changes intact.
+- When pushing, the commit is created before the push runs. If the push fails (no network, missing credentials, rejected remote, etc.), the local commit is kept and the error is reported; you can retry the push yourself.
 - The staged patch, file list, diff stat, optional guidance, and recent commit subjects are sent to the configured model provider. Review staged content for secrets before invoking the command.
 - Model patch context is capped at 256 KiB. For larger changes, the full file list and stat are retained and the UI warns that patch content was truncated.
 
