@@ -6,6 +6,7 @@ A small collection of [pi coding agent](https://pi.dev) extensions.
 |-----------|------------------|--------------|
 | **pi-repo-model** | `/repo-model`, `/repo-model-unset`, `/repo-model-list`, tool `repo_default_model` | Remembers a default model + thinking level **per repository** and auto-applies it at session start. |
 | **pi-repo-skills** | `/skills`, `/skills-list`, `/skills-reset`, tool `repo_skills` | Enable/disable individual skills **per repository** via a checkbox TUI. Disabled skills are stripped from the system prompt. |
+| **pi-commit** | `/commit`, `/commit-all` | Generate, edit, and confirm Git commits with a separately configured model; defaults to DeepSeek V4 Flash. |
 | **token-speed** | `/tps` | Live tokens-per-second meter in the footer while the assistant streams, plus an end-of-message summary (avg tok/s, total tokens, time-to-first-token). |
 | **image-cache** | `Ctrl+V`, `/images`, `/image-cache-clear` | Caches pasted/clipboard images as `[Image#NNN]` placeholders and attaches them to your messages (macOS clipboard support). |
 | **ask-user** | tool `ask_user` | Lets the model ask you a single multiple-choice question (2–5 options plus a free-form "write my own answer") in a popup. |
@@ -26,6 +27,7 @@ install all of them or only the ones you need.
 ```bash
 pi install npm:pi-tian-repo-model
 pi install npm:pi-tian-repo-skills
+pi install npm:pi-tian-commit
 pi install npm:pi-tian-token-speed
 pi install npm:pi-tian-image-cache
 pi install npm:pi-tian-ask-user
@@ -42,6 +44,7 @@ The commands above add these entries to `~/.pi/agent/settings.json`:
   "packages": [
     "npm:pi-tian-repo-model",
     "npm:pi-tian-repo-skills",
+    "npm:pi-tian-commit",
     "npm:pi-tian-token-speed",
     "npm:pi-tian-image-cache",
     "npm:pi-tian-ask-user",
@@ -57,6 +60,7 @@ The commands above add these entries to `~/.pi/agent/settings.json`:
 |-----------|-----------------|
 | [pi-tian-repo-model](https://www.npmjs.com/package/pi-tian-repo-model) | `pi install npm:pi-tian-repo-model` |
 | [pi-tian-repo-skills](https://www.npmjs.com/package/pi-tian-repo-skills) | `pi install npm:pi-tian-repo-skills` |
+| [pi-tian-commit](https://www.npmjs.com/package/pi-tian-commit) | `pi install npm:pi-tian-commit` |
 | [pi-tian-token-speed](https://www.npmjs.com/package/pi-tian-token-speed) | `pi install npm:pi-tian-token-speed` |
 | [pi-tian-image-cache](https://www.npmjs.com/package/pi-tian-image-cache) | `pi install npm:pi-tian-image-cache` |
 | [pi-tian-ask-user](https://www.npmjs.com/package/pi-tian-ask-user) | `pi install npm:pi-tian-ask-user` |
@@ -90,6 +94,7 @@ pi remove git:github.com/TianZuo555/pi-token-speed
 
 pi install npm:pi-tian-repo-model
 pi install npm:pi-tian-repo-skills
+pi install npm:pi-tian-commit
 pi install npm:pi-tian-token-speed
 pi install npm:pi-tian-image-cache
 pi install npm:pi-tian-ask-user
@@ -158,6 +163,30 @@ auto-load them. State lives in `~/.pi/repo-skills/config.json`.
 `disabled` is stored as an array of skill names or the sentinel `"ALL"` (every
 skill off, future-proof against newly installed skills).
 
+### pi-commit
+
+Generates commit messages with a dedicated model without changing the active Pi
+session model. The default is `deepseek/deepseek-v4-flash`; override it globally
+in `~/.pi/agent/settings.json` or, for a trusted project, in `.pi/settings.json`:
+
+```json
+{
+  "piCommit": {
+    "model": "deepseek/deepseek-v4-flash"
+  }
+}
+```
+
+- `/commit [guidance]` — generate, edit, and confirm a commit for changes already staged in Git.
+- `/commit-all [guidance]` — confirm `git add --all`, then generate, edit, and confirm the commit.
+
+`/commit` never stages files. `/commit-all` includes tracked, deleted, and
+untracked files but not ignored files. Cancelling after its staging step leaves
+those changes staged. The extension fingerprints both the staged tree and
+`HEAD`, honors normal Git hooks/signing, and aborts if the snapshot changes
+while the message is being reviewed. The staged diff is sent to the configured
+model provider; patch context is capped at 256 KiB.
+
 ### token-speed
 
 A live generation-speed readout. While the assistant streams, the footer shows a
@@ -225,20 +254,22 @@ The repository is an npm workspace with one publishable package per extension:
 |-----------|-------------|
 | `packages/pi-repo-model` | `pi-tian-repo-model` |
 | `packages/pi-repo-skills` | `pi-tian-repo-skills` |
+| `packages/pi-commit` | `pi-tian-commit` |
 | `packages/pi-token-speed` | `pi-tian-token-speed` |
 | `packages/pi-image-cache` | `pi-tian-image-cache` |
 | `packages/pi-ask-user` | `pi-tian-ask-user` |
 | `packages/pi-usage` | `pi-tian-usage` |
 | `packages/pi-background-terminals` | `pi-tian-background-terminals` |
 
-Install dependencies, typecheck every workspace, run the managed-terminal suite,
-and inspect publishable tarballs:
+Install dependencies, typecheck every workspace, run the commit and
+managed-terminal suites, and inspect publishable tarballs:
 
 ```bash
 npm install
 npm run typecheck
 npm run check -w pi-tian-background-terminals
 npm test -w pi-tian-background-terminals
+npm test -w pi-tian-commit
 npm run pack:check
 ```
 
@@ -263,8 +294,8 @@ at runtime.
 
 The [`Publish`](.github/workflows/publish.yml) workflow publishes packages to npm
 automatically. On every push to `main` that touches `packages/**`, it runs both
-TypeScript checks and the background-terminals test suite, then checks each
-workspace's version against npm and publishes only versions not yet present
+TypeScript checks plus the commit and background-terminals test suites, then
+checks each workspace's version against npm and publishes only versions not yet present
 (so bumping one `package.json` version is enough to release it). Packages are
 published with [npm provenance](https://docs.npmjs.com/generating-provenance-statements).
 
@@ -283,6 +314,7 @@ After logging in to npm, publish each workspace independently:
 ```bash
 npm publish --workspace packages/pi-repo-model
 npm publish --workspace packages/pi-repo-skills
+npm publish --workspace packages/pi-commit
 npm publish --workspace packages/pi-token-speed
 npm publish --workspace packages/pi-image-cache
 npm publish --workspace packages/pi-ask-user

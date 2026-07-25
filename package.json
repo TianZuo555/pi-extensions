@@ -1,7 +1,7 @@
 {
   "name": "pi-tian-extensions",
   "version": "0.1.0",
-  "description": "A collection of extensions for the pi coding agent: per-repository defaults, skill toggles, token speed, and pasted-image caching.",
+  "description": "A collection of extensions for the pi coding agent: per-repository defaults, skill toggles, commits, token speed, and more.",
   "type": "module",
   "workspaces": [
     "packages/*"
@@ -27,6 +27,7 @@
     "extensions": [
       "extensions/pi-repo-model.ts",
       "extensions/pi-repo-skills.ts",
+      "extensions/commit.ts",
       "extensions/image-cache.ts",
       "extensions/token-speed.ts",
       "extensions/ask-user.ts",
@@ -37,6 +38,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test:usage": "node --test tests/pi-usage-providers.test.mjs",
+    "test:commit": "npm test -w pi-tian-commit",
     "pack:check": "npm pack --dry-run --workspaces"
   },
   "peerDependencies": {

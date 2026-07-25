@@ -1,0 +1,44 @@
+{
+  "name": "pi-tian-commit",
+  "version": "0.1.0",
+  "description": "Generate reviewed Git commits with a dedicated configurable model in the pi coding agent.",
+  "type": "module",
+  "keywords": [
+    "pi",
+    "pi-package",
+    "pi-extension",
+    "pi-coding-agent",
+    "git",
+    "commit"
+  ],
+  "author": "Tian Zuo",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TianZuo555/pi-tian-extensions.git",
+    "directory": "packages/pi-commit"
+  },
+  "homepage": "https://github.com/TianZuo555/pi-tian-extensions#pi-commit",
+  "bugs": {
+    "url": "https://github.com/TianZuo555/pi-tian-extensions/issues"
+  },
+  "files": [
+    "index.ts",
+    "lib"
+  ],
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "scripts": {
+    "test": "node --test --experimental-strip-types test/*.test.ts"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
