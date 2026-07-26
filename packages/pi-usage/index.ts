@@ -78,6 +78,21 @@ export default function usageExtension(pi: ExtensionAPI): void {
     }
   };
 
+  // EVERY session-bound getter on a stale ctx throws, not just ctx.ui: pi
+  // invalidates the extension runner as soon as a session is disposed (/new,
+  // /resume, /fork, /reload, quit), and a disposed session can still emit
+  // model_select — e.g. when setModel()'s auth check outlives the swap. Reading
+  // ctx.model there would reject our async handler, and since the handler itself
+  // returns synchronously pi's per-handler try/catch never sees it: Node turns
+  // the floating rejection into an uncaughtException and kills the process.
+  const probeModel = (ctx: ExtensionContext): { stale: true } | { stale: false; provider?: string } => {
+    try {
+      return { stale: false, provider: ctx.model?.provider };
+    } catch {
+      return { stale: true };
+    }
+  };
+
   const queryProvider = async (
     ctx: ExtensionContext,
     provider: ProviderSpec,
@@ -153,7 +168,10 @@ export default function usageExtension(pi: ExtensionAPI): void {
   };
 
   const publishStatus = async (ctx: ExtensionContext, force: boolean) => {
-    const provider = PROVIDERS.find((candidate) => candidate.id === ctx.model?.provider);
+    const probe = probeModel(ctx);
+    // Nothing to publish for a session that no longer exists.
+    if (probe.stale) return;
+    const provider = PROVIDERS.find((candidate) => candidate.id === probe.provider);
     if (!provider) {
       safeSetStatus(ctx, undefined);
       return;
@@ -247,7 +265,9 @@ export default function usageExtension(pi: ExtensionAPI): void {
 
   // Reuse freshly-collected menu data to update the footer for the active model.
   const publishActiveFrom = (ctx: ExtensionContext, states: ProviderState[]) => {
-    const provider = PROVIDERS.find((candidate) => candidate.id === ctx.model?.provider);
+    const probe = probeModel(ctx);
+    if (probe.stale) return;
+    const provider = PROVIDERS.find((candidate) => candidate.id === probe.provider);
     if (!provider) {
       safeSetStatus(ctx, undefined);
       return;
@@ -269,14 +289,23 @@ export default function usageExtension(pi: ExtensionAPI): void {
     },
   });
 
+  // These handlers are sync, so pi's per-handler try/catch cannot observe a
+  // later rejection: the .catch() is what keeps a background failure from
+  // escalating to an unhandled rejection (fatal under Node's default policy).
+  const publishStatusDetached = (ctx: ExtensionContext) => {
+    void publishStatus(ctx, false).catch(() => {
+      // Never let footer upkeep take the process down.
+    });
+  };
+
   pi.on("session_start", (_event, ctx) => {
-    void publishStatus(ctx, false);
+    publishStatusDetached(ctx);
   });
   pi.on("model_select", (_event, ctx) => {
-    void publishStatus(ctx, false);
+    publishStatusDetached(ctx);
   });
   pi.on("turn_start", (_event, ctx) => {
-    void publishStatus(ctx, false);
+    publishStatusDetached(ctx);
   });
   pi.on("session_shutdown", (_event, ctx) => {
     cache.clear();
