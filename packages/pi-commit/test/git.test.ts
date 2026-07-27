@@ -175,7 +175,7 @@ test("pushCurrentBranch sets upstream on the first push and pushes afterwards", 
     "origin/main",
   );
   assert.equal(
-    git(remoteDir, ["log", "-1", "--pretty=format:%s"]),
+    git(remoteDir, ["log", "-1", "--pretty=format:%s", "refs/heads/main"]),
     "change for push",
   );
 
@@ -188,7 +188,7 @@ test("pushCurrentBranch sets upstream on the first push and pushes afterwards", 
   const secondPush = await pushCurrentBranch(repository);
   assert.equal(secondPush.code, 0, secondPush.stderr);
   assert.equal(
-    git(remoteDir, ["log", "-1", "--pretty=format:%s"]),
+    git(remoteDir, ["log", "-1", "--pretty=format:%s", "refs/heads/main"]),
     "second change",
   );
 });
