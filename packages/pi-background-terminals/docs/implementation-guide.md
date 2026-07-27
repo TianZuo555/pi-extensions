@@ -119,6 +119,7 @@ src/result-delivery.ts      Drain-once completion delivery map
 src/runtime.ts              ManagedRuntime and Effect→Promise boundary
 src/ui/output-view.ts       ANSI-safe wrapped output rendering
 src/ui/ps.ts                /ps list and detail overlays
+src/ui/spill-source.ts      Bounded windowed reader over a complete spill log
 ```
 
 The manager owns mutable lifecycle state. Consumers receive readonly live
@@ -400,8 +401,36 @@ The list overlay supports selection and stopping. The detail overlay provides:
 - command metadata;
 - stdout/stderr toggle;
 - ANSI/control sanitization at render time;
-- wrapped output with cached layouts keyed by `(buffer version, width)`;
-- live tail pinning and scrollback.
+- wrapped output with cached layouts keyed by `(source version, width)`;
+- live tail pinning and scrollback;
+- complete-log paging once retention drops bytes (below).
+
+### Reading the complete log
+
+The retained view answers "what did it print recently"; the user also has to be
+able to read everything a command produced. As soon as a stream reports
+`truncatedBytes > 0` and still owns a spill path, the detail view stops
+rendering the retained buffer and renders a window over the spill file instead
+(`src/ui/spill-source.ts`). Every window edge is snapped to a UTF-8 code point
+boundary, and one `loading` latch serializes reads so the 1 Hz pump cannot stack
+file handles.
+
+```text
+follow      tail window, ≤ 1 MiB, tracks EOF while pinned to the bottom
+loadEarlier prepend 512 KiB; the bottom stays put, so scroll offsets survive
+cap         at 4 MiB loaded, loadEarlier re-anchors: new window ends exactly
+            where the old one began → viewer pins to the bottom
+seekAfter   next window starts exactly where the current one ended → viewer
+            pins to the top
+```
+
+The two exact anchors are why paging needs no line arithmetic: a re-anchored
+window shares a byte boundary with the window it replaces, so reading continues
+without a gap or overlap in either direction. `follow` runs only while the
+viewer is *following* (bottom-pinned and untouched by backwards paging), so a
+reader in history is never yanked to EOF; `G` restores following. A pruned or
+unreadable spill records a bounded error and the view degrades to the retained
+buffer with a note.
 
 ## 16. Session teardown
 
@@ -440,7 +469,9 @@ The package test suite covers:
 - output head stability, rolling tail, UTF-8 boundaries, and omission counts;
 - complete spill capture beyond the memory cap;
 - drain-once result delivery without direct TUI stderr writes on retry;
-- `/ps` selection, sanitization, wrapping, and cache behavior.
+- `/ps` selection, sanitization, wrapping, and cache behavior;
+- spill-window follow/backfill/re-anchor anchoring, UTF-8 boundaries, and
+  degradation when the log becomes unreadable.
 
 Validation commands:
 

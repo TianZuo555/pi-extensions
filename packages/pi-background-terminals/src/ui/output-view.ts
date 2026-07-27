@@ -59,15 +59,17 @@ export function buildOutputLines(text: string, width: number) {
 }
 
 /**
- * Cache of wrapped lines keyed by (buffer version, width): a chatty process
+ * Cache of wrapped lines keyed by (source version, width): a chatty process
  * bumps the version per chunk, but renders between chunks (1Hz elapsed ticks,
- * scrolling) must not re-wrap megabytes.
+ * scrolling) must not re-wrap megabytes. The version is opaque so callers can
+ * namespace it per source (retained buffer vs. on-disk spill window) and never
+ * collide across a switch.
  */
 export function createOutputLineCache() {
   let key: string | undefined;
   let lines: string[] = [];
   return {
-    get(text: string, version: number, width: number) {
+    get(text: string, version: string | number, width: number) {
       const nextKey = `${version}:${width}`;
       if (key !== nextKey) {
         key = nextKey;

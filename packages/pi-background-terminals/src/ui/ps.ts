@@ -3,7 +3,9 @@
  * TerminalReadModel:
  * - TerminalDashboard: list of all tracked terminals (select, kill, open).
  * - TerminalDetailView: read-only inspector for one terminal — metadata,
- *   stdout/stderr toggle, scrolling, live tail. No input surface: background
+ *   stdout/stderr toggle, scrolling, live tail. Once a stream outgrows its
+ *   in-memory retention the view switches to the complete on-disk spill log and
+ *   pages through it (see ./spill-source.ts). No input surface: background
  *   terminals have no stdin by design.
  */
 
@@ -18,6 +20,7 @@ import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { formatElapsed, formatExit, type TerminalSnapshot } from "../domain.ts";
 import type { TerminalReadModel } from "../manager.ts";
 import { createOutputLineCache, sanitizeText } from "./output-view.ts";
+import { createSpillSource, type SpillSource } from "./spill-source.ts";
 
 /** One-line-safe rendering of model-provided text (titles, commands): a
  * newline or control char inside a fixed-height row desyncs the renderer. */
@@ -379,6 +382,13 @@ class TerminalDetailView implements Component {
   /** Scroll offset in lines from the bottom. 0 = pinned to bottom (live tail). */
   private scrollOffset = 0;
   private lineCache = createOutputLineCache();
+  /** Complete on-disk logs, opened lazily per stream once retention drops bytes. */
+  private sources = new Map<"stdout" | "stderr", SpillSource>();
+  /** False once the reader pages away from EOF: the spill window must not be
+   * yanked forward under someone reading history. `G` restores it. */
+  private following = true;
+  /** Whether the last render had the viewport clamped to the top of the window. */
+  private atWindowTop = false;
   private unsubscribe: () => void;
   private renderTimer?: ReturnType<typeof setTimeout>;
   private ticker: ReturnType<typeof setInterval>;
@@ -399,12 +409,91 @@ class TerminalDetailView implements Component {
     this.view = view;
     this.done = done;
     this.unsubscribe = view.subscribeTo(id, () => this.scheduleRender());
-    // Elapsed time in the header ticks along at 1Hz.
-    this.ticker = setInterval(() => this.tui.requestRender(), 1000);
+    // Elapsed time in the header ticks along at 1Hz; the spill window follows
+    // EOF on the same tick rather than per output chunk, so a firehose cannot
+    // turn every write into a stat + read.
+    this.ticker = setInterval(() => {
+      this.pumpSpill();
+      this.tui.requestRender();
+    }, 1000);
+    this.pumpSpill();
   }
 
   private snap(): TerminalSnapshot | undefined {
     return this.view.get(this.id);
+  }
+
+  private streamView(snap: TerminalSnapshot) {
+    return this.stream === "stdout" ? snap.stdout : snap.stderr;
+  }
+
+  /**
+   * Disk-backed reader for the active stream, created only once retention has
+   * actually dropped bytes — while the in-memory view is still complete it is
+   * the same content for free.
+   */
+  private activeSource(snap: TerminalSnapshot): SpillSource | undefined {
+    const view = this.streamView(snap);
+    if (!view.spillPath || view.truncatedBytes === 0) return undefined;
+    const existing = this.sources.get(this.stream);
+    if (existing?.path === view.spillPath) return existing;
+    existing?.dispose();
+    const source = createSpillSource(view.spillPath, () =>
+      this.scheduleRender(),
+    );
+    this.sources.set(this.stream, source);
+    return source;
+  }
+
+  private currentSource(): SpillSource | undefined {
+    const snap = this.snap();
+    return snap ? this.activeSource(snap) : undefined;
+  }
+
+  /** Load the initial window, and keep it at EOF while still following. */
+  private pumpSpill() {
+    const source = this.currentSource();
+    if (!source) return;
+    const state = source.state();
+    const unloaded = state.end === 0 && state.error === undefined;
+    if (!this.following && !unloaded) return;
+    void source.follow();
+  }
+
+  /** Extend the window backwards. `force` covers an explicit jump-to-top. */
+  private loadEarlier(force: boolean) {
+    const source = this.currentSource();
+    if (!source) return;
+    if (!force && !this.atWindowTop) return;
+    if (source.state().start === 0) return;
+    this.following = false;
+    void source.loadEarlier().then((outcome) => {
+      if (this.closed) return;
+      // A re-anchored window ends exactly where the previous one began, so
+      // pinning to the bottom continues the upward read without a gap.
+      if (outcome === "reanchored") this.scrollOffset = 0;
+      this.tui.requestRender();
+    });
+  }
+
+  /** Reached the bottom of the viewport: follow EOF, or page one window on. */
+  private reachedBottom(wasAtBottom: boolean) {
+    const source = this.currentSource();
+    if (!source) return;
+    const state = source.state();
+    if (state.end >= state.size) {
+      this.following = true;
+      this.pumpSpill();
+      return;
+    }
+    if (!wasAtBottom) return;
+    void source.seekAfter().then((moved) => {
+      if (this.closed || !moved) return;
+      // The new window starts exactly where the previous one ended: pin to the
+      // top (clamped in render) so downward reading continues without a gap.
+      this.scrollOffset = Number.MAX_SAFE_INTEGER;
+      this.tui.requestRender();
+    });
   }
 
   private scheduleRender() {
@@ -424,6 +513,8 @@ class TerminalDetailView implements Component {
     clearInterval(this.ticker);
     if (this.renderTimer) clearTimeout(this.renderTimer);
     this.renderTimer = undefined;
+    for (const source of this.sources.values()) source.dispose();
+    this.sources.clear();
     return true;
   }
 
@@ -447,6 +538,9 @@ class TerminalDetailView implements Component {
       this.stream = this.stream === "stdout" ? "stderr" : "stdout";
       this.lineCache = createOutputLineCache();
       this.scrollOffset = 0;
+      this.following = true;
+      this.atWindowTop = false;
+      this.pumpSpill();
       this.tui.requestRender();
       return;
     }
@@ -457,6 +551,7 @@ class TerminalDetailView implements Component {
     }
     if (this.keybindings.matches(data, "tui.editor.cursorUp") || data === "k") {
       this.scrollOffset += OUTPUT_SCROLL_STEP;
+      this.loadEarlier(false);
       this.tui.requestRender();
       return;
     }
@@ -464,30 +559,38 @@ class TerminalDetailView implements Component {
       this.keybindings.matches(data, "tui.editor.cursorDown") ||
       data === "j"
     ) {
+      const wasAtBottom = this.scrollOffset === 0;
       this.scrollOffset = Math.max(0, this.scrollOffset - OUTPUT_SCROLL_STEP);
+      if (this.scrollOffset === 0) this.reachedBottom(wasAtBottom);
       this.tui.requestRender();
       return;
     }
     if (this.keybindings.matches(data, "tui.editor.pageUp")) {
       this.scrollOffset += this.viewportHeight();
+      this.loadEarlier(false);
       this.tui.requestRender();
       return;
     }
     if (this.keybindings.matches(data, "tui.editor.pageDown")) {
+      const wasAtBottom = this.scrollOffset === 0;
       this.scrollOffset = Math.max(
         0,
         this.scrollOffset - this.viewportHeight(),
       );
+      if (this.scrollOffset === 0) this.reachedBottom(wasAtBottom);
       this.tui.requestRender();
       return;
     }
     if (data === "g") {
       this.scrollOffset = Number.MAX_SAFE_INTEGER; // clamped to top in render
+      this.loadEarlier(true);
       this.tui.requestRender();
       return;
     }
     if (data === "G") {
       this.scrollOffset = 0;
+      this.following = true;
+      this.pumpSpill();
       this.tui.requestRender();
       return;
     }
@@ -534,16 +637,27 @@ class TerminalDetailView implements Component {
     );
     lines.push(border);
 
-    // Stream tab line: which stream is active, both sizes.
+    // Stream tab line: which stream is active, both sizes, and which capture
+    // is on screen (retained window vs. the complete on-disk log).
     const active = this.stream;
     const viewData = active === "stdout" ? snap.stdout : snap.stderr;
+    const source = this.activeSource(snap);
+    const spill = source?.state();
+    const useSpill =
+      spill !== undefined && spill.error === undefined && spill.text.length > 0;
     const tab = (name: "stdout" | "stderr", size: number) =>
       name === active
         ? theme.fg("accent", theme.bold(`${name} (${formatSize(size)})`))
         : theme.fg("dim", `${name} (${formatSize(size)})`);
     lines.push(
       truncateToWidth(
-        `  ${tab("stdout", snap.stdout.totalBytes)}${theme.fg("dim", " | ")}${tab("stderr", snap.stderr.totalBytes)}${theme.fg("dim", "  — t to switch")}`,
+        `  ${tab("stdout", snap.stdout.totalBytes)}${theme.fg("dim", " | ")}${tab("stderr", snap.stderr.totalBytes)}${theme.fg("dim", "  — t to switch")}` +
+          (useSpill
+            ? theme.fg(
+                "dim",
+                this.following ? "  · full log (live)" : "  · full log",
+              )
+            : ""),
         width,
       ),
     );
@@ -553,9 +667,15 @@ class TerminalDetailView implements Component {
     const buffer = viewData;
     const version =
       // The cached view text identity changes with the buffer; totalBytes is a
-      // monotonically increasing proxy for a version counter.
-      buffer.totalBytes;
-    const output = this.lineCache.get(buffer.text, version, width - 2);
+      // monotonically increasing proxy for a version counter. Namespaced so a
+      // switch between the retained buffer and the spill window cannot reuse
+      // stale wrapped lines.
+      useSpill ? `spill:${spill.version}` : `mem:${buffer.totalBytes}`;
+    const output = this.lineCache.get(
+      useSpill ? spill.text : buffer.text,
+      version,
+      width - 2,
+    );
     const viewport = this.viewportHeight();
 
     const noteRows: string[] = [];
@@ -567,12 +687,37 @@ class TerminalDetailView implements Component {
         ),
       );
     }
-    if (buffer.truncatedBytes > 0) {
+    if (useSpill) {
+      const earlier = spill.start;
+      const later = Math.max(0, spill.size - spill.end);
+      const parts = [
+        `full log · showing ${formatSize(spill.end - spill.start)} of ${formatSize(spill.size)}`,
+      ];
+      if (earlier > 0) parts.push(`${formatSize(earlier)} earlier ↑`);
+      if (later > 0) parts.push(`${formatSize(later)} later ↓`);
+      parts.push(buffer.spillPath ?? "");
+      noteRows.push(
+        truncateToWidth(
+          theme.fg("dim", parts.filter(Boolean).join(" · ")),
+          width,
+        ),
+      );
+    } else if (spill?.error !== undefined) {
       noteRows.push(
         truncateToWidth(
           theme.fg(
             "dim",
-              `${formatSize(buffer.truncatedBytes)} omitted from middle — full log: ${buffer.spillPath ?? "(unavailable)"}`,
+            `full log unavailable (${oneLine(spill.error)}); showing retained output`,
+          ),
+          width,
+        ),
+      );
+    } else if (buffer.truncatedBytes > 0) {
+      noteRows.push(
+        truncateToWidth(
+          theme.fg(
+            "dim",
+            `${formatSize(buffer.truncatedBytes)} omitted from middle — full log: ${buffer.spillPath ?? "(unavailable)"}`,
           ),
           width,
         ),
@@ -584,6 +729,9 @@ class TerminalDetailView implements Component {
     const capacity = Math.max(1, viewport - body.length - scrollRows);
     const maxOffset = Math.max(0, output.length - capacity);
     if (this.scrollOffset > maxOffset) this.scrollOffset = maxOffset;
+    // Read by the next ↑/PgUp so it can extend the window backwards instead of
+    // dead-ending at the top of what is currently loaded.
+    this.atWindowTop = this.scrollOffset >= maxOffset;
 
     const end = output.length - this.scrollOffset;
     const visible = output.slice(Math.max(0, end - capacity), end);

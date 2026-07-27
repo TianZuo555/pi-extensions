@@ -65,7 +65,11 @@ While at least one terminal runs, a one-line widget renders above the editor.
 1. **List** — every tracked terminal, newest first; `↑/↓`/`j`/`k` select,
    `Enter` inspect, `x` stop the selected running terminal, `Esc` close.
 2. **Detail** — metadata, `t`-toggled stdout/stderr, live tailing, scrolling
-   (`↑/↓`, `PgUp/PgDn`, `g`/`G`), and `x` to stop.
+   (`↑/↓`, `PgUp/PgDn`, `g`/`G`), and `x` to stop. Once a stream outgrows its
+   in-memory retention the viewer reads the **complete on-disk log** instead:
+   scrolling past the top of the loaded window pulls in earlier bytes, `G`
+   returns to the live tail. The note row shows how much is loaded, how much
+   lies on either side, and the log's path.
 
 ## Design
 
@@ -80,7 +84,9 @@ While at least one terminal runs, a one-line widget renders above the editor.
   cap. Omitted middle bytes are marked. Complete output spills from byte zero
   to an owner-only file (`0600` in a `0700` session directory), capped at
   256 MiB per stream. A terminal's spill files are deleted when it is pruned
-  from the 32-entry history.
+  from the 32-entry history. The `/ps` detail view pages that file through a
+  bounded window (1 MiB live tail, up to 4 MiB when reading backwards), so the
+  user can read output the model's bounded result never showed.
 - **Separate stdout and stderr.** Both streams are independently retained,
   spilled, inspected, and formatted.
 - **No interactive stdin.** Normal commands see EOF. The legacy WSL Bash

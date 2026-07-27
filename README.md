@@ -11,7 +11,7 @@ A small collection of [pi coding agent](https://pi.dev) extensions.
 | **image-cache** | `Ctrl+V`, `/images`, `/image-cache-clear` | Caches pasted/clipboard images as `[Image#NNN]` placeholders and attaches them to your messages (macOS clipboard support). |
 | **ask-user** | tool `ask_user` | Lets the model ask you a single multiple-choice question (2–5 options plus a free-form "write my own answer") in a popup. |
 | **usage** | `/usage` | Show **OpenAI Codex** and **GitHub Copilot** account usage in a menu, plus a compact footer meter for the active provider. |
-| **background-terminals** | `/ps`, overrides tool `bash` | Replace Pi's built-in Bash with one no-stdin execution path: quick commands return normally, long commands automatically continue in the background and notify the model exactly once. `/ps` provides live inspection and user-owned termination. |
+| **background-terminals** | `/ps`, overrides tool `bash` | Replace Pi's built-in Bash with one no-stdin execution path: quick commands return normally, long commands automatically continue in the background and notify the model exactly once. `/ps` provides live inspection (including paging a terminal's complete stdout/stderr log, not just what fits in memory) and user-owned termination. |
 
 Selections for the per-repo extensions are stored centrally and keyed by git
 root, so each repository keeps its own preferences without touching global
