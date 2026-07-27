@@ -11,11 +11,14 @@ provider.
 OpenAI Codex · Plus
   Weekly limit:     [████████████░░░░░░░░] 60% left · resets 14:20 on 27 Jul
 GitHub Copilot · Business
-  Premium requests: [██████████░░░░░░░░░░] 49% left · 12,387 / 25,000
-  Chat:             unlimited
-  Completions:      unlimited
+  Premium credits:  [██████░░░░░░░░░░░░░░] 31% left · 7,787 / 25,000 credits
   Quota resets: 2026-08-01
 ```
+
+Only metered quotas are shown. The unmetered `chat` and `completions` seat
+buckets are omitted, and the premium bucket is labelled **Premium credits** on
+credit-billed accounts (`token_based_billing`) and **Premium requests**
+otherwise.
 
 ## Commands
 
@@ -27,8 +30,9 @@ GitHub Copilot · Business
 ## Statusline
 
 When the active model provider is Codex or Copilot, the footer shows a compact
-Azure Blue meter such as `codex 60% wk` or `copilot 49% premium`, refreshed at
-most every five minutes (results are cached to avoid hammering the endpoints).
+Azure Blue meter such as `codex 60% wk`, `copilot 31% credits`, or
+`copilot 49% premium`, refreshed at most every five minutes (results are cached
+to avoid hammering the endpoints).
 
 ## How it works
 

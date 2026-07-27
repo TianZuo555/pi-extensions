@@ -1,7 +1,7 @@
 // Presentation helpers: a multi-line report for the /usage menu and a compact
 // single-line string for the footer statusline.
 
-import { CODEX_PROVIDER_ID, COPILOT_PROVIDER_ID, type ProviderReport, type UsageWindow } from "./providers";
+import { CODEX_PROVIDER_ID, COPILOT_PROVIDER_ID, type ProviderReport, type UsageWindow } from "./providers.ts";
 
 const BAR_SEGMENTS = 20;
 const LABEL_COLUMN = 18;
@@ -42,10 +42,11 @@ function formatWindow(window: UsageWindow): string {
   if (window.remainingPercent !== undefined) {
     parts.push(`${bar(window.remainingPercent)} ${Math.round(window.remainingPercent)}% left`);
   }
+  const unit = window.credits ? " credits" : "";
   if (window.remaining !== undefined && window.entitlement !== undefined) {
-    parts.push(`${formatCount(window.remaining)} / ${formatCount(window.entitlement)}`);
+    parts.push(`${formatCount(window.remaining)} / ${formatCount(window.entitlement)}${unit}`);
   } else if (window.remaining !== undefined) {
-    parts.push(`${formatCount(window.remaining)} left`);
+    parts.push(`${formatCount(window.remaining)}${unit} left`);
   }
   if (window.resetsAt !== undefined) {
     const reset = formatReset(window.resetsAt);
@@ -63,12 +64,14 @@ export function formatStatusline(report: ProviderReport): string | undefined {
     return parts.length > 0 ? `codex ${parts.join(" ")}` : undefined;
   }
   if (report.id === COPILOT_PROVIDER_ID) {
-    const premium =
-      report.windows.find((window) => window.label === "Premium requests") ?? report.windows[0];
+    // The premium bucket is the only metered one; it is reported as credits on
+    // token-based-billing accounts and as requests otherwise.
+    const premium = report.windows[0];
     if (!premium) return undefined;
+    const unit = premium.credits ? "credits" : "premium";
     if (premium.unlimited) return "copilot unlimited";
     if (premium.remainingPercent !== undefined) {
-      return `copilot ${Math.round(premium.remainingPercent)}% premium`;
+      return `copilot ${Math.round(premium.remainingPercent)}% ${unit}`;
     }
     return undefined;
   }

@@ -33,6 +33,8 @@ export interface UsageWindow {
   entitlement?: number;
   /** True when the allowance is unmetered. */
   unlimited?: boolean;
+  /** True when the allowance is denominated in credits rather than requests. */
+  credits?: boolean;
   /** Reset time as epoch seconds (Codex) — rendered as a clock/date. */
   resetsAt?: number;
 }
@@ -116,10 +118,17 @@ function windowLabel(seconds: number): string {
 
 const COPILOT_SNAPSHOT_LABELS: Record<string, string> = {
   premium_interactions: "Premium requests",
-  chat: "Chat",
-  completions: "Completions",
 };
-const COPILOT_SNAPSHOT_ORDER = ["premium_interactions", "chat", "completions"];
+// Copilot bills premium interactions as *credits* once the account is on
+// token-based billing (`token_based_billing: true`), so the same snapshot has to
+// be labelled differently depending on the plan.
+const COPILOT_CREDIT_LABELS: Record<string, string> = {
+  premium_interactions: "Premium credits",
+};
+const COPILOT_SNAPSHOT_ORDER = ["premium_interactions"];
+// Seat-based buckets that carry no quota worth showing (they are unmetered on
+// every paid plan and pi never spends them).
+const COPILOT_HIDDEN_SNAPSHOTS = new Set(["chat", "completions"]);
 
 export async function queryCopilotUsage(
   token: string,
@@ -138,28 +147,34 @@ export async function queryCopilotUsage(
   );
 
   const snapshots = asObject(data.quota_snapshots) ?? {};
+  if (Object.keys(snapshots).length === 0) {
+    throw new Error("Copilot usage endpoint returned no quota snapshots.");
+  }
+
+  const creditBilled = data.token_based_billing === true;
   const windows: UsageWindow[] = [];
   const seen = new Set<string>();
   for (const key of [...COPILOT_SNAPSHOT_ORDER, ...Object.keys(snapshots)]) {
     if (seen.has(key)) continue;
     seen.add(key);
+    if (COPILOT_HIDDEN_SNAPSHOTS.has(key)) continue;
     const snapshot = asObject(snapshots[key]);
     if (!snapshot) continue;
     const unlimited = snapshot.unlimited === true;
     windows.push({
-      label: COPILOT_SNAPSHOT_LABELS[key] ?? titleCase(key),
+      label: copilotSnapshotLabel(key, creditBilled),
       unlimited,
       remainingPercent: unlimited ? undefined : asNumber(snapshot.percent_remaining),
-      remaining: asNumber(snapshot.remaining) ?? asNumber(snapshot.quota_remaining),
-      entitlement: asNumber(snapshot.entitlement),
+      remaining: unlimited
+        ? undefined
+        : (asNumber(snapshot.remaining) ?? asNumber(snapshot.quota_remaining)),
+      entitlement: unlimited ? undefined : asNumber(snapshot.entitlement),
+      credits: creditBilled,
     });
   }
 
-  if (windows.length === 0) {
-    throw new Error("Copilot usage endpoint returned no quota snapshots.");
-  }
-
   const notes: string[] = [];
+  if (windows.length === 0) notes.push("No metered quotas reported.");
   const resetDate = asString(data.quota_reset_date) ?? asString(data.quota_reset_date_utc);
   if (resetDate) notes.push(`Quota resets: ${resetDate.slice(0, 10)}`);
 
@@ -170,6 +185,11 @@ export async function queryCopilotUsage(
     windows,
     notes,
   };
+}
+
+function copilotSnapshotLabel(key: string, creditBilled: boolean): string {
+  if (creditBilled && COPILOT_CREDIT_LABELS[key]) return COPILOT_CREDIT_LABELS[key];
+  return COPILOT_SNAPSHOT_LABELS[key] ?? titleCase(key);
 }
 
 // --- fetch helpers ----------------------------------------------------------

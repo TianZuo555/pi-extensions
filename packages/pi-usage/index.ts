@@ -20,15 +20,15 @@ import {
   type ExtensionCommandContext,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { resolveCodexToken, resolveCopilotToken, type ResolvedToken } from "./lib/auth";
-import { formatReports, formatStatusline, type ProviderState } from "./lib/format";
+import { resolveCodexToken, resolveCopilotToken, type ResolvedToken } from "./lib/auth.ts";
+import { formatReports, formatStatusline, type ProviderState } from "./lib/format.ts";
 import {
   CODEX_PROVIDER_ID,
   COPILOT_PROVIDER_ID,
   type ProviderReport,
   queryCodexUsage,
   queryCopilotUsage,
-} from "./lib/providers";
+} from "./lib/providers.ts";
 
 const STATUS_KEY = "usage";
 const CACHE_TTL_MS = 5 * 60 * 1000;

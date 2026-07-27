@@ -1,6 +1,38 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { queryCodexUsage } from "../packages/pi-usage/lib/providers.ts";
+import { queryCodexUsage, queryCopilotUsage } from "../packages/pi-usage/lib/providers.ts";
+import { formatReport, formatStatusline } from "../packages/pi-usage/lib/format.ts";
+
+const copilotSnapshot = (overrides = {}) => ({
+  overage_count: 0,
+  overage_permitted: false,
+  percent_remaining: 100,
+  quota_remaining: 0,
+  unlimited: true,
+  has_quota: true,
+  remaining: 0,
+  entitlement: 0,
+  ...overrides,
+});
+
+const creditBilledCopilotUsage = {
+  copilot_plan: "business",
+  token_based_billing: true,
+  quota_reset_date: "2026-08-01",
+  quota_snapshots: {
+    chat: copilotSnapshot(),
+    completions: copilotSnapshot(),
+    premium_interactions: copilotSnapshot({
+      percent_remaining: 31.1,
+      quota_remaining: 7787.9,
+      unlimited: false,
+      credits_used: 17_212,
+      remaining: 7787,
+      entitlement: 25_000,
+      overage_permitted: true,
+    }),
+  },
+};
 
 const validCodexUsage = {
   plan_type: "plus",
@@ -103,4 +135,51 @@ test("Codex usage honors caller cancellation without starting a request", async 
     (error) => error instanceof Error && error.name === "AbortError",
   );
   assert.equal(calls, 0);
+});
+
+test("Copilot usage hides the unmetered chat and completions buckets", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  globalThis.fetch = async () => jsonResponse(creditBilledCopilotUsage);
+
+  const report = await queryCopilotUsage("test-token", undefined, 50, 0);
+  assert.deepEqual(
+    report.windows.map((window) => window.label),
+    ["Premium credits"],
+  );
+});
+
+test("Copilot usage reports premium quota as credits under token-based billing", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  globalThis.fetch = async () => jsonResponse(creditBilledCopilotUsage);
+
+  const report = await queryCopilotUsage("test-token", undefined, 50, 0);
+  const premium = report.windows[0];
+  assert.equal(premium.credits, true);
+  assert.equal(premium.remaining, 7787);
+  assert.equal(premium.entitlement, 25_000);
+
+  const body = formatReport({ id: report.id, name: report.name, status: "ready", report });
+  assert.match(body, /Premium credits: {2}\[.+\] 31% left · 7,787 \/ 25,000 credits/);
+  assert.doesNotMatch(body, /Chat|Completions/);
+  assert.equal(formatStatusline(report), "copilot 31% credits");
+});
+
+test("Copilot usage keeps request wording when billing is not credit-based", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  globalThis.fetch = async () =>
+    jsonResponse({ ...creditBilledCopilotUsage, token_based_billing: false });
+
+  const report = await queryCopilotUsage("test-token", undefined, 50, 0);
+  assert.equal(report.windows[0].label, "Premium requests");
+  assert.equal(report.windows[0].credits, false);
+  assert.equal(formatStatusline(report), "copilot 31% premium");
 });
