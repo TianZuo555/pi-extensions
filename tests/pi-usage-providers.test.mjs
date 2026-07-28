@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { queryCodexUsage, queryCopilotUsage, queryZaiUsage } from "../packages/pi-usage/lib/providers.ts";
 import { formatReport, formatStatusline } from "../packages/pi-usage/lib/format.ts";
+import { hasProviderLoginInfo } from "../packages/pi-usage/lib/auth.ts";
 
 const copilotSnapshot = (overrides = {}) => ({
   overage_count: 0,
@@ -71,6 +72,36 @@ function jsonResponse(body, status = 200, statusText = "OK") {
     headers: { "content-type": "application/json" },
   });
 }
+
+function authContext(configured) {
+  return {
+    modelRegistry: {
+      getProviderAuthStatus: () => ({ configured }),
+    },
+  };
+}
+
+test("usage preflight skips a provider with no login information", async () => {
+  let queryCalls = 0;
+  if (hasProviderLoginInfo(authContext(false), "test-provider")) {
+    queryCalls += 1;
+  }
+  assert.equal(queryCalls, 0);
+});
+
+test("usage preflight accepts pi and extension-local login information", () => {
+  assert.equal(hasProviderLoginInfo(authContext(true), "test-provider"), true);
+
+  const staleContext = {
+    modelRegistry: {
+      getProviderAuthStatus: () => {
+        throw new Error("stale context");
+      },
+    },
+  };
+  assert.equal(hasProviderLoginInfo(staleContext, "test-provider", () => true), true);
+  assert.equal(hasProviderLoginInfo(staleContext, "test-provider"), false);
+});
 
 test("Codex usage retries one transient network failure", async (t) => {
   const originalFetch = globalThis.fetch;

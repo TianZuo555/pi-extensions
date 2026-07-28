@@ -20,7 +20,16 @@ import {
   type ExtensionCommandContext,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { resolveCodexToken, resolveCopilotToken, resolveZaiToken, type ResolvedToken } from "./lib/auth.ts";
+import {
+  hasCodexLoginInfo,
+  hasCopilotLoginInfo,
+  hasProviderLoginInfo,
+  hasZaiLoginInfo,
+  resolveCodexToken,
+  resolveCopilotToken,
+  resolveZaiToken,
+  type ResolvedToken,
+} from "./lib/auth.ts";
 import { formatReports, formatStatusline, type ProviderState } from "./lib/format.ts";
 import {
   CODEX_PROVIDER_ID,
@@ -44,6 +53,7 @@ interface ProviderSpec {
   name: string;
   statusLabel: string;
   configureHint: string;
+  hasLoginInfo: (ctx: ExtensionContext) => boolean;
   resolve: (ctx: ExtensionContext) => Promise<ResolvedToken | undefined>;
   query: (token: string, signal?: AbortSignal) => Promise<ProviderReport>;
 }
@@ -54,6 +64,7 @@ const PROVIDERS: ProviderSpec[] = [
     name: "OpenAI Codex",
     statusLabel: "codex",
     configureHint: "sign in with /login and select OpenAI Codex",
+    hasLoginInfo: (ctx) => hasProviderLoginInfo(ctx, CODEX_PROVIDER_ID, hasCodexLoginInfo),
     resolve: (ctx) => resolveCodexToken(ctx),
     query: queryCodexUsage,
   },
@@ -62,6 +73,8 @@ const PROVIDERS: ProviderSpec[] = [
     name: "GitHub Copilot",
     statusLabel: "copilot",
     configureHint: "sign in with /login and select GitHub Copilot",
+    hasLoginInfo: (ctx) =>
+      hasProviderLoginInfo(ctx, COPILOT_PROVIDER_ID, hasCopilotLoginInfo),
     resolve: async () => resolveCopilotToken(),
     query: queryCopilotUsage,
   },
@@ -70,6 +83,7 @@ const PROVIDERS: ProviderSpec[] = [
     name: "GLM Coding Plan",
     statusLabel: "zai",
     configureHint: "set ZAI_API_KEY or sign in with /login and select Z.ai",
+    hasLoginInfo: (ctx) => hasProviderLoginInfo(ctx, ZAI_PROVIDER_ID, hasZaiLoginInfo),
     resolve: async () => resolveZaiToken(),
     query: queryZaiUsage,
   },
@@ -109,6 +123,19 @@ export default function usageExtension(pi: ExtensionAPI): void {
     force: boolean,
     signal?: AbortSignal,
   ): Promise<ProviderState> => {
+    // Do not even resolve auth (which can refresh OAuth) unless pi or one of
+    // this extension's documented fallback sources reports login information.
+    // This preflight is intentionally before cache lookup so logging out hides
+    // a previously cached report immediately.
+    if (!provider.hasLoginInfo(ctx)) {
+      return {
+        id: provider.id,
+        name: provider.name,
+        status: "unconfigured",
+        message: provider.configureHint,
+      };
+    }
+
     const cached = cache.get(provider.id);
     if (!force && cached && Date.now() - cached.at < CACHE_TTL_MS) {
       return { id: provider.id, name: provider.name, status: "ready", report: cached.report };
@@ -160,8 +187,9 @@ export default function usageExtension(pi: ExtensionAPI): void {
     force: boolean,
     signal?: AbortSignal,
   ): Promise<ProviderState[]> => {
-    // Always query every provider, independent of the active model. allSettled is
-    // belt-and-braces: queryProvider already never rejects.
+    // Check every provider independently of the active model. Providers without
+    // login information return "unconfigured" before their usage endpoint is
+    // fetched. allSettled is belt-and-braces: queryProvider already never rejects.
     const settled = await Promise.allSettled(
       PROVIDERS.map((provider) => queryProvider(ctx, provider, force, signal)),
     );

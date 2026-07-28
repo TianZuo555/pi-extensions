@@ -254,8 +254,9 @@ leaving pi.
 Credentials come from the same store pi writes (`~/.pi/agent/auth.json`): Codex
 uses the ChatGPT OAuth access token; Copilot uses the stored GitHub OAuth token
 (with `GH_TOKEN` / `GITHUB_TOKEN` and `~/.config/github-copilot/apps.json` as
-fallbacks). A provider with no resolvable credential shows as **Not configured**
-— sign in with `/login` and select it.
+fallbacks). `/usage` skips the usage request for each provider with no login
+information and shows it as **Not configured** — sign in with `/login` and select
+it.
 
 ### background-terminals
 

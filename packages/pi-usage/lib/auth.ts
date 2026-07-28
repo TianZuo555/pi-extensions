@@ -49,6 +49,32 @@ export interface ResolvedToken {
   source: string;
 }
 
+/**
+ * Check whether a provider has login information without resolving OAuth.
+ *
+ * Pi's synchronous auth status covers stored, runtime, environment, and
+ * models.json credentials. `hasLocalLoginInfo` preserves the extra credential
+ * sources this extension supports directly (for example VS Code Copilot).
+ */
+export function hasProviderLoginInfo(
+  ctx: ExtensionContext,
+  providerId: string,
+  hasLocalLoginInfo?: () => boolean,
+): boolean {
+  try {
+    if (ctx.modelRegistry.getProviderAuthStatus(providerId).configured) return true;
+  } catch {
+    // Fall through to local sources for a stale session context or an older pi
+    // without provider auth status.
+  }
+  try {
+    return hasLocalLoginInfo?.() ?? false;
+  } catch {
+    // Never query a provider speculatively when its local auth check fails.
+    return false;
+  }
+}
+
 function readPiAuth(): Record<string, PiAuthEntry> {
   try {
     return JSON.parse(fs.readFileSync(AUTH_FILE, "utf-8")) as Record<string, PiAuthEntry>;
@@ -117,6 +143,12 @@ async function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T | unde
   }
 }
 
+/** Return whether pi has stored enough Codex OAuth data to resolve a token. */
+export function hasCodexLoginInfo(): boolean {
+  const entry = readPiAuth()["openai-codex"];
+  return Boolean(entry?.access || entry?.refresh);
+}
+
 /**
  * Resolve the ChatGPT access token used for Codex usage.
  *
@@ -145,6 +177,11 @@ export async function resolveCodexToken(ctx: ExtensionContext): Promise<Resolved
   return undefined;
 }
 
+/** Return whether a supported Z.ai credential source is configured. */
+export function hasZaiLoginInfo(): boolean {
+  return resolveZaiToken() !== undefined;
+}
+
 /** Resolve the Z.ai API key used for the GLM Coding Plan usage endpoint. */
 export function resolveZaiToken(): ResolvedToken | undefined {
   const key = readPiAuth()["zai"]?.key;
@@ -155,6 +192,11 @@ export function resolveZaiToken(): ResolvedToken | undefined {
     if (value) return { token: value, source: `$${name}` };
   }
   return undefined;
+}
+
+/** Return whether a supported Copilot credential source is configured. */
+export function hasCopilotLoginInfo(): boolean {
+  return resolveCopilotToken() !== undefined;
 }
 
 /** Resolve the GitHub OAuth token used for Copilot usage. */

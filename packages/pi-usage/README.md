@@ -65,7 +65,9 @@ network, timeout, rate-limit, or server failure. Simultaneous startup and
 refresh or duplicate a cold request. Recorded expired Codex tokens are never
 sent to the endpoint when Pi cannot refresh them.
 
-A provider that has no resolvable credential is shown as **Not configured** —
+Before calling a usage endpoint, `/usage` checks whether pi or one of the
+supported fallback sources has login information for that provider. Providers
+without login information are not fetched and are shown as **Not configured** —
 sign in with `/login` and select that provider (or, for Z.ai, export
 `ZAI_API_KEY`).
 
