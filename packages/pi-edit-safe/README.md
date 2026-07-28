@@ -20,19 +20,14 @@ Install: `npm:pi-tian-edit-safe` · npm package `pi-tian-edit-safe` · workspace
 One shape, always an array:
 
 ```jsonc
-// single change — still a one-element array:
-{ "path": "src/a.ts", "edits": [
-	{ "oldText": "const x = 1;", "newText": "const x = 2;" }
-] }
-
-// several changes, applied in order, top to bottom:
 { "path": "src/a.ts", "edits": [
 	{ "oldText": "...", "newText": "..." },
 	{ "oldText": "...", "newText": "..." }
 ] }
 ```
 
-`path` and `edits` are both required and `edits` has `minItems: 1`. Nothing else
+Use a one-element `edits` array for a single replacement. `path` and `edits` are
+both required and `edits` has `minItems: 1`. Nothing else
 is advertised to the model.
 
 ### Tolerated but not advertised
