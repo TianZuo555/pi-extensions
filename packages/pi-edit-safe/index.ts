@@ -60,7 +60,7 @@ export default function editSafeExtension(pi: ExtensionAPI): void {
 		name: "edit", // same name as the built-in → overrides it
 		label: "edit (strict)",
 		description:
-			"Replace text in a file. Pass path and edits: [{oldText, newText}, ...] — always an array, even for a single change. Edits apply in order, one after another, each matched against the already-updated text. Each oldText must match the file and be unique; small whitespace/indentation, unicode-punctuation, or escape drift is tolerated only when the match is unambiguous. newText is written verbatim. On failure the error explains why so you can re-read the file and retry.",
+			"Replace text in a file using only the array schema: { path, edits: [{ oldText, newText }, ...] }. The edits field is required and must be a non-empty array, including for a single replacement; top-level oldText/newText fields are not part of the public schema. Edits apply in order, one after another, each matched against the already-updated text. Each oldText must match the file and be unique; small whitespace/indentation, unicode-punctuation, or escape drift is tolerated only when the match is unambiguous. newText is written verbatim. On failure, re-read the file before retrying.",
 		parameters,
 		// Fold the looser shapes models emit (alias keys, stringified arrays, a bare
 		// edit object, top-level oldText/newText) onto the canonical {path, edits[]}
@@ -72,7 +72,7 @@ export default function editSafeExtension(pi: ExtensionAPI): void {
 		prepareArguments: (args: unknown) => prepareEditArguments(args) as Static<typeof parameters>,
 		promptGuidelines: [
 			"Prefer `edit` for targeted changes and `write` only for new files or full rewrites.",
-			"Always pass `edits` as an array — use a one-element array for a single change. Edits apply in order, top to bottom.",
+			"The edit tool supports only the `edits` array schema; use a one-element array for a single change. Edits apply in order, top to bottom.",
 			"Each oldText must be unique in the file; include surrounding lines to disambiguate when needed.",
 			"On an edit failure, re-read the file before retrying — the error usually means your context was stale or the match was ambiguous.",
 		],

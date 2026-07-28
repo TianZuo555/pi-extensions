@@ -57,6 +57,10 @@ type GenerationOutcome =
   | { status: "cancelled" }
   | { status: "error"; error: Error };
 
+type OperationOutcome<T> =
+  | { status: "success"; value: T }
+  | { status: "error"; error: Error };
+
 function asError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
 }
@@ -135,6 +139,33 @@ async function requestCommitMessage(
     .map((part) => part.text)
     .join("\n");
   return normalizeGeneratedCommitMessage(text);
+}
+
+async function runWithLoader<T>(
+  ctx: ExtensionCommandContext,
+  message: string,
+  operation: () => Promise<T>,
+): Promise<T> {
+  if (ctx.mode !== "tui") {
+    ctx.ui.setStatus("pi-commit", message);
+    try {
+      return await operation();
+    } finally {
+      ctx.ui.setStatus("pi-commit", undefined);
+    }
+  }
+
+  const outcome = await ctx.ui.custom<OperationOutcome<T>>((tui, theme, _keybindings, done) => {
+    const loader = new BorderedLoader(tui, theme, message, { cancellable: false });
+    void operation().then(
+      (value) => done({ status: "success", value }),
+      (error) => done({ status: "error", error: asError(error) }),
+    );
+    return loader;
+  });
+
+  if (outcome.status === "error") throw outcome.error;
+  return outcome.value;
 }
 
 async function generateCommitMessage(
@@ -266,7 +297,9 @@ async function runCommitWorkflow(
     }
 
     await verifyStagedSnapshot(repository, snapshot);
-    const commitResult = await commitWithMessage(repository, message);
+    const commitResult = await runWithLoader(ctx, "Creating commit…", () =>
+      commitWithMessage(repository, message),
+    );
     if (commitResult.code !== 0) {
       ctx.ui.notify(
         `${describeGitFailure("Creating commit", commitResult)}\nStaged changes were kept.`,
@@ -284,7 +317,9 @@ async function runCommitWorkflow(
     }
 
     if (choice === CHOICE_PUSH) {
-      const pushResult = await pushCurrentBranch(repository);
+      const pushResult = await runWithLoader(ctx, `Pushing ${snapshot.branch}…`, () =>
+        pushCurrentBranch(repository),
+      );
       if (pushResult.code !== 0) {
         ctx.ui.notify(
           `${describeGitFailure("Pushing commit", pushResult)}\nCommit ${summary} was created locally.`,

@@ -17,8 +17,8 @@ Examples:
 
 Both commands show the generated message in a multiline editor, then ask how to finish: **Commit and push**, **Commit only**, or **Cancel**.
 
-- **Commit and push** runs `git commit` and then pushes the current branch. If the branch has no upstream, the push sets it (`--set-upstream`) on the default remote — `origin`, or the only configured remote when `origin` is absent.
-- **Commit only** runs `git commit` and stops there.
+- **Commit and push** runs `git commit` and then pushes the current branch. Separate loading indicators remain visible while the commit and push are running. If the branch has no upstream, the push sets it (`--set-upstream`) on the default remote — `origin`, or the only configured remote when `origin` is absent.
+- **Commit only** runs `git commit` with a loading indicator and stops there.
 - **Cancel** (or dismissing the prompt) leaves everything staged; for `/commit-all` the staged files stay staged.
 
 ## Model setting
