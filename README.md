@@ -3,16 +3,18 @@
 A small collection of [pi coding agent](https://pi.dev) extensions.
 
 | Extension | Commands / Tools | What it does |
-|-----------|------------------|--------------|
-| **pi-repo-model** | `/repo-model`, `/repo-model-unset`, `/repo-model-list`, tool `repo_default_model` | Remembers a default model + thinking level **per repository** and auto-applies it at session start. |
-| **pi-repo-skills** | `/skills`, `/skills-list`, `/skills-reset`, tool `repo_skills` | Enable/disable individual skills **per repository** via a checkbox TUI. Disabled skills are stripped from the system prompt. |
-| **pi-commit** | `/commit`, `/commit-all` | Generate, edit, and confirm Git commits with a separately configured model; defaults to DeepSeek V4 Flash. |
-| **token-speed** | `/tps` | Live tokens-per-second meter in the footer while the assistant streams, plus an end-of-message summary (avg tok/s, total tokens, time-to-first-token). |
-| **image-cache** | `Ctrl+V`, `/images`, `/image-cache-clear` | Caches pasted/clipboard images as `[Image#NNN]` placeholders and attaches them to your messages (macOS clipboard support). |
-| **ask-user** | tool `ask_user` | Lets the model ask 1–5 fully described single- or multi-select questions in one wrapped, keyboard-driven form. |
-| **usage** | `/usage` | Show **OpenAI Codex** and **GitHub Copilot** account usage in a menu, plus a compact footer meter for the active provider. |
-| **background-terminals** | `/ps`, overrides tool `bash` | Replace Pi's built-in Bash with one no-stdin execution path: quick commands return normally, long commands automatically continue in the background and notify the model exactly once. `/ps` provides live inspection (including paging a terminal's complete stdout/stderr log, not just what fits in memory) and user-owned termination. |
-| **edit-safe** | overrides tool `edit` | Replace Pi's built-in edit with a stricter matcher: fuzzy matching only *locates* a full-span, unambiguous target and the replacement is spliced in verbatim. Any ambiguity throws instead of guessing an occurrence, and bytes outside the matched span — including mixed line endings — are never rewritten. Exposes a single `edits[]` call shape so the model has nothing to choose. |
+|---|---|---|
+| **pi-repo-model** | `/repo-model`, `/repo-model-unset`, `/repo-model-list`, tool `repo_default_model` | Per-repo default model + thinking level, auto-applied at session start. |
+| **pi-repo-skills** | `/skills`, `/skills-list`, `/skills-reset`, tool `repo_skills` | Per-repo skill toggles via checkbox TUI; disabled skills leave the prompt. |
+| **pi-commit** | `/commit`, `/commit-all` | Git commits written by a separately configured model. |
+| **token-speed** | `/tps` | Live tok/s meter in the footer plus an end-of-message summary. |
+| **image-cache** | `Ctrl+V`, `/images`, `/image-cache-clear` | Caches pasted images as `[Image#NNN]` and re-attaches them on send. |
+| **ask-user** | tool `ask_user` | Lets the model ask 1–5 single- or multi-select questions in one form. |
+| **usage** | `/usage` | Codex and Copilot account usage in a menu, plus a footer meter. |
+| **background-terminals** | `/ps`, overrides tool `bash` | One no-stdin bash path: long commands yield to background and notify once. |
+| **edit-safe** | overrides tool `edit` | Stricter `edit`: verbatim splice, ambiguity throws, one `edits[]` shape. |
+
+Each extension is described in detail under [Extensions](#extensions).
 
 Selections for the per-repo extensions are stored centrally and keyed by git
 root, so each repository keeps its own preferences without touching global
@@ -159,7 +161,8 @@ Turns individual skills on/off per repository. Disabled skills are removed from
 the system prompt (like `disable-model-invocation: true`), so the model won't
 auto-load them. State lives in `~/.pi/repo-skills/config.json`.
 
-- `/skills` — checkbox TUI: `↑↓/jk` move, `space` toggle, `a` disable all, `n` enable all, `enter` save, `esc` cancel.
+- `/skills` — checkbox TUI: `↑↓/jk` move, `space` toggle, `a` disable all,
+  `n` enable all, `enter` save, `esc` cancel.
 - `/skills-list` — list all repos with overrides.
 - `/skills-reset` — clear this repo's overrides.
 - Tool `repo_skills` — `get` / `list` / `disable` / `enable` / `disable-all` / `enable-all` / `reset`.
@@ -254,6 +257,26 @@ uses the ChatGPT OAuth access token; Copilot uses the stored GitHub OAuth token
 fallbacks). A provider with no resolvable credential shows as **Not configured**
 — sign in with `/login` and select it.
 
+### background-terminals
+
+Replaces the built-in `bash` tool with one no-stdin execution path. Quick
+commands return normally; a command that outlives the initial wait keeps running
+as a session-scoped background terminal and its result is delivered to the model
+exactly once, so there is nothing to poll.
+
+- Parameters: `command`, plus optional `timeout` (hard kill), `working_dir`,
+  `title`, and `yield_time_ms` (default 10s, clamped to 250–30,000 ms).
+- `/ps` — full-screen viewer: list every tracked terminal, inspect one, toggle
+  stdout/stderr, tail live output, and stop a running terminal with `x`.
+- Once a stream outgrows in-memory retention, the viewer pages the **complete
+  on-disk log** instead of only what fits in memory.
+- A one-line widget renders above the editor while any terminal is running.
+
+Inspection and termination are user-owned — the model gets no status, list,
+kill, or stdin tools. See
+[packages/pi-background-terminals/README.md](packages/pi-background-terminals/README.md)
+for the full design.
+
 ### edit-safe
 
 Overrides the built-in `edit` tool with a stricter matcher. Fuzzy matching only
@@ -268,7 +291,13 @@ re-indented or rewritten.
   occurs exactly once.
 - **Untouched bytes stay untouched.** BOMs and bytes outside the matched span
   survive, and mixed-line-ending files are never flattened.
-- **Lenient input, strict schema.** The model is offered exactly **one** call shape — `{path, edits: [...]}`, always an array, even for a single change — so there is no per-call choice to get wrong. Looser shapes (`file_path`/`old_string` aliases, a stringified `edits` array, a bare edit object, top-level `oldText`/`newText`) are still folded onto that form before validation, so off-contract or older resumed calls are normalized rather than rejected.
+- **Lenient input, strict schema.** The model is offered exactly **one** call
+  shape — `{path, edits: [...]}`, always an array, even for a single change — so
+  there is no per-call choice to get wrong. Looser shapes
+  (`file_path`/`old_string` aliases, a stringified `edits` array, a bare edit
+  object, top-level `oldText`/`newText`) are still folded onto that form before
+  validation, so off-contract or older resumed calls are normalized rather than
+  rejected.
 - **Sequential multi-edit.** `edits[]` applies in order, each matched against the
   already-updated text, so dependent edits work; a later failure leaves the file
   unchanged because the write happens once at the end.
