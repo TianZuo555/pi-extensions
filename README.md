@@ -9,7 +9,7 @@ A small collection of [pi coding agent](https://pi.dev) extensions.
 | **pi-commit** | `/commit`, `/commit-all` | Generate, edit, and confirm Git commits with a separately configured model; defaults to DeepSeek V4 Flash. |
 | **token-speed** | `/tps` | Live tokens-per-second meter in the footer while the assistant streams, plus an end-of-message summary (avg tok/s, total tokens, time-to-first-token). |
 | **image-cache** | `Ctrl+V`, `/images`, `/image-cache-clear` | Caches pasted/clipboard images as `[Image#NNN]` placeholders and attaches them to your messages (macOS clipboard support). |
-| **ask-user** | tool `ask_user` | Lets the model ask you a single multiple-choice question (2–5 options plus a free-form "write my own answer") in a popup. |
+| **ask-user** | tool `ask_user` | Lets the model ask 1–5 fully described single- or multi-select questions in one wrapped, keyboard-driven form. |
 | **usage** | `/usage` | Show **OpenAI Codex** and **GitHub Copilot** account usage in a menu, plus a compact footer meter for the active provider. |
 | **background-terminals** | `/ps`, overrides tool `bash` | Replace Pi's built-in Bash with one no-stdin execution path: quick commands return normally, long commands automatically continue in the background and notify the model exactly once. `/ps` provides live inspection (including paging a terminal's complete stdout/stderr log, not just what fits in memory) and user-owned termination. |
 | **edit-safe** | overrides tool `edit` | Replace Pi's built-in edit with a stricter matcher: fuzzy matching only *locates* a full-span, unambiguous target and the replacement is spliced in verbatim. Any ambiguity throws instead of guessing an occurrence, and bytes outside the matched span — including mixed line endings — are never rewritten. Exposes a single `edits[]` call shape so the model has nothing to choose. |
@@ -218,21 +218,23 @@ image directly. Cache lives under `~/.pi/agent/cache/image-cache/` with a 24h TT
 
 ### ask-user
 
-Registers an `ask_user` tool the model can call to ask you a single
-multiple-choice question. The model supplies the question and 2–5 options; a
-free-form **"Write my own answer"** option is always appended, and you can
-dismiss the question without answering.
+Registers an `ask_user` tool the model can call with 1–5 questions and 2–5
+options per question. Full questions and option descriptions word-wrap instead
+of being clipped. Each question supports single selection by default or
+multiple selections with `allow_multiple: true`; a free-form **Other** option is
+always appended.
 
-- Interactive mode shows a popup: `↑↓` or number keys `1-N` to move, `Enter` to
-  confirm, `Esc` to dismiss.
-- "Write my own answer" opens a multi-line editor; submitting an empty answer
-  returns to the option list.
-- RPC mode falls back to the built-in select/input dialogs; print/json mode
-  reports that no UI was available so the model asks in plain text instead.
+- `←` / `→` switches questions while preserving answers.
+- `↑` / `↓` moves the focused option; `Space` selects or toggles it.
+- `Enter` advances to the next question or submits after all questions are
+  answered; `Esc` dismisses.
+- Other opens an inline multi-line editor. RPC mode uses built-in dialogs;
+  print/json mode reports that no UI was available.
+- Tool calls stored by versions through 0.1.2 with top-level `question` and
+  `options` are upgraded automatically to the new `questions[]` schema.
 
-The tool result tells the model exactly what happened — which option (by number)
-was picked, the free-form text you wrote, or that you dismissed the question —
-so it never silently assumes an answer.
+The result lists every answer with its question and option number (or marks it
+as custom text), so the model never silently assumes an answer.
 
 ### usage
 

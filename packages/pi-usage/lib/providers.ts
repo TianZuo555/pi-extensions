@@ -5,9 +5,11 @@
 
 export const CODEX_PROVIDER_ID = "openai-codex";
 export const COPILOT_PROVIDER_ID = "github-copilot";
+export const ZAI_PROVIDER_ID = "zai";
 
 const CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
 const COPILOT_USAGE_URL = "https://api.github.com/copilot_internal/user";
+const ZAI_QUOTA_URL = "https://api.z.ai/api/monitor/usage/quota/limit";
 
 // Copilot's internal endpoint expects the editor client headers plus a REST API
 // version. Values mirror the GitHub Copilot chat client.
@@ -190,6 +192,75 @@ export async function queryCopilotUsage(
 function copilotSnapshotLabel(key: string, creditBilled: boolean): string {
   if (creditBilled && COPILOT_CREDIT_LABELS[key]) return COPILOT_CREDIT_LABELS[key];
   return COPILOT_SNAPSHOT_LABELS[key] ?? titleCase(key);
+}
+
+// --- Z.ai (GLM Coding Plan) ------------------------------------------------
+
+// Z.ai reports the GLM Coding Plan quota at api.z.ai. The body is
+// { code, msg, data: { level, limits: [...] }, success }. Each limit carries a
+// `percentage` = the share of the allowance already *used* (so remaining is
+// 100 - percentage) and a `nextResetTime` in epoch *milliseconds* — unlike
+// Codex's seconds, which is why we divide before handing it to the formatter.
+// Only the 5-hour token pool is surfaced; the tool/MCP allowance (TIME_LIMIT)
+// and any other windows Z.ai returns are intentionally ignored.
+const ZAI_LIMIT_LABELS: Record<string, string> = {
+  TOKENS_LIMIT: "5h tokens",
+};
+
+export async function queryZaiUsage(
+  token: string,
+  signal?: AbortSignal,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+  retryCount = DEFAULT_RETRY_COUNT,
+): Promise<ProviderReport> {
+  const data = await fetchProviderJson(
+    ZAI_QUOTA_URL,
+    token,
+    { "User-Agent": "pi-usage" },
+    signal,
+    timeoutMs,
+    retryCount,
+    token,
+  );
+
+  const payload = asObject(data.data);
+  if (!payload) {
+    const msg = asString(data.msg);
+    throw new Error(
+      msg ? `Z.ai usage error: ${msg}` : "Z.ai usage endpoint returned no displayable data.",
+    );
+  }
+
+  const limits = Array.isArray(payload.limits) ? payload.limits : [];
+  const windows: UsageWindow[] = [];
+  for (const entry of limits) {
+    const limit = asObject(entry);
+    if (!limit) continue;
+    const typeLabel = asString(limit.type);
+    const label = typeLabel ? ZAI_LIMIT_LABELS[typeLabel] : undefined;
+    const used = asNumber(limit.percentage);
+    // Skip limits we cannot label (e.g. a plan tier exposes an extra window we
+    // don't yet name) rather than showing a confusing raw key.
+    if (!label || used === undefined) continue;
+    const resetsAtMs = asNumber(limit.nextResetTime);
+    windows.push({
+      label,
+      remainingPercent: clampPercent(100 - used),
+      resetsAt: resetsAtMs !== undefined ? Math.round(resetsAtMs / 1000) : undefined,
+    });
+  }
+
+  if (windows.length === 0) {
+    throw new Error("Z.ai usage endpoint returned no displayable data.");
+  }
+
+  return {
+    id: ZAI_PROVIDER_ID,
+    name: "GLM Coding Plan",
+    plan: asString(payload.level),
+    windows,
+    notes: [],
+  };
 }
 
 // --- fetch helpers ----------------------------------------------------------

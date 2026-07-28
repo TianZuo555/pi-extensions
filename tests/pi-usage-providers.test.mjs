@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { queryCodexUsage, queryCopilotUsage } from "../packages/pi-usage/lib/providers.ts";
+import { queryCodexUsage, queryCopilotUsage, queryZaiUsage } from "../packages/pi-usage/lib/providers.ts";
 import { formatReport, formatStatusline } from "../packages/pi-usage/lib/format.ts";
 
 const copilotSnapshot = (overrides = {}) => ({
@@ -42,6 +42,25 @@ const validCodexUsage = {
       limit_window_seconds: 18_000,
       reset_at: 1_800_000_000,
     },
+  },
+};
+
+const validZaiUsage = {
+  code: 200,
+  msg: "Operation successful",
+  success: true,
+  data: {
+    level: "lite",
+    limits: [
+      {
+        type: "TIME_LIMIT",
+        unit: 5,
+        percentage: 0,
+        nextResetTime: 1_785_478_127_985,
+        usageDetails: [{ modelCode: "search-prime", usage: 0 }],
+      },
+      { type: "TOKENS_LIMIT", unit: 3, percentage: 41, nextResetTime: 1_785_226_974_785 },
+    ],
   },
 };
 
@@ -182,4 +201,63 @@ test("Copilot usage keeps request wording when billing is not credit-based", asy
   assert.equal(report.windows[0].label, "Premium requests");
   assert.equal(report.windows[0].credits, false);
   assert.equal(formatStatusline(report), "copilot 31% premium");
+});
+
+test("Z.ai usage treats percentage as used and converts ms resets to seconds", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  globalThis.fetch = async () => jsonResponse(validZaiUsage);
+
+  const report = await queryZaiUsage("test-key", undefined, 50, 0);
+  assert.equal(report.plan, "lite");
+
+  const tokens = report.windows.find((window) => window.label === "5h tokens");
+  assert.equal(tokens?.remainingPercent, 59); // 100 - 41
+  assert.equal(tokens?.resetsAt, 1_785_226_975); // ms -> s, rounded
+
+  const body = formatReport({ id: report.id, name: report.name, status: "ready", report });
+  assert.match(body, /GLM Coding Plan · Lite/);
+  assert.match(body, /5h tokens:/);
+  assert.doesNotMatch(body, /MCP tools/);
+  assert.equal(formatStatusline(report), "zai 59% 5h");
+});
+
+test("Z.ai usage surfaces in-body error messages", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  globalThis.fetch = async () =>
+    jsonResponse({ code: 401, msg: "invalid api key", success: false });
+
+  await assert.rejects(
+    queryZaiUsage("test-key", undefined, 50, 0),
+    /Z.ai usage error: invalid api key/,
+  );
+});
+
+test("Z.ai usage skips unknown limit types", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  globalThis.fetch = async () =>
+    jsonResponse({
+      ...validZaiUsage,
+      data: {
+        level: "pro",
+        limits: [
+          { type: "SOMETHING_NEW", unit: 9, percentage: 50, nextResetTime: 1_785_000_000_000 },
+          ...validZaiUsage.data.limits,
+        ],
+      },
+    });
+
+  const report = await queryZaiUsage("test-key", undefined, 50, 0);
+  assert.deepEqual(
+    report.windows.map((window) => window.label),
+    ["5h tokens"],
+  );
 });

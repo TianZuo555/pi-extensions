@@ -39,6 +39,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "test:usage": "node --test tests/pi-usage-providers.test.mjs",
+    "test:ask-user": "npm test -w pi-tian-ask-user",
     "test:commit": "npm test -w pi-tian-commit",
     "test:edit-safe": "npm test -w pi-tian-edit-safe",
     "pack:check": "npm pack --dry-run --workspaces"

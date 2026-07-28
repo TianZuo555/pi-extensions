@@ -49,6 +49,9 @@ jobs:
       - name: Test background terminals
         run: npm test -w pi-tian-background-terminals
 
+      - name: Test ask-user extension
+        run: npm test -w pi-tian-ask-user
+
       - name: Test commit extension
         run: npm test -w pi-tian-commit
 

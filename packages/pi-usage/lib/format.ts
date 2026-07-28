@@ -1,7 +1,7 @@
 // Presentation helpers: a multi-line report for the /usage menu and a compact
 // single-line string for the footer statusline.
 
-import { CODEX_PROVIDER_ID, COPILOT_PROVIDER_ID, type ProviderReport, type UsageWindow } from "./providers.ts";
+import { CODEX_PROVIDER_ID, COPILOT_PROVIDER_ID, ZAI_PROVIDER_ID, type ProviderReport, type UsageWindow } from "./providers.ts";
 
 const BAR_SEGMENTS = 20;
 const LABEL_COLUMN = 18;
@@ -72,6 +72,14 @@ export function formatStatusline(report: ProviderReport): string | undefined {
     if (premium.unlimited) return "copilot unlimited";
     if (premium.remainingPercent !== undefined) {
       return `copilot ${Math.round(premium.remainingPercent)}% ${unit}`;
+    }
+    return undefined;
+  }
+  if (report.id === ZAI_PROVIDER_ID) {
+    // The GLM Coding Plan surfaces only the 5-hour token pool.
+    const tokens = report.windows.find((window) => /5h/.test(window.label));
+    if (tokens?.remainingPercent !== undefined) {
+      return `zai ${Math.round(tokens.remainingPercent)}% 5h`;
     }
     return undefined;
   }

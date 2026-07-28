@@ -21,6 +21,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 const AUTH_FILE = path.join(os.homedir(), ".pi", "agent", "auth.json");
 const COPILOT_APPS_FILE = path.join(os.homedir(), ".config", "github-copilot", "apps.json");
 const COPILOT_TOKEN_ENV = ["GH_TOKEN", "GITHUB_TOKEN", "GITHUB_COPILOT_TOKEN", "COPILOT_GITHUB_TOKEN"];
+const ZAI_TOKEN_ENV = ["ZAI_API_KEY"];
 const AUTH_RESOLVE_TIMEOUT_MS = 30_000;
 
 interface PiAuthEntry {
@@ -140,6 +141,18 @@ export async function resolveCodexToken(ctx: ExtensionContext): Promise<Resolved
   // fallback, but never send one whose recorded expiry has passed.
   if (entry?.access && (entry.expires === undefined || entry.expires > now)) {
     return { token: entry.access, source: "~/.pi/agent/auth.json (expires soon)" };
+  }
+  return undefined;
+}
+
+/** Resolve the Z.ai API key used for the GLM Coding Plan usage endpoint. */
+export function resolveZaiToken(): ResolvedToken | undefined {
+  const key = readPiAuth()["zai"]?.key;
+  if (key) return { token: key, source: "~/.pi/agent/auth.json" };
+
+  for (const name of ZAI_TOKEN_ENV) {
+    const value = process.env[name];
+    if (value) return { token: value, source: `$${name}` };
   }
   return undefined;
 }

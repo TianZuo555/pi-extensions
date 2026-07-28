@@ -12,7 +12,7 @@ A collection of extensions for the [pi coding agent](https://pi.dev): per-repo m
 ## Repository layout
 - `packages/` — one publishable workspace per extension. Real implementation lives here, mostly as `index.ts` (+ `lib/*.ts` helpers), except `pi-background-terminals` which uses `index.ts` + `src/**`.
 - `extensions/` — thin re-export stubs (`export { default } from "../packages/<pkg>/index"`) kept only as compatibility entry points for the legacy aggregate Git package. **Do not put logic here** — edit the matching `packages/*` instead.
-- `tests/` — repo-level tests run from the root (currently `pi-usage-providers.test.mjs`). `pi-commit` and `pi-edit-safe` keep tests under `test/`; `pi-background-terminals` keeps its `*.test.ts` files next to source.
+- `tests/` — repo-level tests run from the root (currently `pi-usage-providers.test.mjs`). `pi-ask-user`, `pi-commit`, and `pi-edit-safe` keep tests under `test/`; `pi-background-terminals` keeps its `*.test.ts` files next to source.
 - `.github/workflows/publish.yml` — npm publish on push to `main`.
 - `tsconfig.json` — root typecheck config. **Excludes `pi-background-terminals`** (it carries its own `tsconfig.json`).
 - `mise.toml`, `package-lock.json` — tooling/lockfile.
@@ -24,6 +24,7 @@ Workspace → npm package map: `pi-repo-model`→`pi-tian-repo-model`, `pi-repo-
 - Typecheck (the 7 simple extensions): `npm run typecheck`
 - Typecheck `pi-background-terminals` (not covered by the root command; run separately locally and in CI): `npm run check -w pi-tian-background-terminals`
 - Test repo-level (usage providers): `npm run test:usage`
+- Test `pi-ask-user`: `npm test -w pi-tian-ask-user`
 - Test `pi-commit`: `npm test -w pi-tian-commit`
 - Test `pi-edit-safe`: `npm test -w pi-tian-edit-safe` (45 cases); A/B vs pi's real built-in edit: `npm run bench -w pi-tian-edit-safe`
 - Test `pi-background-terminals`: `npm test -w pi-tian-background-terminals`
@@ -41,5 +42,5 @@ Workspace → npm package map: `pi-repo-model`→`pi-tian-repo-model`, `pi-repo-
 
 ## Working agreement
 - Prefer small, reviewable changes; bump and publish only the package(s) that actually changed.
-- Always run **both** typechecks before pushing: `npm run typecheck` (root) **and** `npm run check -w pi-tian-background-terminals`. The publish workflow runs both plus the commit, edit-safe, and background-terminals test suites before publishing.
+- Always run **both** typechecks before pushing: `npm run typecheck` (root) **and** `npm run check -w pi-tian-background-terminals`. The publish workflow runs both plus the ask-user, commit, edit-safe, and background-terminals test suites before publishing.
 - Keep this file in sync with real workflows — update it when commands, workspace layout, or publish steps change.

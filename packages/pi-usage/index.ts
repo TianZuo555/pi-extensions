@@ -1,8 +1,8 @@
-// usage — show OpenAI Codex and GitHub Copilot account usage in the pi coding
-// agent.
+// usage — show OpenAI Codex, GitHub Copilot, and Z.ai (GLM Coding Plan)
+// account usage in the pi coding agent.
 //
 // Commands:
-//   /usage            open a menu with current Codex + Copilot usage
+//   /usage            open a menu with current Codex + Copilot + Z.ai usage
 //                     (Refresh re-queries; Close dismisses)
 //
 // Statusline:
@@ -20,14 +20,16 @@ import {
   type ExtensionCommandContext,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { resolveCodexToken, resolveCopilotToken, type ResolvedToken } from "./lib/auth.ts";
+import { resolveCodexToken, resolveCopilotToken, resolveZaiToken, type ResolvedToken } from "./lib/auth.ts";
 import { formatReports, formatStatusline, type ProviderState } from "./lib/format.ts";
 import {
   CODEX_PROVIDER_ID,
   COPILOT_PROVIDER_ID,
+  ZAI_PROVIDER_ID,
   type ProviderReport,
   queryCodexUsage,
   queryCopilotUsage,
+  queryZaiUsage,
 } from "./lib/providers.ts";
 
 const STATUS_KEY = "usage";
@@ -62,6 +64,14 @@ const PROVIDERS: ProviderSpec[] = [
     configureHint: "sign in with /login and select GitHub Copilot",
     resolve: async () => resolveCopilotToken(),
     query: queryCopilotUsage,
+  },
+  {
+    id: ZAI_PROVIDER_ID,
+    name: "GLM Coding Plan",
+    statusLabel: "zai",
+    configureHint: "set ZAI_API_KEY or sign in with /login and select Z.ai",
+    resolve: async () => resolveZaiToken(),
+    query: queryZaiUsage,
   },
 ];
 
@@ -279,7 +289,7 @@ export default function usageExtension(pi: ExtensionAPI): void {
   };
 
   pi.registerCommand("usage", {
-    description: "Show OpenAI Codex and GitHub Copilot account usage",
+    description: "Show OpenAI Codex, GitHub Copilot, and Z.ai GLM Coding Plan usage",
     handler: async (args, ctx) => {
       if (args.trim()) {
         ctx.ui.notify("/usage takes no arguments; use its menu.", "warning");
