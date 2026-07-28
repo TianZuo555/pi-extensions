@@ -32,6 +32,7 @@
       "extensions/token-speed.ts",
       "extensions/ask-user.ts",
       "extensions/usage.ts",
+      "extensions/edit-safe.ts",
       "extensions/background-terminals.ts"
     ]
   },
@@ -39,6 +40,7 @@
     "typecheck": "tsc --noEmit",
     "test:usage": "node --test tests/pi-usage-providers.test.mjs",
     "test:commit": "npm test -w pi-tian-commit",
+    "test:edit-safe": "npm test -w pi-tian-edit-safe",
     "pack:check": "npm pack --dry-run --workspaces"
   },
   "peerDependencies": {

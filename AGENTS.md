@@ -1,6 +1,6 @@
 # AGENTS.md
 
-A collection of extensions for the [pi coding agent](https://pi.dev): per-repo model defaults, per-repo skill toggles, dedicated-model Git commits, token-speed meter, pasted-image cache, an ask-user tool, provider usage display, and background-yielding bash. Published as independent npm packages from one npm-workspace monorepo.
+A collection of extensions for the [pi coding agent](https://pi.dev): per-repo model defaults, per-repo skill toggles, dedicated-model Git commits, token-speed meter, pasted-image cache, an ask-user tool, provider usage display, background-yielding bash, and a strict edit tool. Published as independent npm packages from one npm-workspace monorepo.
 
 ## Tech stack
 - Language: TypeScript (strict, `noEmit`, `target: ES2022`, `module: ESNext`, `moduleResolution: bundler`). Source is shipped as-is — there is **no build step**; the `lib/` and `src/` directories under each package are committed TypeScript, not compiled output.
@@ -12,12 +12,12 @@ A collection of extensions for the [pi coding agent](https://pi.dev): per-repo m
 ## Repository layout
 - `packages/` — one publishable workspace per extension. Real implementation lives here, mostly as `index.ts` (+ `lib/*.ts` helpers), except `pi-background-terminals` which uses `index.ts` + `src/**`.
 - `extensions/` — thin re-export stubs (`export { default } from "../packages/<pkg>/index"`) kept only as compatibility entry points for the legacy aggregate Git package. **Do not put logic here** — edit the matching `packages/*` instead.
-- `tests/` — repo-level tests run from the root (currently `pi-usage-providers.test.mjs`). `pi-commit` keeps tests under `test/`; `pi-background-terminals` keeps its `*.test.ts` files next to source.
+- `tests/` — repo-level tests run from the root (currently `pi-usage-providers.test.mjs`). `pi-commit` and `pi-edit-safe` keep tests under `test/`; `pi-background-terminals` keeps its `*.test.ts` files next to source.
 - `.github/workflows/publish.yml` — npm publish on push to `main`.
 - `tsconfig.json` — root typecheck config. **Excludes `pi-background-terminals`** (it carries its own `tsconfig.json`).
 - `mise.toml`, `package-lock.json` — tooling/lockfile.
 
-Workspace → npm package map: `pi-repo-model`→`pi-tian-repo-model`, `pi-repo-skills`→`pi-tian-repo-skills`, `pi-commit`→`pi-tian-commit`, `pi-token-speed`→`pi-tian-token-speed`, `pi-image-cache`→`pi-tian-image-cache`, `pi-ask-user`→`pi-tian-ask-user`, `pi-usage`→`pi-tian-usage`, `pi-background-terminals`→`pi-tian-background-terminals`.
+Workspace → npm package map: `pi-repo-model`→`pi-tian-repo-model`, `pi-repo-skills`→`pi-tian-repo-skills`, `pi-commit`→`pi-tian-commit`, `pi-token-speed`→`pi-tian-token-speed`, `pi-image-cache`→`pi-tian-image-cache`, `pi-ask-user`→`pi-tian-ask-user`, `pi-usage`→`pi-tian-usage`, `pi-background-terminals`→`pi-tian-background-terminals`, `pi-edit-safe`→`pi-tian-edit-safe`.
 
 ## Common tasks
 - Install deps: `npm install`
@@ -25,6 +25,7 @@ Workspace → npm package map: `pi-repo-model`→`pi-tian-repo-model`, `pi-repo-
 - Typecheck `pi-background-terminals` (not covered by the root command; run separately locally and in CI): `npm run check -w pi-tian-background-terminals`
 - Test repo-level (usage providers): `npm run test:usage`
 - Test `pi-commit`: `npm test -w pi-tian-commit`
+- Test `pi-edit-safe`: `npm test -w pi-tian-edit-safe` (45 cases); A/B vs pi's real built-in edit: `npm run bench -w pi-tian-edit-safe`
 - Test `pi-background-terminals`: `npm test -w pi-tian-background-terminals`
 - Inspect publishable tarballs: `npm run pack:check`
 - Try an extension in a live pi session without installing: `pi -e ./packages/pi-repo-model`
@@ -34,10 +35,11 @@ Workspace → npm package map: `pi-repo-model`→`pi-tian-repo-model`, `pi-repo-
 - One extension per package; the package `name`/version in each `packages/*/package.json` is the source of truth for npm publishing.
 - `files` arrays in each package's `package.json` define tarball contents — add new source files there when they should ship (e.g. `lib`, `src`, `docs`).
 - Machine-local state (per-repo prefs, caches, tokens) lives under `~/.pi/...`, never inside a repo. Extensions read credentials pi already writes to `~/.pi/agent/auth.json`.
+- Packages ship **uncompiled TypeScript**, so all source must use erasable-syntax-only constructs — no `enum`, no namespaces, and no constructor parameter properties (`constructor(readonly x: T)`), which Node's type-stripping loader rejects. Declare the field and assign it in the body instead.
 - Keep `extensions/*.ts` as one-line re-export stubs; real code goes in `packages/*`.
 - When changing an extension, bump that package's `version` to trigger an npm release — CI compares the local version against the registry and publishes only unpublished versions, with provenance.
 
 ## Working agreement
 - Prefer small, reviewable changes; bump and publish only the package(s) that actually changed.
-- Always run **both** typechecks before pushing: `npm run typecheck` (root) **and** `npm run check -w pi-tian-background-terminals`. The publish workflow runs both plus the commit and background-terminals test suites before publishing.
+- Always run **both** typechecks before pushing: `npm run typecheck` (root) **and** `npm run check -w pi-tian-background-terminals`. The publish workflow runs both plus the commit, edit-safe, and background-terminals test suites before publishing.
 - Keep this file in sync with real workflows — update it when commands, workspace layout, or publish steps change.

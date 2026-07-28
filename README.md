@@ -12,6 +12,7 @@ A small collection of [pi coding agent](https://pi.dev) extensions.
 | **ask-user** | tool `ask_user` | Lets the model ask you a single multiple-choice question (2–5 options plus a free-form "write my own answer") in a popup. |
 | **usage** | `/usage` | Show **OpenAI Codex** and **GitHub Copilot** account usage in a menu, plus a compact footer meter for the active provider. |
 | **background-terminals** | `/ps`, overrides tool `bash` | Replace Pi's built-in Bash with one no-stdin execution path: quick commands return normally, long commands automatically continue in the background and notify the model exactly once. `/ps` provides live inspection (including paging a terminal's complete stdout/stderr log, not just what fits in memory) and user-owned termination. |
+| **edit-safe** | overrides tool `edit` | Replace Pi's built-in edit with a stricter matcher: fuzzy matching only *locates* a full-span, unambiguous target and the replacement is spliced in verbatim. Any ambiguity throws instead of guessing an occurrence, and bytes outside the matched span — including mixed line endings — are never rewritten. Exposes a single `edits[]` call shape so the model has nothing to choose. |
 
 Selections for the per-repo extensions are stored centrally and keyed by git
 root, so each repository keeps its own preferences without touching global
@@ -33,6 +34,7 @@ pi install npm:pi-tian-image-cache
 pi install npm:pi-tian-ask-user
 pi install npm:pi-tian-usage
 pi install npm:pi-tian-background-terminals
+pi install npm:pi-tian-edit-safe
 ```
 
 Restart pi or run `/reload` in an existing session after installation.
@@ -49,7 +51,8 @@ The commands above add these entries to `~/.pi/agent/settings.json`:
     "npm:pi-tian-image-cache",
     "npm:pi-tian-ask-user",
     "npm:pi-tian-usage",
-    "npm:pi-tian-background-terminals"
+    "npm:pi-tian-background-terminals",
+    "npm:pi-tian-edit-safe"
   ]
 }
 ```
@@ -66,6 +69,7 @@ The commands above add these entries to `~/.pi/agent/settings.json`:
 | [pi-tian-ask-user](https://www.npmjs.com/package/pi-tian-ask-user) | `pi install npm:pi-tian-ask-user` |
 | [pi-tian-usage](https://www.npmjs.com/package/pi-tian-usage) | `pi install npm:pi-tian-usage` |
 | [pi-tian-background-terminals](https://www.npmjs.com/package/pi-tian-background-terminals) | `pi install npm:pi-tian-background-terminals` |
+| [pi-tian-edit-safe](https://www.npmjs.com/package/pi-tian-edit-safe) | `pi install npm:pi-tian-edit-safe` |
 
 Try an extension temporarily without adding it to settings:
 
@@ -248,6 +252,34 @@ uses the ChatGPT OAuth access token; Copilot uses the stored GitHub OAuth token
 fallbacks). A provider with no resolvable credential shows as **Not configured**
 — sign in with `/login` and select it.
 
+### edit-safe
+
+Overrides the built-in `edit` tool with a stricter matcher. Fuzzy matching only
+**locates** a target span; the replacement is always spliced in verbatim, never
+re-indented or rewritten.
+
+- **Ambiguity throws.** Occurrences are counted overlap-aware (`aa` in `aaa` is
+  ambiguous, not unique), and a strategy matching more than one candidate fails
+  instead of falling through to a looser matcher or picking a "best" candidate.
+- **No partial-signal matching.** No first/last-line anchoring and no similarity
+  thresholds — every fuzzy candidate must be a full-span structural match that
+  occurs exactly once.
+- **Untouched bytes stay untouched.** BOMs and bytes outside the matched span
+  survive, and mixed-line-ending files are never flattened.
+- **Lenient input, strict schema.** The model is offered exactly **one** call shape — `{path, edits: [...]}`, always an array, even for a single change — so there is no per-call choice to get wrong. Looser shapes (`file_path`/`old_string` aliases, a stringified `edits` array, a bare edit object, top-level `oldText`/`newText`) are still folded onto that form before validation, so off-contract or older resumed calls are normalized rather than rejected.
+- **Sequential multi-edit.** `edits[]` applies in order, each matched against the
+  already-updated text, so dependent edits work; a later failure leaves the file
+  unchanged because the write happens once at the end.
+
+Returns pi's built-in `EditToolDetails` (`diff`, `patch`, `firstChangedLine`) and
+defines no custom renderers, so pi's streaming diff preview and final diff
+rendering are inherited.
+
+Disable without uninstalling: `PI_EDIT_SAFE_DISABLE=1 pi`.
+
+See [packages/pi-edit-safe](packages/pi-edit-safe/README.md) for the full
+matching order and the A/B bench against pi's real built-in edit.
+
 The repository is an npm workspace with one publishable package per extension:
 
 | Workspace | npm package |
@@ -260,6 +292,7 @@ The repository is an npm workspace with one publishable package per extension:
 | `packages/pi-ask-user` | `pi-tian-ask-user` |
 | `packages/pi-usage` | `pi-tian-usage` |
 | `packages/pi-background-terminals` | `pi-tian-background-terminals` |
+| `packages/pi-edit-safe` | `pi-tian-edit-safe` |
 
 Install dependencies, typecheck every workspace, run the commit and
 managed-terminal suites, and inspect publishable tarballs:
@@ -270,6 +303,7 @@ npm run typecheck
 npm run check -w pi-tian-background-terminals
 npm test -w pi-tian-background-terminals
 npm test -w pi-tian-commit
+npm test -w pi-tian-edit-safe
 npm run pack:check
 ```
 

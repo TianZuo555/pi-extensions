@@ -52,6 +52,9 @@ jobs:
       - name: Test commit extension
         run: npm test -w pi-tian-commit
 
+      - name: Test edit-safe extension
+        run: npm test -w pi-tian-edit-safe
+
       - name: Publish changed packages
         env:
           DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || 'false' }}
