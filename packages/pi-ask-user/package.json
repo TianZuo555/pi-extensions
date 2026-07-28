@@ -1,7 +1,7 @@
 {
   "name": "pi-tian-ask-user",
-  "version": "0.1.2",
-  "description": "Ask the user a multiple-choice question (with a free-form fallback) from the pi coding agent.",
+  "version": "0.2.0",
+  "description": "Ask the user one or more fully described multiple-choice questions from the pi coding agent.",
   "type": "module",
   "keywords": [
     "pi",
@@ -29,6 +29,9 @@
     "extensions": [
       "./index.ts"
     ]
+  },
+  "scripts": {
+    "test": "node --test --experimental-strip-types test/*.test.ts"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",

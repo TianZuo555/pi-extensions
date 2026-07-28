@@ -6,12 +6,21 @@ Let the model ask you a multiple-choice question from [pi](https://pi.dev).
 pi install npm:pi-tian-ask-user
 ```
 
-Registers an `ask_user` tool. The model supplies a question and 2–5 options; a
-free-form **"Write my own answer"** option is always added, and you can dismiss
-the question without answering.
+Registers an `ask_user` tool. The model can supply 1–5 questions with 2–5
+options each. Questions and option descriptions wrap across as many lines as
+needed instead of being truncated. Every question also gets a free-form
+**Other** option, and questions can allow either one or multiple selections.
 
-In interactive mode the options render as a popup: `↑↓` or number keys to move,
-`Enter` to confirm, `Esc` to dismiss.
+Interactive controls:
+
+- `←` / `→` — switch questions while preserving answers
+- `↑` / `↓` — move between options
+- `Space` — select an option or toggle it in a multi-select question
+- `Enter` — move to the next question or submit the completed form
+- `Esc` — go back from the custom-answer editor or dismiss the form
+
+The public schema uses `questions[]`. Calls saved by versions through 0.1.2 with
+top-level `question` and `options` are upgraded automatically when resumed.
 
 While it waits for your answer, the tool reports the input requirement on pi's
 **shared event bus** (`pi.events`). This is pi's in-process mechanism for tool ↔

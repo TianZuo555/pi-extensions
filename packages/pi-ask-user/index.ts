@@ -1,24 +1,23 @@
-// ask-user — lets the model ask the user a single multiple-choice question.
+// ask-user — lets the model ask one or more multiple-choice questions.
 //
-// The model provides 2–5 options; a free-form "Write my own answer" option is
-// always appended. In interactive (TUI) mode the options render as a popup:
-//   ↑↓ or 1–N to move · Enter to confirm · Esc to dismiss.
-// Choosing "Write my own answer" opens a multi-line editor; submitting an empty
-// answer returns to the option list. Dismissing tells the model you declined.
+// Interactive controls:
+//   ←/→ switch question · ↑/↓ move option · Space select/toggle
+//   Enter next/submit · Esc dismiss
 //
-// In RPC mode it falls back to the built-in select/input dialogs. In non-UI
-// modes (print/json) it reports back that no UI was available so the model can
-// ask in plain text instead.
+// Questions, labels, and descriptions are word-wrapped instead of truncated.
+// Each question always includes a free-form Other choice. RPC mode falls back
+// to built-in dialogs; print/json modes report that no UI was available.
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import {
-  SelectList,
-  type SelectItem,
-  type SelectListTheme,
-  Text,
-  truncateToWidth,
-} from "@earendil-works/pi-tui";
+import { Text } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
+import {
+  AskUserForm,
+  type AskUserAnswer,
+  type AskUserChoice,
+  type AskUserQuestion,
+  type AskUserSubmission,
+} from "./lib/form.ts";
 import {
   ASK_USER_PARAMETER_DESCRIPTIONS,
   ASK_USER_PROMPT_GUIDELINES,
@@ -26,12 +25,14 @@ import {
   ASK_USER_TOOL_DESCRIPTION,
   type AskUserOutcome,
   buildAskUserResultMessage,
-} from "./lib/prompt";
+} from "./lib/prompt.ts";
 
+const MIN_QUESTIONS = 1;
+const MAX_QUESTIONS = 5;
 const MIN_OPTIONS = 2;
 const MAX_OPTIONS = 5;
-const OTHER_VALUE = "__ask_user_other__";
-const OTHER_LABEL = "Write my own answer…";
+const OTHER_LABEL = "Other — type your own answer";
+const DONE_LABEL = "Done selecting";
 
 const OptionSchema = Type.Object({
   label: Type.String({ description: ASK_USER_PARAMETER_DESCRIPTIONS.optionLabel }),
@@ -40,12 +41,23 @@ const OptionSchema = Type.Object({
   ),
 });
 
-const AskUserParams = Type.Object({
+const QuestionSchema = Type.Object({
   question: Type.String({ description: ASK_USER_PARAMETER_DESCRIPTIONS.question }),
   options: Type.Array(OptionSchema, {
     minItems: MIN_OPTIONS,
     maxItems: MAX_OPTIONS,
     description: ASK_USER_PARAMETER_DESCRIPTIONS.options,
+  }),
+  allow_multiple: Type.Optional(
+    Type.Boolean({ description: ASK_USER_PARAMETER_DESCRIPTIONS.allowMultiple }),
+  ),
+});
+
+const AskUserParams = Type.Object({
+  questions: Type.Array(QuestionSchema, {
+    minItems: MIN_QUESTIONS,
+    maxItems: MAX_QUESTIONS,
+    description: ASK_USER_PARAMETER_DESCRIPTIONS.questions,
   }),
 });
 
@@ -64,40 +76,174 @@ export interface AgentInputRequiredEvent {
 }
 
 interface AskUserDetails {
-  question: string;
-  options: string[];
-  answer: string | null;
-  wasCustom: boolean;
+  questions: Array<{
+    question: string;
+    options: string[];
+    allowMultiple: boolean;
+  }>;
+  answers: AskUserAnswer[];
   cancelled: boolean;
 }
 
-type Picked =
-  | { kind: "option"; label: string; index: number }
-  | { kind: "other" }
-  | { kind: "cancel" };
+type AskUserContext = Parameters<
+  Parameters<ExtensionAPI["registerTool"]>[0]["execute"]
+>[4];
 
-// Word-wrap a paragraph to a column width, preserving explicit newlines.
-function wrapText(text: string, width: number): string[] {
-  const lines: string[] = [];
-  for (const paragraph of text.split("\n")) {
-    const words = paragraph.split(/\s+/).filter(Boolean);
-    if (words.length === 0) {
-      lines.push("");
+function normalizeQuestions(params: AskUserInput): AskUserQuestion[] {
+  return params.questions.map((question) => ({
+    question: question.question,
+    options: question.options,
+    allowMultiple: question.allow_multiple === true,
+  }));
+}
+
+function validateQuestions(questions: AskUserQuestion[]): void {
+  if (questions.length < MIN_QUESTIONS || questions.length > MAX_QUESTIONS) {
+    throw new Error(
+      `ask_user requires between ${MIN_QUESTIONS} and ${MAX_QUESTIONS} questions (got ${questions.length}). Retry with a valid number of questions.`,
+    );
+  }
+
+  for (let index = 0; index < questions.length; index++) {
+    const count = questions[index].options.length;
+    if (count < MIN_OPTIONS || count > MAX_OPTIONS) {
+      throw new Error(
+        `ask_user question ${index + 1} requires between ${MIN_OPTIONS} and ${MAX_OPTIONS} options (got ${count}). Retry with a valid number of options.`,
+      );
+    }
+  }
+}
+
+function showQuestions(
+  ctx: AskUserContext,
+  questions: AskUserQuestion[],
+  signal: AbortSignal | undefined,
+): Promise<AskUserSubmission | null> {
+  return ctx.ui.custom<AskUserSubmission | null>((tui, theme, keybindings, done) =>
+    new AskUserForm(tui, theme, keybindings, questions, done, signal),
+  );
+}
+
+function optionDialogLabel(
+  option: AskUserQuestion["options"][number],
+  index: number,
+  selected = false,
+): string {
+  const checkbox = selected ? "[x]" : "[ ]";
+  const description = option.description ? ` — ${option.description}` : "";
+  return `${checkbox} ${index + 1}. ${option.label}${description}`;
+}
+
+async function askQuestionWithDialogs(
+  ctx: AskUserContext,
+  question: AskUserQuestion,
+  questionIndex: number,
+  signal: AbortSignal | undefined,
+): Promise<AskUserAnswer | null> {
+  const title = `${questionIndex + 1}. ${question.question}`;
+
+  if (!question.allowMultiple) {
+    const labels = question.options.map((option, index) =>
+      optionDialogLabel(option, index),
+    );
+    labels.push(`[ ] ${question.options.length + 1}. ${OTHER_LABEL}`);
+
+    const selected = await ctx.ui.select(title, labels);
+    if (selected === undefined || signal?.aborted) return null;
+    const selectedIndex = labels.indexOf(selected);
+    let choice: AskUserChoice;
+
+    if (selectedIndex === question.options.length) {
+      const custom = (await ctx.ui.editor("Write your answer", ""))?.trim();
+      if (!custom || signal?.aborted) return null;
+      choice = { label: custom, wasCustom: true };
+    } else {
+      choice = {
+        label: question.options[selectedIndex].label,
+        optionIndex: selectedIndex + 1,
+        wasCustom: false,
+      };
+    }
+
+    return {
+      questionIndex: questionIndex + 1,
+      question: question.question,
+      choices: [choice],
+    };
+  }
+
+  const selectedIndices = new Set<number>();
+  let customAnswer: string | undefined;
+
+  for (;;) {
+    if (signal?.aborted) return null;
+    const labels = question.options.map((option, index) =>
+      optionDialogLabel(option, index, selectedIndices.has(index)),
+    );
+    labels.push(`${customAnswer ? "[x]" : "[ ]"} ${question.options.length + 1}. ${OTHER_LABEL}`);
+    labels.push(DONE_LABEL);
+
+    const selected = await ctx.ui.select(`${title} (select one or more)`, labels);
+    if (selected === undefined || signal?.aborted) return null;
+    const selectedIndex = labels.indexOf(selected);
+
+    if (selectedIndex === labels.length - 1) {
+      if (selectedIndices.size === 0 && !customAnswer) {
+        ctx.ui.notify("Select one or more options before continuing", "warning");
+        continue;
+      }
+      break;
+    }
+
+    if (selectedIndex === question.options.length) {
+      if (customAnswer) {
+        customAnswer = undefined;
+        continue;
+      }
+      const custom = (await ctx.ui.editor("Write your answer", ""))?.trim();
+      if (signal?.aborted) return null;
+      if (custom) customAnswer = custom;
       continue;
     }
-    let current = "";
-    for (const word of words) {
-      const candidate = current ? `${current} ${word}` : word;
-      if (candidate.length > width && current) {
-        lines.push(current);
-        current = word;
-      } else {
-        current = candidate;
-      }
-    }
-    if (current) lines.push(current);
+
+    if (selectedIndices.has(selectedIndex)) selectedIndices.delete(selectedIndex);
+    else selectedIndices.add(selectedIndex);
   }
-  return lines;
+
+  const choices: AskUserChoice[] = [...selectedIndices]
+    .sort((left, right) => left - right)
+    .map((optionIndex) => ({
+      label: question.options[optionIndex].label,
+      optionIndex: optionIndex + 1,
+      wasCustom: false,
+    }));
+  if (customAnswer) choices.push({ label: customAnswer, wasCustom: true });
+
+  return {
+    questionIndex: questionIndex + 1,
+    question: question.question,
+    choices,
+  };
+}
+
+async function showQuestionsWithDialogs(
+  ctx: AskUserContext,
+  questions: AskUserQuestion[],
+  signal: AbortSignal | undefined,
+): Promise<AskUserSubmission | null> {
+  const answers: AskUserAnswer[] = [];
+  for (let index = 0; index < questions.length; index++) {
+    const answer = await askQuestionWithDialogs(ctx, questions[index], index, signal);
+    if (!answer) return null;
+    answers.push(answer);
+  }
+  return { answers };
+}
+
+function formatChoiceForResult(choice: AskUserChoice): string {
+  return choice.wasCustom
+    ? `(wrote) ${choice.label}`
+    : `${choice.optionIndex}. ${choice.label}`;
 }
 
 export default function askUser(pi: ExtensionAPI): void {
@@ -108,46 +254,66 @@ export default function askUser(pi: ExtensionAPI): void {
     promptSnippet: ASK_USER_PROMPT_SNIPPET,
     promptGuidelines: ASK_USER_PROMPT_GUIDELINES,
     parameters: AskUserParams,
+    executionMode: "sequential",
+
+    prepareArguments(args): AskUserInput {
+      if (!args || typeof args !== "object") return args as AskUserInput;
+      const input = args as {
+        questions?: unknown;
+        question?: unknown;
+        options?: unknown;
+        allow_multiple?: unknown;
+      };
+      if (Array.isArray(input.questions)) return args as AskUserInput;
+      if (typeof input.question !== "string" || !Array.isArray(input.options)) {
+        return args as AskUserInput;
+      }
+
+      // Compatibility for tool calls stored by versions <= 0.1.2.
+      return {
+        questions: [
+          {
+            question: input.question,
+            options: input.options,
+            ...(typeof input.allow_multiple === "boolean"
+              ? { allow_multiple: input.allow_multiple }
+              : {}),
+          },
+        ],
+      };
+    },
 
     async execute(toolCallId, params, signal, _onUpdate, ctx) {
-      const reply = (text: string, answer: string | null = null, wasCustom = false) => ({
-        content: [{ type: "text" as const, text }],
-        details: {
-          question: params.question,
-          options: params.options.map((o) => o.label),
-          answer,
-          wasCustom,
-          cancelled: answer === null,
-        } satisfies AskUserDetails,
+      const questions = normalizeQuestions(params);
+      validateQuestions(questions);
+
+      const detailsFor = (submission: AskUserSubmission | null): AskUserDetails => ({
+        questions: questions.map((question) => ({
+          question: question.question,
+          options: question.options.map((option) => option.label),
+          allowMultiple: question.allowMultiple,
+        })),
+        answers: submission?.answers ?? [],
+        cancelled: submission === null,
       });
 
-      if (params.options.length < MIN_OPTIONS || params.options.length > MAX_OPTIONS) {
-        throw new Error(
-          `ask_user requires between ${MIN_OPTIONS} and ${MAX_OPTIONS} options (got ${params.options.length}). Retry with a valid number of options.`,
-        );
-      }
+      const reply = (outcome: AskUserOutcome, submission: AskUserSubmission | null = null) => ({
+        content: [{ type: "text" as const, text: buildAskUserResultMessage(outcome) }],
+        details: detailsFor(submission),
+      });
 
       const dismissedOrCancelled = (): AskUserOutcome =>
         signal?.aborted ? { kind: "cancelled" } : { kind: "dismissed" };
 
-      // The model's options plus the always-present free-form option.
-      const items: SelectItem[] = params.options.map((o, i) => ({
-        value: `opt-${i}`,
-        label: o.label,
-        description: o.description,
-      }));
-      items.push({ value: OTHER_VALUE, label: OTHER_LABEL });
-
       // Report the cause (waiting for input), not a client-specific final agent
-      // state. Consumers own state aggregation and transport; for example, a
-      // Herdr integration can map active requests to its pane's blocked state.
-      // The tool-call ID makes duplicate and concurrent lifecycles correlatable.
-      //
-      // `herdr:blocked` is emitted temporarily for compatibility with Herdr's
-      // version 6 pi integration. New consumers should use the generic channel.
-      const blockedLabel =
-        params.question.replace(/\s+/g, " ").trim().slice(0, 120) ||
-        "Waiting for user input";
+      // state. Consumers own state aggregation and transport. `herdr:blocked`
+      // remains temporarily for compatibility with Herdr's version 6 bridge.
+      const firstQuestion = questions[0].question.replace(/\s+/g, " ").trim();
+      const blockedLabel = (
+        questions.length === 1
+          ? firstQuestion
+          : `${questions.length} questions: ${firstQuestion}`
+      ).slice(0, 120) || "Waiting for user input";
       const emitInputRequired = (active: boolean) => {
         const payload: AgentInputRequiredEvent = {
           version: 1,
@@ -166,86 +332,58 @@ export default function askUser(pi: ExtensionAPI): void {
         }
       };
 
-      // --- Interactive TUI popup -------------------------------------------
       if (ctx.mode === "tui") {
         emitInputRequired(true);
         try {
-          // Loop so an empty free-form answer returns to the option list.
-          for (;;) {
-            if (signal?.aborted) {
-              return reply(buildAskUserResultMessage({ kind: "cancelled" }));
-            }
-
-            const picked = await showOptions(ctx, params.question, items, signal);
-
-            if (picked.kind === "cancel") {
-              return reply(buildAskUserResultMessage(dismissedOrCancelled()));
-            }
-
-            if (picked.kind === "other") {
-              const answer = (await ctx.ui.editor("Write your answer", ""))?.trim();
-              if (answer) {
-                return reply(buildAskUserResultMessage({ kind: "custom", answer }), answer, true);
-              }
-              continue; // back to the options
-            }
-
-            return reply(
-              buildAskUserResultMessage({
-                kind: "selected",
-                answer: picked.label,
-                index: picked.index,
-              }),
-              picked.label,
-            );
-          }
+          if (signal?.aborted) return reply({ kind: "cancelled" });
+          const submission = await showQuestions(ctx, questions, signal);
+          if (!submission) return reply(dismissedOrCancelled());
+          return reply({ kind: "answered", answers: submission.answers }, submission);
         } finally {
           emitInputRequired(false);
         }
       }
 
-      // --- RPC fallback: built-in select/input dialogs ---------------------
       if (ctx.hasUI) {
         emitInputRequired(true);
         try {
-          const labels = items.map((i) =>
-            i.description ? `${i.label} — ${i.description}` : i.label,
-          );
-          const choice = await ctx.ui.select(params.question, labels);
-          if (choice === undefined) {
-            return reply(buildAskUserResultMessage(dismissedOrCancelled()));
-          }
-          const idx = labels.indexOf(choice);
-          if (idx === items.length - 1) {
-            const answer = (await ctx.ui.input(params.question))?.trim();
-            if (answer) {
-              return reply(buildAskUserResultMessage({ kind: "custom", answer }), answer, true);
-            }
-            return reply(buildAskUserResultMessage({ kind: "dismissed" }));
-          }
-          const opt = params.options[idx];
-          return reply(
-            buildAskUserResultMessage({ kind: "selected", answer: opt.label, index: idx + 1 }),
-            opt.label,
-          );
+          const submission = await showQuestionsWithDialogs(ctx, questions, signal);
+          if (!submission) return reply(dismissedOrCancelled());
+          return reply({ kind: "answered", answers: submission.answers }, submission);
         } finally {
           emitInputRequired(false);
         }
       }
 
-      // --- No UI (print/json) ----------------------------------------------
-      return reply(buildAskUserResultMessage({ kind: "no-ui" }));
+      return reply({ kind: "no-ui" });
     },
 
     renderCall(args, theme, _context) {
+      const renderArgs = args as AskUserInput & {
+        question?: string;
+        options?: Array<{ label?: string }>;
+      };
+      const rawQuestions = Array.isArray(renderArgs.questions)
+        ? (renderArgs.questions as Array<{
+            question?: string;
+            options?: Array<{ label?: string }>;
+          }>)
+        : typeof renderArgs.question === "string"
+          ? [{ question: renderArgs.question, options: renderArgs.options }]
+          : [];
+      const count = rawQuestions.length;
       let text = theme.fg("toolTitle", theme.bold("ask_user "));
-      text += theme.fg("muted", typeof args.question === "string" ? args.question : "");
-      const opts = Array.isArray(args.options)
-        ? (args.options as Array<{ label?: string }>)
-        : [];
-      if (opts.length > 0) {
-        const numbered = opts.map((o, i) => `${i + 1}. ${o.label ?? ""}`);
-        text += `\n${theme.fg("dim", `  ${numbered.join("  ")}`)}`;
+      text += theme.fg("muted", `${count} question${count === 1 ? "" : "s"}`);
+
+      for (let index = 0; index < rawQuestions.length; index++) {
+        const question = rawQuestions[index];
+        text += `\n${theme.fg("dim", `  ${index + 1}. ${question.question ?? ""}`)}`;
+        if (count === 1 && Array.isArray(question.options)) {
+          const options = question.options.map(
+            (option, optionIndex) => `${optionIndex + 1}. ${option.label ?? ""}`,
+          );
+          if (options.length > 0) text += `\n${theme.fg("dim", `     ${options.join("  ")}`)}`;
+        }
       }
       return new Text(text, 0, 0);
     },
@@ -256,109 +394,19 @@ export default function askUser(pi: ExtensionAPI): void {
         const first = result.content[0];
         return new Text(first?.type === "text" ? first.text : "", 0, 0);
       }
-      if (details.cancelled || details.answer === null) {
+      if (details.cancelled) {
         return new Text(theme.fg("warning", "✗ dismissed"), 0, 0);
       }
-      if (details.wasCustom) {
-        return new Text(
+
+      const lines = details.answers.map((answer) => {
+        const choices = answer.choices.map(formatChoiceForResult).join(", ");
+        return (
           theme.fg("success", "✓ ") +
-            theme.fg("muted", "(wrote) ") +
-            theme.fg("accent", details.answer),
-          0,
-          0,
+          theme.fg("accent", `Q${answer.questionIndex}: `) +
+          theme.fg("text", choices)
         );
-      }
-      const idx = details.options.indexOf(details.answer) + 1;
-      const display = idx > 0 ? `${idx}. ${details.answer}` : details.answer;
-      return new Text(theme.fg("success", "✓ ") + theme.fg("accent", display), 0, 0);
+      });
+      return new Text(lines.join("\n"), 0, 0);
     },
-  });
-}
-
-// Renders the question header and the option list as a custom TUI popup,
-// resolving to the user's choice (or a cancel when Esc/abort fires).
-function showOptions(
-  ctx: Parameters<Parameters<ExtensionAPI["registerTool"]>[0]["execute"]>[4],
-  question: string,
-  items: SelectItem[],
-  signal: AbortSignal | undefined,
-): Promise<Picked> {
-  return ctx.ui.custom<Picked>((tui, theme, _keybindings, done) => {
-    let settled = false;
-    const finish = (picked: Picked) => {
-      if (settled) return;
-      settled = true;
-      signal?.removeEventListener("abort", onAbort);
-      done(picked);
-    };
-    const onAbort = () => finish({ kind: "cancel" });
-    signal?.addEventListener("abort", onAbort, { once: true });
-    if (signal?.aborted) queueMicrotask(onAbort);
-
-    const listTheme: SelectListTheme = {
-      selectedPrefix: (t) => theme.fg("accent", t),
-      selectedText: (t) => theme.fg("accent", t),
-      description: (t) => theme.fg("muted", t),
-      scrollInfo: (t) => theme.fg("dim", t),
-      noMatch: (t) => theme.fg("warning", t),
-    };
-
-    const list = new SelectList(items, Math.min(items.length, 8), listTheme);
-    list.onSelect = (item) => {
-      const index = items.findIndex((i) => i.value === item.value);
-      if (item.value === OTHER_VALUE) finish({ kind: "other" });
-      else finish({ kind: "option", label: item.label, index: index + 1 });
-    };
-    list.onCancel = () => finish({ kind: "cancel" });
-
-    let cache: string[] | undefined;
-    const invalidate = () => {
-      cache = undefined;
-      list.invalidate();
-    };
-
-    return {
-      render(width: number): string[] {
-        if (cache) return cache;
-        const lines: string[] = [];
-        const add = (s: string) => lines.push(truncateToWidth(s, width));
-
-        const title = " Question ";
-        add(
-          theme.fg(
-            "accent",
-            `─${title}${"─".repeat(Math.max(0, width - title.length - 1))}`,
-          ),
-        );
-        for (const line of wrapText(question, Math.max(10, width - 2))) {
-          add(` ${theme.fg("text", theme.bold(line))}`);
-        }
-        lines.push("");
-        for (const line of list.render(width - 1)) add(` ${line}`);
-        lines.push("");
-        add(theme.fg("dim", ` ↑↓ or 1-${items.length} select · Enter confirm · Esc dismiss`));
-        add(theme.fg("accent", "─".repeat(width)));
-
-        cache = lines;
-        return lines;
-      },
-      invalidate,
-      handleInput(data: string) {
-        // Number keys jump straight to (and confirm) an option.
-        if (data.length === 1 && data >= "1" && data <= "9") {
-          const n = Number(data);
-          if (n >= 1 && n <= items.length) {
-            list.onSelect?.(items[n - 1]);
-            return;
-          }
-        }
-        list.handleInput(data);
-        invalidate();
-        tui.requestRender();
-      },
-      dispose() {
-        signal?.removeEventListener("abort", onAbort);
-      },
-    };
   });
 }
