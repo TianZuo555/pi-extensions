@@ -5,9 +5,10 @@ A managed replacement for Pi's built-in `bash` tool.
 Every model shell command follows one path: start it, wait briefly, and return
 its final output if it finishes. If it outlives the initial wait, return control
 to the model while the command continues as a session-scoped background
-terminal. Its final result is delivered automatically exactly once. The model
-still receives bounded stdout/stderr, but the main TUI transcript stays compact
-and output-free; `/ps` owns all human-facing terminal inspection.
+terminal. Its final result is delivered automatically exactly once. Quick Bash
+calls show a bounded command/output preview in the main transcript; only calls
+that actually yield collapse to compact terminal rows. `/ps` retains complete
+invocation metadata and the detailed stdout/stderr viewer.
 
 ```text
 ■ 2 background terminals running • /ps to view
@@ -25,8 +26,11 @@ Parameters:
 - `command` — Bash script to execute.
 - `timeout` — optional hard total runtime timeout in seconds. When reached, the
   whole process tree is terminated. There is no default runtime timeout.
-- `working_dir` — optional working directory; defaults to the current directory.
-- `title` — optional short `/ps` label; defaults to a bounded one-line command.
+- `working_dir` — optional working directory for this fresh shell invocation;
+  defaults to the session directory. A standalone `cd` never affects later calls.
+- `title` — optional short `/ps` label. The default strips common leading
+  `D=/path;` or `cd /path &&` setup and preserves both ends when bounding a long
+  command, so repeated setup prefixes do not hide the actual work.
 - `yield-time_ms` — optional initial wait, default **10 seconds**. Integer values
   are clamped to **250–30,000 ms** rather than rejected when out of range.
 
@@ -37,18 +41,25 @@ Behavior:
 2. Preserve Pi's managed `PATH` (`<agent-dir>/bin` is prepended unless already
    present) and inject the same `PI_SESSION_ID`, `PI_SESSION_FILE`, `PI_PROVIDER`,
    `PI_MODEL`, and `PI_REASONING_LEVEL` values as built-in Bash.
-3. Start the command with no interactive stdin and capture stdout/stderr while
-   the main Bash row shows only compact terminal status plus a `/ps` hint.
+3. Start the command in a fresh shell with no interactive stdin and capture
+   stdout/stderr. During the initial wait, the main Bash row shows the useful
+   command title and a small sanitized output preview.
 4. If it exits during `yield_time_ms`, return its final status and bounded
    head+tail output to the model. Non-zero exits and hard timeouts are Bash tool
-   errors; the TUI row remains output-free even when expanded.
-5. If it remains alive, return an id such as `bt-1`. The model should continue
-   working rather than poll. A compact follow-up notification wakes it exactly
-   once when the process exits; stdout/stderr stay in `/ps` rather than the main
-   transcript.
+   errors. The TUI keeps the quick command visibly distinct from background work.
+5. If it remains alive, return an id such as `bt-1`. Only then does the row
+   collapse to compact background-terminal status. The model should continue
+   rather than poll; a compact follow-up wakes it exactly once on exit, while
+   detailed stdout/stderr remain in `/ps`.
 
 There are no model-facing status, list, kill, polling, or stdin tools. The user
 owns inspection and termination through `/ps`.
+
+To prevent an agent from spending an entire run on recursive shell searches,
+the extension counts recognized read-only Bash inspection commands across the
+whole agent run. It starts adding a model-facing synthesis warning at call 6 and
+blocks call 9 (limit 8) before spawn. The counter resets for the next agent run;
+normal builds, tests, and other unrecognized execution commands are not counted.
 
 ### Safe foreground fallback
 
@@ -83,9 +94,13 @@ While at least one terminal runs, a one-line widget renders above the editor.
 - **Automatic yielding, no polling.** Quick commands return directly; only
   commands that outlive the initial wait become background work. Completion
   uses `pi.sendMessage(..., { deliverAs: "followUp", triggerTurn: true })`.
-- **Output-free main transcript.** Custom Bash and completion renderers show
-  only terminal id/status plus `/ps`; their underlying content still carries
-  bounded stdout/stderr to the model.
+- **Truthful quick-vs-yielded rendering.** Quick and initial-wait Bash rows show
+  a bounded sanitized preview. Only a command that actually yields is rendered
+  as a compact background terminal; asynchronous completion rows remain compact.
+- **Fresh-shell guidance and exploration guardrail.** Model guidance points to
+  `working_dir` instead of persistent `cd` assumptions and prefers dedicated
+  inspection tools. Read-only shell exploration warns at 6 calls and blocks
+  after 8 within one agent run.
 - **Exactly-once completion.** A race-safe waiter token decides whether the
   initial Bash call or the later follow-up owns settlement. A drain-once map
   handles delivery retries without duplicates.

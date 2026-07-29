@@ -263,8 +263,9 @@ it.
 Replaces the built-in `bash` tool with one no-stdin execution path. Quick
 commands return normally; a command that outlives the initial wait keeps running
 as a session-scoped background terminal and its result is delivered to the model
-exactly once, so there is nothing to poll. Bash and completion rows keep the main
-TUI transcript output-free; human-facing stdout/stderr lives in `/ps`.
+exactly once, so there is nothing to poll. Quick Bash rows show their useful
+command and a bounded output preview; only commands that actually yield collapse
+to compact terminal rows. Complete human-facing stdout/stderr remains in `/ps`.
 
 - Parameters: `command`, plus optional `timeout` (hard kill), `working_dir`,
   `title`, and `yield_time_ms` (default 10s, clamped to 250–30,000 ms).
@@ -274,6 +275,9 @@ TUI transcript output-free; human-facing stdout/stderr lives in `/ps`.
 - Once a stream outgrows in-memory retention, the viewer pages the **complete
   on-disk log** instead of only what fits in memory.
 - A one-line widget renders above the editor while any terminal is running.
+- Every call uses a fresh shell; prompt guidance directs the model to
+  `working_dir` rather than persistent `cd` assumptions. Read-only Bash
+  exploration warns at 6 calls and blocks after 8 within one agent run.
 
 Inspection and termination are user-owned — the model gets no status, list,
 kill, or stdin tools. See

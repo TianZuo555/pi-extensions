@@ -21,9 +21,10 @@ Every model shell command goes through `bash`:
    follow-up that wakes the model.
 
 The model-facing tool result and completion message retain bounded stdout/stderr.
-Their custom TUI renderers deliberately hide all process output—even when a row
-is expanded—and show only compact status plus a `/ps` hint. `/ps` is the sole
-human-facing output viewer.
+Quick and initial-wait TUI rows show a sanitized bounded output preview plus a
+useful command title. Only a command that actually yields is presented as a
+compact background-terminal row; asynchronous completion rows also stay compact.
+`/ps` remains the complete invocation and human-facing output viewer.
 
 The model has no status, list, kill, poll, or stdin tools. It should continue
 working after a command yields. The user inspects and stops running terminals
@@ -55,12 +56,15 @@ yield_time_ms  optional initial wait; integers clamp to 250–30,000 ms
 ```
 
 The override supplies its own prompt snippet and guidelines because Pi does not
-inherit prompt metadata from built-ins. It also supplies compact call/result
-renderers so commands and stdout/stderr never appear in the main TUI transcript.
-These renderers change presentation only: the unchanged textual result still
-reaches the model. Successful results use `details: undefined`, which is a valid
-`BashToolDetails` shape. Separate full-log paths remain in the model-facing
-stdout/stderr sections.
+inherit prompt metadata from built-ins. The guidelines state that every call is
+a fresh shell, direct directory changes through `working_dir`, prefer dedicated
+inspection tools, and disclose the shell-exploration budget.
+
+The custom call/result renderers show a useful bounded title and preview for
+quick work, then switch to compact id/status rendering only after a real yield.
+Rendering changes presentation only: the textual result still reaches the model.
+Successful results use `details: undefined`, which is a valid `BashToolDetails`
+shape. Separate full-log paths remain in model-facing stdout/stderr sections.
 
 ## 3. Safe fallback boundary
 
@@ -108,16 +112,19 @@ The tool preserves Pi's normal Bash behavior:
   `PI_SESSION_ID`, `PI_SESSION_FILE`, `PI_PROVIDER`, `PI_MODEL`, and
   `PI_REASONING_LEVEL`. Inherited stale values are removed first.
 
-Most shells receive the script as a `-c` argument and have stdin ignored.
-Legacy WSL Bash may require a one-shot stdin script transport; the extension
-writes the script and closes the pipe immediately. Neither path provides an
-interactive input surface.
+Every call spawns a fresh shell in its resolved cwd. Shell-side `cd`, variables,
+and exports therefore live only for that invocation; later calls use their own
+`working_dir` or the session cwd. Most shells receive the script as a `-c`
+argument and have stdin ignored. Legacy WSL Bash may require a one-shot stdin
+script transport; the extension writes the script and closes the pipe
+immediately. Neither path provides an interactive input surface.
 
 ## 5. File layout
 
 ```text
 index.ts                    Pi boundary, bash override, fallback, /ps
 src/domain.ts               Snapshot/status/error types
+src/exploration-budget.ts   Read-only shell exploration classifier/guardrail
 src/manager.ts              Effect service and process lifecycle
 src/output.ts               Bounded head+tail stream retention
 src/process-tracker.ts      Synchronous abnormal-exit process-tree safety net
@@ -163,11 +170,12 @@ A snapshot includes:
 ## 7. Execution flow
 
 `index.ts` first performs side-effect-free validation. It preserves the exact
-script text and trims only to reject an empty command and derive a title.
-Filesystem stat errors and non-directory paths are reported before manager
-resolution. The public schema accepts any integer `yield_time_ms`; the manager
-clamps it so an overconfident scheduling guess cannot reject the entire tool
-call.
+script text and trims only to reject an empty command. Default titles remove a
+common leading assignment (`D=/path;`) or directory setup (`cd /path &&`) and
+middle-truncate long commands, preserving the work-bearing suffix. Filesystem
+stat errors and non-directory paths are reported before manager resolution. The
+public schema accepts any integer `yield_time_ms`; the manager clamps it so an
+overconfident scheduling guess cannot reject the entire tool call.
 
 Manager execution has two calls:
 
@@ -180,9 +188,10 @@ manager.waitForSettlement(id, yield_time_ms)
 an abort window where a live child exists without a manager entry or scope.
 
 During the initial wait, a per-terminal subscription emits bounded progress
-updates at most every 100 ms. The custom renderer reduces each update to compact
-terminal status, never process output. Exceptions thrown by the display callback
-are ignored; presentation cannot affect process execution.
+updates at most every 100 ms. The custom renderer shows a sanitized preview of
+at most four source lines. Quick final results show at most six; yielded results
+collapse to compact terminal status with `/ps`. Exceptions thrown by the display
+callback are ignored; presentation cannot affect process execution.
 
 The initial wait is abortible. Aborting it does not kill the process. The error
 identifies the terminal id, and eventual settlement remains eligible for an
@@ -190,11 +199,26 @@ automatic follow-up.
 
 The returned result has two forms:
 
-- **Final:** status/output are returned directly and any deferred completion for
-  the tiny start→wait race is consumed. Failed, killed, and timed-out final
-  states throw so Pi marks the Bash result as an error.
+- **Final:** status/output are returned directly, without presenting the
+  manager's internal `bt-N` identity as background work, and any deferred
+  completion for the tiny start→wait race is consumed. Failed, killed, and
+  timed-out final states throw so Pi marks the Bash result as an error.
 - **Yielded:** status is `running`, the id and captured startup output are
   returned, and later settlement becomes a follow-up.
+
+### Shell exploration guardrail
+
+A narrow classifier recognizes common read-only Bash inspection such as `rg`,
+`grep`, `find`, `ls`, `sed`, and read-only Git queries. It also recognizes those
+commands after the repeated `D=/long/path;` setup pattern. Unknown execution,
+build, and test commands are not counted.
+
+The count spans every model/tool turn in one `agent_start` → `agent_end` run,
+rather than resetting per turn. Calls 6–8 execute but append a model-facing
+instruction to stop broad searching and synthesize. Call 9 is rejected before
+manager resolution or spawn, so it cannot produce side effects. The next agent
+run and every session transition reset the counter. Tool-call ids are counted
+once so framework retries cannot consume the budget twice.
 
 ## 8. Hard runtime timeout
 
@@ -473,7 +497,10 @@ The package test suite covers:
 - Pi managed-bin `PATH`, session environment, and command-prefix preservation;
 - out-of-range integer yield waits reaching the manager clamp;
 - bounded streaming updates during the initial wait;
-- output-free main Bash/completion renderers with `/ps` hints;
+- visible quick-command title/output previews versus compact genuinely yielded
+  Bash/completion rows;
+- fresh-shell/`working_dir` guidance and work-bearing default titles;
+- shell-exploration warnings, pre-spawn blocking, and next-run reset;
 - hard timeout status and tree termination;
 - Bash-specific syntax on the resolved shell;
 - abort leaving eventual completion deliverable;

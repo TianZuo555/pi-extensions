@@ -8,6 +8,10 @@ import { Check } from "typebox/value";
 import backgroundTerminals, {
   createBackgroundTerminalsExtension,
 } from "./index.ts";
+import {
+  EXPLORATION_LIMIT,
+  EXPLORATION_WARNING_AT,
+} from "./src/exploration-budget.ts";
 
 function command(script: string) {
   const encoded = Buffer.from(script).toString("base64");
@@ -100,7 +104,7 @@ test("extension overrides only bash plus the user /ps command", async () => {
   }
 });
 
-test("main transcript renderers hide command output and point to /ps", async () => {
+test("renderers distinguish quick bash from actually yielded terminals", async () => {
   const app = harness();
   const theme = {
     fg: (_color: string, text: string) => text,
@@ -109,22 +113,46 @@ test("main transcript renderers hide command output and point to /ps", async () 
   try {
     const tool = app.tools.get("bash");
     const call = tool.renderCall(
-      { command: "printf super-secret-command" },
+      { command: "printf visible-command" },
       theme,
       {},
     );
-    assert.equal(call.render(120).join("\n").trimEnd(), "bash");
+    assert.equal(
+      call.render(120).join("\n").trimEnd(),
+      "$ printf visible-command",
+    );
 
-    const result = tool.renderResult(
+    const quick = tool.renderResult(
       {
         content: [{
           type: "text",
           text: [
-            'Command is still running as background terminal bt-9 "secret".',
-            'bt-9 [running] "secret" (pid 99)',
+            "Command finished in 0s (exit 0).",
             "",
             "stdout:",
-            "super-secret-output",
+            "visible-output",
+          ].join("\n"),
+        }],
+      },
+      { isPartial: false, expanded: false },
+      theme,
+      { isError: false },
+    );
+    const renderedQuick = quick.render(120).join("\n").trimEnd();
+    assert.match(renderedQuick, /bash done.*\/ps for details/);
+    assert.match(renderedQuick, /stdout:\s*\nvisible-output/);
+    assert.doesNotMatch(renderedQuick, /terminal bt-/);
+
+    const yielded = tool.renderResult(
+      {
+        content: [{
+          type: "text",
+          text: [
+            'Command is still running as background terminal bt-9 "server".',
+            'bt-9 [running] "server" (pid 99)',
+            "",
+            "stdout:",
+            "startup-output",
           ].join("\n"),
         }],
       },
@@ -132,19 +160,19 @@ test("main transcript renderers hide command output and point to /ps", async () 
       theme,
       { isError: false },
     );
-    const renderedResult = result.render(120).join("\n").trimEnd();
-    assert.match(renderedResult, /terminal bt-9 running.*\/ps to inspect/);
-    assert.doesNotMatch(renderedResult, /stdout|super-secret-output|secret\"/);
+    const renderedYielded = yielded.render(120).join("\n").trimEnd();
+    assert.match(renderedYielded, /terminal bt-9 running.*\/ps to inspect/);
+    assert.doesNotMatch(renderedYielded, /stdout|startup-output|server\"/);
 
     const completionRenderer = app.messageRenderers.get(
       "background-terminal-result",
     );
     const completion = completionRenderer(
       {
-        content: "Background terminal bt-9 exited.\n\nstdout:\nsuper-secret-output",
+        content: "Background terminal bt-9 exited.\n\nstdout:\nlater-output",
         details: {
           id: "bt-9",
-          title: "secret",
+          title: "server",
           status: "done",
           exitCode: 0,
         },
@@ -156,7 +184,7 @@ test("main transcript renderers hide command output and point to /ps", async () 
     assert.match(renderedCompletion, /terminal bt-9.*\/ps to inspect/);
     assert.doesNotMatch(
       renderedCompletion,
-      /stdout|super-secret-output|secret/,
+      /stdout|later-output|server/,
     );
   } finally {
     await app.shutdown();
@@ -170,6 +198,53 @@ test("yield wait schema delegates bounds to manager clamping", async () => {
     assert.equal(Check(schema, { command: "true", yield_time_ms: 120_000 }), true);
     assert.equal(Check(schema, { command: "true", yield_time_ms: -1 }), true);
     assert.equal(Check(schema, { command: "true", yield_time_ms: 1.5 }), false);
+  } finally {
+    await app.shutdown();
+  }
+});
+
+test("shell exploration warns, blocks, and resets for the next agent run", async () => {
+  const app = harness();
+  try {
+    const tool = app.tools.get("bash");
+    for (let count = 1; count <= EXPLORATION_LIMIT; count++) {
+      const result = await tool.execute(
+        `call-inspect-${count}`,
+        { command: "ls >/dev/null", yield_time_ms: 30_000 },
+        undefined,
+        undefined,
+        app.ctx,
+      );
+      if (count === EXPLORATION_WARNING_AT) {
+        assert.match(
+          result.content[0].text,
+          new RegExp(`${EXPLORATION_WARNING_AT}/${EXPLORATION_LIMIT}`),
+        );
+      }
+    }
+
+    const inspectionCommand = "ls >/dev/null";
+    await assert.rejects(
+      tool.execute(
+        "call-inspect-blocked",
+        { command: inspectionCommand, yield_time_ms: 30_000 },
+        undefined,
+        undefined,
+        app.ctx,
+      ),
+      /was not executed.*synthesize/is,
+    );
+
+    for (const handler of app.handlers.get("agent_start") ?? []) {
+      handler({}, app.ctx);
+    }
+    await tool.execute(
+      "call-inspect-after-reset",
+      { command: inspectionCommand, yield_time_ms: 30_000 },
+      undefined,
+      undefined,
+      app.ctx,
+    );
   } finally {
     await app.shutdown();
   }

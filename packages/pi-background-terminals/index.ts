@@ -10,7 +10,8 @@
  * While ≥1 process runs, a one-line widget above the editor shows
  * "N background terminal(s) running • /ps to view". `/ps` opens a two-stage
  * full-screen overlay (list → read-only detail with Info/stdout/stderr tabs).
- * Main-session Bash and completion rows stay compact and output-free.
+ * Quick Bash rows show a bounded command/output preview; only commands that
+ * actually yield collapse to compact /ps-owned terminal rows.
  *
  * Architecture: Effect v4 core (manager service behind one ManagedRuntime);
  * this file is the async boundary where tool handlers run effects via
@@ -37,6 +38,12 @@ import {
   type TerminalStatus,
 } from "./src/domain.ts";
 import {
+  EXPLORATION_LIMIT,
+  explorationLimitError,
+  explorationWarning,
+  isExploratoryBashCommand,
+} from "./src/exploration-budget.ts";
+import {
   DEFAULT_YIELD_TIME_MS,
   MAX_RUNTIME_TIMEOUT_SECONDS,
   TerminalManager,
@@ -50,6 +57,7 @@ import {
   buildBashProgress,
   buildBashResult,
   buildTerminalResultMessage,
+  deriveCommandTitle,
   describeTerminal,
 } from "./src/prompt.ts";
 import { createDeferredResultDelivery } from "./src/result-delivery.ts";
@@ -58,6 +66,7 @@ import {
   runTool,
   type TerminalRuntime,
 } from "./src/runtime.ts";
+import { sanitizeText } from "./src/ui/output-view.ts";
 import { openTerminalPicker } from "./src/ui/ps.ts";
 
 const WIDGET_KEY = "background-terminals";
@@ -72,9 +81,8 @@ const SESSION_ENV_KEYS = [
 
 type CompactTerminalStatus = TerminalStatus | "starting";
 
-/** Extract only manager-owned metadata from a model-facing Bash result. Process
- * output is deliberately ignored so it can never leak into the compact main
- * transcript renderer, even when the tool row is expanded. */
+/** Extract manager-owned status from a model-facing Bash result. Output is
+ * parsed separately only for the bounded quick-command preview. */
 function compactTerminalState(
   text: string,
   isPartial: boolean,
@@ -98,6 +106,37 @@ function compactTerminalState(
   if (isError) return { id, status: "failed" };
   if (isPartial) return { id, status: id ? "running" : "starting" };
   return { id, status: "done" };
+}
+
+function quickOutputPreview(text: string, maxLines: number) {
+  const stdoutAt = text.indexOf("\n\nstdout:");
+  const stderrAt = text.indexOf("\n\nstderr:");
+  const starts = [stdoutAt, stderrAt].filter((at) => at >= 0);
+  if (starts.length === 0) return [];
+
+  const output = sanitizeText(text.slice(Math.min(...starts) + 2));
+  const lines = output
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .filter(
+      (line) =>
+        !/^\[(?:stdout|stderr) bounded head\+tail:/i.test(line) &&
+        line !== "stdout: (empty)",
+    )
+    .map((line) =>
+      line.length <= 240 ? line : `${line.slice(0, 237)}...`,
+    );
+  while (lines[0] === "") lines.shift();
+  while (lines.at(-1) === "") lines.pop();
+  if (lines.length <= maxLines) return lines;
+
+  const headCount = Math.min(2, Math.floor(maxLines / 2));
+  const tailCount = Math.max(1, maxLines - headCount - 1);
+  return [
+    ...lines.slice(0, headCount),
+    `... ${lines.length - headCount - tailCount} preview lines omitted ...`,
+    ...lines.slice(-tailCount),
+  ];
 }
 
 function getPiShellEnv(): NodeJS.ProcessEnv {
@@ -155,7 +194,14 @@ export function createBackgroundTerminalsExtension(
   let sessionContext: ExtensionContext | undefined;
   let ui: ExtensionUIContext | undefined;
   let unsubStatus: (() => void) | undefined;
+  let exploratoryCallCount = 0;
+  const exploratoryToolCalls = new Set<string>();
   const resultDelivery = createDeferredResultDelivery<TerminalSnapshot>();
+
+  const resetExplorationBudget = () => {
+    exploratoryCallCount = 0;
+    exploratoryToolCalls.clear();
+  };
 
   const getRuntime = () => (runtime ??= makeRuntime());
 
@@ -264,8 +310,15 @@ export function createBackgroundTerminalsExtension(
 
   pi.on("session_start", (_event, ctx) => {
     sessionContext = ctx;
+    resetExplorationBudget();
     if (ctx.hasUI) ui = ctx.ui;
   });
+
+  // One agent run can contain many model/tool turns. Bound repeated shell-based
+  // inspection across that whole run, then reset for the next user/follow-up
+  // run rather than per turn (which would let a two-calls-per-turn loop evade
+  // the guardrail indefinitely).
+  pi.on("agent_start", resetExplorationBudget);
 
   // Drain deferred results when the agent settles: together with the
   // isIdle() fast path above and the Map-keyed delivery (drain clears),
@@ -279,6 +332,7 @@ export function createBackgroundTerminalsExtension(
   // bounded so a wedged process cannot hang shutdown.
   pi.on("session_shutdown", async () => {
     sessionContext = undefined;
+    resetExplorationBudget();
     resultDelivery.clear();
     unsubStatus?.();
     unsubStatus = undefined;
@@ -332,13 +386,19 @@ export function createBackgroundTerminalsExtension(
         }),
       ),
     }),
-    // Keep the main transcript intentionally output-free. The complete command,
-    // invocation metadata, stdout, and stderr remain available in /ps, while
-    // the unchanged result content is still delivered to the model.
-    renderCall(_args, theme, context) {
+    // Quick commands show their useful title and a bounded output preview.
+    // Commands that actually yield collapse to one compact terminal row; /ps
+    // remains the complete invocation/output viewer for every managed process.
+    renderCall(args, theme, context) {
+      const command = typeof args?.command === "string" ? args.command : "";
+      const explicitTitle =
+        typeof args?.title === "string" ? args.title : undefined;
+      const title = command
+        ? deriveCommandTitle(command, explicitTitle)
+        : "...";
       const text =
         (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-      text.setText(theme.fg("toolTitle", theme.bold("bash")));
+      text.setText(theme.fg("toolTitle", theme.bold(`$ ${title}`)));
       return text;
     },
     renderResult(result, { isPartial }, theme, context) {
@@ -368,9 +428,20 @@ export function createBackgroundTerminalsExtension(
           : summary.status === "killed"
             ? "muted"
             : "warning";
-      const body = summary.id
+      let body = summary.id
         ? `${icon} ${theme.fg("accent", theme.bold(`terminal ${summary.id}`))} ${theme.fg(statusColor, word)}${theme.fg("dim", " · ")}${theme.fg("accent", "/ps")}${theme.fg("dim", " to inspect")}`
-        : `${icon} ${theme.fg("muted", `managed bash ${word}`)}`;
+        : `${icon} ${theme.fg(statusColor, `bash ${word}`)}${theme.fg("dim", " · ")}${theme.fg("accent", "/ps")}${theme.fg("dim", " for details")}`;
+      // Quick foreground completions and initial-wait progress show a small
+      // human-facing preview. Once a command actually yields, its transcript
+      // row returns to one compact /ps-owned background-terminal line.
+      if (!summary.id) {
+        const preview = quickOutputPreview(rawText, isPartial ? 4 : 6);
+        if (preview.length > 0) {
+          body += `\n${preview
+            .map((line) => theme.fg("toolOutput", line))
+            .join("\n")}`;
+        }
+      }
       const text =
         (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
       text.setText(body);
@@ -381,6 +452,18 @@ export function createBackgroundTerminalsExtension(
       // multiline scripts; trim only for validation and the display title.
       const command = params.command;
       if (!command.trim()) throw new Error("command must not be empty.");
+
+      let explorationNote: string | undefined;
+      if (isExploratoryBashCommand(command)) {
+        if (!exploratoryToolCalls.has(toolCallId)) {
+          exploratoryToolCalls.add(toolCallId);
+          exploratoryCallCount++;
+        }
+        if (exploratoryCallCount > EXPLORATION_LIMIT) {
+          throw new Error(explorationLimitError());
+        }
+        explorationNote = explorationWarning(exploratoryCallCount);
+      }
 
       if (
         params.timeout !== undefined &&
@@ -409,10 +492,9 @@ export function createBackgroundTerminalsExtension(
         ? `${commandPrefix}\n${command}`
         : command;
 
-      // Collapse whitespace before bounding: titles render in one-line rows.
-      const title =
-        (params.title ?? command).replace(/\s+/g, " ").trim().slice(0, 80) ||
-        "command";
+      // Keep the work-bearing part visible when a model prefixes every call
+      // with the same long D=/path assignment or `cd ... &&`.
+      const title = deriveCommandTitle(command, params.title);
 
       const runForegroundFallback = async (
         reason: unknown,
@@ -446,6 +528,9 @@ export function createBackgroundTerminalsExtension(
             ...result,
             content: [
               { type: "text" as const, text: warning },
+              ...(explorationNote
+                ? [{ type: "text" as const, text: explorationNote }]
+                : []),
               ...result.content,
             ],
           };
@@ -566,7 +651,8 @@ export function createBackgroundTerminalsExtension(
         resultDelivery.consume([snap.id]);
       }
 
-      const text = buildBashResult(snap);
+      let text = buildBashResult(snap);
+      if (explorationNote) text += `\n\n${explorationNote}`;
       if (
         snap.status === "failed" ||
         snap.status === "timed_out" ||

@@ -3,18 +3,52 @@ import test from "node:test";
 import type { OutputView, TerminalSnapshot } from "./src/domain.ts";
 import {
   BASH_PARAMETER_DESCRIPTIONS,
+  BASH_PROMPT_GUIDELINES,
   BASH_TOOL_DESCRIPTION,
+  buildBashProgress,
   buildBashResult,
   buildTerminalResultMessage,
+  deriveCommandTitle,
 } from "./src/prompt.ts";
 
 test("bash descriptions identify managed yielding, timeout, and no-stdin contracts", () => {
   assert.match(BASH_TOOL_DESCRIPTION, /one managed execution path/);
   assert.match(BASH_TOOL_DESCRIPTION, /continue as a session-scoped background terminal/);
+  assert.match(BASH_TOOL_DESCRIPTION, /fresh, non-persistent shell/);
+  assert.match(BASH_TOOL_DESCRIPTION, /blocks after 8/);
   assert.match(BASH_TOOL_DESCRIPTION, /do not poll/i);
   assert.match(BASH_PARAMETER_DESCRIPTIONS.command, /no interactive stdin/);
   assert.match(BASH_PARAMETER_DESCRIPTIONS.yieldTimeMs, /clamped to 250-30000 ms/);
   assert.match(BASH_PARAMETER_DESCRIPTIONS.timeout, /hard total runtime timeout/);
+  assert.match(BASH_PARAMETER_DESCRIPTIONS.workingDir, /fresh shell/);
+  assert.ok(
+    BASH_PROMPT_GUIDELINES.some((guideline) => /non-persistent shell/.test(guideline)),
+  );
+  assert.ok(
+    BASH_PROMPT_GUIDELINES.some((guideline) => /synthesize instead of recursively searching/.test(guideline)),
+  );
+  assert.ok(
+    BASH_PROMPT_GUIDELINES.some((guideline) => /blocks after 8/.test(guideline)),
+  );
+});
+
+test("default titles expose work after repeated setup prefixes", () => {
+  const root = "/Users/example/a/very/long/pi-coding-agent/install/path";
+  assert.equal(
+    deriveCommandTitle(
+      `D=${root}; grep -rn 'contextTokens' $D/docs/*.md | head -20`,
+    ),
+    "grep -rn 'contextTokens' $D/docs/*.md | head -20",
+  );
+  assert.equal(
+    deriveCommandTitle(`cd ${root} && npm test`),
+    "npm test",
+  );
+  assert.equal(deriveCommandTitle("ignored", "Meaningful title"), "Meaningful title");
+
+  const long = deriveCommandTitle(`printf '${"x".repeat(120)}'`);
+  assert.equal(long.length, 80);
+  assert.match(long, / … /);
 });
 
 function view(overrides: Partial<OutputView> = {}): OutputView {
@@ -60,7 +94,7 @@ test("yielded result tells the model not to poll and points the user to /ps", ()
   assert.match(text, /stdout:\nready/);
 });
 
-test("quick completion returns final exit and omits empty stderr", () => {
+test("quick completion returns ordinary bash output without terminal identity", () => {
   const text = buildBashResult(
     snap({
       stdout: view({ text: "done\n", head: "done\n", totalBytes: 5 }),
@@ -68,7 +102,17 @@ test("quick completion returns final exit and omits empty stderr", () => {
   );
   assert.match(text, /Command finished in 5s \(exit 0\)/);
   assert.match(text, /stdout:\ndone/);
+  assert.doesNotMatch(text, /bt-1|background terminal/);
   assert.ok(!text.includes("stderr:\n"), "empty stderr section omitted");
+});
+
+test("initial progress does not claim the command already yielded", () => {
+  const text = buildBashProgress(
+    snap({ status: "running", settledAt: undefined, exitCode: undefined }),
+  );
+  assert.match(text, /during the initial wait/);
+  assert.match(text, /only if it outlives that wait/);
+  assert.doesNotMatch(text, /background terminal bt-1/);
 });
 
 test("model-facing output preserves bounded startup head and recent tail", () => {
