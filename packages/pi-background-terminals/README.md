@@ -5,7 +5,9 @@ A managed replacement for Pi's built-in `bash` tool.
 Every model shell command follows one path: start it, wait briefly, and return
 its final output if it finishes. If it outlives the initial wait, return control
 to the model while the command continues as a session-scoped background
-terminal. Its final result is delivered automatically exactly once.
+terminal. Its final result is delivered automatically exactly once. The model
+still receives bounded stdout/stderr, but the main TUI transcript stays compact
+and output-free; `/ps` owns all human-facing terminal inspection.
 
 ```text
 ■ 2 background terminals running • /ps to view
@@ -35,13 +37,15 @@ Behavior:
 2. Preserve Pi's managed `PATH` (`<agent-dir>/bin` is prepended unless already
    present) and inject the same `PI_SESSION_ID`, `PI_SESSION_FILE`, `PI_PROVIDER`,
    `PI_MODEL`, and `PI_REASONING_LEVEL` values as built-in Bash.
-3. Start the command with no interactive stdin and stream bounded progress in
-   the normal Bash tool row.
+3. Start the command with no interactive stdin and capture stdout/stderr while
+   the main Bash row shows only compact terminal status plus a `/ps` hint.
 4. If it exits during `yield_time_ms`, return its final status and bounded
-   head+tail output. Non-zero exits and hard timeouts are Bash tool errors.
+   head+tail output to the model. Non-zero exits and hard timeouts are Bash tool
+   errors; the TUI row remains output-free even when expanded.
 5. If it remains alive, return an id such as `bt-1`. The model should continue
-   working rather than poll. A follow-up message wakes it exactly once when the
-   process exits.
+   working rather than poll. A compact follow-up notification wakes it exactly
+   once when the process exits; stdout/stderr stay in `/ps` rather than the main
+   transcript.
 
 There are no model-facing status, list, kill, polling, or stdin tools. The user
 owns inspection and termination through `/ps`.
@@ -64,7 +68,10 @@ While at least one terminal runs, a one-line widget renders above the editor.
 
 1. **List** — every tracked terminal, newest first; `↑/↓`/`j`/`k` select,
    `Enter` inspect, `x` stop the selected running terminal, `Esc` close.
-2. **Detail** — metadata, `t`-toggled stdout/stderr, live tailing, scrolling
+2. **Detail** — three tabs ordered **Info** (default), **stdout**, **stderr**.
+   Info shows the complete invocation metadata (command, cwd, PID, status,
+   timing/timeout, exit state, stream sizes, spill paths, and errors). `t`,
+   `←/→`, or `h`/`l` switches tabs. Output tabs support live tailing, scrolling
    (`↑/↓`, `PgUp/PgDn`, `g`/`G`), and `x` to stop. Once a stream outgrows its
    in-memory retention the viewer reads the **complete on-disk log** instead:
    scrolling past the top of the loaded window pulls in earlier bytes, `G`
@@ -76,6 +83,9 @@ While at least one terminal runs, a one-line widget renders above the editor.
 - **Automatic yielding, no polling.** Quick commands return directly; only
   commands that outlive the initial wait become background work. Completion
   uses `pi.sendMessage(..., { deliverAs: "followUp", triggerTurn: true })`.
+- **Output-free main transcript.** Custom Bash and completion renderers show
+  only terminal id/status plus `/ps`; their underlying content still carries
+  bounded stdout/stderr to the model.
 - **Exactly-once completion.** A race-safe waiter token decides whether the
   initial Bash call or the later follow-up owns settlement. A drain-once map
   handles delivery retries without duplicates.

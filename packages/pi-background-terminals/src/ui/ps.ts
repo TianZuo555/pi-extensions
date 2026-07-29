@@ -2,8 +2,8 @@
  * /ps UI — two-stage full-screen overlay over the synchronous
  * TerminalReadModel:
  * - TerminalDashboard: list of all tracked terminals (select, kill, open).
- * - TerminalDetailView: read-only inspector for one terminal — metadata,
- *   stdout/stderr toggle, scrolling, live tail. Once a stream outgrows its
+ * - TerminalDetailView: read-only inspector for one terminal — default
+ *   invocation-info tab, stdout/stderr tabs, scrolling, and live tail. Once a stream outgrows its
  *   in-memory retention the view switches to the complete on-disk spill log and
  *   pages through it (see ./spill-source.ts). No input surface: background
  *   terminals have no stdin by design.
@@ -62,6 +62,48 @@ function statusWord(snap: TerminalSnapshot, theme: Theme) {
     case "killed":
       return theme.fg("muted", "killed");
   }
+}
+
+export type TerminalDetailTab = "info" | "stdout" | "stderr";
+export const DEFAULT_TERMINAL_DETAIL_TAB: TerminalDetailTab = "info";
+const TERMINAL_DETAIL_TABS: readonly TerminalDetailTab[] = [
+  "info",
+  "stdout",
+  "stderr",
+];
+
+export function cycleTerminalDetailTab(
+  current: TerminalDetailTab,
+  direction: 1 | -1 = 1,
+): TerminalDetailTab {
+  const index = TERMINAL_DETAIL_TABS.indexOf(current);
+  return TERMINAL_DETAIL_TABS[
+    (index + direction + TERMINAL_DETAIL_TABS.length) %
+      TERMINAL_DETAIL_TABS.length
+  ] ?? DEFAULT_TERMINAL_DETAIL_TAB;
+}
+
+/** Output-free invocation metadata used by the default detail tab. */
+export function buildTerminalInvocationInfo(snap: TerminalSnapshot): string {
+  const lines = [
+    `id: ${snap.id}`,
+    `title: ${oneLine(snap.title)}`,
+    `status: ${snap.status}`,
+    `pid: ${snap.pid ?? "?"}`,
+    `working directory: ${snap.cwd}`,
+    `started: ${new Date(snap.createdAt).toISOString()}`,
+    `elapsed: ${formatElapsed(snap)}`,
+    `timeout: ${snap.timeoutMs === undefined ? "none" : `${snap.timeoutMs / 1000}s`}`,
+    `exit: ${snap.status === "running" ? "-" : formatExit(snap)}`,
+    `stdout: ${formatSize(snap.stdout.totalBytes)}${snap.stdout.spillPath ? ` · full log: ${snap.stdout.spillPath}` : ""}`,
+    `stderr: ${formatSize(snap.stderr.totalBytes)}${snap.stderr.spillPath ? ` · full log: ${snap.stderr.spillPath}` : ""}`,
+  ];
+  if (snap.settledAt !== undefined) {
+    lines.splice(6, 0, `settled: ${new Date(snap.settledAt).toISOString()}`);
+  }
+  if (snap.errorText) lines.push(`error: ${oneLine(snap.errorText)}`);
+  lines.push("", "command:", snap.command);
+  return sanitizeText(lines.join("\n"));
 }
 
 // --- Entry point ---------------------------------------------------------------
@@ -377,10 +419,11 @@ class TerminalDetailView implements Component {
   private view: TerminalReadModel;
   private done: (value: null) => void;
 
-  /** Active output stream shown in the viewport; `t` toggles. */
-  private stream: "stdout" | "stderr" = "stdout";
-  /** Scroll offset in lines from the bottom. 0 = pinned to bottom (live tail). */
-  private scrollOffset = 0;
+  /** Active detail tab; invocation info is deliberately first/default. */
+  private tab: TerminalDetailTab = DEFAULT_TERMINAL_DETAIL_TAB;
+  /** Scroll offset in lines from the bottom. Info opens at its top; output
+   * streams open at 0, pinned to their live tail. */
+  private scrollOffset = Number.MAX_SAFE_INTEGER;
   private lineCache = createOutputLineCache();
   /** Complete on-disk logs, opened lazily per stream once retention drops bytes. */
   private sources = new Map<"stdout" | "stderr", SpillSource>();
@@ -423,25 +466,27 @@ class TerminalDetailView implements Component {
     return this.view.get(this.id);
   }
 
-  private streamView(snap: TerminalSnapshot) {
-    return this.stream === "stdout" ? snap.stdout : snap.stderr;
+  private activeStream(): "stdout" | "stderr" | undefined {
+    return this.tab === "info" ? undefined : this.tab;
   }
 
   /**
    * Disk-backed reader for the active stream, created only once retention has
    * actually dropped bytes — while the in-memory view is still complete it is
-   * the same content for free.
+   * the same content for free. The Info tab never opens a spill reader.
    */
   private activeSource(snap: TerminalSnapshot): SpillSource | undefined {
-    const view = this.streamView(snap);
+    const stream = this.activeStream();
+    if (!stream) return undefined;
+    const view = stream === "stdout" ? snap.stdout : snap.stderr;
     if (!view.spillPath || view.truncatedBytes === 0) return undefined;
-    const existing = this.sources.get(this.stream);
+    const existing = this.sources.get(stream);
     if (existing?.path === view.spillPath) return existing;
     existing?.dispose();
     const source = createSpillSource(view.spillPath, () =>
       this.scheduleRender(),
     );
-    this.sources.set(this.stream, source);
+    this.sources.set(stream, source);
     return source;
   }
 
@@ -522,6 +567,17 @@ class TerminalDetailView implements Component {
     if (this.cleanup()) this.done(null);
   }
 
+  private switchTab(tab: TerminalDetailTab) {
+    if (tab === this.tab) return;
+    this.tab = tab;
+    this.lineCache = createOutputLineCache();
+    this.scrollOffset = tab === "info" ? Number.MAX_SAFE_INTEGER : 0;
+    this.following = true;
+    this.atWindowTop = false;
+    this.pumpSpill();
+    this.tui.requestRender();
+  }
+
   dispose(): void {
     this.cleanup();
   }
@@ -534,14 +590,19 @@ class TerminalDetailView implements Component {
       this.close();
       return;
     }
-    if (data === "t") {
-      this.stream = this.stream === "stdout" ? "stderr" : "stdout";
-      this.lineCache = createOutputLineCache();
-      this.scrollOffset = 0;
-      this.following = true;
-      this.atWindowTop = false;
-      this.pumpSpill();
-      this.tui.requestRender();
+    if (
+      data === "t" ||
+      data === "l" ||
+      this.keybindings.matches(data, "tui.editor.cursorRight")
+    ) {
+      this.switchTab(cycleTerminalDetailTab(this.tab, 1));
+      return;
+    }
+    if (
+      data === "h" ||
+      this.keybindings.matches(data, "tui.editor.cursorLeft")
+    ) {
+      this.switchTab(cycleTerminalDetailTab(this.tab, -1));
       return;
     }
     if (data === "x") {
@@ -598,9 +659,9 @@ class TerminalDetailView implements Component {
 
   private viewportHeight(): number {
     const rows = this.tui.terminal.rows || 30;
-    // The complete view renders viewport + 8 chrome rows (borders, header,
-    // command, tab, hints). rows - 9 makes the overlay ~terminal rows - 1.
-    return Math.max(6, rows - 9);
+    // The complete view renders viewport + 7 chrome rows (borders, header,
+    // tab, hints). rows - 8 makes the overlay ~terminal rows - 1.
+    return Math.max(6, rows - 8);
   }
 
   render(width: number): string[] {
@@ -626,32 +687,29 @@ class TerminalDetailView implements Component {
       ) +
       (snap.status !== "running"
         ? theme.fg("muted", ` · ${formatExit(snap)}`)
-        : "") +
-      theme.fg("dim", ` · ${snap.cwd}`);
+        : "");
     lines.push(truncateToWidth(header, width));
-    lines.push(
-      truncateToWidth(
-        theme.fg("dim", "$ ") + theme.fg("text", oneLine(snap.command)),
-        width,
-      ),
-    );
     lines.push(border);
 
-    // Stream tab line: which stream is active, both sizes, and which capture
-    // is on screen (retained window vs. the complete on-disk log).
-    const active = this.stream;
-    const viewData = active === "stdout" ? snap.stdout : snap.stderr;
+    // Invocation info is the first/default tab. stdout and stderr stay
+    // separate and switch to the full spill log when in-memory retention drops
+    // bytes.
+    const active = this.tab;
     const source = this.activeSource(snap);
     const spill = source?.state();
     const useSpill =
       spill !== undefined && spill.error === undefined && spill.text.length > 0;
-    const tab = (name: "stdout" | "stderr", size: number) =>
-      name === active
-        ? theme.fg("accent", theme.bold(`${name} (${formatSize(size)})`))
-        : theme.fg("dim", `${name} (${formatSize(size)})`);
+    const tab = (name: TerminalDetailTab) => {
+      const label = name === "info"
+        ? "Info"
+        : `${name} (${formatSize(snap[name].totalBytes)})`;
+      return name === active
+        ? theme.fg("accent", theme.bold(label))
+        : theme.fg("dim", label);
+    };
     lines.push(
       truncateToWidth(
-        `  ${tab("stdout", snap.stdout.totalBytes)}${theme.fg("dim", " | ")}${tab("stderr", snap.stderr.totalBytes)}${theme.fg("dim", "  — t to switch")}` +
+        `  ${tab("info")}${theme.fg("dim", " | ")}${tab("stdout")}${theme.fg("dim", " | ")}${tab("stderr")}${theme.fg("dim", "  — t/←/→ to switch")}` +
           (useSpill
             ? theme.fg(
                 "dim",
@@ -662,81 +720,99 @@ class TerminalDetailView implements Component {
       ),
     );
 
-    // Fixed-height output viewport. Notes and scroll status consume rows
-    // inside the viewport so streaming/scrolling never changes overlay height.
-    const buffer = viewData;
-    const version =
-      // The cached view text identity changes with the buffer; totalBytes is a
-      // monotonically increasing proxy for a version counter. Namespaced so a
-      // switch between the retained buffer and the spill window cannot reuse
-      // stale wrapped lines.
-      useSpill ? `spill:${spill.version}` : `mem:${buffer.totalBytes}`;
-    const output = this.lineCache.get(
-      useSpill ? spill.text : buffer.text,
-      version,
-      width - 2,
-    );
-    const viewport = this.viewportHeight();
-
+    // Fixed-height viewport shared by invocation metadata and stream output.
+    // Notes and scroll status consume rows inside it so the overlay height does
+    // not change while streaming or switching tabs.
     const noteRows: string[] = [];
-    if (snap.errorText) {
-      noteRows.push(
-        truncateToWidth(
-          theme.fg("error", `error: ${oneLine(snap.errorText)}`),
-          width,
-        ),
+    let output: string[];
+    if (active === "info") {
+      const info = buildTerminalInvocationInfo(snap);
+      const version = [
+        "info",
+        snap.status,
+        snap.settledAt ?? Math.floor(Date.now() / 1000),
+        snap.stdout.totalBytes,
+        snap.stderr.totalBytes,
+        snap.errorText ?? "",
+      ].join(":");
+      output = this.lineCache.get(info, version, width - 2);
+    } else {
+      const buffer = snap[active];
+      const version =
+        // totalBytes is a monotonically increasing proxy for a source version.
+        // Namespacing prevents retained/spill windows from sharing stale wraps.
+        useSpill ? `spill:${spill.version}` : `mem:${buffer.totalBytes}`;
+      output = this.lineCache.get(
+        useSpill ? spill.text : buffer.text,
+        version,
+        width - 2,
       );
-    }
-    if (useSpill) {
-      const earlier = spill.start;
-      const later = Math.max(0, spill.size - spill.end);
-      const parts = [
-        `full log · showing ${formatSize(spill.end - spill.start)} of ${formatSize(spill.size)}`,
-      ];
-      if (earlier > 0) parts.push(`${formatSize(earlier)} earlier ↑`);
-      if (later > 0) parts.push(`${formatSize(later)} later ↓`);
-      parts.push(buffer.spillPath ?? "");
-      noteRows.push(
-        truncateToWidth(
-          theme.fg("dim", parts.filter(Boolean).join(" · ")),
-          width,
-        ),
-      );
-    } else if (spill?.error !== undefined) {
-      noteRows.push(
-        truncateToWidth(
-          theme.fg(
-            "dim",
-            `full log unavailable (${oneLine(spill.error)}); showing retained output`,
+
+      if (snap.errorText) {
+        noteRows.push(
+          truncateToWidth(
+            theme.fg("error", `error: ${oneLine(snap.errorText)}`),
+            width,
           ),
-          width,
-        ),
-      );
-    } else if (buffer.truncatedBytes > 0) {
-      noteRows.push(
-        truncateToWidth(
-          theme.fg(
-            "dim",
-            `${formatSize(buffer.truncatedBytes)} omitted from middle — full log: ${buffer.spillPath ?? "(unavailable)"}`,
+        );
+      }
+      if (useSpill) {
+        const earlier = spill.start;
+        const later = Math.max(0, spill.size - spill.end);
+        const parts = [
+          `full log · showing ${formatSize(spill.end - spill.start)} of ${formatSize(spill.size)}`,
+        ];
+        if (earlier > 0) parts.push(`${formatSize(earlier)} earlier ↑`);
+        if (later > 0) parts.push(`${formatSize(later)} later ↓`);
+        parts.push(buffer.spillPath ?? "");
+        noteRows.push(
+          truncateToWidth(
+            theme.fg("dim", parts.filter(Boolean).join(" · ")),
+            width,
           ),
-          width,
-        ),
-      );
+        );
+      } else if (spill?.error !== undefined) {
+        noteRows.push(
+          truncateToWidth(
+            theme.fg(
+              "dim",
+              `full log unavailable (${oneLine(spill.error)}); showing retained output`,
+            ),
+            width,
+          ),
+        );
+      } else if (buffer.truncatedBytes > 0) {
+        noteRows.push(
+          truncateToWidth(
+            theme.fg(
+              "dim",
+              `${formatSize(buffer.truncatedBytes)} omitted from middle — full log: ${buffer.spillPath ?? "(unavailable)"}`,
+            ),
+            width,
+          ),
+        );
+      }
     }
 
+    const viewport = this.viewportHeight();
     const body: string[] = [...noteRows];
     const scrollRows = this.scrollOffset > 0 ? 1 : 0;
     const capacity = Math.max(1, viewport - body.length - scrollRows);
     const maxOffset = Math.max(0, output.length - capacity);
     if (this.scrollOffset > maxOffset) this.scrollOffset = maxOffset;
-    // Read by the next ↑/PgUp so it can extend the window backwards instead of
-    // dead-ending at the top of what is currently loaded.
+    // Read by the next ↑/PgUp so it can extend a spill window backwards instead
+    // of dead-ending at the top of what is currently loaded.
     this.atWindowTop = this.scrollOffset >= maxOffset;
 
     const end = output.length - this.scrollOffset;
     const visible = output.slice(Math.max(0, end - capacity), end);
     if (visible.length === 0) {
-      body.push(theme.fg("dim", `(no ${active} yet)`));
+      body.push(
+        theme.fg(
+          "dim",
+          active === "info" ? "(no invocation metadata)" : `(no ${active} yet)`,
+        ),
+      );
     } else {
       for (const line of visible) {
         body.push(truncateToWidth(`  ${line}`, width));
@@ -759,7 +835,7 @@ class TerminalDetailView implements Component {
       truncateToWidth(
         theme.fg(
           "dim",
-          `${configuredKeys(this.keybindings, "tui.select.cancel")} back · t stdout/stderr · x kill · ${configuredKeys(this.keybindings, "tui.editor.cursorUp")}/${configuredKeys(this.keybindings, "tui.editor.cursorDown")}/jk scroll · ${configuredKeys(this.keybindings, "tui.editor.pageUp")}/${configuredKeys(this.keybindings, "tui.editor.pageDown")} page · g/G top/bottom`,
+          `${configuredKeys(this.keybindings, "tui.select.cancel")} back · t/←/→/h/l tabs · x kill · ${configuredKeys(this.keybindings, "tui.editor.cursorUp")}/${configuredKeys(this.keybindings, "tui.editor.cursorDown")}/jk scroll · ${configuredKeys(this.keybindings, "tui.editor.pageUp")}/${configuredKeys(this.keybindings, "tui.editor.pageDown")} page · g/G top/bottom`,
         ),
         width,
       ),

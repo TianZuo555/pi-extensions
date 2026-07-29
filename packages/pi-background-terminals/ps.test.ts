@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  buildTerminalInvocationInfo,
+  cycleTerminalDetailTab,
+  DEFAULT_TERMINAL_DETAIL_TAB,
   reconcileDashboardSelection,
   type DashboardSelection,
 } from "./src/ui/ps.ts";
@@ -31,6 +34,54 @@ test("dashboard selection follows its terminal id and falls back by row", () => 
 
   reconcileDashboardSelection(selection, []);
   assert.deepEqual(selection, { id: undefined, index: 0 });
+});
+
+test("terminal detail tabs start on Info and cycle before stdout/stderr", () => {
+  assert.equal(DEFAULT_TERMINAL_DETAIL_TAB, "info");
+  assert.equal(cycleTerminalDetailTab("info"), "stdout");
+  assert.equal(cycleTerminalDetailTab("stdout"), "stderr");
+  assert.equal(cycleTerminalDetailTab("stderr"), "info");
+  assert.equal(cycleTerminalDetailTab("info", -1), "stderr");
+});
+
+test("invocation info includes execution metadata but not captured output", () => {
+  const info = buildTerminalInvocationInfo({
+    id: "bt-7",
+    command: "printf hello\nprintf world",
+    title: "invoke info",
+    cwd: "/tmp/project",
+    pid: 123,
+    status: "done",
+    createdAt: Date.parse("2026-01-01T00:00:00.000Z"),
+    settledAt: Date.parse("2026-01-01T00:00:02.000Z"),
+    timeoutMs: 5_000,
+    exitCode: 0,
+    stdout: {
+      text: "hidden stdout",
+      head: "hidden stdout",
+      tail: "",
+      totalBytes: 13,
+      truncatedBytes: 0,
+      spillPath: "/tmp/bt-7.stdout.log",
+    },
+    stderr: {
+      text: "hidden stderr",
+      head: "hidden stderr",
+      tail: "",
+      totalBytes: 13,
+      truncatedBytes: 0,
+    },
+  });
+
+  assert.match(info, /id: bt-7/);
+  assert.match(info, /working directory: \/tmp\/project/);
+  assert.match(info, /started: 2026-01-01T00:00:00.000Z/);
+  assert.match(info, /settled: 2026-01-01T00:00:02.000Z/);
+  assert.match(info, /timeout: 5s/);
+  assert.match(info, /exit: exit 0/);
+  assert.match(info, /command:\nprintf hello\nprintf world/);
+  assert.match(info, /full log: \/tmp\/bt-7.stdout.log/);
+  assert.doesNotMatch(info, /hidden stdout|hidden stderr/);
 });
 
 test("sanitizeText strips ANSI, tabs, and control characters", () => {

@@ -263,12 +263,14 @@ it.
 Replaces the built-in `bash` tool with one no-stdin execution path. Quick
 commands return normally; a command that outlives the initial wait keeps running
 as a session-scoped background terminal and its result is delivered to the model
-exactly once, so there is nothing to poll.
+exactly once, so there is nothing to poll. Bash and completion rows keep the main
+TUI transcript output-free; human-facing stdout/stderr lives in `/ps`.
 
 - Parameters: `command`, plus optional `timeout` (hard kill), `working_dir`,
   `title`, and `yield_time_ms` (default 10s, clamped to 250–30,000 ms).
-- `/ps` — full-screen viewer: list every tracked terminal, inspect one, toggle
-  stdout/stderr, tail live output, and stop a running terminal with `x`.
+- `/ps` — full-screen viewer: list every tracked terminal, then inspect its
+  default **Info** tab or switch to stdout/stderr, tail live output, and stop a
+  running terminal with `x`.
 - Once a stream outgrows in-memory retention, the viewer pages the **complete
   on-disk log** instead of only what fits in memory.
 - A one-line widget renders above the editor while any terminal is running.

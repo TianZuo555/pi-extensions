@@ -22,6 +22,7 @@ function harness(extension = testExtension) {
   const handlers = new Map<string, Array<(...args: any[]) => any>>();
   const tools = new Map<string, any>();
   const commands = new Map<string, any>();
+  const messageRenderers = new Map<string, any>();
   const messages: Array<{ message: any; options: any }> = [];
 
   const pi = {
@@ -36,7 +37,9 @@ function harness(extension = testExtension) {
     registerCommand(name: string, definition: any) {
       commands.set(name, definition);
     },
-    registerMessageRenderer() {},
+    registerMessageRenderer(name: string, renderer: any) {
+      messageRenderers.set(name, renderer);
+    },
     getThinkingLevel() {
       return "high";
     },
@@ -67,6 +70,7 @@ function harness(extension = testExtension) {
     handlers,
     tools,
     commands,
+    messageRenderers,
     messages,
     ctx,
     async shutdown() {
@@ -91,6 +95,69 @@ test("extension overrides only bash plus the user /ps command", async () => {
   try {
     assert.deepEqual([...app.tools.keys()], ["bash"]);
     assert.deepEqual([...app.commands.keys()], ["ps"]);
+  } finally {
+    await app.shutdown();
+  }
+});
+
+test("main transcript renderers hide command output and point to /ps", async () => {
+  const app = harness();
+  const theme = {
+    fg: (_color: string, text: string) => text,
+    bold: (text: string) => text,
+  } as any;
+  try {
+    const tool = app.tools.get("bash");
+    const call = tool.renderCall(
+      { command: "printf super-secret-command" },
+      theme,
+      {},
+    );
+    assert.equal(call.render(120).join("\n").trimEnd(), "bash");
+
+    const result = tool.renderResult(
+      {
+        content: [{
+          type: "text",
+          text: [
+            'Command is still running as background terminal bt-9 "secret".',
+            'bt-9 [running] "secret" (pid 99)',
+            "",
+            "stdout:",
+            "super-secret-output",
+          ].join("\n"),
+        }],
+      },
+      { isPartial: false, expanded: true },
+      theme,
+      { isError: false },
+    );
+    const renderedResult = result.render(120).join("\n").trimEnd();
+    assert.match(renderedResult, /terminal bt-9 running.*\/ps to inspect/);
+    assert.doesNotMatch(renderedResult, /stdout|super-secret-output|secret\"/);
+
+    const completionRenderer = app.messageRenderers.get(
+      "background-terminal-result",
+    );
+    const completion = completionRenderer(
+      {
+        content: "Background terminal bt-9 exited.\n\nstdout:\nsuper-secret-output",
+        details: {
+          id: "bt-9",
+          title: "secret",
+          status: "done",
+          exitCode: 0,
+        },
+      },
+      { expanded: true },
+      theme,
+    );
+    const renderedCompletion = completion.render(120).join("\n").trimEnd();
+    assert.match(renderedCompletion, /terminal bt-9.*\/ps to inspect/);
+    assert.doesNotMatch(
+      renderedCompletion,
+      /stdout|super-secret-output|secret/,
+    );
   } finally {
     await app.shutdown();
   }

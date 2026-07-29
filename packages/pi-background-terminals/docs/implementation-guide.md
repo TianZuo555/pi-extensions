@@ -20,6 +20,11 @@ Every model shell command goes through `bash`:
 7. When a yielded process settles, deliver its final result as an exactly-once
    follow-up that wakes the model.
 
+The model-facing tool result and completion message retain bounded stdout/stderr.
+Their custom TUI renderers deliberately hide all process output—even when a row
+is expanded—and show only compact status plus a `/ps` hint. `/ps` is the sole
+human-facing output viewer.
+
 The model has no status, list, kill, poll, or stdin tools. It should continue
 working after a command yields. The user inspects and stops running terminals
 with `/ps`.
@@ -50,10 +55,12 @@ yield_time_ms  optional initial wait; integers clamp to 250–30,000 ms
 ```
 
 The override supplies its own prompt snippet and guidelines because Pi does not
-inherit prompt metadata from built-ins. It omits custom tool renderers so Pi's
-built-in Bash call/result renderers are inherited. Successful results use
-`details: undefined`, which is a valid `BashToolDetails` shape. Separate full-log
-paths remain in the textual stdout/stderr sections.
+inherit prompt metadata from built-ins. It also supplies compact call/result
+renderers so commands and stdout/stderr never appear in the main TUI transcript.
+These renderers change presentation only: the unchanged textual result still
+reaches the model. Successful results use `details: undefined`, which is a valid
+`BashToolDetails` shape. Separate full-log paths remain in the model-facing
+stdout/stderr sections.
 
 ## 3. Safe fallback boundary
 
@@ -173,8 +180,9 @@ manager.waitForSettlement(id, yield_time_ms)
 an abort window where a live child exists without a manager entry or scope.
 
 During the initial wait, a per-terminal subscription emits bounded progress
-updates at most every 100 ms. Exceptions thrown by the display callback are
-ignored; presentation cannot affect process execution.
+updates at most every 100 ms. The custom renderer reduces each update to compact
+terminal status, never process output. Exceptions thrown by the display callback
+are ignored; presentation cannot affect process execution.
 
 The initial wait is abortible. Aborting it does not kill the process. The error
 identifies the terminal id, and eventual settlement remains eligible for an
@@ -267,8 +275,10 @@ pi.sendMessage(message, {
 });
 ```
 
-A busy agent receives the message after its current run settles. An idle agent
-is woken immediately. No model-driven polling is required.
+The custom message content includes bounded output for model context, while its
+message renderer always shows one status line with a `/ps` hint and ignores
+expanded mode. A busy agent receives the message after its current run settles.
+An idle agent is woken immediately. No model-driven polling is required.
 
 ## 11. Head+tail output retention
 
@@ -398,8 +408,10 @@ The manager exposes a synchronous `TerminalReadModel` for TUI rendering:
 
 The list overlay supports selection and stopping. The detail overlay provides:
 
-- command metadata;
-- stdout/stderr toggle;
+- tabs ordered `Info`, `stdout`, `stderr`, with `Info` selected by default;
+- an output-free Info view containing command, cwd, PID, status, timestamps,
+  timeout, exit state, stream sizes/spill paths, and lifecycle errors;
+- `t`, left/right, or `h`/`l` tab switching;
 - ANSI/control sanitization at render time;
 - wrapped output with cached layouts keyed by `(source version, width)`;
 - live tail pinning and scrollback;
@@ -461,6 +473,7 @@ The package test suite covers:
 - Pi managed-bin `PATH`, session environment, and command-prefix preservation;
 - out-of-range integer yield waits reaching the manager clamp;
 - bounded streaming updates during the initial wait;
+- output-free main Bash/completion renderers with `/ps` hints;
 - hard timeout status and tree termination;
 - Bash-specific syntax on the resolved shell;
 - abort leaving eventual completion deliverable;
@@ -469,7 +482,8 @@ The package test suite covers:
 - output head stability, rolling tail, UTF-8 boundaries, and omission counts;
 - complete spill capture beyond the memory cap;
 - drain-once result delivery without direct TUI stderr writes on retry;
-- `/ps` selection, sanitization, wrapping, and cache behavior;
+- `/ps` selection, default Info tab/invocation metadata, sanitization,
+  wrapping, and cache behavior;
 - spill-window follow/backfill/re-anchor anchoring, UTF-8 boundaries, and
   degradation when the log becomes unreadable.
 

@@ -9,7 +9,8 @@
  *
  * While ≥1 process runs, a one-line widget above the editor shows
  * "N background terminal(s) running • /ps to view". `/ps` opens a two-stage
- * full-screen overlay (list → read-only detail with stdout/stderr toggle).
+ * full-screen overlay (list → read-only detail with Info/stdout/stderr tabs).
+ * Main-session Bash and completion rows stay compact and output-free.
  *
  * Architecture: Effect v4 core (manager service behind one ManagedRuntime);
  * this file is the async boundary where tool handlers run effects via
@@ -26,12 +27,15 @@ import type {
 import {
   createBashToolDefinition,
   getAgentDir,
-  getMarkdownTheme,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
-import { Markdown, Text } from "@earendil-works/pi-tui";
+import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { SpawnError, type TerminalSnapshot } from "./src/domain.ts";
+import {
+  SpawnError,
+  type TerminalSnapshot,
+  type TerminalStatus,
+} from "./src/domain.ts";
 import {
   DEFAULT_YIELD_TIME_MS,
   MAX_RUNTIME_TIMEOUT_SECONDS,
@@ -54,7 +58,6 @@ import {
   runTool,
   type TerminalRuntime,
 } from "./src/runtime.ts";
-import { sanitizeText } from "./src/ui/output-view.ts";
 import { openTerminalPicker } from "./src/ui/ps.ts";
 
 const WIDGET_KEY = "background-terminals";
@@ -66,6 +69,36 @@ const SESSION_ENV_KEYS = [
   "PI_MODEL",
   "PI_REASONING_LEVEL",
 ] as const;
+
+type CompactTerminalStatus = TerminalStatus | "starting";
+
+/** Extract only manager-owned metadata from a model-facing Bash result. Process
+ * output is deliberately ignored so it can never leak into the compact main
+ * transcript renderer, even when the tool row is expanded. */
+function compactTerminalState(
+  text: string,
+  isPartial: boolean,
+  isError: boolean,
+): { readonly id?: string; readonly status: CompactTerminalStatus } {
+  const metadata = text.split("\n\nstdout:", 1)[0] ?? "";
+  const described = metadata.match(
+    /\b(bt-\d+) \[(running|done|failed|timed_out|killed)\]/,
+  );
+  const id = described?.[1] ?? metadata.match(/\bterminal (bt-\d+)\b/i)?.[1];
+  const describedStatus = described?.[2] as TerminalStatus | undefined;
+
+  if (describedStatus) return { id, status: describedStatus };
+  if (/timed out/i.test(metadata)) return { id, status: "timed_out" };
+  if (/\b(killed|SIGKILL|SIGTERM)\b/i.test(metadata)) {
+    return { id, status: "killed" };
+  }
+  if (/still running|running as terminal/i.test(metadata)) {
+    return { id, status: "running" };
+  }
+  if (isError) return { id, status: "failed" };
+  if (isPartial) return { id, status: id ? "running" : "starting" };
+  return { id, status: "done" };
+}
 
 function getPiShellEnv(): NodeJS.ProcessEnv {
   // Mirrors Pi's internal getShellEnv(), which is not exported from the
@@ -299,6 +332,50 @@ export function createBackgroundTerminalsExtension(
         }),
       ),
     }),
+    // Keep the main transcript intentionally output-free. The complete command,
+    // invocation metadata, stdout, and stderr remain available in /ps, while
+    // the unchanged result content is still delivered to the model.
+    renderCall(_args, theme, context) {
+      const text =
+        (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+      text.setText(theme.fg("toolTitle", theme.bold("bash")));
+      return text;
+    },
+    renderResult(result, { isPartial }, theme, context) {
+      const rawText = result.content
+        .filter((part) => part.type === "text")
+        .map((part) => part.text)
+        .join("\n");
+      const summary = compactTerminalState(
+        rawText,
+        isPartial,
+        context.isError,
+      );
+      const word = summary.status === "timed_out"
+        ? "timed out"
+        : summary.status;
+      const icon = summary.status === "failed" || summary.status === "timed_out"
+        ? theme.fg("error", "x")
+        : summary.status === "done"
+          ? theme.fg("success", "■")
+          : summary.status === "killed"
+            ? theme.fg("muted", "■")
+            : theme.fg("warning", "■");
+      const statusColor = summary.status === "failed" || summary.status === "timed_out"
+        ? "error"
+        : summary.status === "done"
+          ? "success"
+          : summary.status === "killed"
+            ? "muted"
+            : "warning";
+      const body = summary.id
+        ? `${icon} ${theme.fg("accent", theme.bold(`terminal ${summary.id}`))} ${theme.fg(statusColor, word)}${theme.fg("dim", " · ")}${theme.fg("accent", "/ps")}${theme.fg("dim", " to inspect")}`
+        : `${icon} ${theme.fg("muted", `managed bash ${word}`)}`;
+      const text =
+        (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+      text.setText(body);
+      return text;
+    },
     async execute(toolCallId, params, signal, onUpdate, ctx) {
       // Preserve the exact command text. Trimming here can break heredocs and
       // multiline scripts; trim only for validation and the display title.
@@ -512,10 +589,9 @@ export function createBackgroundTerminalsExtension(
 
   pi.registerMessageRenderer(
     "background-terminal-result",
-    (message, { expanded }, theme) => {
+    (message, _options, theme) => {
       const details = (message.details ?? {}) as {
         id?: string;
-        title?: string;
         status?: string;
         exitCode?: number;
         signal?: string;
@@ -536,37 +612,13 @@ export function createBackgroundTerminalsExtension(
       const header =
         `${icon} ` +
         theme.fg("accent", theme.bold(`terminal ${details.id ?? "?"}`)) +
-        theme.fg("muted", ` · ${details.title ?? ""} · ${how}`);
+        theme.fg("muted", ` · ${how} · `) +
+        theme.fg("accent", "/ps") +
+        theme.fg("dim", " to inspect");
 
-      const content =
-        typeof message.content === "string" ? message.content : "";
-      // Remove only the summary line; the Error line (when present) is part
-      // of the actual result and must remain visible. The body carries raw
-      // process output — sanitize ANSI/control chars or the transcript smears.
-      const body = sanitizeText(content.split("\n").slice(1).join("\n").trim());
-
-      if (expanded) {
-        const md = new Markdown(`${body}`, 0, 0, getMarkdownTheme());
-        const container = new Text(header, 0, 0);
-        return {
-          render: (width: number) => [
-            ...container.render(width),
-            ...md.render(width),
-          ],
-          invalidate: () => {
-            container.invalidate();
-            md.invalidate();
-          },
-        };
-      }
-
-      const previewLines = body.split("\n").slice(0, 8);
-      let text = header;
-      for (const line of previewLines)
-        text += `\n${theme.fg("toolOutput", line)}`;
-      if (body.split("\n").length > 8)
-        text += `\n${theme.fg("dim", "... (ctrl+o to expand)")}`;
-      return new Text(text, 0, 0);
+      // The message still carries bounded stdout/stderr for the model, but its
+      // TUI renderer is always one line, including in expanded transcript mode.
+      return new Text(header, 0, 0);
     },
   );
 
