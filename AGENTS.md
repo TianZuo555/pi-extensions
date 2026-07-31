@@ -40,6 +40,7 @@ Workspace → npm package map: `pi-repo-model`→`pi-tian-repo-model`, `pi-repo-
 - Packages ship **uncompiled TypeScript**, so all source must use erasable-syntax-only constructs — no `enum`, no namespaces, and no constructor parameter properties (`constructor(readonly x: T)`), which Node's type-stripping loader rejects. Declare the field and assign it in the body instead.
 - Keep `extensions/*.ts` as one-line re-export stubs; real code goes in `packages/*`.
 - When changing an extension, bump that package's `version` to trigger an npm release — CI compares the local version against the registry and publishes only unpublished versions, with provenance.
+- Version update policy: bump only the changed package; use a patch release for fixes, a minor release for backward-compatible features, and a major release for breaking changes. Documentation-only changes that do not alter a published package do not require a version bump. Keep `package-lock.json` synchronized when package versions change.
 
 ## Working agreement
 - Prefer small, reviewable changes; bump and publish only the package(s) that actually changed.
