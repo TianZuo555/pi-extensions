@@ -103,7 +103,7 @@ let cacheDir = join(CACHE_ROOT, `process-${process.pid}`);
 let manifestPath = join(cacheDir, "manifest.json");
 let nextImageId = 1;
 const imagesByPlaceholder = new Map<string, CachedImage>();
-/** Pre-converted, terminal-displayable bytes keyed by cache file path. */
+/** Terminal-displayable bytes keyed by the file they were read from. */
 const displayDataByPath = new Map<string, { data: string; mimeType: string }>();
 
 function formatPlaceholder(id: number): string {
@@ -153,6 +153,14 @@ function detectMimeType(filePath: string, bytes: Buffer): string | undefined {
 
 function imageExtension(mimeType: string): string {
   return EXT_BY_MIME[normalizeMimeType(mimeType)] ?? "png";
+}
+
+/**
+ * PNG rendition used for terminal preview, derived from the cache file so no
+ * extra bookkeeping is needed in the manifest or in persisted entries.
+ */
+function displayPathFor(filePath: string): string {
+  return `${filePath.slice(0, -extname(filePath).length)}.display.png`;
 }
 
 function hashBytes(bytes: Buffer): string {
@@ -318,6 +326,16 @@ async function cacheBytes(bytes: Buffer, detectedMime: string, sourcePath?: stri
   const filePath = join(cacheDir, `${fileStem(placeholder)}.${imageExtension(mimeType)}`);
   await writeFile(filePath, storedBytes);
 
+  // The Kitty graphics protocol only accepts PNG, and an entry renderer has to
+  // produce its image synchronously (extensions cannot request a re-render), so
+  // the PNG a preview needs is written once here rather than converted lazily.
+  if (mimeType !== "image/png") {
+    const converted = await convertToPng(storedBytes.toString("base64"), mimeType).catch(() => null);
+    if (converted) {
+      await writeFile(displayPathFor(filePath), Buffer.from(converted.data, "base64"));
+    }
+  }
+
   const cached: CachedImage = {
     id,
     placeholder,
@@ -373,18 +391,29 @@ type ClipboardScriptResult =
   | { kind: "files"; paths: string[] }
   | { kind: "none" };
 
+type ClipboardImages = {
+  images: CachedImage[];
+  /** Copied files we could see on the pasteboard but could not read (usually TCC). */
+  unreadable: string[];
+};
+
 /**
  * Read every image the clipboard offers. Two shapes matter on macOS:
  *
- * - raw image data (screenshots, "Copy Image" in a browser) under an image UTI;
- * - file references (Cmd+C on files in Finder), which carry *no* image data at
- *   all - only `public.file-url` - so they must be resolved and read from disk.
+ * - file references (Cmd+C on files in Finder), which carry the real file only
+ *   as `public.file-url`;
+ * - raw image data (screenshots, "Copy Image" in a browser) under an image UTI.
+ *
+ * File references are checked FIRST and win: Finder also puts an icon/preview
+ * rendition of the copied file on the pasteboard under `public.png`/
+ * `public.tiff`, so preferring image data would silently cache a generic
+ * document icon instead of the file the user copied.
  *
  * The JXA script returns JSON on stdout describing which shape was found; raw
  * data is written to `rawPath` because it cannot travel through stdout.
  */
-async function readMacClipboardImagesToCache(): Promise<CachedImage[]> {
-  if (process.platform !== "darwin") return [];
+async function readMacClipboardImagesToCache(): Promise<ClipboardImages> {
+  if (process.platform !== "darwin") return { images: [], unreadable: [] };
 
   await ensureCacheDir();
   const rawPath = join(cacheDir, `clipboard-${randomUUID()}.raw`);
@@ -394,44 +423,46 @@ ObjC.import('AppKit');
 ObjC.import('Foundation');
 const out = ${quotedPath};
 const pb = $.NSPasteboard.generalPasteboard;
-const candidates = [
-  'public.png',
-  'public.jpeg',
-  'com.compuserve.gif',
-  'org.webmproject.webp',
-  'public.webp',
-  'public.heic',
-  'public.heif',
-  'public.tiff',
-];
 let result = { kind: 'none' };
-for (const uti of candidates) {
-  const data = pb.dataForType(uti);
-  if (data && data.length > 0) {
-    if (!data.writeToFileAtomically(out, true)) {
-      throw new Error('failed to write clipboard image');
-    }
-    result = { kind: 'data' };
-    break;
+
+// Finder copies put file references on the pasteboard. The option keys are the
+// literal Cocoa constant names, including the trailing 'Key' - anything else is
+// silently ignored and would let non-image files through.
+const options = $({
+  NSPasteboardURLReadingFileURLsOnlyKey: 1,
+  NSPasteboardURLReadingContentsConformToTypesKey: ['public.image'],
+});
+const urls = pb.readObjectsForClassesOptions($([$.NSURL]), options);
+const paths = [];
+if (urls) {
+  for (let i = 0; i < urls.count; i++) {
+    const path = ObjC.unwrap(urls.objectAtIndex(i).path);
+    if (path) paths.push(path);
   }
 }
+if (paths.length > 0) result = { kind: 'files', paths: paths };
+
 if (result.kind === 'none') {
-  // Finder copies put file references on the pasteboard. The option keys are
-  // the literal Cocoa constant names, including the trailing 'Key' - anything
-  // else is silently ignored and would let non-image files through.
-  const options = $({
-    NSPasteboardURLReadingFileURLsOnlyKey: 1,
-    NSPasteboardURLReadingContentsConformToTypesKey: ['public.image'],
-  });
-  const urls = pb.readObjectsForClassesOptions($([$.NSURL]), options);
-  const paths = [];
-  if (urls) {
-    for (let i = 0; i < urls.count; i++) {
-      const path = ObjC.unwrap(urls.objectAtIndex(i).path);
-      if (path) paths.push(path);
+  const candidates = [
+    'public.png',
+    'public.jpeg',
+    'com.compuserve.gif',
+    'org.webmproject.webp',
+    'public.webp',
+    'public.heic',
+    'public.heif',
+    'public.tiff',
+  ];
+  for (const uti of candidates) {
+    const data = pb.dataForType(uti);
+    if (data && data.length > 0) {
+      if (!data.writeToFileAtomically(out, true)) {
+        throw new Error('failed to write clipboard image');
+      }
+      result = { kind: 'data' };
+      break;
     }
   }
-  if (paths.length > 0) result = { kind: 'files', paths: paths };
 }
 JSON.stringify(result);
 `;
@@ -443,23 +474,27 @@ JSON.stringify(result);
     });
     const result = JSON.parse(stdout.trim()) as ClipboardScriptResult;
 
-    if (result.kind === "data") {
-      const cached = await cacheImageFile(rawPath);
-      return cached ? [cached] : [];
-    }
-
     if (result.kind === "files") {
-      const cached: CachedImage[] = [];
+      const images: CachedImage[] = [];
+      const unreadable: string[] = [];
       for (const path of result.paths) {
         const image = await cacheImageFile(path, path).catch(() => null);
-        if (image) cached.push(image);
+        if (image) images.push(image);
+        else unreadable.push(path);
       }
-      return cached;
+      // Never fall back to pasteboard image data here: for a Finder copy that
+      // data is the 1024x1024 generic document icon, not the file itself.
+      return { images, unreadable };
     }
 
-    return [];
+    if (result.kind === "data") {
+      const cached = await cacheImageFile(rawPath);
+      return { images: cached ? [cached] : [], unreadable: [] };
+    }
+
+    return { images: [], unreadable: [] };
   } catch {
-    return [];
+    return { images: [], unreadable: [] };
   } finally {
     await unlink(rawPath).catch(() => undefined);
   }
@@ -505,26 +540,40 @@ async function toImageContent(
 }
 
 /**
- * Pre-compute terminal-displayable bytes. The Kitty graphics protocol only
- * accepts PNG, so non-PNG caches are converted once and memoized.
+ * Read terminal-displayable bytes for a preview entry. Synchronous by design:
+ * entry renderers must return a component immediately, and a resumed session
+ * renders these entries in a fresh process with an empty memo.
  */
-async function prepareDisplayData(cached: CachedImage): Promise<void> {
+function loadDisplayData(entry: PreviewEntryData): { data: string; mimeType: string } | undefined {
   const protocol = getCapabilities().images;
-  if (!protocol || displayDataByPath.has(cached.filePath)) return;
+  if (!protocol) return undefined;
+
+  // Kitty accepts PNG only; the other protocols handle the stored format.
+  const needsPng = protocol === "kitty" && entry.mimeType !== "image/png";
+  const path = needsPng ? displayPathFor(entry.filePath) : entry.filePath;
+
+  const memo = displayDataByPath.get(path);
+  if (memo) return memo;
 
   try {
-    const bytes = await readFile(cached.filePath);
-    const base64 = bytes.toString("base64");
-    if (protocol === "kitty" && cached.mimeType !== "image/png") {
-      const converted = await convertToPng(base64, cached.mimeType);
-      if (!converted) return;
-      displayDataByPath.set(cached.filePath, converted);
-      return;
-    }
-    displayDataByPath.set(cached.filePath, { data: base64, mimeType: cached.mimeType });
+    const display = {
+      data: readFileSync(path).toString("base64"),
+      mimeType: needsPng ? "image/png" : entry.mimeType,
+    };
+    displayDataByPath.set(path, display);
+    return display;
   } catch {
     // Preview is best-effort only.
+    return undefined;
   }
+}
+
+function previewEntryData(cached: CachedImage): PreviewEntryData {
+  return {
+    placeholder: cached.placeholder,
+    filePath: cached.filePath,
+    mimeType: cached.mimeType,
+  };
 }
 
 function findPlaceholders(text: string): string[] {
@@ -538,15 +587,10 @@ function findPlaceholders(text: string): string[] {
 
 export default function (pi: ExtensionAPI) {
   /** Render the cached image inline in the transcript, if the terminal can. */
-  const showPreview = async (cached: CachedImage): Promise<void> => {
-    if (!getCapabilities().images) return;
-    await prepareDisplayData(cached);
-    if (!displayDataByPath.has(cached.filePath)) return;
-    pi.appendEntry<PreviewEntryData>(ENTRY_TYPE, {
-      placeholder: cached.placeholder,
-      filePath: cached.filePath,
-      mimeType: cached.mimeType,
-    });
+  const showPreview = (cached: CachedImage): void => {
+    const data = previewEntryData(cached);
+    if (!loadDisplayData(data)) return;
+    pi.appendEntry<PreviewEntryData>(ENTRY_TYPE, data);
   };
 
   pi.registerEntryRenderer<PreviewEntryData>(ENTRY_TYPE, (entry, _options, theme: Theme) => {
@@ -554,22 +598,7 @@ export default function (pi: ExtensionAPI) {
     if (!data) return undefined;
 
     const label = theme.fg("muted", `${data.placeholder} ${basename(data.filePath)}`);
-
-    let display = displayDataByPath.get(data.filePath);
-    if (!display) {
-      // Session was resumed in a new process: re-read from disk if still cached.
-      try {
-        const bytes = readFileSync(data.filePath);
-        display = { data: bytes.toString("base64"), mimeType: data.mimeType };
-        if (getCapabilities().images === "kitty" && data.mimeType !== "image/png") {
-          display = undefined;
-        } else {
-          displayDataByPath.set(data.filePath, display);
-        }
-      } catch {
-        display = undefined;
-      }
-    }
+    const display = loadDisplayData(data);
 
     if (!display) {
       return new Text(theme.fg("dim", `${label} (preview unavailable)`), 0, 0);
@@ -615,8 +644,17 @@ export default function (pi: ExtensionAPI) {
     pi.registerShortcut("ctrl+v", {
       description: "Paste clipboard image as [Image#xxx]",
       handler: async (ctx) => {
-        const cached = await readMacClipboardImagesToCache();
-        if (cached.length === 0) {
+        const { images, unreadable } = await readMacClipboardImagesToCache();
+        if (images.length === 0) {
+          if (unreadable.length > 0) {
+            ctx.ui.notify(
+              `Could not read copied file${unreadable.length > 1 ? "s" : ""}: ${unreadable
+                .map((path) => basename(path))
+                .join(", ")} (check the terminal's Files and Folders permission)`,
+              "warning",
+            );
+            return;
+          }
           // Extension shortcuts run before pi's built-in pasteImage handler, so
           // we must reproduce its text fallback ourselves or Ctrl+V would stop
           // pasting text entirely.
@@ -629,11 +667,11 @@ export default function (pi: ExtensionAPI) {
           return;
         }
 
-        ctx.ui.pasteToEditor(cached.map((image) => image.placeholder).join(" "));
+        ctx.ui.pasteToEditor(images.map((image) => image.placeholder).join(" "));
         ctx.ui.setStatus(EXTENSION_ID, `images: ${imagesByPlaceholder.size}`);
         await touchCacheDir();
-        for (const image of cached) {
-          if (ctx.mode === "tui") await showPreview(image);
+        for (const image of images) {
+          if (ctx.mode === "tui") showPreview(image);
           else ctx.ui.notify(`Cached ${image.placeholder} (${basename(image.filePath)})`, "info");
         }
       },
@@ -706,7 +744,7 @@ export default function (pi: ExtensionAPI) {
 
     ctx.ui.setStatus(EXTENSION_ID, `images: ${imagesByPlaceholder.size}`);
     if (ctx.mode === "tui") {
-      for (const cached of newlyCached) await showPreview(cached);
+      for (const cached of newlyCached) showPreview(cached);
     }
     return { action: "transform", text, images: attached };
   });
@@ -721,7 +759,7 @@ export default function (pi: ExtensionAPI) {
 
       const images = [...imagesByPlaceholder.values()];
       if (ctx.mode === "tui" && getCapabilities().images) {
-        for (const image of images) await showPreview(image);
+        for (const image of images) showPreview(image);
         return;
       }
 
