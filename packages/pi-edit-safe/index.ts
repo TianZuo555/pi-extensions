@@ -61,6 +61,8 @@ export default function editSafeExtension(pi: ExtensionAPI): void {
 		label: "edit (strict)",
 		description:
 			"Replace text in a file using only the array schema: { path, edits: [{ oldText, newText }, ...] }. The edits field is required and must be a non-empty array, including for a single replacement; top-level oldText/newText fields are not part of the public schema. Edits apply in order, one after another, each matched against the already-updated text. Each oldText must match the file and be unique; small whitespace/indentation, unicode-punctuation, or escape drift is tolerated only when the match is unambiguous. newText is written verbatim. On failure, re-read the file before retrying.",
+		promptSnippet:
+			"Make precise file edits with exact text replacement, including multiple ordered edits in one call",
 		parameters,
 		// Fold the looser shapes models emit (alias keys, stringified arrays, a bare
 		// edit object, top-level oldText/newText) onto the canonical {path, edits[]}

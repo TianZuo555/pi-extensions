@@ -13,8 +13,6 @@
 //   /skills-list       list every configured repo and its disabled skills
 //   /skills-reset      clear this repo's overrides (all skills enabled)
 //
-// The agent can also manage it via the `repo_skills` tool (text form).
-//
 // Config lives at ~/.pi/repo-skills/config.json (machine-local, never synced):
 //   {
 //     "version": 1,
@@ -32,10 +30,8 @@
 // empty array means every skill is enabled.
 
 import path from "node:path";
-import type { BuildSystemPromptOptions, ExtensionAPI, ExtensionContext, Skill } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext, Skill } from "@earendil-works/pi-coding-agent";
 import { formatSkillsForPrompt } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
-import { StringEnum } from "@earendil-works/pi-ai";
 import { Container, Spacer, Text } from "@earendil-works/pi-tui";
 import { getRepoMeta, piConfigDir, readJson, type RepoMeta, writeJson } from "./lib/repo-registry";
 
@@ -83,15 +79,8 @@ function saveConfig(config: RepoSkillsConfig): void {
 
 // --- skill helpers ----------------------------------------------------------
 
-// `getSystemPromptOptions()` is on the command context but not the tool's base
-// context. `before_agent_start` always runs before any tool call in a run, so we
-// cache the full skill list there and fall back to it for the tool.
-let cachedSkills: Skill[] = [];
-
-function loadedSkills(ctx: ExtensionContext): Skill[] {
-  const get = (ctx as { getSystemPromptOptions?: () => BuildSystemPromptOptions }).getSystemPromptOptions;
-  const fromCtx = get?.().skills;
-  return fromCtx ?? cachedSkills;
+function loadedSkills(ctx: ExtensionCommandContext): Skill[] {
+  return ctx.getSystemPromptOptions().skills ?? [];
 }
 
 // Only skills the model can auto-invoke are togglable. `disable-model-invocation`
@@ -263,7 +252,7 @@ function commitDisabled(meta: RepoMeta, disabled: DisabledSkills): ActionResult 
 
 // --- interactive entrypoint -------------------------------------------------
 
-async function interactiveToggle(ctx: ExtensionContext): Promise<ActionResult> {
+async function interactiveToggle(ctx: ExtensionCommandContext): Promise<ActionResult> {
   const meta = getRepoMeta(ctx.cwd);
   const all = visibleSkills(loadedSkills(ctx));
   if (all.length === 0) {
@@ -274,7 +263,7 @@ async function interactiveToggle(ctx: ExtensionContext): Promise<ActionResult> {
 
   const custom = (ctx.ui as { custom?: Function }).custom;
   if (typeof custom !== "function") {
-    return { message: "Interactive toggle needs a TUI. Use the repo_skills tool instead.", level: "warning" };
+    return { message: "Interactive toggle requires TUI mode.", level: "warning" };
   }
 
   const result = (await custom.call(
@@ -290,7 +279,7 @@ async function interactiveToggle(ctx: ExtensionContext): Promise<ActionResult> {
 // --- text-form actions (shared with the tool) -------------------------------
 
 async function runAction(
-  ctx: ExtensionContext,
+  ctx: ExtensionCommandContext,
   action: "get" | "list" | "reset" | "disable-all" | "enable-all" | "disable" | "enable",
   skillName?: string,
 ): Promise<ActionResult> {
@@ -357,7 +346,6 @@ export default function repoSkillsExtension(pi: ExtensionAPI): void {
   // apply immediately.
   pi.on("before_agent_start", (event, ctx) => {
     const all = event.systemPromptOptions.skills ?? [];
-    cachedSkills = all; // fallback source for the tool's base context
     if (all.length === 0) return;
 
     const disabled = loadConfig().repos?.[getRepoMeta(ctx.cwd).key]?.disabled;
@@ -395,36 +383,6 @@ export default function repoSkillsExtension(pi: ExtensionAPI): void {
     description: "Clear the current repo's skill overrides (enable all)",
     handler: async (_args, ctx) => {
       notify(ctx, await runAction(ctx, "reset"));
-    },
-  });
-
-  // Let the agent manage per-repo skill selections (text form).
-  pi.registerTool({
-    name: "repo_skills",
-    label: "Repo Skills",
-    description:
-      "Manage which skills are enabled/disabled for the current repository (pi-repo-skills extension). " +
-      "Disabled skills are stripped from the system prompt and take effect from the next turn. " +
-      "Selections persist centrally, keyed by git root. " +
-      'Actions: "get" (current repo), "list" (all repos), "disable"/"enable" (needs skill), ' +
-      '"disable-all", "enable-all", "reset". For a checkbox picker, the human can run /skills.',
-    promptSnippet: "Get/list/enable/disable per-repo skills",
-    promptGuidelines: [
-      "Use repo_skills when the user asks to enable, disable, or list skills for the current repository.",
-    ],
-    parameters: Type.Object({
-      action: StringEnum(["get", "list", "disable", "enable", "disable-all", "enable-all", "reset"] as const),
-      skill: Type.Optional(
-        Type.String({ description: 'Skill name for "disable"/"enable" actions. Ignored otherwise.' }),
-      ),
-    }),
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const result = await runAction(ctx, params.action, params.skill);
-      return {
-        content: [{ type: "text", text: result.message }],
-        details: { action: params.action, level: result.level },
-        isError: result.level === "error",
-      };
     },
   });
 }

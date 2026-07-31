@@ -15,8 +15,6 @@
 //   /repo-model-unset              clear current repo's default
 //   /repo-model-list               list every configured repo
 //
-// The agent can also manage it via the `repo_default_model` tool (text form).
-//
 // Config lives at ~/.pi/repo-model/config.json (machine-local, never synced):
 //   {
 //     "version": 1,
@@ -34,8 +32,6 @@ import os from "node:os";
 import path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { type ModelRuntime, resolveModelScopeWithDiagnostics, type ScopedModel } from "@earendil-works/pi-coding-agent";
-import { Type } from "typebox";
-import { StringEnum } from "@earendil-works/pi-ai";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
 import { Container, Spacer, Text } from "@earendil-works/pi-tui";
 import { getRepoMeta, piConfigDir, readJson, type RepoMeta, writeJson } from "./lib/repo-registry";
@@ -596,46 +592,6 @@ export default function repoModelExtension(pi: ExtensionAPI): void {
     description: "List all configured repo default models",
     handler: async (_args, ctx) => {
       notify(ctx, await runAction(pi, ctx, "list"));
-    },
-  });
-
-  // Let the agent manage per-repo defaults (text form; agents can't use dropdowns).
-  pi.registerTool({
-    name: "repo_default_model",
-    label: "Repo Default Model",
-    description:
-      "Manage the per-repository default model preference (pi-repo-model extension). " +
-      "The preference is stored centrally and auto-applied at session start for that repo. " +
-      'Use action "set" with model "provider/modelId[:thinkingLevel]" (e.g. "cursor/composer-2.5:high"), ' +
-      'or "get"/"unset" for the current repo, or "list" for all. ' +
-      "For an interactive model+thinking picker, the human can run /repo-model.",
-    promptSnippet: "Get/set/unset/list the per-repo default model preference",
-    promptGuidelines: [
-      "Use repo_default_model when the user asks to pin or change the default model for the current repository.",
-    ],
-    parameters: Type.Object({
-      action: StringEnum(["get", "set", "unset", "list"] as const),
-      model: Type.Optional(
-        Type.String({
-          description: 'Model reference for action "set", e.g. "cursor/composer-2.5:high". Ignored for other actions.',
-        }),
-      ),
-    }),
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const action = (params.action ?? "get") as "get" | "set" | "unset" | "list";
-      if (action === "set" && !params.model?.trim()) {
-        return {
-          content: [{ type: "text", text: "Set requires a model reference like provider/model:thinking" }],
-          details: { error: "missing-model" },
-          isError: true,
-        };
-      }
-      const result = await runAction(pi, ctx, action, params.model);
-      return {
-        content: [{ type: "text", text: result.message }],
-        details: { action, level: result.level },
-        isError: result.level === "error",
-      };
     },
   });
 }

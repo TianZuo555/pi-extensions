@@ -4,8 +4,8 @@ A small collection of [pi coding agent](https://pi.dev) extensions.
 
 | Extension | Commands / Tools | What it does |
 |---|---|---|
-| **pi-repo-model** | `/repo-model`, `/repo-model-unset`, `/repo-model-list`, tool `repo_default_model` | Per-repo default model + thinking level, auto-applied at session start. |
-| **pi-repo-skills** | `/skills`, `/skills-list`, `/skills-reset`, tool `repo_skills` | Per-repo skill toggles via checkbox TUI; disabled skills leave the prompt. |
+| **pi-repo-model** | `/repo-model`, `/repo-model-unset`, `/repo-model-list` | Per-repo default model + thinking level, auto-applied at session start. |
+| **pi-repo-skills** | `/skills`, `/skills-list`, `/skills-reset` | Per-repo skill toggles via checkbox TUI; disabled skills leave the prompt. |
 | **pi-commit** | `/commit`, `/commit-all` | Git commits written by a separately configured model. |
 | **token-speed** | `/tps` | Live tok/s meter in the footer plus an end-of-message summary. |
 | **image-cache** | `Ctrl+V`, `/images`, `/image-cache-clear` | Caches pasted images as `[Image#NNN]` and re-attaches them on send. |
@@ -153,8 +153,6 @@ applies it at session start (default triggers: fresh start + new session).
 - `/repo-model-unset` — clear the current repo's default.
 - `/repo-model-list` — list every configured repo.
 
-The agent can also manage it via the `repo_default_model` tool.
-
 ### pi-repo-skills
 
 Turns individual skills on/off per repository. Disabled skills are removed from
@@ -165,7 +163,6 @@ auto-load them. State lives in `~/.pi/repo-skills/config.json`.
   `n` enable all, `enter` save, `esc` cancel.
 - `/skills-list` — list all repos with overrides.
 - `/skills-reset` — clear this repo's overrides.
-- Tool `repo_skills` — `get` / `list` / `disable` / `enable` / `disable-all` / `enable-all` / `reset`.
 
 `disabled` is stored as an array of skill names or the sentinel `"ALL"` (every
 skill off, future-proof against newly installed skills).
