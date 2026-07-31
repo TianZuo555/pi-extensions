@@ -47,6 +47,12 @@ const PI_CLIPBOARD_PATH_RE =
 /** Inline images larger than this are dropped rather than sent to the provider. */
 const MAX_INLINE_BYTES = 4.5 * 1024 * 1024;
 
+/**
+ * Upper bound for a source file we are willing to read into memory. Copying a
+ * huge image out of Finder should be ignored, not blow up the agent process.
+ */
+const MAX_SOURCE_BYTES = 64 * 1024 * 1024;
+
 const MIME_BY_EXT: Record<string, string> = {
   ".png": "image/png",
   ".jpg": "image/jpeg",
@@ -336,13 +342,21 @@ function isInsideTmpDir(candidate: string): boolean {
   }
 }
 
-/** Cache an image that already exists on disk (pi's own clipboard temp file). */
-async function cacheExistingImage(sourcePath: string): Promise<CachedImage | null> {
-  const bytes = await readFile(sourcePath);
-  const detectedMime = detectMimeType(sourcePath, bytes);
+/** Read an image file from disk into the cache, ignoring non-images and huge files. */
+async function cacheImageFile(filePath: string, sourcePath?: string): Promise<CachedImage | null> {
+  const info = await stat(filePath);
+  if (!info.isFile() || info.size === 0 || info.size > MAX_SOURCE_BYTES) return null;
+
+  const bytes = await readFile(filePath);
+  const detectedMime = detectMimeType(filePath, bytes);
   if (!detectedMime) return null;
 
-  const cached = await cacheBytes(bytes, detectedMime, sourcePath);
+  return await cacheBytes(bytes, detectedMime, sourcePath);
+}
+
+/** Cache an image that already exists on disk (pi's own clipboard temp file). */
+async function cacheExistingImage(sourcePath: string): Promise<CachedImage | null> {
+  const cached = await cacheImageFile(sourcePath, sourcePath);
   if (!cached) return null;
 
   // pi never cleans up its own pi-clipboard-* temp files. Once the bytes are in
@@ -354,15 +368,27 @@ async function cacheExistingImage(sourcePath: string): Promise<CachedImage | nul
   return cached;
 }
 
-async function readMacClipboardImageToCache(): Promise<CachedImage | null> {
-  if (process.platform !== "darwin") return null;
+type ClipboardScriptResult =
+  | { kind: "data" }
+  | { kind: "files"; paths: string[] }
+  | { kind: "none" };
+
+/**
+ * Read every image the clipboard offers. Two shapes matter on macOS:
+ *
+ * - raw image data (screenshots, "Copy Image" in a browser) under an image UTI;
+ * - file references (Cmd+C on files in Finder), which carry *no* image data at
+ *   all - only `public.file-url` - so they must be resolved and read from disk.
+ *
+ * The JXA script returns JSON on stdout describing which shape was found; raw
+ * data is written to `rawPath` because it cannot travel through stdout.
+ */
+async function readMacClipboardImagesToCache(): Promise<CachedImage[]> {
+  if (process.platform !== "darwin") return [];
 
   await ensureCacheDir();
   const rawPath = join(cacheDir, `clipboard-${randomUUID()}.raw`);
   const quotedPath = JSON.stringify(rawPath);
-  // NOTE: this script deliberately prints nothing. JXA's console.log writes to
-  // stderr, so any value reported here could not be read back reliably from
-  // stdout - the real format is detected from the written bytes instead.
   const script = `
 ObjC.import('AppKit');
 ObjC.import('Foundation');
@@ -378,34 +404,62 @@ const candidates = [
   'public.heif',
   'public.tiff',
 ];
-let wrote = false;
+let result = { kind: 'none' };
 for (const uti of candidates) {
   const data = pb.dataForType(uti);
   if (data && data.length > 0) {
     if (!data.writeToFileAtomically(out, true)) {
       throw new Error('failed to write clipboard image');
     }
-    wrote = true;
+    result = { kind: 'data' };
     break;
   }
 }
-if (!wrote) {
-  throw new Error('clipboard does not contain a supported image');
+if (result.kind === 'none') {
+  // Finder copies put file references on the pasteboard. The option keys are
+  // the literal Cocoa constant names, including the trailing 'Key' - anything
+  // else is silently ignored and would let non-image files through.
+  const options = $({
+    NSPasteboardURLReadingFileURLsOnlyKey: 1,
+    NSPasteboardURLReadingContentsConformToTypesKey: ['public.image'],
+  });
+  const urls = pb.readObjectsForClassesOptions($([$.NSURL]), options);
+  const paths = [];
+  if (urls) {
+    for (let i = 0; i < urls.count; i++) {
+      const path = ObjC.unwrap(urls.objectAtIndex(i).path);
+      if (path) paths.push(path);
+    }
+  }
+  if (paths.length > 0) result = { kind: 'files', paths: paths };
 }
+JSON.stringify(result);
 `;
 
   try {
-    await execFileAsync("osascript", ["-l", "JavaScript", "-e", script], {
+    const { stdout } = await execFileAsync("osascript", ["-l", "JavaScript", "-e", script], {
       timeout: 5_000,
-      maxBuffer: 64 * 1024,
+      maxBuffer: 256 * 1024,
     });
+    const result = JSON.parse(stdout.trim()) as ClipboardScriptResult;
 
-    const bytes = await readFile(rawPath);
-    const detectedMime = detectMimeType(rawPath, bytes);
-    if (!detectedMime) return null;
-    return await cacheBytes(bytes, detectedMime);
+    if (result.kind === "data") {
+      const cached = await cacheImageFile(rawPath);
+      return cached ? [cached] : [];
+    }
+
+    if (result.kind === "files") {
+      const cached: CachedImage[] = [];
+      for (const path of result.paths) {
+        const image = await cacheImageFile(path, path).catch(() => null);
+        if (image) cached.push(image);
+      }
+      return cached;
+    }
+
+    return [];
   } catch {
-    return null;
+    return [];
   } finally {
     await unlink(rawPath).catch(() => undefined);
   }
@@ -561,8 +615,8 @@ export default function (pi: ExtensionAPI) {
     pi.registerShortcut("ctrl+v", {
       description: "Paste clipboard image as [Image#xxx]",
       handler: async (ctx) => {
-        const cached = await readMacClipboardImageToCache();
-        if (!cached) {
+        const cached = await readMacClipboardImagesToCache();
+        if (cached.length === 0) {
           // Extension shortcuts run before pi's built-in pasteImage handler, so
           // we must reproduce its text fallback ourselves or Ctrl+V would stop
           // pasting text entirely.
@@ -575,11 +629,13 @@ export default function (pi: ExtensionAPI) {
           return;
         }
 
-        ctx.ui.pasteToEditor(cached.placeholder);
+        ctx.ui.pasteToEditor(cached.map((image) => image.placeholder).join(" "));
         ctx.ui.setStatus(EXTENSION_ID, `images: ${imagesByPlaceholder.size}`);
         await touchCacheDir();
-        if (ctx.mode === "tui") await showPreview(cached);
-        else ctx.ui.notify(`Cached ${cached.placeholder} (${basename(cached.filePath)})`, "info");
+        for (const image of cached) {
+          if (ctx.mode === "tui") await showPreview(image);
+          else ctx.ui.notify(`Cached ${image.placeholder} (${basename(image.filePath)})`, "info");
+        }
       },
     });
   }

@@ -214,7 +214,9 @@ token count when available. The mode is remembered in
 
 Caches pasted images so they survive as compact `[Image#NNN]` placeholders and
 are re-attached to the model on send. On macOS, `Ctrl+V` pastes the clipboard
-image directly. Cache lives under `~/.pi/agent/cache/image-cache/` with a 24h TTL.
+image directly — both raw image data (screenshots, "Copy Image") and image
+files copied in Finder, including multiple files at once. Cache lives under
+`~/.pi/agent/cache/image-cache/` with a 24h TTL.
 
 ### ask-user
 
