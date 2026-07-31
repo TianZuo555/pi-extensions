@@ -38,6 +38,12 @@ import {
   type TerminalStatus,
 } from "./src/domain.ts";
 import {
+  duplicateCommandError,
+  findDuplicateRunning,
+  isStateOnlyCommand,
+  stateOnlyCommandError,
+} from "./src/command-shape.ts";
+import {
   EXPLORATION_LIMIT,
   explorationLimitError,
   explorationWarning,
@@ -453,6 +459,11 @@ export function createBackgroundTerminalsExtension(
       const command = params.command;
       if (!command.trim()) throw new Error("command must not be empty.");
 
+      // The shell is discarded at exit, so a command that only mutates shell
+      // state cannot affect anything. Left to run it would exit 0 and let the
+      // model believe the directory or variable persists into the next call.
+      if (isStateOnlyCommand(command)) throw new Error(stateOnlyCommandError());
+
       let explorationNote: string | undefined;
       if (isExploratoryBashCommand(command)) {
         if (!exploratoryToolCalls.has(toolCallId)) {
@@ -547,6 +558,12 @@ export function createBackgroundTerminalsExtension(
         // Manager resolution precedes start(), so no child can exist yet.
         return await runForegroundFallback(managerError, true);
       }
+
+      // Re-issuing a command that is still running is the one mistake the model
+      // gets no feedback on: the duplicate repeats every side effect and both
+      // copies report success. Refuse instead of spawning it twice.
+      const duplicate = findDuplicateRunning(manager.view.list(), command, cwd);
+      if (duplicate) throw new Error(duplicateCommandError(duplicate));
 
       const env = getPiShellEnv();
       for (const key of SESSION_ENV_KEYS) delete env[key];

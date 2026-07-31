@@ -17,7 +17,7 @@ A collection of extensions for the [pi coding agent](https://pi.dev): per-repo m
 - `tsconfig.json` — root typecheck config. **Excludes `pi-background-terminals`** (it carries its own `tsconfig.json`).
 - `mise.toml`, `package-lock.json` — tooling/lockfile.
 
-Workspace → npm package map: `pi-repo-model`→`pi-tian-repo-model`, `pi-repo-skills`→`pi-tian-repo-skills`, `pi-commit`→`pi-tian-commit`, `pi-token-speed`→`pi-tian-token-speed`, `pi-image-cache`→`pi-tian-image-cache`, `pi-ask-user`→`pi-tian-ask-user`, `pi-usage`→`pi-tian-usage`, `pi-background-terminals`→`pi-tian-background-terminals`, `pi-edit-safe`→`pi-tian-edit-safe`.
+Workspace → npm package map: `pi-repo-model`→`pi-tian-repo-model`, `pi-repo-skills`→`pi-tian-repo-skills`, `pi-commit`→`pi-tian-commit`, `pi-token-speed`→`pi-tian-token-speed`, `pi-image-cache`→`pi-tian-image-cache`, `pi-ask-user`→`pi-tian-ask-user`, `pi-usage`→`pi-tian-usage`, `pi-background-terminals`→`pi-tian-background-terminals`, `pi-edit-safe`→`pi-tian-edit-safe`, `pi-todo`→`pi-tian-todo`.
 
 ## Common tasks
 - Install deps: `npm install`
@@ -27,6 +27,7 @@ Workspace → npm package map: `pi-repo-model`→`pi-tian-repo-model`, `pi-repo-
 - Test `pi-ask-user`: `npm test -w pi-tian-ask-user`
 - Test `pi-commit`: `npm test -w pi-tian-commit`
 - Test `pi-edit-safe`: `npm test -w pi-tian-edit-safe` (45 cases); A/B vs pi's real built-in edit: `npm run bench -w pi-tian-edit-safe`
+- Test `pi-todo`: `npm test -w pi-tian-todo`
 - Test `pi-background-terminals`: `npm test -w pi-tian-background-terminals`
 - Inspect publishable tarballs: `npm run pack:check`
 - Try an extension in a live pi session without installing: `pi -e ./packages/pi-repo-model`

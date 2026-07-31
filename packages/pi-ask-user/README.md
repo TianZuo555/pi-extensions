@@ -10,6 +10,8 @@ Registers an `ask_user` tool. The model can supply 1–5 questions with 2–5
 options each. Questions and option descriptions wrap across as many lines as
 needed instead of being truncated. Every question also gets a free-form
 **Other** option, and questions can allow either one or multiple selections.
+A model-supplied Other-style option is refused rather than shown twice: the
+duplicate would otherwise reach the user with nothing reporting it back.
 
 Interactive controls:
 

@@ -101,6 +101,17 @@ While at least one terminal runs, a one-line widget renders above the editor.
   `working_dir` instead of persistent `cd` assumptions and prefers dedicated
   inspection tools. Read-only shell exploration warns at 6 calls and blocks
   after 8 within one agent run.
+- **Loud failure for the two silent mistakes.** Prompt wording only makes a
+  misunderstanding less likely, so both contract errors that produce *no* error
+  signal are refused before spawning. A command that only mutates the discarded
+  shell (`cd packages/x`, `export FOO=1`) is rejected with the `working_dir`
+  fix, because otherwise it exits 0 and the next call silently runs elsewhere.
+  Re-issuing a command identical to one still running in the same directory is
+  rejected too, because a yielded command looks like a hang and the duplicate
+  would repeat every side effect while both copies report success. Ambiguous
+  syntax (redirects, command substitution) always fails open. Every settled
+  result also names the directory the command actually ran in, because the
+  common mistake is assuming a cwd that was never set.
 - **Exactly-once completion.** A race-safe waiter token decides whether the
   initial Bash call or the later follow-up owns settlement. A drain-once map
   handles delivery retries without duplicates.

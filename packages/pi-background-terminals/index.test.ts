@@ -250,6 +250,62 @@ test("shell exploration warns, blocks, and resets for the next agent run", async
   }
 });
 
+test("a command that only mutates the discarded shell is refused before spawning", async () => {
+  const app = harness();
+  try {
+    await assert.rejects(
+      app.tools.get("bash").execute(
+        "call-cd-only",
+        { command: "cd /tmp", yield_time_ms: 30_000 },
+        undefined,
+        undefined,
+        app.ctx,
+      ),
+      /was not executed.*working_dir/is,
+    );
+    // The same directory change with real work attached still runs.
+    const result = await app.tools.get("bash").execute(
+      "call-cd-with-work",
+      { command: "cd /tmp && pwd", yield_time_ms: 30_000 },
+      undefined,
+      undefined,
+      app.ctx,
+    );
+    assert.match(result.content[0].text, /tmp/);
+  } finally {
+    await app.shutdown();
+  }
+});
+
+test("re-running a still-running command is refused instead of duplicating it", async () => {
+  const app = harness();
+  try {
+    const tool = app.tools.get("bash");
+    const script = command("setTimeout(() => {}, 2000)");
+    const first = await tool.execute(
+      "call-duplicate-1",
+      { command: script, yield_time_ms: 250 },
+      undefined,
+      undefined,
+      app.ctx,
+    );
+    assert.match(first.content[0].text, /still running as background terminal/);
+
+    await assert.rejects(
+      tool.execute(
+        "call-duplicate-2",
+        { command: script, yield_time_ms: 250 },
+        undefined,
+        undefined,
+        app.ctx,
+      ),
+      /already running as background terminal bt-\d+.*has not failed/is,
+    );
+  } finally {
+    await app.shutdown();
+  }
+});
+
 test("quick command returns final output without a duplicate follow-up", async () => {
   const app = harness();
   try {

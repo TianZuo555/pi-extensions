@@ -36,13 +36,20 @@ const PROGRESS_STDERR_MAX_LINES = 50;
 const RESULT_STDOUT_MAX_LINES = 40;
 const RESULT_STDERR_MAX_LINES = 20;
 
+// Scope: the CALL CONTRACT only — what the model cannot infer from a plain
+// bash prior (fresh shell, no stdin, yield-to-id return type) plus the hard
+// caps. Behavioural advice and the exploration budget live in
+// BASH_PROMPT_GUIDELINES, which pi always injects into the system prompt
+// alongside this description whenever the tool is active, so restating them
+// here only buys tokens. Two facts are deliberately kept in BOTH places:
+// yielding and shell-freshness, whose violations are silent or irreversible
+// (a re-run command repeats its side effects; a lost `cd` silently runs in the
+// wrong directory and still reports success).
 export const BASH_TOOL_DESCRIPTION =
-  "Execute a Bash command with no interactive stdin through one managed execution path. " +
-  "Each call starts a fresh, non-persistent shell; use working_dir because standalone cd/export/assignments do not affect later calls. " +
-  `Waits up to ${DEFAULT_YIELD_TIME_MS} ms by default: commands that finish return ordinary Bash output; only commands still running continue as a session-scoped background terminal and return an id. ` +
-  "A yielded command notifies you automatically exactly once when it exits; do not poll it. The user can inspect or stop it in /ps. " +
-  `Read-only shell inspection warns at ${EXPLORATION_WARNING_AT} calls and blocks after ${EXPLORATION_LIMIT} in one agent run. ` +
-  `Output is bounded head+tail with full private spill logs. Max ${MAX_RUNNING} commands can remain running at once.`;
+  "Run a Bash command in a fresh, non-persistent shell with no interactive stdin — use working_dir instead of a standalone cd. " +
+  `Waits up to ${DEFAULT_YIELD_TIME_MS / 1000} s (yield_time_ms): if the command finishes you get its final output; otherwise it keeps running as a background terminal, returns an id, and notifies you exactly once when it exits — do not poll it. ` +
+  "yield_time_ms only changes that wait; timeout kills the command. " +
+  `Output is bounded head+tail. Max ${MAX_RUNNING} background commands at once.`;
 
 export const BASH_PROMPT_SNIPPET =
   "Execute Bash commands; long-running commands automatically continue in the background and notify on exit";
@@ -193,12 +200,16 @@ export function buildBashProgress(snap: TerminalSnapshot) {
 
 /** Result of the initial bash wait, whether final or yielded. */
 export function buildBashResult(snap: TerminalSnapshot) {
+  // Always name the directory. A command sent to the wrong one usually still
+  // exits 0, and the common mistake is assuming a cwd that was never set, so
+  // the model must see where it actually ran even when that is the session cwd.
+  // Running terminals carry it via describeTerminal() instead.
   let text =
     snap.status === "running"
       ? `Command is still running as background terminal ${snap.id} "${snap.title}" (pid ${snap.pid ?? "?"}). It has no interactive stdin; do not poll it. The final result will arrive automatically, and the user can inspect or stop it with /ps.\n${describeTerminal(snap)}`
       : snap.status === "timed_out"
-        ? `Command timed out after ${formatElapsed(snap)}.`
-        : `Command finished in ${formatElapsed(snap)} (${formatExit(snap)}).`;
+        ? `Command timed out after ${formatElapsed(snap)} in ${snap.cwd}.`
+        : `Command finished in ${formatElapsed(snap)} (${formatExit(snap)}) in ${snap.cwd}.`;
   if (snap.errorText) text += `\nError: ${snap.errorText}`;
   return appendOutput(
     text,

@@ -18,7 +18,7 @@ export const ASK_USER_PARAMETER_DESCRIPTIONS = {
 
 /** Tool description shown to the model in the system prompt. */
 export const ASK_USER_TOOL_DESCRIPTION =
-  "Ask the user one or more multiple-choice questions (1-5 questions, 2-5 options each). Questions and option descriptions may be long. Each question can allow one or multiple selections. A free-form Other option is added automatically, and the user may dismiss without answering.";
+  "Ask the user one or more multiple-choice questions (1-5 questions, 2-5 options each). Questions and option descriptions may be long. A free-form Other option is added automatically, and the user may dismiss without answering.";
 
 /** One-line entry added to the model's `Available tools` section. */
 export const ASK_USER_PROMPT_SNIPPET =

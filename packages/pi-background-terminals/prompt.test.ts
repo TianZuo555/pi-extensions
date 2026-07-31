@@ -12,11 +12,14 @@ import {
 } from "./src/prompt.ts";
 
 test("bash descriptions identify managed yielding, timeout, and no-stdin contracts", () => {
-  assert.match(BASH_TOOL_DESCRIPTION, /one managed execution path/);
-  assert.match(BASH_TOOL_DESCRIPTION, /continue as a session-scoped background terminal/);
+  assert.match(BASH_TOOL_DESCRIPTION, /keeps running as a background terminal, returns an id/);
   assert.match(BASH_TOOL_DESCRIPTION, /fresh, non-persistent shell/);
-  assert.match(BASH_TOOL_DESCRIPTION, /blocks after 8/);
+  assert.match(BASH_TOOL_DESCRIPTION, /no interactive stdin/);
+  assert.match(BASH_TOOL_DESCRIPTION, /timeout kills the command/);
   assert.match(BASH_TOOL_DESCRIPTION, /do not poll/i);
+  // The exploration budget is stated once, in the guidelines, where it also
+  // carries the remediation. It must not creep back into the description.
+  assert.doesNotMatch(BASH_TOOL_DESCRIPTION, /blocks after/);
   assert.match(BASH_PARAMETER_DESCRIPTIONS.command, /no interactive stdin/);
   assert.match(BASH_PARAMETER_DESCRIPTIONS.yieldTimeMs, /clamped to 250-30000 ms/);
   assert.match(BASH_PARAMETER_DESCRIPTIONS.timeout, /hard total runtime timeout/);
@@ -92,6 +95,23 @@ test("yielded result tells the model not to poll and points the user to /ps", ()
   assert.match(text, /do not poll/);
   assert.match(text, /user can inspect or stop it with \/ps/);
   assert.match(text, /stdout:\nready/);
+});
+
+test("every settled result names the directory the command actually ran in", () => {
+  // The common wrong-directory mistake is assuming a cwd that was never set, so
+  // the session cwd is exactly the case that must not be silent.
+  assert.match(
+    buildBashResult(snap({ cwd: "/repo/packages/x" })),
+    /Command finished in .* \(exit 0\) in \/repo\/packages\/x\./,
+  );
+  assert.match(
+    buildBashResult(snap({ cwd: "/repo" })),
+    /\(exit 0\) in \/repo\./,
+  );
+  assert.match(
+    buildBashResult(snap({ cwd: "/repo", status: "timed_out" })),
+    /timed out after .* in \/repo\./,
+  );
 });
 
 test("quick completion returns ordinary bash output without terminal identity", () => {

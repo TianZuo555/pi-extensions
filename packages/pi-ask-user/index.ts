@@ -97,6 +97,36 @@ function normalizeQuestions(params: AskUserInput): AskUserQuestion[] {
   }));
 }
 
+/**
+ * Labels that mean "none of these, let me type my own". The form always appends
+ * its own free-form Other row, so a model-supplied one renders twice — and
+ * nothing in the flow would ever report that back, which is why this is a hard
+ * error rather than prose in the schema.
+ */
+const SELF_SUPPLIED_OTHER_LABELS = new Set([
+  "other",
+  "others",
+  "other answer",
+  "other option",
+  "something else",
+  "custom",
+  "custom answer",
+  "none of the above",
+]);
+
+function isSelfSuppliedOther(label: string): boolean {
+  const bare = label
+    // Drop an explanatory tail: `Other — type your own`, `Other - explain`.
+    .split(/[—–]|\s-\s/)[0]
+    // Drop a qualifier and trailing punctuation: `Other (specify)`, `Other...`.
+    .replace(/\([^)]*\)/g, " ")
+    .replace(/[.…:;,!?*]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+  return SELF_SUPPLIED_OTHER_LABELS.has(bare);
+}
+
 function validateQuestions(questions: AskUserQuestion[]): void {
   if (questions.length < MIN_QUESTIONS || questions.length > MAX_QUESTIONS) {
     throw new Error(
@@ -105,10 +135,19 @@ function validateQuestions(questions: AskUserQuestion[]): void {
   }
 
   for (let index = 0; index < questions.length; index++) {
-    const count = questions[index].options.length;
-    if (count < MIN_OPTIONS || count > MAX_OPTIONS) {
+    const options = questions[index].options;
+    if (options.length < MIN_OPTIONS || options.length > MAX_OPTIONS) {
       throw new Error(
-        `ask_user question ${index + 1} requires between ${MIN_OPTIONS} and ${MAX_OPTIONS} options (got ${count}). Retry with a valid number of options.`,
+        `ask_user question ${index + 1} requires between ${MIN_OPTIONS} and ${MAX_OPTIONS} options (got ${options.length}). Retry with a valid number of options.`,
+      );
+    }
+
+    const selfOther = options.findIndex((option) =>
+      isSelfSuppliedOther(option.label),
+    );
+    if (selfOther >= 0) {
+      throw new Error(
+        `ask_user question ${index + 1} option ${selfOther + 1} ("${options[selfOther].label}") duplicates the free-form Other choice this tool always appends, so the user would see it twice. These questions were not shown. Remove that option and keep only the substantive choices.`,
       );
     }
   }

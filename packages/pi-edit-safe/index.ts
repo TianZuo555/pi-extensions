@@ -59,8 +59,14 @@ export default function editSafeExtension(pi: ExtensionAPI): void {
 	pi.registerTool({
 		name: "edit", // same name as the built-in → overrides it
 		label: "edit (strict)",
+		// Keep this to the CONTRACT the model cannot infer from the schema: the
+		// always-an-array shape, sequential (not against-the-original) semantics,
+		// exactly-once matching, minimal spans, verbatim splice. Recovery and
+		// batching advice lives in promptGuidelines instead, and the matcher's
+		// drift tolerance is deliberately NOT advertised — it is a safety net for
+		// near-misses, not a licence to send approximate oldText.
 		description:
-			"Replace text in a file using only the array schema: { path, edits: [{ oldText, newText }, ...] }. The edits field is required and must be a non-empty array, including for a single replacement; top-level oldText/newText fields are not part of the public schema. Edits apply in order, one after another, each matched against the already-updated text. Each oldText must match the file and be unique; small whitespace/indentation, unicode-punctuation, or escape drift is tolerated only when the match is unambiguous. newText is written verbatim. On failure, re-read the file before retrying.",
+			"Replace text in a file: { path, edits: [{ oldText, newText }, ...] } — edits is always an array, even for a single replacement. Edits apply in order; each oldText is matched against the file as already changed by earlier edits in the same call, must occur exactly once at that point, and should be the smallest snippet that is still unique — do not pad with large unchanged regions. newText is spliced in verbatim.",
 		promptSnippet:
 			"Make precise file edits with exact text replacement, including multiple ordered edits in one call",
 		parameters,
@@ -77,7 +83,8 @@ export default function editSafeExtension(pi: ExtensionAPI): void {
 		// edit-vs-write split is already covered by pi's built-in write guideline.
 		promptGuidelines: [
 			"edit takes only the `edits` array schema; use a one-element array for a single change.",
-			"Each oldText must be unique in the file; include surrounding lines to disambiguate when needed.",
+			"Change several locations in one file with one edit call, not several calls.",
+			"Keep each oldText minimal but unique; add surrounding lines only to disambiguate.",
 			"On an edit failure, re-read the file before retrying — the error usually means your context was stale or the match was ambiguous.",
 		],
 		async execute(_toolCallId, params, signal, _onUpdate, ctx) {

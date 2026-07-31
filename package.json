@@ -42,6 +42,7 @@
     "test:ask-user": "npm test -w pi-tian-ask-user",
     "test:commit": "npm test -w pi-tian-commit",
     "test:edit-safe": "npm test -w pi-tian-edit-safe",
+    "test:todo": "npm test -w pi-tian-todo",
     "pack:check": "npm pack --dry-run --workspaces"
   },
   "peerDependencies": {

@@ -123,6 +123,7 @@ immediately. Neither path provides an interactive input surface.
 
 ```text
 index.ts                    Pi boundary, bash override, fallback, /ps
+src/command-shape.ts        Pre-spawn guards: state-only and duplicate commands
 src/domain.ts               Snapshot/status/error types
 src/exploration-budget.ts   Read-only shell exploration classifier/guardrail
 src/manager.ts              Effect service and process lifecycle
@@ -219,6 +220,25 @@ instruction to stop broad searching and synthesize. Call 9 is rejected before
 manager resolution or spawn, so it cannot produce side effects. The next agent
 run and every session transition reset the counter. Tool-call ids are counted
 once so framework retries cannot consume the budget twice.
+
+### Pre-spawn shape guards
+
+`src/command-shape.ts` refuses two call shapes whose failure is otherwise
+invisible to the model, since neither produces an error it could learn from:
+
+- **State-only commands.** Every segment is `cd`, `export`, or a bare
+  assignment, so the command cannot outlive its own discarded shell. Checked
+  immediately after the empty-command check, before the exploration budget. The
+  error names `working_dir` and the `cd x && work` combination.
+- **Duplicate running commands.** An identical `command` in an identical `cwd`
+  is already tracked as `running`. Checked after manager resolution and before
+  spawn, so the second copy never starts. A settled twin or another directory is
+  a legitimate new run.
+
+Segments split on `&&`, `||`, `;`, `|`, and newlines — deliberately a separate
+splitter from the exploration classifier, whose behaviour must not change.
+Redirects and command substitution fail open: they can escape the shell, so
+they are never treated as no-ops.
 
 ## 8. Hard runtime timeout
 
