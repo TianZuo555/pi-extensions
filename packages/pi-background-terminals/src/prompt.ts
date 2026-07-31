@@ -47,14 +47,14 @@ export const BASH_TOOL_DESCRIPTION =
 export const BASH_PROMPT_SNIPPET =
   "Execute Bash commands; long-running commands automatically continue in the background and notify on exit";
 
+// Kept deliberately short: these bullets are merged flat into the system prompt
+// alongside every other tool's guidelines, so each one has to earn its line by
+// describing behaviour that differs from a plain bash tool.
 export const BASH_PROMPT_GUIDELINES = [
-  "Use bash for shell execution; it automatically yields long-running commands instead of requiring a separate background tool.",
+  "bash auto-yields long-running commands as background terminals instead of needing a separate tool; when it returns a terminal id, keep working — the final result arrives automatically and the user manages it with /ps.",
   "Every bash call starts a fresh, non-persistent shell in ctx.cwd. A standalone cd, export, or variable assignment does not affect later calls; use working_dir or combine setup and execution in one command.",
-  "Prefer dedicated read, grep, and find tools for file or source inspection when available. After 1-2 exploratory searches, inspect the best match and synthesize instead of recursively searching.",
-  `bash warns after ${EXPLORATION_WARNING_AT} and blocks after ${EXPLORATION_LIMIT} read-only shell inspection calls in one agent run; when warned, stop broad exploration and synthesize.`,
-  "bash processes receive no interactive stdin — never use bash for commands requiring prompts or terminal interaction.",
-  "When bash returns a background terminal id, keep working instead of polling; its final result arrives automatically, and the user manages it with /ps.",
-  "Inspect PI_* environment variables for current model and session details.",
+  "bash has no interactive stdin — never use it for commands that prompt or need terminal interaction.",
+  `bash warns after ${EXPLORATION_WARNING_AT} and blocks after ${EXPLORATION_LIMIT} read-only shell inspection calls in one agent run; prefer dedicated read, grep, and find tools for file inspection instead of cat, sed, rg, or grep -r, and when warned, stop exploring and synthesize instead of recursively searching.`,
 ];
 
 export const BASH_PARAMETER_DESCRIPTIONS = {

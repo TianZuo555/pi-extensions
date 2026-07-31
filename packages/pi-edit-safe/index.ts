@@ -72,9 +72,11 @@ export default function editSafeExtension(pi: ExtensionAPI): void {
 		// shape — including tool calls stored in older resumed sessions — still
 		// works instead of hard-failing validation.
 		prepareArguments: (args: unknown) => prepareEditArguments(args) as Static<typeof parameters>,
+		// These bullets land flat in the system prompt next to every other tool's
+		// guidelines, so keep them to what the strict schema actually changes. The
+		// edit-vs-write split is already covered by pi's built-in write guideline.
 		promptGuidelines: [
-			"Prefer `edit` for targeted changes and `write` only for new files or full rewrites.",
-			"The edit tool supports only the `edits` array schema; use a one-element array for a single change. Edits apply in order, top to bottom.",
+			"edit takes only the `edits` array schema; use a one-element array for a single change.",
 			"Each oldText must be unique in the file; include surrounding lines to disambiguate when needed.",
 			"On an edit failure, re-read the file before retrying — the error usually means your context was stale or the match was ambiguous.",
 		],
