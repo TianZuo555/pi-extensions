@@ -201,6 +201,41 @@ test("Copilot usage hides the unmetered chat and completions buckets", async (t)
   );
 });
 
+test("Copilot usage treats a zero-entitlement 100% placeholder as unlimited", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  globalThis.fetch = async () =>
+    jsonResponse({
+      copilot_plan: "business",
+      token_based_billing: true,
+      quota_snapshots: {
+        chat: copilotSnapshot(),
+        completions: copilotSnapshot(),
+        premium_interactions: copilotSnapshot({
+          unlimited: false,
+          percent_remaining: 100,
+          quota_remaining: 0,
+          remaining: 0,
+          entitlement: 0,
+          overage_permitted: true,
+        }),
+      },
+    });
+
+  const report = await queryCopilotUsage("test-token", undefined, 50, 0);
+  const premium = report.windows[0];
+  assert.equal(premium.unlimited, true);
+  assert.equal(premium.remaining, undefined);
+  assert.equal(premium.entitlement, undefined);
+  assert.equal(formatStatusline(report), "copilot unlimited");
+
+  const body = formatReport({ id: report.id, name: report.name, status: "ready", report });
+  assert.match(body, /Premium credits: {2}unlimited/);
+  assert.doesNotMatch(body, /0 \/ 0/);
+});
+
 test("Copilot usage reports premium quota as credits under token-based billing", async (t) => {
   const originalFetch = globalThis.fetch;
   t.after(() => {
@@ -211,11 +246,11 @@ test("Copilot usage reports premium quota as credits under token-based billing",
   const report = await queryCopilotUsage("test-token", undefined, 50, 0);
   const premium = report.windows[0];
   assert.equal(premium.credits, true);
-  assert.equal(premium.remaining, 7787);
+  assert.equal(premium.remaining, 7787.9);
   assert.equal(premium.entitlement, 25_000);
 
   const body = formatReport({ id: report.id, name: report.name, status: "ready", report });
-  assert.match(body, /Premium credits: {2}\[.+\] 31% left · 7,787 \/ 25,000 credits/);
+  assert.match(body, /Premium credits: {2}\[.+\] 31% left · 7,788 \/ 25,000 credits/);
   assert.doesNotMatch(body, /Chat|Completions/);
   assert.equal(formatStatusline(report), "copilot 31% credits");
 });

@@ -20,7 +20,9 @@ GLM Coding Plan · Lite
 Only metered quotas are shown. The unmetered `chat` and `completions` seat
 buckets are omitted, and the premium bucket is labelled **Premium credits** on
 credit-billed accounts (`token_based_billing`) and **Premium requests**
-otherwise.
+otherwise. GitHub may represent an organization-managed unlimited premium
+bucket as a `0 / 0` snapshot with 100% remaining; that placeholder is shown as
+**unlimited**, not as an empty quota.
 
 ## Commands
 

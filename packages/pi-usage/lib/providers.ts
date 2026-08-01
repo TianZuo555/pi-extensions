@@ -162,15 +162,22 @@ export async function queryCopilotUsage(
     if (COPILOT_HIDDEN_SNAPSHOTS.has(key)) continue;
     const snapshot = asObject(snapshots[key]);
     if (!snapshot) continue;
-    const unlimited = snapshot.unlimited === true;
+    // Business/org-managed seats can return the premium bucket as a 0/0
+    // placeholder even though the account may continue using it. Treat the
+    // 100%-remaining placeholder as unmetered instead of rendering "100% ·
+    // 0 / 0". A zero balance with 0% remaining is still an exhausted quota.
+    const remaining =
+      asNumber(snapshot.quota_remaining) ?? asNumber(snapshot.remaining);
+    const entitlement = asNumber(snapshot.entitlement);
+    const unlimited =
+      snapshot.unlimited === true ||
+      (remaining === 0 && entitlement === 0 && asNumber(snapshot.percent_remaining) === 100);
     windows.push({
       label: copilotSnapshotLabel(key, creditBilled),
       unlimited,
       remainingPercent: unlimited ? undefined : asNumber(snapshot.percent_remaining),
-      remaining: unlimited
-        ? undefined
-        : (asNumber(snapshot.remaining) ?? asNumber(snapshot.quota_remaining)),
-      entitlement: unlimited ? undefined : asNumber(snapshot.entitlement),
+      remaining: unlimited ? undefined : remaining,
+      entitlement: unlimited ? undefined : entitlement,
       credits: creditBilled,
     });
   }
