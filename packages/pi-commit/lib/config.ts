@@ -4,6 +4,17 @@ import { CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";
 
 export const DEFAULT_COMMIT_MODEL = "deepseek/deepseek-v4-flash";
 export const COMMIT_SETTINGS_KEY = "piCommit";
+export const COMMIT_THINKING_LEVELS = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+] as const;
+
+export type CommitThinkingLevel = (typeof COMMIT_THINKING_LEVELS)[number];
 
 export interface ModelReference {
   provider: string;
@@ -13,6 +24,7 @@ export interface ModelReference {
 
 export interface CommitSettingsResolution {
   model: ModelReference;
+  thinkingLevel?: CommitThinkingLevel;
   warnings: string[];
 }
 
@@ -41,36 +53,59 @@ export function parseModelReference(raw: string): ModelReference {
   return { provider, id, value: `${provider}/${id}` };
 }
 
-function configuredModel(
+interface ConfiguredCommitSettings {
+  model?: ModelReference;
+  thinkingLevel?: CommitThinkingLevel;
+}
+
+function configuredSettings(
   settings: unknown,
   source: string,
   warnings: string[],
-): ModelReference | undefined {
+): ConfiguredCommitSettings {
   if (!isRecord(settings)) {
     if (settings !== undefined) warnings.push(`${source} settings must contain a JSON object`);
-    return undefined;
+    return {};
   }
 
   const section = settings[COMMIT_SETTINGS_KEY];
-  if (section === undefined) return undefined;
+  if (section === undefined) return {};
   if (!isRecord(section)) {
     warnings.push(`${source} ${COMMIT_SETTINGS_KEY} setting must be an object`);
-    return undefined;
+    return {};
   }
 
+  const configured: ConfiguredCommitSettings = {};
   const model = section.model;
-  if (model === undefined) return undefined;
-  if (typeof model !== "string" || model.trim().length === 0) {
-    warnings.push(`${source} ${COMMIT_SETTINGS_KEY}.model must be a non-empty provider/model string`);
-    return undefined;
+  if (model !== undefined) {
+    if (typeof model !== "string" || model.trim().length === 0) {
+      warnings.push(`${source} ${COMMIT_SETTINGS_KEY}.model must be a non-empty provider/model string`);
+    } else {
+      try {
+        configured.model = parseModelReference(model);
+      } catch (error) {
+        warnings.push(
+          `${source} ${COMMIT_SETTINGS_KEY}.model: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
   }
 
-  try {
-    return parseModelReference(model);
-  } catch (error) {
-    warnings.push(`${source} ${COMMIT_SETTINGS_KEY}.model: ${error instanceof Error ? error.message : String(error)}`);
-    return undefined;
+  const thinkingLevel = section.thinkingLevel;
+  if (thinkingLevel !== undefined) {
+    if (
+      typeof thinkingLevel !== "string" ||
+      !COMMIT_THINKING_LEVELS.includes(thinkingLevel as CommitThinkingLevel)
+    ) {
+      warnings.push(
+        `${source} ${COMMIT_SETTINGS_KEY}.thinkingLevel must be one of ${COMMIT_THINKING_LEVELS.join(", ")}`,
+      );
+    } else {
+      configured.thinkingLevel = thinkingLevel as CommitThinkingLevel;
+    }
   }
+
+  return configured;
 }
 
 export function resolveCommitSettings(
@@ -78,11 +113,12 @@ export function resolveCommitSettings(
   projectSettings?: unknown,
 ): CommitSettingsResolution {
   const warnings: string[] = [];
-  const globalModel = configuredModel(globalSettings, "Global", warnings);
-  const projectModel = configuredModel(projectSettings, "Project", warnings);
+  const global = configuredSettings(globalSettings, "Global", warnings);
+  const project = configuredSettings(projectSettings, "Project", warnings);
 
   return {
-    model: projectModel ?? globalModel ?? parseModelReference(DEFAULT_COMMIT_MODEL),
+    model: project.model ?? global.model ?? parseModelReference(DEFAULT_COMMIT_MODEL),
+    thinkingLevel: project.thinkingLevel ?? global.thinkingLevel,
     warnings,
   };
 }

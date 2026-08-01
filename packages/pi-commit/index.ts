@@ -5,18 +5,28 @@
 //   /commit-all [guidance]  explicitly stage every change, then generate a message
 //
 // Model configuration is read on every invocation from Pi settings:
-//   { "piCommit": { "model": "deepseek/deepseek-v4-flash" } }
+//   { "piCommit": { "model": "provider/model", "thinkingLevel": "high" } }
 // Project .pi/settings.json overrides the global setting when the project is trusted.
 
 import { randomUUID } from "node:crypto";
-import type { Api, Model } from "@earendil-works/pi-ai";
-import { complete } from "@earendil-works/pi-ai/compat";
+import type {
+  Api,
+  AssistantMessage,
+  Context,
+  Model,
+  SimpleStreamOptions,
+} from "@earendil-works/pi-ai";
+import { completeSimple } from "@earendil-works/pi-ai/compat";
 import {
   BorderedLoader,
   type ExtensionAPI,
   type ExtensionCommandContext,
 } from "@earendil-works/pi-coding-agent";
-import { loadCommitSettings, type ModelReference } from "./lib/config.ts";
+import {
+  loadCommitSettings,
+  type CommitThinkingLevel,
+  type ModelReference,
+} from "./lib/config.ts";
 import {
   commitWithMessage,
   describeGitFailure,
@@ -46,10 +56,24 @@ interface ResolvedAuth {
   env?: Record<string, string>;
 }
 
+interface ProviderInvoker {
+  streamSimple(
+    model: Model<Api>,
+    context: Context,
+    options?: SimpleStreamOptions,
+  ): { result(): Promise<AssistantMessage> };
+}
+
+interface ProviderRegistry {
+  getProvider?: (provider: string) => ProviderInvoker | undefined;
+}
+
 interface ResolvedModel {
   model: Model<Api>;
   reference: ModelReference;
+  thinkingLevel?: CommitThinkingLevel;
   auth: ResolvedAuth;
+  providerInvoker?: ProviderInvoker;
 }
 
 type GenerationOutcome =
@@ -73,9 +97,18 @@ function compactError(error: unknown): string {
     : truncated.text;
 }
 
+function getProviderInvoker(
+  registry: ExtensionCommandContext["modelRegistry"],
+  provider: string,
+): ProviderInvoker | undefined {
+  const registryWithProvider = registry as ProviderRegistry;
+  return registryWithProvider.getProvider?.(provider);
+}
+
 async function resolveConfiguredModel(
   ctx: ExtensionCommandContext,
   reference: ModelReference,
+  thinkingLevel?: CommitThinkingLevel,
 ): Promise<ResolvedModel> {
   const model = ctx.modelRegistry.find(reference.provider, reference.id);
   if (!model) {
@@ -89,7 +122,15 @@ async function resolveConfiguredModel(
     throw new Error(`Commit model ${reference.value} is unavailable: ${auth.error}`);
   }
 
-  return { model, reference, auth };
+  return {
+    model,
+    reference,
+    thinkingLevel,
+    auth,
+    // Newer Pi runtimes expose the native provider on the registry. Using it
+    // keeps provider-specific request handling inside Pi's SDK.
+    providerInvoker: getProviderInvoker(ctx.modelRegistry, reference.provider),
+  };
 }
 
 async function requestCommitMessage(
@@ -98,32 +139,32 @@ async function requestCommitMessage(
   guidance: string,
   signal?: AbortSignal,
 ): Promise<string | undefined> {
-  const response = await complete(
-    resolved.model,
-    {
-      systemPrompt: COMMIT_SYSTEM_PROMPT,
-      messages: [
-        {
-          role: "user",
-          content: [{ type: "text", text: buildCommitPrompt(snapshot, guidance) }],
-          timestamp: Date.now(),
-        },
-      ],
-    },
-    {
-      apiKey: resolved.auth.apiKey,
-      headers: resolved.auth.headers,
-      env: resolved.auth.env,
-      signal,
-      cacheRetention: "none",
-      maxTokens: 2048,
-      temperature: 0.1,
-      timeoutMs: 120_000,
-      maxRetries: 0,
-      maxRetryDelayMs: 60_000,
-      sessionId: randomUUID(),
-    },
-  );
+  const context: Context = {
+    systemPrompt: COMMIT_SYSTEM_PROMPT,
+    messages: [
+      {
+        role: "user",
+        content: [{ type: "text", text: buildCommitPrompt(snapshot, guidance) }],
+        timestamp: Date.now(),
+      },
+    ],
+  };
+  const options: SimpleStreamOptions = {
+    apiKey: resolved.auth.apiKey,
+    headers: resolved.auth.headers,
+    env: resolved.auth.env,
+    signal,
+    cacheRetention: "none",
+    maxTokens: 2048,
+    reasoning: resolved.thinkingLevel === "off" ? undefined : resolved.thinkingLevel,
+    timeoutMs: 120_000,
+    maxRetries: 0,
+    maxRetryDelayMs: 60_000,
+    sessionId: randomUUID(),
+  };
+  const response = resolved.providerInvoker
+    ? await resolved.providerInvoker.streamSimple(resolved.model, context, options).result()
+    : await completeSimple(resolved.model, context, options);
 
   if (response.stopReason === "aborted") return undefined;
   if (response.stopReason !== "stop") {
@@ -231,7 +272,11 @@ async function runCommitWorkflow(
     if (settings.warnings.length > 0) {
       throw new Error(`pi-commit settings:\n${settings.warnings.join("\n")}`);
     }
-    const resolvedModel = await resolveConfiguredModel(ctx, settings.model);
+    const resolvedModel = await resolveConfiguredModel(
+      ctx,
+      settings.model,
+      settings.thinkingLevel,
+    );
 
     const exec: ExecFunction = (command, args, options) => pi.exec(command, args, options);
     const repository = await openGitRepository(exec, ctx.cwd);

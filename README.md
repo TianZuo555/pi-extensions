@@ -176,7 +176,19 @@ in `~/.pi/agent/settings.json` or, for a trusted project, in `.pi/settings.json`
 ```json
 {
   "piCommit": {
-    "model": "deepseek/deepseek-v4-flash"
+    "model": "deepseek/deepseek-v4-flash",
+    "thinkingLevel": "high"
+  }
+}
+```
+
+For example, to use GPT-5.6 Luna with maximum reasoning:
+
+```json
+{
+  "piCommit": {
+    "model": "openai-codex/gpt-5.6-luna",
+    "thinkingLevel": "max"
   }
 }
 ```
@@ -188,8 +200,10 @@ in `~/.pi/agent/settings.json` or, for a trusted project, in `.pi/settings.json`
 untracked files but not ignored files. Cancelling after its staging step leaves
 those changes staged. The extension fingerprints both the staged tree and
 `HEAD`, honors normal Git hooks/signing, and aborts if the snapshot changes
-while the message is being reviewed. The staged diff is sent to the configured
-model provider; patch context is capped at 256 KiB.
+while the message is being reviewed. Staged paths containing `node_modules` are
+rejected before their contents are sent to the model or committed. The prompt
+also warns against dependency trees and generated artifacts. The staged diff is
+sent to the configured model provider; patch context is capped at 256 KiB.
 
 ### token-speed
 

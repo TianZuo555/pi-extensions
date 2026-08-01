@@ -23,37 +23,41 @@ Both commands show the generated message in a multiline editor, then ask how to 
 
 ## Model setting
 
-The extension reads `piCommit.model` from Pi's normal settings files on every invocation, so changing it does not require `/reload`.
+The extension reads `piCommit.model` and the optional `piCommit.thinkingLevel` from Pi's normal settings files on every invocation, so changing them does not require `/reload`.
 
 Global setting (`~/.pi/agent/settings.json`):
 
 ```json
 {
   "piCommit": {
-    "model": "deepseek/deepseek-v4-flash"
+    "model": "deepseek/deepseek-v4-flash",
+    "thinkingLevel": "high"
   }
 }
 ```
 
-A trusted project can override it in `.pi/settings.json`:
+A trusted project can override either value in `.pi/settings.json`:
 
 ```json
 {
   "piCommit": {
-    "model": "anthropic/claude-sonnet-4-5"
+    "model": "openai-codex/gpt-5.6-luna",
+    "thinkingLevel": "max"
   }
 }
 ```
 
-The value must use `provider/model` format. Model IDs may themselves contain slashes, such as `openrouter/anthropic/claude-sonnet-4`.
+The model value must use `provider/model` format. Model IDs may themselves contain slashes, such as `openrouter/anthropic/claude-sonnet-4`.
 
-When the setting is absent, the default is `deepseek/deepseek-v4-flash`. Invalid settings stop the command instead of silently sending the diff to a fallback provider. Configure authentication for the selected provider with Pi's `/login` command or `models.json`.
+`thinkingLevel` accepts `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`. The selected model's supported levels are respected; omit it to use the provider default. When the model setting is absent, the default is `deepseek/deepseek-v4-flash`. Invalid settings stop the command instead of silently sending the diff to a fallback provider. Configure authentication for the selected provider with Pi's `/login` command or `models.json`.
 
 ## Workflow and safety
 
 - The configured model is called directly for this one task. The active session model is never switched.
 - `/commit` never stages files. If the index is empty, it suggests `/commit-all`.
 - `/commit-all` explicitly confirms before staging tracked, deleted, and untracked files. Git-ignored files remain ignored.
+- Staged paths containing `node_modules` are rejected before their contents are sent to the model or committed, including force-staged/tracked dependency files.
+- The prompt also warns against dependency trees, package-manager caches, build/coverage output, and editor/system artifacts.
 - Cancelling after `/commit-all` has staged files leaves those files staged; the extension reports this explicitly.
 - The staged Git tree and `HEAD` are fingerprinted. If either changes while the message is being generated or reviewed, the commit is aborted.
 - Unresolved merge conflicts are rejected.

@@ -18,13 +18,28 @@ test("commit settings default to DeepSeek V4 Flash", () => {
   assert.deepEqual(resolved.warnings, []);
 });
 
-test("trusted project commit model overrides the global model", () => {
+test("trusted project commit settings override the global settings", () => {
   const resolved = resolveCommitSettings(
-    { piCommit: { model: "anthropic/claude-sonnet" } },
-    { piCommit: { model: "deepseek/deepseek-v4-flash" } },
+    { piCommit: { model: "anthropic/claude-sonnet", thinkingLevel: "low" } },
+    {
+      piCommit: {
+        model: "openai-codex/gpt-5.6-luna",
+        thinkingLevel: "max",
+      },
+    },
   );
-  assert.equal(resolved.model.provider, "deepseek");
-  assert.equal(resolved.model.id, "deepseek-v4-flash");
+  assert.equal(resolved.model.provider, "openai-codex");
+  assert.equal(resolved.model.id, "gpt-5.6-luna");
+  assert.equal(resolved.thinkingLevel, "max");
+});
+
+test("invalid commit thinking levels are reported", () => {
+  const resolved = resolveCommitSettings(
+    { piCommit: { model: "openai/gpt-test", thinkingLevel: "max" } },
+    { piCommit: { thinkingLevel: "turbo" } },
+  );
+  assert.equal(resolved.thinkingLevel, "max");
+  assert.match(resolved.warnings.join("\n"), /thinkingLevel/);
 });
 
 test("invalid project model is reported alongside the otherwise resolved global model", () => {
