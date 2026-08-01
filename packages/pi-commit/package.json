@@ -1,6 +1,6 @@
 {
   "name": "pi-tian-commit",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Generate reviewed Git commits with a dedicated configurable model in the pi coding agent.",
   "type": "module",
   "keywords": [

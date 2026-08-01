@@ -6,6 +6,7 @@ import type { ExecOptions, ExecResult } from "@earendil-works/pi-coding-agent";
 const READ_TIMEOUT_MS = 30_000;
 const MUTATION_TIMEOUT_MS = 120_000;
 const ERROR_OUTPUT_BYTES = 8 * 1024;
+const FORBIDDEN_STAGED_PATH_COMPONENTS = new Set(["node_modules"]);
 
 export type ExecFunction = (
   command: string,
@@ -48,8 +49,29 @@ export class RepositoryChangedError extends Error {
   }
 }
 
+export class ForbiddenStagedPathError extends Error {
+  constructor(paths: readonly string[]) {
+    super(
+      `Refusing to commit protected dependency paths: ${paths.join(", ")}. Remove them from the index or update .gitignore before retrying.`,
+    );
+    this.name = "ForbiddenStagedPathError";
+  }
+}
+
 function outputText(result: ExecResult): string {
   return [result.stderr.trim(), result.stdout.trim()].filter(Boolean).join("\n");
+}
+
+function splitNulSeparatedPaths(value: string): string[] {
+  return value.split("\0").filter(Boolean);
+}
+
+export function findForbiddenStagedPaths(paths: readonly string[]): string[] {
+  return [...new Set(
+    paths.filter((filePath) =>
+      filePath.split("/").some((component) => FORBIDDEN_STAGED_PATH_COMPONENTS.has(component)),
+    ),
+  )].sort();
 }
 
 export function truncateUtf8(value: string, maxBytes: number): {
@@ -207,6 +229,14 @@ export async function readStagedSnapshot(
 ): Promise<StagedSnapshot> {
   await ensureNoUnmergedEntries(repository);
   if (!(await hasStagedChanges(repository))) throw new NoStagedChangesError();
+
+  const stagedPathOutput = await runGitOrThrow(
+    repository,
+    [...DIFF_BASE_ARGS, "--name-only", "-z", "--"],
+    "Checking staged file safety",
+  );
+  const forbiddenPaths = findForbiddenStagedPaths(splitNulSeparatedPaths(stagedPathOutput));
+  if (forbiddenPaths.length > 0) throw new ForbiddenStagedPathError(forbiddenPaths);
 
   const fingerprint = await readFingerprint(repository);
   const [branch, nameStatus, stat, patch, recentCommitSubjects] = await Promise.all([

@@ -1,5 +1,5 @@
 import { execFile, execFileSync } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import assert from "node:assert/strict";
@@ -7,6 +7,7 @@ import test, { type TestContext } from "node:test";
 import type { ExecResult } from "@earendil-works/pi-coding-agent";
 import {
   commitWithMessage,
+  ForbiddenStagedPathError,
   NoStagedChangesError,
   openGitRepository,
   pushCurrentBranch,
@@ -94,6 +95,20 @@ test("snapshot creation rejects a repository with no staged changes", async (t) 
   await assert.rejects(
     readStagedSnapshot(repository, 64 * 1024),
     (error) => error instanceof NoStagedChangesError,
+  );
+});
+
+test("staged snapshots reject node_modules before reading the patch", async (t) => {
+  const directory = await createRepository(t);
+  const dependency = path.join(directory, "node_modules", "example", "index.js");
+  await mkdir(path.dirname(dependency), { recursive: true });
+  await writeFile(dependency, "export default 1;\n", "utf8");
+  git(directory, ["add", "--force", "node_modules/example/index.js"]);
+
+  const repository = await openGitRepository(testExec, directory);
+  await assert.rejects(
+    readStagedSnapshot(repository, 64 * 1024),
+    (error) => error instanceof ForbiddenStagedPathError && /node_modules/.test(error.message),
   );
 });
 

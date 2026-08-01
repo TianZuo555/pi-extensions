@@ -15,7 +15,8 @@ Rules:
 - Add a blank line and a short body only when it adds useful context or explains why.
 - Match the style of recent commit subjects when there is a clear pattern.
 - Use Conventional Commits only when recent history or the user's guidance clearly calls for it.
-- Do not invent issue numbers, behavior, tests, or motivations that are not evidenced by the input.`;
+- Do not invent issue numbers, behavior, tests, or motivations that are not evidenced by the input.
+- Do not recommend committing dependency trees or generated artifacts such as node_modules, package-manager caches, build output, coverage output, or editor/system files. If they appear in the staged file list, treat that as a safety problem rather than normal commit content.`;
 
 export function buildCommitPrompt(snapshot: StagedSnapshot, guidance: string): string {
   const recent = snapshot.recentCommitSubjects.trim() || "(no recent commits)";
