@@ -1,6 +1,6 @@
 {
   "name": "pi-tian-todo",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "A small todo-list tool for the pi coding agent: one call shape, a short prompt, and visible warnings when a write drops unfinished items.",
   "type": "module",
   "keywords": [

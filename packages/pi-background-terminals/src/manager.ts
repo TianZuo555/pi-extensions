@@ -30,12 +30,14 @@ import {
   ConcurrencyLimitError,
   formatExit,
   SpawnError,
+  TerminalLogUnavailableError,
   UnknownTerminalError,
   type TerminalSnapshot,
   type TerminalStatus,
 } from "./domain.ts";
 import { OutputBuffer } from "./output.ts";
 import { createDetachedChildTracker } from "./process-tracker.ts";
+import { codePointStart, completeCodePointEnd } from "./utf8.ts";
 
 export const MAX_RUNNING = 8;
 export const MAX_TRACKED = 32;
@@ -52,6 +54,8 @@ export const RETAINED_PER_STREAM = 2 * 1024 * 1024;
 export const HEAD_RETAINED_PER_STREAM = 256 * 1024;
 /** Private full-log spills are bounded so a firehose cannot fill the temp disk. */
 export const MAX_SPILL_BYTES_PER_STREAM = 256 * 1024 * 1024;
+/** Maximum bytes exposed by one model-facing archive read. */
+export const MAX_TERMINAL_LOG_READ_BYTES = 64 * 1024;
 const STOP_TIMEOUT_MS = 5_000;
 /** SIGTERM is normally enough; the second deadline covers a wedged process. */
 const FORCE_KILL_AFTER_MS = 2_000;
@@ -71,6 +75,18 @@ function bounded(text: string) {
 
 function boundedError(error: unknown) {
   return bounded(error instanceof Error ? error.message : String(error));
+}
+
+function boundedSpillError(error: unknown, spillPath: string) {
+  return boundedError(error)
+    .replaceAll(spillPath, "<private archive>")
+    .replaceAll(path.dirname(spillPath), "<private archive directory>");
+}
+
+/** Single source of truth for archive file naming: the spill writer creates it
+ * and pruning tombstones recognize it. */
+function spillFileName(id: string, stream: TerminalLogStream) {
+  return `${id}.${stream}.log`;
 }
 
 // --- Internal state -----------------------------------------------------------
@@ -120,6 +136,17 @@ interface Entry {
   settled: Deferred.Deferred<void>;
 }
 
+type ArchiveTombstoneStream = {
+  /** True when this stream owned a spill before pruning removed it. */
+  readonly archived: boolean;
+};
+
+interface ArchiveTombstone {
+  readonly reason: "pruned";
+  readonly stdout: ArchiveTombstoneStream;
+  readonly stderr: ArchiveTombstoneStream;
+}
+
 export interface StartOptions {
   readonly command: string;
   readonly title: string;
@@ -138,6 +165,27 @@ export interface SettlementWaitResult {
   readonly snapshot: TerminalSnapshot;
   /** True when the process settled before this wait yielded. */
   readonly settled: boolean;
+}
+
+export type TerminalLogStream = "stdout" | "stderr";
+
+export interface TerminalLogReadRequest {
+  readonly id: string;
+  readonly stream: TerminalLogStream;
+  readonly offset: number;
+  readonly limit: number;
+}
+
+export interface TerminalLogReadResult {
+  readonly id: string;
+  readonly stream: TerminalLogStream;
+  readonly offset: number;
+  readonly nextOffset: number;
+  readonly bytesRead: number;
+  readonly size: number;
+  readonly settled: boolean;
+  readonly complete: boolean;
+  readonly text: string;
 }
 
 export interface KillResult {
@@ -189,6 +237,12 @@ export interface TerminalManagerShape {
     timeoutMs: number,
   ): Effect.Effect<SettlementWaitResult, UnknownTerminalError>;
   status(id: string): Effect.Effect<TerminalSnapshot, UnknownTerminalError>;
+  readLog(
+    request: TerminalLogReadRequest,
+  ): Effect.Effect<
+    TerminalLogReadResult,
+    UnknownTerminalError | TerminalLogUnavailableError
+  >;
   /** Kill running terminals; resolves only after they have settled. */
   kill(ids: ReadonlyArray<string>): Effect.Effect<ReadonlyArray<KillResult>>;
   /** Tracked terminals ordered by creation time, newest first. */
@@ -331,6 +385,9 @@ const makeManager = Effect.gen(function* () {
     string,
     Pick<KillResult, "title" | "status" | "exit">
   >();
+  /** Metadata-only records for archives removed by the retention cap. Like
+   * settledHistory, this is bounded; it never retains a filesystem path. */
+  const archiveTombstones = new Map<string, ArchiveTombstone>();
   /** Internal kill() callers collecting a result (settle → consumed). */
   const killInterest = new Map<string, number>();
   /** Initial bash waits currently entitled to return a settlement. */
@@ -380,8 +437,37 @@ const makeManager = Effect.gen(function* () {
   const closeEntryScope = (entry: Entry) =>
     Scope.close(entry.scope, Exit.void).pipe(Effect.ignore);
 
+  const streamTombstone = (
+    entry: Entry,
+    stream: TerminalLogStream,
+  ): ArchiveTombstoneStream => ({
+    archived: entry.spillPaths.some(
+      (candidate) =>
+        path.basename(candidate) === spillFileName(entry.snapshot.id, stream),
+    ),
+  });
+
+  const rememberPrunedArchive = (entry: Entry) => {
+    archiveTombstones.set(entry.snapshot.id, {
+      reason: "pruned",
+      stdout: streamTombstone(entry, "stdout"),
+      stderr: streamTombstone(entry, "stderr"),
+    });
+    while (archiveTombstones.size > MAX_SETTLED_HISTORY) {
+      const oldest = archiveTombstones.keys().next().value;
+      if (oldest === undefined) break;
+      archiveTombstones.delete(oldest);
+    }
+  };
+
   const removeEntrySpills = (entry: Entry) =>
     Effect.sync(() => {
+      // Record only immutable metadata before unlinking. Tombstones never keep
+      // a spill path or file descriptor alive. pruneSettled records first to
+      // close the deletion/read race; this guard covers any later caller.
+      if (!archiveTombstones.has(entry.snapshot.id)) {
+        rememberPrunedArchive(entry);
+      }
       for (const spillPath of entry.spillPaths) {
         try {
           fs.rmSync(spillPath, { force: true });
@@ -407,11 +493,21 @@ const makeManager = Effect.gen(function* () {
       );
     for (const entry of candidates) {
       if (entries.size <= MAX_TRACKED) break;
+      // Make the expired-ref fact visible before the async unlink starts.
+      rememberPrunedArchive(entry);
       entries.delete(entry.snapshot.id);
       runCleanup(
         closeEntryScope(entry).pipe(Effect.andThen(removeEntrySpills(entry))),
       );
     }
+  };
+
+  const markArchiveCompleteness = (entry: Entry) => {
+    const complete = entry.stdioClosed;
+    entry.stdoutBuf.archiveComplete =
+      complete && entry.stdoutBuf.spillPath !== undefined;
+    entry.stderrBuf.archiveComplete =
+      complete && entry.stderrBuf.spillPath !== undefined;
   };
 
   /** End all spill streams; resolves when their buffers are flushed to disk
@@ -443,6 +539,7 @@ const makeManager = Effect.gen(function* () {
               "Full-log spill flush timed out; full output may be incomplete";
           }),
       }),
+      Effect.andThen(Effect.sync(() => markArchiveCompleteness(entry))),
     );
   };
 
@@ -493,8 +590,9 @@ const makeManager = Effect.gen(function* () {
   };
 
   /** Flush the spill files, then settle: the completion follow-up (and the
-   * kill() resolution) reference the spill path, so the full capture must be
-   * on disk before anyone is told about it. Idempotent via `settling`. */
+   * kill() resolution) depend on the final capture metadata, so the full
+   * archive must be on disk before anyone is told about it. Idempotent via
+   * `settling`. */
   const settleAfterFlush = (entry: Entry) => {
     if (entry.settling || entry.snapshot.status !== "running") return;
     entry.settling = true;
@@ -541,12 +639,12 @@ const makeManager = Effect.gen(function* () {
   const makeSpill = (
     entry: () => Entry | undefined,
     id: string,
-    stream: "stdout" | "stderr",
+    stream: TerminalLogStream,
     resumeSource: () => void,
   ) => {
     const dir = resolveSpillDir();
     if (!dir) return undefined;
-    const spillPath = path.join(dir, `${id}.${stream}.log`);
+    const spillPath = path.join(dir, spillFileName(id, stream));
     try {
       const file = fs.createWriteStream(spillPath, {
         flags: "a",
@@ -564,7 +662,7 @@ const makeManager = Effect.gen(function* () {
             stream === "stdout" ? current.stdoutBuf : current.stderrBuf;
           buf.spillPath = undefined;
           current.snapshot.errorText ??= bounded(
-            `Full-log spill to ${spillPath} failed: ${boundedError(error)}`,
+            `Full-log spill failed: ${boundedSpillError(error, spillPath)}`,
           );
         }
       });
@@ -940,6 +1038,94 @@ const makeManager = Effect.gen(function* () {
       },
     );
 
+  const readLog = (request: TerminalLogReadRequest) =>
+    Effect.suspend(
+      (): Effect.Effect<
+        TerminalLogReadResult,
+        UnknownTerminalError | TerminalLogUnavailableError
+      > => {
+        const entry = entries.get(request.id);
+        if (!entry) {
+          const tombstone = archiveTombstones.get(request.id);
+          if (tombstone) {
+            if (tombstone[request.stream].archived) {
+              return new TerminalLogUnavailableError({
+                message:
+                  `Archive ${request.id}:${request.stream} expired when the terminal was pruned from the ${MAX_TRACKED}-entry retention cap. ` +
+                  "It cannot be recovered. Work with the output already available or re-run the command.",
+              });
+            }
+            return new TerminalLogUnavailableError({
+              message: `Archive ${request.id}:${request.stream} is unavailable.`,
+            });
+          }
+          return new UnknownTerminalError({
+            message: `Unknown terminal id "${request.id}"; no terminal with that id is tracked in this session.`,
+          });
+        }
+        const buffer =
+          request.stream === "stdout" ? entry.stdoutBuf : entry.stderrBuf;
+        const spillPath = buffer.spillPath;
+        if (!spillPath) {
+          return new TerminalLogUnavailableError({
+            message: `Archive ${request.id}:${request.stream} is unavailable.`,
+          });
+        }
+        const offset = Number.isFinite(request.offset)
+          ? Math.max(0, Math.floor(request.offset))
+          : 0;
+        const limit = Number.isFinite(request.limit)
+          ? Math.max(1, Math.min(MAX_TERMINAL_LOG_READ_BYTES, Math.floor(request.limit)))
+          : MAX_TERMINAL_LOG_READ_BYTES;
+        return Effect.try({
+          try: () => {
+            const size = fs.statSync(spillPath).size;
+            const start = Math.min(offset, size);
+            const length = Math.min(limit, size - start);
+            let raw = Buffer.alloc(0);
+            if (length > 0) {
+              const fd = fs.openSync(spillPath, "r");
+              try {
+                const window = Buffer.allocUnsafe(length);
+                const bytesRead = fs.readSync(fd, window, 0, length, start);
+                raw = window.subarray(0, bytesRead);
+              } finally {
+                fs.closeSync(fd);
+              }
+            }
+            // Snap both edges to code-point boundaries. Without this a window
+            // that splits a multi-byte character decodes to U+FFFD, which
+            // silently corrupts the text AND every page stitched after it.
+            const leading = start > 0 ? codePointStart(raw) : 0;
+            const body = raw.subarray(leading);
+            const atEof = start + raw.length >= size;
+            const complete = completeCodePointEnd(body);
+            // Only trim a split trailing sequence when the rest of it is
+            // already on disk. At EOF there is nothing to stitch to, and a
+            // window too small to hold one code point must still advance.
+            const bytes =
+              atEof || complete === 0 ? body : body.subarray(0, complete);
+            const readOffset = start + leading;
+            return {
+              id: request.id,
+              stream: request.stream,
+              offset: readOffset,
+              nextOffset: readOffset + bytes.length,
+              bytesRead: bytes.length,
+              size,
+              settled: entry.snapshot.status !== "running",
+              complete: buffer.archiveComplete === true,
+              text: bytes.toString("utf8"),
+            } satisfies TerminalLogReadResult;
+          },
+          catch: () =>
+            new TerminalLogUnavailableError({
+              message: `Archive ${request.id}:${request.stream} could not be read.`,
+            }),
+        });
+      },
+    );
+
   /** Kill one running entry: close the scope — whose finalizer marks the kill
    * at the signal point, terminates the tree, and force-settles —
    * in a DETACHED fiber. Once the flag is set the termination must actually
@@ -1042,6 +1228,8 @@ const makeManager = Effect.gen(function* () {
       Effect.ignore,
     );
     yield* Effect.sync(() => {
+      // Tombstones are session-scoped metadata; disposal must not retain them.
+      archiveTombstones.clear();
       const dir = spillDir;
       spillDir = null;
       if (dir) fs.rmSync(dir, { recursive: true, force: true });
@@ -1092,6 +1280,7 @@ const makeManager = Effect.gen(function* () {
     start,
     waitForSettlement,
     status,
+    readLog,
     kill,
     list: Effect.sync(listNewestFirst),
     disposeAll,

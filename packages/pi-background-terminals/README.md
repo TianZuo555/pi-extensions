@@ -52,8 +52,11 @@ Behavior:
    rather than poll; a compact follow-up wakes it exactly once on exit, while
    detailed stdout/stderr remain in `/ps`.
 
-There are no model-facing status, list, kill, polling, or stdin tools. The user
-owns inspection and termination through `/ps`.
+There are no model-facing status, list, kill, polling, or stdin tools. The
+read-only `terminal_log_read` tool only pages an opaque archive ref emitted by
+`bash`; it returns at most 64 KiB per call, and 256 KiB across at most 8 reads
+per agent run. The user still owns terminal inspection and termination through
+`/ps`.
 
 To prevent an agent from spending an entire run on recursive shell searches,
 the extension counts recognized read-only Bash inspection commands across the
@@ -124,7 +127,11 @@ While at least one terminal runs, a one-line widget renders above the editor.
   bounded window (1 MiB live tail, up to 4 MiB when reading backwards), so the
   user can read output the model's bounded result never showed.
 - **Separate stdout and stderr.** Both streams are independently retained,
-  spilled, inspected, and formatted.
+  spilled, inspected, and formatted. The model can page a bounded settled
+  archive with `terminal_log_read` using the opaque ref and byte offsets from
+  the Bash result; windows are snapped to UTF-8 boundaries so paging with
+  `next_offset` is byte-exact, and the tool never reports status or controls a
+  process.
 - **No interactive stdin.** Normal commands see EOF. The legacy WSL Bash
   transport may receive the script over stdin, but that pipe is closed
   immediately and cannot be used interactively.

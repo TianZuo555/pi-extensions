@@ -27,6 +27,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import {
   createBashToolDefinition,
+  formatSize,
   getAgentDir,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
@@ -52,7 +53,9 @@ import {
 import {
   DEFAULT_YIELD_TIME_MS,
   MAX_RUNTIME_TIMEOUT_SECONDS,
+  MAX_TERMINAL_LOG_READ_BYTES,
   TerminalManager,
+  type TerminalLogReadResult,
   type TerminalManagerShape,
 } from "./src/manager.ts";
 import {
@@ -86,6 +89,30 @@ const SESSION_ENV_KEYS = [
 ] as const;
 
 type CompactTerminalStatus = TerminalStatus | "starting";
+
+const TERMINAL_LOG_READ_RUN_BUDGET = MAX_TERMINAL_LOG_READ_BYTES * 4;
+/** A byte budget alone cannot stop `limit: 1` polling; bound the calls too. */
+const TERMINAL_LOG_READ_RUN_CALLS = 8;
+
+function parseTerminalLogRef(ref: string) {
+  const match = /^(bt-\d+):(stdout|stderr)$/.exec(ref);
+  if (!match) return undefined;
+  return {
+    id: match[1],
+    stream: match[2] as "stdout" | "stderr",
+  };
+}
+
+function formatTerminalLogRead(result: TerminalLogReadResult) {
+  const range = result.bytesRead === 0
+    ? "empty"
+    : `${result.offset}-${result.nextOffset - 1}`;
+  return [
+    `${result.id}:${result.stream} bytes ${range} of ${result.size}; ` +
+      `settled: ${result.settled ? "yes" : "no"}; complete: ${result.complete ? "yes" : "no"}; next_offset: ${result.nextOffset}`,
+    result.text || "(empty)",
+  ].join("\n");
+}
 
 /** Extract manager-owned status from a model-facing Bash result. Output is
  * parsed separately only for the bounded quick-command preview. */
@@ -202,11 +229,15 @@ export function createBackgroundTerminalsExtension(
   let unsubStatus: (() => void) | undefined;
   let exploratoryCallCount = 0;
   const exploratoryToolCalls = new Set<string>();
+  let terminalLogReadBytes = 0;
+  let terminalLogReadCalls = 0;
   const resultDelivery = createDeferredResultDelivery<TerminalSnapshot>();
 
   const resetExplorationBudget = () => {
     exploratoryCallCount = 0;
     exploratoryToolCalls.clear();
+    terminalLogReadBytes = 0;
+    terminalLogReadCalls = 0;
   };
 
   const getRuntime = () => (runtime ??= makeRuntime());
@@ -681,9 +712,108 @@ export function createBackgroundTerminalsExtension(
       }
       return {
         content: [{ type: "text", text }],
-        // Exact BashToolDetails-compatible shape. Paths remain in bounded text
-        // because stdout and stderr have separate complete spill files.
+        // Exact BashToolDetails-compatible shape. Model-facing output uses
+        // opaque archive references rather than private spill paths.
         details: undefined,
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "terminal_log_read",
+    label: "terminal_log_read",
+    description:
+      "Read one bounded page from a background terminal's archived stdout or stderr using the opaque ref emitted by bash. This is read-only and never polls, kills, or reports status. Maximum 64 KiB per page; use next_offset to page through a settled archive.",
+    promptSnippet: "Read one bounded page of a background terminal's archived output",
+    parameters: Type.Object({
+      ref: Type.String({
+        description: "Opaque archive ref from bash, for example bt-3:stdout.",
+      }),
+      offset: Type.Optional(
+        Type.Integer({
+          minimum: 0,
+          description: "Byte offset to begin reading (default 0).",
+        }),
+      ),
+      limit: Type.Optional(
+        Type.Integer({
+          minimum: 1,
+          maximum: MAX_TERMINAL_LOG_READ_BYTES,
+          description: `Maximum bytes to return (default ${MAX_TERMINAL_LOG_READ_BYTES}).`,
+        }),
+      ),
+    }),
+    executionMode: "sequential",
+    // One compact row: the page itself is for the model, and /ps remains the
+    // human viewer. Rendering a 64 KiB page into the transcript would bury it.
+    renderCall(args, theme, context) {
+      const ref = typeof args?.ref === "string" ? args.ref : "...";
+      const offset = typeof args?.offset === "number" ? args.offset : 0;
+      const text =
+        (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+      text.setText(
+        `${theme.fg("toolTitle", theme.bold("terminal_log_read"))} ${theme.fg("accent", ref)}${theme.fg("dim", ` @${offset}`)}`,
+      );
+      return text;
+    },
+    renderResult(result, _options, theme, context) {
+      const details = result.details as TerminalLogReadResult | undefined;
+      const text =
+        (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+      if (!details) {
+        text.setText(
+          `${theme.fg("error", "x")} ${theme.fg("error", "archive unavailable")}`,
+        );
+        return text;
+      }
+      text.setText(
+        `${theme.fg("success", "■")} ${theme.fg("accent", `${details.id}:${details.stream}`)} ${theme.fg(
+          "muted",
+          `bytes ${details.offset}-${Math.max(details.offset, details.nextOffset - 1)} of ${formatSize(details.size)}`,
+        )}`,
+      );
+      return text;
+    },
+    async execute(_toolCallId, params) {
+      const parsed = parseTerminalLogRef(params.ref);
+      if (!parsed) {
+        throw new Error(
+          `Invalid terminal log ref "${params.ref}"; expected bt-N:stdout or bt-N:stderr.`,
+        );
+      }
+      const limit = Math.min(
+        MAX_TERMINAL_LOG_READ_BYTES,
+        Math.max(1, Math.floor(params.limit ?? MAX_TERMINAL_LOG_READ_BYTES)),
+      );
+      // Two budgets, because either one alone is escapable: bytes bound a
+      // firehose of full pages, calls bound a tiny-limit polling loop.
+      if (terminalLogReadCalls >= TERMINAL_LOG_READ_RUN_CALLS) {
+        throw new Error(
+          `terminal_log_read budget exhausted for this agent run (maximum ${TERMINAL_LOG_READ_RUN_CALLS} reads). ` +
+            "Work with the output you already have; the user can inspect the full log with /ps.",
+        );
+      }
+      if (terminalLogReadBytes + limit > TERMINAL_LOG_READ_RUN_BUDGET) {
+        throw new Error(
+          `terminal_log_read budget exhausted for this agent run (maximum ${TERMINAL_LOG_READ_RUN_BUDGET} bytes).`,
+        );
+      }
+      terminalLogReadCalls++;
+      const manager = await getManager();
+      const result = await runTool(
+        getRuntime(),
+        manager.readLog({
+          ...parsed,
+          offset: params.offset ?? 0,
+          limit,
+        }),
+      );
+      terminalLogReadBytes += result.bytesRead;
+      return {
+        content: [{ type: "text", text: formatTerminalLogRead(result) }],
+        // The page text is already in content; repeating it here would store
+        // every read twice in the session file.
+        details: { ...result, text: undefined },
       };
     },
   });

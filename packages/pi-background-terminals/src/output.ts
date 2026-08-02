@@ -41,6 +41,7 @@ export class OutputBuffer {
   version = 0;
   totalBytes = 0;
   private _spillPath?: string;
+  private _archiveComplete = false;
 
   get spillPath() {
     return this._spillPath;
@@ -49,6 +50,17 @@ export class OutputBuffer {
   set spillPath(value: string | undefined) {
     if (this._spillPath === value) return;
     this._spillPath = value;
+    if (value === undefined) this._archiveComplete = false;
+    this.cachedView = undefined;
+  }
+
+  get archiveComplete() {
+    return this._archiveComplete;
+  }
+
+  set archiveComplete(value: boolean) {
+    if (this._archiveComplete === value) return;
+    this._archiveComplete = value;
     this.cachedView = undefined;
   }
 
@@ -157,6 +169,7 @@ export class OutputBuffer {
       totalBytes: this.totalBytes,
       truncatedBytes,
       spillPath: this._spillPath,
+      archiveComplete: this._archiveComplete,
     };
     return this.cachedView;
   }

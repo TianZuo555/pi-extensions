@@ -1,8 +1,8 @@
 # Background terminals implementation guide
 
 This document describes the invariants behind `pi-tian-background-terminals`.
-The package overrides Pi's built-in `bash` model tool and adds one user command,
-`/ps`.
+The package overrides Pi's built-in `bash` model tool, adds the bounded
+read-only `terminal_log_read` tool, and adds one user command, `/ps`.
 
 ## 1. Product contract
 
@@ -26,9 +26,10 @@ useful command title. Only a command that actually yields is presented as a
 compact background-terminal row; asynchronous completion rows also stay compact.
 `/ps` remains the complete invocation and human-facing output viewer.
 
-The model has no status, list, kill, poll, or stdin tools. It should continue
-working after a command yields. The user inspects and stops running terminals
-with `/ps`.
+The model has no status, list, kill, poll, or stdin tools. `terminal_log_read`
+only reads one bounded page from an opaque archive ref emitted by Bash; it does
+not wait for, inspect, or control a process. The user inspects and stops running
+terminals with `/ps`.
 
 A process is session-scoped. It never survives `/new`, `/resume`, `/fork`,
 `/reload`, or quit.
@@ -58,13 +59,16 @@ yield_time_ms  optional initial wait; integers clamp to 250–30,000 ms
 The override supplies its own prompt snippet and guidelines because Pi does not
 inherit prompt metadata from built-ins. The guidelines state that every call is
 a fresh shell, direct directory changes through `working_dir`, prefer dedicated
-inspection tools, and disclose the shell-exploration budget.
+inspection tools, and disclose the shell-exploration budget. The archive reader
+supplies one prompt snippet but no prompt guidelines, keeping its bounded
+read-only capability discoverable without expanding the global prompt.
 
 The custom call/result renderers show a useful bounded title and preview for
 quick work, then switch to compact id/status rendering only after a real yield.
 Rendering changes presentation only: the textual result still reaches the model.
-Successful results use `details: undefined`, which is a valid `BashToolDetails`
-shape. Separate full-log paths remain in model-facing stdout/stderr sections.
+Successful Bash results use `details: undefined`, which is a valid
+`BashToolDetails` shape. Private full-log paths never reach model-facing output;
+settled archives are addressed through opaque refs and `terminal_log_read`.
 
 ## 3. Safe fallback boundary
 
@@ -166,7 +170,9 @@ A snapshot includes:
 - `tail`: rolling recent suffix;
 - `text`: head + omission marker + tail for `/ps`;
 - `totalBytes` and `truncatedBytes`;
-- optional complete spill-file path.
+- optional private spill-file path for the human `/ps` viewer;
+- optional `archiveComplete`, true only after a clean stdio close and spill flush.
+  Model output uses an opaque archive reference and the `terminal_log_read` tool.
 
 ## 7. Execution flow
 
@@ -377,7 +383,7 @@ stdout:  8 KiB / 40 lines
 stderr:  4 KiB / 20 lines
 ```
 
-Every model-visible path remains bounded even if a child is a firehose.
+Every model-visible output remains bounded even if a child is a firehose.
 
 ## 12. Spill files and backpressure
 
@@ -397,7 +403,35 @@ snapshot. The flush wait is bounded so a broken filesystem cannot leave a
 terminal permanently running. When the 32-entry registry prunes a settled
 terminal, its scope closes first and both owned spill files are then unlinked.
 Still-tracked snapshots therefore keep valid full-log paths while session disk
-usage remains bounded by retained history rather than command count.
+usage remains bounded by retained history rather than command count. Model-facing
+bounded output never exposes those private paths; it emits an opaque stream
+reference only while the archive exists, with its completeness and omitted byte
+range. `terminal_log_read` serves at most 64 KiB per page, 256 KiB per agent
+run, and 8 reads per agent run, and reports `next_offset` without polling
+terminal status.
+
+### Model-facing archive reads
+
+`terminal_log_read` is the only model-facing path into a complete spill. It
+accepts the opaque `bt-N:stdout` or `bt-N:stderr` reference emitted by Bash,
+plus a byte `offset` and bounded `limit`. The manager resolves the reference
+against the live session registry rather than exposing a filesystem path. Each
+read returns `settled`, `complete`, the current file size, and `next_offset`;
+reading a running stream is a single non-blocking snapshot, not a status or
+poll operation. Pages are capped at 64 KiB, and the extension permits 256 KiB
+and 8 archive reads per agent run. Both budgets are required: the byte budget
+bounds full-page firehosing, and the call budget bounds a `limit: 1` polling
+loop that would otherwise spend almost no bytes. Pruned entries return an
+expired/unavailable error.
+
+A byte offset chosen by the model can land inside a code point, so both window
+edges are snapped to UTF-8 boundaries before decoding: leading continuation
+bytes are skipped, and a trailing sequence the window cut short is excluded so
+the next page starts at its lead byte. `offset` and `next_offset` describe the
+snapped window, which makes paging with `next_offset` byte-exact rather than
+silently inserting replacement characters at every page boundary. A window at
+end of file, or one too small to hold a single code point, is returned as read
+so paging always advances.
 
 ## 13. Process lifecycle and termination
 
@@ -439,7 +473,10 @@ the foreground fallback.
 The registry retains at most 32 live/settled entries for `/ps` and exposes them
 newest first. When over the limit, it removes the oldest settled entries and
 their spill files; running entries are never pruned. Small tombstones retain
-final kill-report facts across pruning races.
+final kill-report facts across pruning races, and a separate bounded tombstone
+records that an archive ref expired so a later `terminal_log_read` reports
+expiry rather than an unknown id. Tombstones hold no path and keep no file
+alive; both are cleared on disposal.
 
 ## 15. `/ps` UI
 
@@ -528,6 +565,9 @@ The package test suite covers:
 - session disposal, spill-directory cleanup, and per-entry pruning cleanup;
 - output head stability, rolling tail, UTF-8 boundaries, and omission counts;
 - complete spill capture beyond the memory cap;
+- opaque archive references, bounded `terminal_log_read` pages, settled/complete
+  metadata, UTF-8-exact paging of a multi-byte archive, per-run read budgets,
+  and expired-entry errors;
 - drain-once result delivery without direct TUI stderr writes on retry;
 - `/ps` selection, default Info tab/invocation metadata, sanitization,
   wrapping, and cache behavior;

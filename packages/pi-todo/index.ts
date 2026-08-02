@@ -16,7 +16,7 @@ import type {
   ExtensionContext,
   Theme,
 } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { Text, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { Type, type Static } from "typebox";
 import {
   TODO_PARAMETER_DESCRIPTIONS,
@@ -80,19 +80,24 @@ export default function todoExtension(pi: ExtensionAPI): void {
     ctx.ui.setWidget(
       WIDGET_KEY,
       (_tui, theme: Theme) => ({
-        render: () => [
-          theme.fg("accent", " Todos ") +
-            theme.fg("muted", `${completed}/${total}`),
-          ...snapshot.map((todo) => {
-            const label =
-              todo.status === "completed"
-                ? theme.fg("dim", todo.title)
-                : todo.status === "in-progress"
-                  ? theme.fg("warning", todo.title)
-                  : todo.title;
-            return `  ${STATUS_ICON[todo.status]} ${theme.fg("accent", `${todo.id}.`)} ${label}`;
-          }),
-        ],
+        render: (width: number) =>
+          [
+            theme.fg("accent", " Todos ") +
+              theme.fg("muted", `${completed}/${total}`),
+            ...snapshot.map((todo) => {
+              const label =
+                todo.status === "completed"
+                  ? theme.fg("dim", todo.title)
+                  : todo.status === "in-progress"
+                    ? theme.fg("warning", todo.title)
+                    : todo.title;
+              return `  ${STATUS_ICON[todo.status]} ${theme.fg("accent", `${todo.id}.`)} ${label}`;
+            }),
+          ].map((line) =>
+            visibleWidth(line) <= width
+              ? line
+              : truncateToWidth(line, width),
+          ),
         invalidate: () => {},
       }),
       { placement: "aboveEditor" },

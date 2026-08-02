@@ -94,11 +94,118 @@ async function pollUntil(check: () => boolean, timeoutMs = 5_000) {
   return true;
 }
 
-test("extension overrides only bash plus the user /ps command", async () => {
+test("extension overrides bash, adds log reading, and keeps the user /ps command", async () => {
   const app = harness(backgroundTerminals);
   try {
-    assert.deepEqual([...app.tools.keys()], ["bash"]);
+    assert.deepEqual([...app.tools.keys()], ["bash", "terminal_log_read"]);
+    assert.equal(
+      app.tools.get("terminal_log_read").promptSnippet,
+      "Read one bounded page of a background terminal's archived output",
+    );
+    assert.equal(app.tools.get("terminal_log_read").promptGuidelines, undefined);
     assert.deepEqual([...app.commands.keys()], ["ps"]);
+  } finally {
+    await app.shutdown();
+  }
+});
+
+test("terminal_log_read validates opaque refs and bounded pages", async () => {
+  const app = harness();
+  try {
+    const schema = app.tools.get("terminal_log_read").parameters;
+    assert.equal(Check(schema, { ref: "bt-1:stdout" }), true);
+    assert.equal(
+      Check(schema, { ref: "bt-1:stdout", offset: 0, limit: 64 * 1024 }),
+      true,
+    );
+    assert.equal(
+      Check(schema, { ref: "bt-1:stdout", limit: 64 * 1024 + 1 }),
+      false,
+    );
+    assert.equal(
+      Check(schema, { ref: "bt-1:stdout", offset: -1 }),
+      false,
+    );
+  } finally {
+    await app.shutdown();
+  }
+});
+
+test("terminal_log_read resolves an opaque ref from bash", async () => {
+  const app = harness();
+  try {
+    const result = await app.tools.get("bash").execute(
+      "call-log-source",
+      {
+        command: command('process.stdout.write("0123456789".repeat(20_000))'),
+        yield_time_ms: 30_000,
+      },
+      undefined,
+      undefined,
+      app.ctx,
+    );
+    const ref = /archive ref (bt-\d+:stdout)/.exec(result.content[0].text)?.[1];
+    assert.ok(ref, result.content[0].text);
+
+    const page = await app.tools.get("terminal_log_read").execute(
+      "call-log-read",
+      { ref, offset: 0, limit: 1_024 },
+      undefined,
+      undefined,
+      app.ctx,
+    );
+    assert.match(page.content[0].text, /bytes 0-1023/);
+    assert.match(page.content[0].text, /settled: yes/);
+    assert.match(page.content[0].text, /complete: yes/);
+    assert.match(page.content[0].text, /0123456789/);
+  } finally {
+    await app.shutdown();
+  }
+});
+
+test("terminal_log_read is bounded by a per-run call budget", async () => {
+  const app = harness();
+  try {
+    const result = await app.tools.get("bash").execute(
+      "call-budget-source",
+      {
+        command: command('process.stdout.write("0123456789".repeat(20_000))'),
+        yield_time_ms: 30_000,
+      },
+      undefined,
+      undefined,
+      app.ctx,
+    );
+    const ref = /archive ref (bt-\d+:stdout)/.exec(result.content[0].text)?.[1];
+    assert.ok(ref, result.content[0].text);
+
+    const read = (id: string) =>
+      app.tools
+        .get("terminal_log_read")
+        .execute(id, { ref, offset: 0, limit: 1 }, undefined, undefined, app.ctx);
+
+    // A byte budget alone cannot stop this: eight one-byte reads spend eight
+    // bytes, so only a call budget bounds a polling loop.
+    for (let call = 0; call < 8; call++) {
+      const page = await read(`call-budget-${call}`);
+      assert.match(page.content[0].text, /of \d+/);
+      assert.equal(
+        "text" in page.details && page.details.text !== undefined,
+        false,
+        "page text must not be duplicated into details",
+      );
+    }
+    await assert.rejects(
+      () => read("call-budget-over"),
+      /budget exhausted for this agent run \(maximum 8 reads\)/,
+    );
+
+    // The budget is per agent run, not per session.
+    for (const handler of app.handlers.get("agent_start") ?? []) {
+      handler({}, app.ctx);
+    }
+    const afterReset = await read("call-budget-after-reset");
+    assert.match(afterReset.content[0].text, /of \d+/);
   } finally {
     await app.shutdown();
   }

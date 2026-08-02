@@ -136,6 +136,15 @@ test("changing the spill path invalidates the cached view", () => {
   assert.equal(after.spillPath, "/tmp/a.log");
 });
 
+test("archive completeness is cleared when the spill path disappears", () => {
+  const buf = new OutputBuffer(1024);
+  buf.spillPath = "/tmp/archive.log";
+  buf.archiveComplete = true;
+  assert.equal(buf.view().archiveComplete, true);
+  buf.spillPath = undefined;
+  assert.equal(buf.view().archiveComplete, false);
+});
+
 test("zero retention omits all bytes without growing memory", () => {
   const buf = new OutputBuffer(0);
   buf.push("abc");
@@ -146,5 +155,6 @@ test("zero retention omits all bytes without growing memory", () => {
     totalBytes: 3,
     truncatedBytes: 3,
     spillPath: undefined,
+    archiveComplete: false,
   });
 });

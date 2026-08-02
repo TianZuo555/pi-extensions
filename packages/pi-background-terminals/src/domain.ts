@@ -31,8 +31,10 @@ export interface OutputView {
   readonly totalBytes: number;
   /** Bytes omitted from the middle of the in-memory view (0 = complete). */
   readonly truncatedBytes: number;
-  /** On-disk full capture; always the complete stream when spilling works. */
+  /** On-disk capture path, private to the manager and the human /ps viewer. */
   readonly spillPath?: string;
+  /** True only after the stream closed and its spill flushed without errors. */
+  readonly archiveComplete?: boolean;
 }
 
 export interface TerminalSnapshot {
@@ -97,6 +99,12 @@ export class ConcurrencyLimitError extends Data.TaggedError(
 
 export class UnknownTerminalError extends Data.TaggedError(
   "UnknownTerminalError",
+)<{
+  readonly message: string;
+}> {}
+
+export class TerminalLogUnavailableError extends Data.TaggedError(
+  "TerminalLogUnavailableError",
 )<{
   readonly message: string;
 }> {}

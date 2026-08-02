@@ -1,5 +1,6 @@
 /** Model-facing strings and bounded output formatting for the bash override. */
 
+import { existsSync } from "node:fs";
 import {
   DEFAULT_MAX_BYTES,
   DEFAULT_MAX_LINES,
@@ -121,11 +122,31 @@ export function describeTerminal(snap: TerminalSnapshot) {
 
 /**
  * Bounded model-facing view that preserves both startup context and recent
- * output. The retained in-memory middle may already be omitted; spillPath is
- * the authoritative complete stream whenever spilling succeeded.
+ * output. The retained in-memory middle may already be omitted; an existing
+ * spill file can be referred to through an opaque session-scoped archive id.
  */
+/**
+ * Return a model-safe, session-scoped reference without exposing the private
+ * spill path. The existence check matters for deferred follow-ups: a settled
+ * snapshot can outlive its entry in the manager's bounded history.
+ */
+function archiveReference(
+  terminalId: string,
+  stream: "stdout" | "stderr",
+  view: TerminalSnapshot["stdout"],
+) {
+  if (!view.spillPath) return undefined;
+  try {
+    return existsSync(view.spillPath) ? `${terminalId}:${stream}` : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function outputSection(
   label: string,
+  terminalId: string,
+  stream: "stdout" | "stderr",
   view: TerminalSnapshot["stdout"],
   maxBytes: number,
   maxLines: number,
@@ -157,18 +178,37 @@ function outputSection(
     maxBytes: tailBytes,
     maxLines: tailLines,
   });
+
   const shownBytes = start.outputBytes + end.outputBytes;
   const omittedBytes = Math.max(0, view.totalBytes - shownBytes);
+  const omittedStart = Math.min(view.totalBytes, start.outputBytes);
+  const tailSourceStart =
+    view.totalBytes - Buffer.byteLength(endSource, "utf8");
+  let tailOffset = endSource.length - end.content.length;
+  while (
+    tailOffset > 0 &&
+    !endSource.startsWith(end.content, tailOffset)
+  ) {
+    tailOffset--;
+  }
+  const omittedEnd = end.content
+    ? tailSourceStart +
+      Buffer.byteLength(endSource.slice(0, tailOffset), "utf8")
+    : view.totalBytes;
   const parts = [start.content];
   if (omittedBytes > 0) {
     parts.push(`... ${formatSize(omittedBytes)} omitted ...`);
   }
-  if (end.content && end.content !== start.content) parts.push(end.content);
+  if (end.content) parts.push(end.content);
 
-  const where = view.spillPath
-    ? `Full log: ${view.spillPath}`
-    : "Retained output is available in the /ps viewer";
-  return `${label}:\n${parts.filter(Boolean).join("\n")}\n[${label} bounded head+tail: showing ${formatSize(shownBytes)} of ${formatSize(view.totalBytes)}. ${where}]`;
+  const archiveRef = archiveReference(terminalId, stream, view);
+  const omittedRange = omittedBytes > 0
+    ? `${omittedStart}-${omittedEnd - 1}`
+    : "none";
+  const archive = archiveRef
+    ? `archive ref ${archiveRef}; complete: ${view.archiveComplete === true ? "yes" : "no"}; omitted bytes ${omittedRange}; use terminal_log_read with this ref after settlement to recover it`
+    : "complete archive unavailable to the model";
+  return `${label}:\n${parts.filter(Boolean).join("\n")}\n[${label} bounded head+tail: showing ${formatSize(shownBytes)} of ${formatSize(view.totalBytes)}. ${archive}]`;
 }
 
 function appendOutput(
@@ -179,9 +219,9 @@ function appendOutput(
   stderrBytes: number,
   stderrLines: number,
 ) {
-  text += `\n\n${outputSection("stdout", snap.stdout, stdoutBytes, stdoutLines)}`;
+  text += `\n\n${outputSection("stdout", snap.id, "stdout", snap.stdout, stdoutBytes, stdoutLines)}`;
   if (snap.stderr.totalBytes > 0) {
-    text += `\n\n${outputSection("stderr", snap.stderr, stderrBytes, stderrLines)}`;
+    text += `\n\n${outputSection("stderr", snap.id, "stderr", snap.stderr, stderrBytes, stderrLines)}`;
   }
   return text;
 }
@@ -231,12 +271,16 @@ export function buildTerminalResultMessage(snap: TerminalSnapshot) {
         : `exited (${formatExit(snap)})`;
   let text = `Background terminal ${snap.id} "${snap.title}" ${how} after ${formatElapsed(snap)}.`;
   if (snap.errorText) text += `\nError: ${snap.errorText}`;
+  // Failures need the initial diagnostic budget: the useful error often sits
+  // outside the compact success follow-up window. A killed process remains
+  // intentionally concise because /ps is the user-facing inspection path.
+  const diagnostic = snap.status === "failed" || snap.status === "timed_out";
   return appendOutput(
     text,
     snap,
-    RESULT_STDOUT_MAX,
-    RESULT_STDOUT_MAX_LINES,
-    RESULT_STDERR_MAX,
-    RESULT_STDERR_MAX_LINES,
+    diagnostic ? BASH_STDOUT_MAX : RESULT_STDOUT_MAX,
+    diagnostic ? BASH_STDOUT_MAX_LINES : RESULT_STDOUT_MAX_LINES,
+    diagnostic ? BASH_STDERR_MAX : RESULT_STDERR_MAX,
+    diagnostic ? BASH_STDERR_MAX_LINES : RESULT_STDERR_MAX_LINES,
   );
 }

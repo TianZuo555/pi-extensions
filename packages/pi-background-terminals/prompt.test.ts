@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import test from "node:test";
 import type { OutputView, TerminalSnapshot } from "./src/domain.ts";
 import {
@@ -61,6 +64,7 @@ function view(overrides: Partial<OutputView> = {}): OutputView {
     tail: "",
     totalBytes: 0,
     truncatedBytes: 0,
+    archiveComplete: false,
     ...overrides,
   };
 }
@@ -135,31 +139,130 @@ test("initial progress does not claim the command already yielded", () => {
   assert.doesNotMatch(text, /background terminal bt-1/);
 });
 
-test("model-facing output preserves bounded startup head and recent tail", () => {
+test("model-facing output uses an opaque archive reference without leaking paths", () => {
   const head = `startup\n${"h".repeat(20 * 1024)}`;
   const tail = `${"t".repeat(20 * 1024)}\nlatest failure`;
   const totalBytes = 5 * 1024 * 1024;
-  const text = buildBashResult(
+  const spillDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-bt-prompt-"));
+  const spillPath = path.join(spillDir, "stdout.log");
+  fs.writeFileSync(spillPath, "complete capture");
+
+  try {
+    const text = buildBashResult(
+      snap({
+        status: "failed",
+        exitCode: 1,
+        stdout: view({
+          text: `${head}\n... middle omitted ...\n${tail}`,
+          head,
+          tail,
+          totalBytes,
+          truncatedBytes:
+            totalBytes - Buffer.byteLength(head) - Buffer.byteLength(tail),
+          spillPath,
+          archiveComplete: true,
+        }),
+      }),
+    );
+
+    assert.match(text, /startup/);
+    assert.match(text, /latest failure/);
+    assert.match(text, /omitted/);
+    assert.match(text, /bounded head\+tail/);
+    assert.match(text, /archive ref bt-1:stdout/);
+    assert.match(text, /terminal_log_read/);
+    assert.match(text, /complete: yes/);
+    assert.match(text, /omitted bytes \d+-\d+/);
+    assert.equal(text.includes(spillPath), false);
+    assert.equal(text.includes("Full log:"), false);
+
+    // Deferred snapshots can retain the old path after the manager prunes the
+    // entry. A missing archive must not become a model-visible dangling ref.
+    fs.rmSync(spillPath);
+    const expired = buildBashResult(
+      snap({
+        status: "failed",
+        exitCode: 1,
+        stdout: view({
+          text: `${head}\n... middle omitted ...\n${tail}`,
+          head,
+          tail,
+          totalBytes,
+          truncatedBytes:
+            totalBytes - Buffer.byteLength(head) - Buffer.byteLength(tail),
+          spillPath,
+        }),
+      }),
+    );
+    assert.doesNotMatch(expired, /archive ref/);
+    assert.match(expired, /complete archive unavailable to the model/);
+  } finally {
+    fs.rmSync(spillDir, { recursive: true, force: true });
+  }
+});
+
+test("archive completeness does not follow settlement status", () => {
+  const text = buildTerminalResultMessage(
     snap({
-      status: "failed",
-      exitCode: 1,
       stdout: view({
-        text: `${head}\n... middle omitted ...\n${tail}`,
-        head,
-        tail,
-        totalBytes,
-        truncatedBytes:
-          totalBytes - Buffer.byteLength(head) - Buffer.byteLength(tail),
-        spillPath: "/tmp/bt-1.stdout.log",
+        text: "head\n... middle omitted ...\ntail",
+        head: "head",
+        tail: "tail",
+        totalBytes: 100,
+        truncatedBytes: 90,
+        spillPath: process.execPath,
+        archiveComplete: false,
       }),
     }),
   );
+  assert.match(text, /complete: no/);
+});
 
-  assert.match(text, /startup/);
-  assert.match(text, /latest failure/);
+test("line-bounded output does not duplicate overlapping head and tail", () => {
+  const output = Array.from(
+    { length: 41 },
+    (_, index) => `line-${index + 1}`,
+  ).join("\n");
+  const text = buildTerminalResultMessage(
+    snap({
+      stdout: view({
+        text: output,
+        head: output,
+        totalBytes: Buffer.byteLength(output),
+      }),
+    }),
+  );
+  const lines = text.split("\n");
+  for (let index = 1; index <= 41; index++) {
+    assert.ok(
+      lines.filter((line) => line === `line-${index}`).length <= 1,
+      `line ${index} was duplicated`,
+    );
+  }
   assert.match(text, /omitted/);
-  assert.match(text, /bounded head\+tail/);
-  assert.match(text, /Full log: \/tmp\/bt-1\.stdout\.log/);
+});
+
+test("byte-bounded output de-duplicates line-rounded windows", () => {
+  const output = Array.from(
+    { length: 5 },
+    (_, index) => `line-${index + 1}:${"x".repeat(1_700)}`,
+  ).join("\n");
+  const text = buildTerminalResultMessage(
+    snap({
+      stdout: view({
+        text: output,
+        head: output,
+        totalBytes: Buffer.byteLength(output),
+      }),
+    }),
+  );
+  const lines = text.split("\n");
+  for (let index = 1; index <= 5; index++) {
+    assert.ok(
+      lines.filter((line) => line.startsWith(`line-${index}:`)).length <= 1,
+      `line ${index} was duplicated`,
+    );
+  }
 });
 
 test("completion message reports kill vs exit", () => {
@@ -187,6 +290,49 @@ test("completion message reports kill vs exit", () => {
     }),
   );
   assert.match(timedOut, /timed out after/);
+});
+
+test("failed and timed-out completions keep the diagnostic output budget", () => {
+  const output = Array.from(
+    { length: 1_000 },
+    (_, index) => `line-${index + 1}`,
+  ).join("\n");
+  const failed = buildTerminalResultMessage(
+    snap({
+      status: "failed",
+      exitCode: 1,
+      stdout: view({
+        text: output,
+        head: output,
+        totalBytes: Buffer.byteLength(output),
+      }),
+    }),
+  );
+  const timedOut = buildTerminalResultMessage(
+    snap({
+      status: "timed_out",
+      stdout: view({
+        text: output,
+        head: output,
+        totalBytes: Buffer.byteLength(output),
+      }),
+    }),
+  );
+  const successful = buildTerminalResultMessage(
+    snap({
+      stdout: view({
+        text: output,
+        head: output,
+        totalBytes: Buffer.byteLength(output),
+      }),
+    }),
+  );
+
+  assert.ok(failed.length > successful.length);
+  assert.ok(timedOut.length > successful.length);
+  assert.match(failed, /line-1/);
+  assert.match(failed, /line-1000/);
+  assert.match(timedOut, /line-1000/);
 });
 
 test("completion output is shorter than the initial bash result", () => {
