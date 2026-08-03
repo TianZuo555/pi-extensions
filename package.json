@@ -33,7 +33,9 @@
       "extensions/ask-user.ts",
       "extensions/usage.ts",
       "extensions/edit-safe.ts",
-      "extensions/background-terminals.ts"
+      "extensions/background-terminals.ts",
+      "extensions/subagents.ts",
+      "extensions/compact-output.ts"
     ]
   },
   "scripts": {
@@ -43,6 +45,8 @@
     "test:commit": "npm test -w pi-tian-commit",
     "test:edit-safe": "npm test -w pi-tian-edit-safe",
     "test:todo": "npm test -w pi-tian-todo",
+    "test:subagents": "npm test -w pi-tian-subagents",
+    "test:compact-output": "npm test -w pi-tian-compact-output",
     "pack:check": "npm pack --dry-run --workspaces"
   },
   "peerDependencies": {
@@ -52,8 +56,14 @@
     "typebox": "*"
   },
   "devDependencies": {
-    "@earendil-works/pi-coding-agent": "^0.80.0",
+    "@earendil-works/pi-ai": "^0.83.0",
+    "@earendil-works/pi-coding-agent": "^0.83.0",
+    "@earendil-works/pi-tui": "^0.83.0",
     "@types/node": "^26.0.0",
     "typescript": "^7.0.0"
+  },
+  "overrides": {
+    "@earendil-works/pi-ai": "^0.83.0",
+    "@earendil-works/pi-tui": "^0.83.0"
   }
 }

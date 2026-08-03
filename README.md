@@ -13,6 +13,8 @@ A small collection of [pi coding agent](https://pi.dev) extensions.
 | **usage** | `/usage` | Codex and Copilot account usage in a menu, plus a footer meter. |
 | **background-terminals** | `/ps`, overrides tool `bash` | One no-stdin bash path: long commands yield to background and notify once. |
 | **edit-safe** | overrides tool `edit` | Stricter `edit`: verbatim splice, ambiguity throws, one `edits[]` shape. |
+| **subagents** | tool `subagent`, `/agents` | Isolated RPC child processes with profiles, background runs, and worktrees. |
+| **compact-output** | (TUI only) | One-line collapsed tool rows; Ctrl+O expands; hides persisted reasoning. |
 
 Each extension is described in detail under [Extensions](#extensions).
 
@@ -37,6 +39,8 @@ pi install npm:pi-tian-ask-user
 pi install npm:pi-tian-usage
 pi install npm:pi-tian-background-terminals
 pi install npm:pi-tian-edit-safe
+pi install npm:pi-tian-subagents
+pi install npm:pi-tian-compact-output
 ```
 
 Restart pi or run `/reload` in an existing session after installation.
@@ -54,7 +58,9 @@ The commands above add these entries to `~/.pi/agent/settings.json`:
     "npm:pi-tian-ask-user",
     "npm:pi-tian-usage",
     "npm:pi-tian-background-terminals",
-    "npm:pi-tian-edit-safe"
+    "npm:pi-tian-edit-safe",
+    "npm:pi-tian-subagents",
+    "npm:pi-tian-compact-output"
   ]
 }
 ```
@@ -72,6 +78,8 @@ The commands above add these entries to `~/.pi/agent/settings.json`:
 | [pi-tian-usage](https://www.npmjs.com/package/pi-tian-usage) | `pi install npm:pi-tian-usage` |
 | [pi-tian-background-terminals](https://www.npmjs.com/package/pi-tian-background-terminals) | `pi install npm:pi-tian-background-terminals` |
 | [pi-tian-edit-safe](https://www.npmjs.com/package/pi-tian-edit-safe) | `pi install npm:pi-tian-edit-safe` |
+| [pi-tian-subagents](https://www.npmjs.com/package/pi-tian-subagents) | `pi install npm:pi-tian-subagents` |
+| [pi-tian-compact-output](https://www.npmjs.com/package/pi-tian-compact-output) | `pi install npm:pi-tian-compact-output` |
 
 Try an extension temporarily without adding it to settings:
 
@@ -335,6 +343,27 @@ Disable without uninstalling: `PI_EDIT_SAFE_DISABLE=1 pi`.
 See [packages/pi-edit-safe](packages/pi-edit-safe/README.md) for the full
 matching order and the A/B bench against pi's real built-in edit.
 
+### compact-output
+
+TUI-only presentation extension for Pi **0.83.x**. It does not register or
+override any tools.
+
+- Every collapsed tool call renders as **one line** (`…` while pending, `✓`
+  after success, `✗` after failure). Failed rows may append the first error line
+  when there is room.
+- Press **Ctrl+O** (`app.tools.expand`) to toggle all tool rows between compact
+  and each tool owner's original renderer — FFF search output, read buffers,
+  edit diffs, background-terminal views, images, and errors return unchanged.
+- Persisted reasoning blocks are hidden from the transcript. During generation,
+  Pi's normal animated working indicator shows the label **Thinking**. Reasoning
+  remains in session data and model context; only the visual transcript is
+  filtered.
+
+```bash
+pi install npm:pi-tian-compact-output
+pi -e ./packages/pi-compact-output
+```
+
 The repository is an npm workspace with one publishable package per extension:
 
 | Workspace | npm package |
@@ -348,6 +377,8 @@ The repository is an npm workspace with one publishable package per extension:
 | `packages/pi-usage` | `pi-tian-usage` |
 | `packages/pi-background-terminals` | `pi-tian-background-terminals` |
 | `packages/pi-edit-safe` | `pi-tian-edit-safe` |
+| `packages/pi-subagents` | `pi-tian-subagents` |
+| `packages/pi-compact-output` | `pi-tian-compact-output` |
 
 Install dependencies, typecheck every workspace, run the commit and
 managed-terminal suites, and inspect publishable tarballs:
@@ -359,6 +390,8 @@ npm run check -w pi-tian-background-terminals
 npm test -w pi-tian-background-terminals
 npm test -w pi-tian-commit
 npm test -w pi-tian-edit-safe
+npm test -w pi-tian-subagents
+npm test -w pi-tian-compact-output
 npm run pack:check
 ```
 

@@ -58,6 +58,12 @@ jobs:
       - name: Test edit-safe extension
         run: npm test -w pi-tian-edit-safe
 
+      - name: Test subagents extension
+        run: npm test -w pi-tian-subagents
+
+      - name: Test compact-output extension
+        run: npm test -w pi-tian-compact-output
+
       - name: Publish changed packages
         env:
           DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || 'false' }}
