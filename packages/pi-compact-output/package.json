@@ -1,0 +1,49 @@
+{
+  "name": "pi-tian-compact-output",
+  "version": "0.1.2",
+  "description": "TUI-only Pi extension that collapses tool calls to one line and hides persisted reasoning while keeping Ctrl+O expansion.",
+  "type": "module",
+  "keywords": [
+    "pi",
+    "pi-package",
+    "pi-extension",
+    "pi-coding-agent",
+    "tui",
+    "compact",
+    "tools",
+    "reasoning"
+  ],
+  "author": "Tian Zuo",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TianZuo555/pi-tian-extensions.git",
+    "directory": "packages/pi-compact-output"
+  },
+  "homepage": "https://github.com/TianZuo555/pi-tian-extensions#pi-compact-output",
+  "bugs": {
+    "url": "https://github.com/TianZuo555/pi-tian-extensions/issues"
+  },
+  "files": [
+    "index.ts",
+    "lib",
+    "README.md",
+    "LICENSE"
+  ],
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "scripts": {
+    "test": "node --test --experimental-strip-types test/*.test.ts"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": ">=0.83.0 <0.84.0",
+    "@earendil-works/pi-tui": "*"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
