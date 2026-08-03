@@ -8,6 +8,11 @@ import { cleanupWorktree, createWorktree, pruneStaleWorktrees } from "../lib/wor
 
 function initGitRepo(dir: string): void {
   execFileSync("git", ["init"], { cwd: dir, stdio: "pipe" });
+  execFileSync("git", ["config", "user.name", "pi-subagents test"], { cwd: dir, stdio: "pipe" });
+  execFileSync("git", ["config", "user.email", "pi-subagents-test@example.invalid"], {
+    cwd: dir,
+    stdio: "pipe",
+  });
   fs.writeFileSync(path.join(dir, "README.md"), "init\n", "utf8");
   execFileSync("git", ["add", "README.md"], { cwd: dir, stdio: "pipe" });
   execFileSync("git", ["commit", "-m", "init"], { cwd: dir, stdio: "pipe" });
