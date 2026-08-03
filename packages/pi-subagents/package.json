@@ -1,0 +1,47 @@
+{
+  "name": "pi-tian-subagents",
+  "version": "0.2.4",
+  "description": "Isolated Pi RPC subagents with profiles, foreground and background runs, and git worktrees.",
+  "type": "module",
+  "keywords": [
+    "pi",
+    "pi-package",
+    "pi-extension",
+    "pi-coding-agent",
+    "subagent"
+  ],
+  "author": "Tian Zuo",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TianZuo555/pi-tian-extensions.git",
+    "directory": "packages/pi-subagents"
+  },
+  "homepage": "https://github.com/TianZuo555/pi-tian-extensions#subagents",
+  "bugs": {
+    "url": "https://github.com/TianZuo555/pi-tian-extensions/issues"
+  },
+  "files": [
+    "index.ts",
+    "lib",
+    "profiles",
+    "README.md"
+  ],
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "scripts": {
+    "test": "node --test --experimental-strip-types test/*.test.ts"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
