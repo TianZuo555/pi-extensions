@@ -8,14 +8,18 @@ import type { ExecResult } from "@earendil-works/pi-coding-agent";
 import {
   commitWithMessage,
   ForbiddenStagedPathError,
+  hasUnstagedChanges,
   NoStagedChangesError,
   openGitRepository,
   pushCurrentBranch,
   readDefaultRemote,
   readLatestCommitSummary,
+  readStagedPaths,
   readStagedSnapshot,
   RepositoryChangedError,
+  resetStagedChanges,
   stageAllChanges,
+  stageSelectedPaths,
   verifyStagedSnapshot,
   type ExecFunction,
 } from "../lib/git.ts";
@@ -150,6 +154,30 @@ test("stage-all includes untracked files and commitWithMessage creates the revie
   assert.match(await readLatestCommitSummary(repository), /test: commit every change$/);
   assert.equal(git(directory, ["status", "--porcelain"]), "");
   assert.equal(await readFile(path.join(directory, "new file.txt"), "utf8"), "new content\n");
+});
+
+test("selected path staging supports whole-file commit groups", async (t) => {
+  const directory = await createRepository(t);
+  await writeFile(path.join(directory, "tracked.txt"), "tracked change\n", "utf8");
+  await writeFile(path.join(directory, "feature.txt"), "feature change\n", "utf8");
+
+  const repository = await openGitRepository(testExec, directory);
+  await stageAllChanges(repository);
+  const allPaths = await readStagedPaths(repository);
+  assert.deepEqual(new Set(allPaths), new Set(["tracked.txt", "feature.txt"]));
+  assert.equal(await hasUnstagedChanges(repository), false);
+
+  await resetStagedChanges(repository);
+  assert.equal(await hasUnstagedChanges(repository), true);
+  await stageSelectedPaths(repository, ["tracked.txt"]);
+  assert.deepEqual(await readStagedPaths(repository), ["tracked.txt"]);
+  assert.equal((await commitWithMessage(repository, "change tracked file")).code, 0);
+
+  await resetStagedChanges(repository);
+  await stageSelectedPaths(repository, ["feature.txt"]);
+  assert.deepEqual(await readStagedPaths(repository), ["feature.txt"]);
+  assert.equal((await commitWithMessage(repository, "add feature file")).code, 0);
+  assert.equal(git(directory, ["status", "--porcelain"]), "");
 });
 
 async function createBareRemote(t: TestContext): Promise<string> {

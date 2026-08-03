@@ -27,6 +27,7 @@ export interface RepositoryFingerprint {
 export interface StagedSnapshot {
   branch: string;
   fingerprint: RepositoryFingerprint;
+  paths: string[];
   nameStatus: string;
   stat: string;
   patch: string;
@@ -150,6 +151,15 @@ export async function hasWorkingTreeChanges(repository: GitRepository): Promise<
   return output.length > 0;
 }
 
+export async function hasUnstagedChanges(repository: GitRepository): Promise<boolean> {
+  const output = await runGitOrThrow(
+    repository,
+    ["status", "--porcelain=v1", "--untracked-files=normal", "--"],
+    "Reading Git status",
+  );
+  return output.split("\n").some((line) => line.length >= 2 && (line[0] === "?" || line[1] !== " "));
+}
+
 export async function ensureNoUnmergedEntries(repository: GitRepository): Promise<void> {
   const output = await runGitOrThrow(
     repository,
@@ -223,6 +233,37 @@ const DIFF_BASE_ARGS = [
   "--submodule=short",
 ] as const;
 
+export async function readStagedPaths(repository: GitRepository): Promise<string[]> {
+  const output = await runGitOrThrow(
+    repository,
+    [...DIFF_BASE_ARGS, "--name-only", "-z", "--"],
+    "Checking staged file safety",
+  );
+  return splitNulSeparatedPaths(output);
+}
+
+export async function resetStagedChanges(repository: GitRepository): Promise<void> {
+  await runGitOrThrow(
+    repository,
+    ["reset", "--quiet"],
+    "Resetting staged changes",
+    MUTATION_TIMEOUT_MS,
+  );
+}
+
+export async function stageSelectedPaths(
+  repository: GitRepository,
+  paths: readonly string[],
+): Promise<void> {
+  if (paths.length === 0) throw new Error("Cannot stage an empty path group.");
+  await runGitOrThrow(
+    repository,
+    ["--literal-pathspecs", "add", "--", ...paths],
+    "Staging commit group",
+    MUTATION_TIMEOUT_MS,
+  );
+}
+
 export async function readStagedSnapshot(
   repository: GitRepository,
   maxPatchBytes: number,
@@ -230,12 +271,8 @@ export async function readStagedSnapshot(
   await ensureNoUnmergedEntries(repository);
   if (!(await hasStagedChanges(repository))) throw new NoStagedChangesError();
 
-  const stagedPathOutput = await runGitOrThrow(
-    repository,
-    [...DIFF_BASE_ARGS, "--name-only", "-z", "--"],
-    "Checking staged file safety",
-  );
-  const forbiddenPaths = findForbiddenStagedPaths(splitNulSeparatedPaths(stagedPathOutput));
+  const paths = await readStagedPaths(repository);
+  const forbiddenPaths = findForbiddenStagedPaths(paths);
   if (forbiddenPaths.length > 0) throw new ForbiddenStagedPathError(forbiddenPaths);
 
   const fingerprint = await readFingerprint(repository);
@@ -254,6 +291,7 @@ export async function readStagedSnapshot(
   return {
     branch,
     fingerprint,
+    paths,
     nameStatus,
     stat,
     patch: truncatedPatch.text,

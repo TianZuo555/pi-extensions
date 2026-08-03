@@ -7,9 +7,11 @@ import {
 } from "../lib/config.ts";
 import { truncateUtf8, type StagedSnapshot } from "../lib/git.ts";
 import {
+  buildCommitAllPrompt,
   buildCommitPrompt,
   normalizeEditedCommitMessage,
   normalizeGeneratedCommitMessage,
+  normalizeGeneratedCommitPlan,
 } from "../lib/prompt.ts";
 
 test("commit settings default to DeepSeek V4 Flash", () => {
@@ -87,6 +89,7 @@ test("commit prompt labels truncation and user guidance", () => {
   const snapshot: StagedSnapshot = {
     branch: "main",
     fingerprint: { head: "head", tree: "tree" },
+    paths: ["src/index.ts"],
     nameStatus: "M\tsrc/index.ts",
     stat: "1 file changed, 1 insertion(+)",
     patch: "+new line",
@@ -99,4 +102,45 @@ test("commit prompt labels truncation and user guidance", () => {
   assert.match(prompt, /focus on the user-facing behavior/);
   assert.match(prompt, /900 of 1000 UTF-8 bytes omitted/);
   assert.match(prompt, /M\tsrc\/index\.ts/);
+});
+
+test("commit-all prompt requests whole-file logical commit groups", () => {
+  const snapshot: StagedSnapshot = {
+    branch: "main",
+    fingerprint: { head: "head", tree: "tree" },
+    paths: ["src/feature.ts", "test/feature.test.ts"],
+    nameStatus: "M\tsrc/feature.ts\nM\ttest/feature.test.ts",
+    stat: "2 files changed, 4 insertions(+)",
+    patch: "+feature",
+    patchBytes: 1000,
+    omittedPatchBytes: 0,
+    recentCommitSubjects: "feat: previous",
+  };
+
+  const prompt = buildCommitAllPrompt(snapshot, "split independent changes");
+  assert.match(prompt, /separating independent features and logic changes/);
+  assert.match(prompt, /src\/feature\.ts/);
+  assert.match(prompt, /test\/feature\.test\.ts/);
+});
+
+test("generated commit plans cover each staged path exactly once", () => {
+  const plan = normalizeGeneratedCommitPlan(
+    '{"commits":[{"paths":["src/feature.ts"],"message":"feat: add feature"},{"paths":["test/feature.test.ts"],"message":"test: cover feature"}]}',
+    ["src/feature.ts", "test/feature.test.ts"],
+  );
+  assert.deepEqual(plan.commits.map((commit) => commit.paths), [["src/feature.ts"], ["test/feature.test.ts"]]);
+  assert.throws(
+    () => normalizeGeneratedCommitPlan(
+      '{"commits":[{"paths":["src/feature.ts", "src/feature.ts"],"message":"bad"}]}',
+      ["src/feature.ts"],
+    ),
+    /duplicate path/,
+  );
+  assert.throws(
+    () => normalizeGeneratedCommitPlan(
+      '{"commits":[{"paths":["src/feature.ts"],"message":"bad"}]}',
+      ["src/feature.ts", "test/feature.test.ts"],
+    ),
+    /omitted staged path/,
+  );
 });

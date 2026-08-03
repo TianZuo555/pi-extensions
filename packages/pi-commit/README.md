@@ -5,7 +5,7 @@ Generate and review Git commit messages with a dedicated model without changing 
 ## Commands
 
 - `/commit [guidance]` — generate a message for the changes already staged in Git.
-- `/commit-all [guidance]` — confirm, run `git add --all`, then generate a message for the resulting staged snapshot.
+- `/commit-all [guidance]` — confirm, run `git add --all`, then generate a logical commit plan for the resulting staged snapshot.
 
 Examples:
 
@@ -15,11 +15,13 @@ Examples:
 /commit-all use the repository's conventional commit style
 ```
 
-Both commands show the generated message in a multiline editor, then ask how to finish: **Commit and push**, **Commit only**, or **Cancel**.
+Both commands let you review the generated message(s) in multiline editors, then ask how to finish: **Commit and push**, **Commit only**, or **Cancel**.
 
-- **Commit and push** runs `git commit` and then pushes the current branch. Separate loading indicators remain visible while the commit and push are running. If the branch has no upstream, the push sets it (`--set-upstream`) on the default remote — `origin`, or the only configured remote when `origin` is absent.
-- **Commit only** runs `git commit` with a loading indicator and stops there.
-- **Cancel** (or dismissing the prompt) leaves everything staged; for `/commit-all` the staged files stay staged.
+- `/commit` reviews and creates one commit.
+- `/commit-all` asks the model for a logical commit plan, grouping whole files into separate commits for independent features or logic changes. Every generated message is reviewed separately before any commit is created.
+- **Commit and push** creates all planned commits, then pushes the current branch once. Separate loading indicators remain visible while commits and the push are running. If the branch has no upstream, the push sets it (`--set-upstream`) on the default remote — `origin`, or the only configured remote when `origin` is absent.
+- **Commit only** creates all planned commits with loading indicators and stops there.
+- **Cancel** (or dismissing any prompt) leaves everything staged; for `/commit-all` the staged files stay staged.
 
 ## Model setting
 
@@ -56,13 +58,14 @@ The model value must use `provider/model` format. Model IDs may themselves conta
 - The configured model is called directly for this one task. The active session model is never switched.
 - `/commit` never stages files. If the index is empty, it suggests `/commit-all`.
 - `/commit-all` explicitly confirms before staging tracked, deleted, and untracked files. Git-ignored files remain ignored.
+- `/commit-all` groups at whole-file granularity; different hunks in the same file stay in the same planned commit.
 - Staged paths containing `node_modules` are rejected before their contents are sent to the model or committed, including force-staged/tracked dependency files.
 - The prompt also warns against dependency trees, package-manager caches, build/coverage output, and editor/system artifacts.
 - Cancelling after `/commit-all` has staged files leaves those files staged; the extension reports this explicitly.
 - The staged Git tree and `HEAD` are fingerprinted. If either changes while the message is being generated or reviewed, the commit is aborted.
 - Unresolved merge conflicts are rejected.
 - Normal Git hooks and signing configuration are honored. A failed commit leaves staged changes intact.
-- When pushing, the commit is created before the push runs. If the push fails (no network, missing credentials, rejected remote, etc.), the local commit is kept and the error is reported; you can retry the push yourself.
+- When pushing, all planned commits are created before the push runs. If the push fails (no network, missing credentials, rejected remote, etc.), the local commits are kept and the error is reported; you can retry the push yourself.
 - The staged patch, file list, diff stat, optional guidance, and recent commit subjects are sent to the configured model provider. Review staged content for secrets before invoking the command.
 - Model patch context is capped at 256 KiB. For larger changes, the full file list and stat are retained and the UI warns that patch content was truncated.
 
