@@ -2,7 +2,7 @@
 // account usage in the pi coding agent.
 //
 // Commands:
-//   /usage            open a menu with current Codex + Copilot + Z.ai usage
+//   /usage            open a menu with current usage for configured providers
 //                     (Refresh re-queries; Close dismisses)
 //
 // Statusline:
@@ -47,6 +47,8 @@ const AZURE_BLUE = "\x1b[38;2;0;127;255m";
 const RESET_FOREGROUND = "\x1b[39m";
 const REFRESH = "Refresh";
 const CLOSE = "Close";
+const NO_PROVIDER_LOGIN_MESSAGE =
+  "No usage provider is configured. Log in to at least one provider with /login to view usage information.";
 
 interface ProviderSpec {
   id: string;
@@ -189,19 +191,24 @@ export default function usageExtension(pi: ExtensionAPI): void {
   ): Promise<ProviderState[]> => {
     // Check every provider independently of the active model. Providers without
     // login information return "unconfigured" before their usage endpoint is
-    // fetched. allSettled is belt-and-braces: queryProvider already never rejects.
+    // fetched and are omitted from the displayed state list. allSettled is
+    // belt-and-braces: queryProvider already never rejects.
     const settled = await Promise.allSettled(
       PROVIDERS.map((provider) => queryProvider(ctx, provider, force, signal)),
     );
-    return settled.map((result, index) => {
-      if (result.status === "fulfilled") return result.value;
+    return settled.flatMap((result, index) => {
+      if (result.status === "fulfilled") {
+        return result.value.status === "unconfigured" ? [] : [result.value];
+      }
       const provider = PROVIDERS[index];
-      return {
-        id: provider.id,
-        name: provider.name,
-        status: "error",
-        message: errorMessage(result.reason),
-      };
+      return [
+        {
+          id: provider.id,
+          name: provider.name,
+          status: "error" as const,
+          message: errorMessage(result.reason),
+        },
+      ];
     });
   };
 
@@ -267,7 +274,10 @@ export default function usageExtension(pi: ExtensionAPI): void {
   const showMenu = async (ctx: ExtensionCommandContext) => {
     if (!ctx.hasUI) {
       const states = await collectStates(ctx, false);
-      ctx.ui.notify(compactSummary(states), "info");
+      ctx.ui.notify(
+        states.length > 0 ? compactSummary(states) : NO_PROVIDER_LOGIN_MESSAGE,
+        states.length > 0 ? "info" : "warning",
+      );
       return;
     }
     const controller = new AbortController();
@@ -276,6 +286,11 @@ export default function usageExtension(pi: ExtensionAPI): void {
         collectStates(ctx, false, signal),
       );
       if (!states) return;
+      if (states.length === 0) {
+        publishActiveFrom(ctx, states);
+        ctx.ui.notify(NO_PROVIDER_LOGIN_MESSAGE, "warning");
+        return;
+      }
       publishActiveFrom(ctx, states);
       while (!controller.signal.aborted) {
         const action = await ctx.ui.select(formatReports(states), [REFRESH, CLOSE], {
@@ -292,6 +307,11 @@ export default function usageExtension(pi: ExtensionAPI): void {
           // Cancelled refresh keeps the previously shown data.
           if (refreshed) {
             states = refreshed;
+            if (states.length === 0) {
+              publishActiveFrom(ctx, states);
+              ctx.ui.notify(NO_PROVIDER_LOGIN_MESSAGE, "warning");
+              return;
+            }
             publishActiveFrom(ctx, states);
           }
         }
@@ -313,6 +333,8 @@ export default function usageExtension(pi: ExtensionAPI): void {
     const state = states.find((candidate) => candidate.id === provider.id);
     if (state?.status === "ready") {
       safeSetStatus(ctx, azureStatus(formatStatusline(state.report)));
+    } else {
+      safeSetStatus(ctx, undefined);
     }
   };
 

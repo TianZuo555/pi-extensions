@@ -31,7 +31,10 @@ export function formatReport(state: ProviderState): string {
 
 /** Combine multiple provider states into one menu body. */
 export function formatReports(states: readonly ProviderState[]): string {
-  return states.map(formatReport).join("\n\n");
+  return states
+    .filter((state) => state.status !== "unconfigured")
+    .map(formatReport)
+    .join("\n\n");
 }
 
 function formatWindow(window: UsageWindow): string {

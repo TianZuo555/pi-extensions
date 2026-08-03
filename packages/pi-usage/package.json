@@ -1,6 +1,6 @@
 {
   "name": "pi-tian-usage",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Show OpenAI Codex, GitHub Copilot, and Z.ai GLM Coding Plan usage in the pi coding agent.",
   "type": "module",
   "keywords": [

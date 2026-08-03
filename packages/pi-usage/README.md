@@ -3,9 +3,9 @@
 Show **OpenAI Codex**, **GitHub Copilot**, and **Z.ai (GLM Coding Plan)** account
 usage from inside the [pi coding agent](https://pi.dev).
 
-`/usage` opens a menu with the current usage for every provider, and a compact
-meter is shown in the footer whenever the active model belongs to a supported
-provider.
+`/usage` opens a menu with the current usage for every configured provider, and
+a compact meter is shown in the footer whenever the active model belongs to a
+supported provider.
 
 ```text
 OpenAI Codex · Plus
@@ -69,9 +69,9 @@ sent to the endpoint when Pi cannot refresh them.
 
 Before calling a usage endpoint, `/usage` checks whether pi or one of the
 supported fallback sources has login information for that provider. Providers
-without login information are not fetched and are shown as **Not configured** —
-sign in with `/login` and select that provider (or, for Z.ai, export
-`ZAI_API_KEY`).
+without login information are not fetched or displayed. If no provider is
+configured, `/usage` asks you to sign in to at least one provider (or, for Z.ai,
+export `ZAI_API_KEY`) before showing usage information.
 
 ## Install
 

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { queryCodexUsage, queryCopilotUsage, queryZaiUsage } from "../packages/pi-usage/lib/providers.ts";
-import { formatReport, formatStatusline } from "../packages/pi-usage/lib/format.ts";
+import { formatReport, formatReports, formatStatusline } from "../packages/pi-usage/lib/format.ts";
 import { hasProviderLoginInfo } from "../packages/pi-usage/lib/auth.ts";
 
 const copilotSnapshot = (overrides = {}) => ({
@@ -101,6 +101,43 @@ test("usage preflight accepts pi and extension-local login information", () => {
   };
   assert.equal(hasProviderLoginInfo(staleContext, "test-provider", () => true), true);
   assert.equal(hasProviderLoginInfo(staleContext, "test-provider"), false);
+});
+
+test("usage reports omit providers without login information", () => {
+  const unconfigured = [
+    {
+      id: "openai-codex",
+      name: "OpenAI Codex",
+      status: "unconfigured",
+      message: "sign in",
+    },
+    {
+      id: "github-copilot",
+      name: "GitHub Copilot",
+      status: "unconfigured",
+      message: "sign in",
+    },
+    {
+      id: "zai",
+      name: "GLM Coding Plan",
+      status: "unconfigured",
+      message: "sign in",
+    },
+  ];
+
+  assert.equal(formatReports(unconfigured), "");
+  assert.match(
+    formatReports([
+      ...unconfigured,
+      {
+        id: "zai",
+        name: "GLM Coding Plan",
+        status: "ready",
+        report: { id: "zai", name: "GLM Coding Plan", windows: [], notes: [] },
+      },
+    ]),
+    /GLM Coding Plan/,
+  );
 });
 
 test("Codex usage retries one transient network failure", async (t) => {
