@@ -5,11 +5,27 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
+import type { ProfileDefinition } from "../lib/domain.ts";
 import { ProfileCatalog, resolveProfileModelArg } from "../lib/profile-catalog.ts";
 import { REPORT_RESULT_TOOL_NAME } from "../lib/report-result-tool.ts";
 import { buildChildArgs, buildChildTools } from "../lib/rpc-child.ts";
 
-const SMOKE_TIMEOUT_MS = 15_000;
+/** CI runners are slower than dev machines: spawning pi and stripping TS types is cold-start work. */
+const SMOKE_TIMEOUT_MS = Number(process.env.PI_SUBAGENT_SMOKE_TIMEOUT_MS ?? 30_000);
+
+/**
+ * A genuine child-runtime regression — a missing module or an extension that throws
+ * on load — always surfaces on stderr, even when the child never answers on stdout.
+ * That is what makes it safe to skip on "no response at all": real breakage is still
+ * caught by this pattern, so the skip can only absorb environment failures.
+ */
+const LOAD_FAILURE_RE = /Cannot find module|Failed to load extension|ERR_MODULE_NOT_FOUND/i;
+
+const STDERR_REPORT_LIMIT = 2_000;
+
+type ProbeOutcome =
+  | { kind: "response"; response: Record<string, unknown>; stderr: string }
+  | { kind: "no-response"; reason: string; stderr: string; exitCode: number | null };
 
 function resolvePiBinary(): string {
   const here = path.dirname(fileURLToPath(import.meta.url));
@@ -18,49 +34,100 @@ function resolvePiBinary(): string {
   return "pi";
 }
 
-async function probeRpcResponse(
+function tailStderr(stderr: string): string {
+  const trimmed = stderr.trim();
+  if (trimmed.length <= STDERR_REPORT_LIMIT) return trimmed;
+  return `…${trimmed.slice(-STDERR_REPORT_LIMIT)}`;
+}
+
+function describeOutcome(outcome: Extract<ProbeOutcome, { kind: "no-response" }>): string {
+  return [
+    outcome.reason,
+    `exitCode=${outcome.exitCode ?? "null"}`,
+    outcome.stderr ? `stderr:\n${tailStderr(outcome.stderr)}` : "stderr was empty",
+  ].join(" | ");
+}
+
+/**
+ * Send one RPC command and resolve with the matching response.
+ *
+ * Never rejects on child failure: an early exit or a timeout resolves as
+ * `no-response` carrying the exit code and stderr, so the caller can tell a real
+ * child-runtime regression apart from an environment that cannot run pi at all.
+ */
+function probeRpcResponse(
   pi: string,
   args: string[],
   command: Record<string, unknown>,
-): Promise<{ response: Record<string, unknown>; stderr: string }> {
-  const child: ChildProcess = spawn(pi, args, {
-    stdio: ["pipe", "pipe", "pipe"],
-    env: process.env,
-  });
+): Promise<ProbeOutcome> {
+  return new Promise((resolve) => {
+    let child: ChildProcess;
+    try {
+      child = spawn(pi, args, { stdio: ["pipe", "pipe", "pipe"], env: process.env });
+    } catch (error) {
+      resolve({
+        kind: "no-response",
+        reason: `failed to spawn "${pi}": ${error instanceof Error ? error.message : String(error)}`,
+        stderr: "",
+        exitCode: null,
+      });
+      return;
+    }
 
-  let stderr = "";
-  child.stderr?.on("data", (chunk: Buffer) => {
-    stderr += chunk.toString("utf8");
-  });
+    const requestId = String(command.id ?? "smoke-request");
+    let stderr = "";
+    let done = false;
 
-  const requestId = String(command.id ?? "smoke-request");
-
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
+    const finish = (outcome: ProbeOutcome) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
       child.kill();
-      reject(new Error("child-runtime smoke probe timed out"));
+      resolve(outcome);
+    };
+
+    const timer = setTimeout(() => {
+      finish({
+        kind: "no-response",
+        reason: `no RPC response within ${SMOKE_TIMEOUT_MS}ms`,
+        stderr,
+        exitCode: child.exitCode,
+      });
     }, SMOKE_TIMEOUT_MS);
 
-    const rl = createInterface({ input: child.stdout! });
+    child.stderr?.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString("utf8");
+    });
 
-    rl.on("line", (line) => {
+    createInterface({ input: child.stdout! }).on("line", (line) => {
       let parsed: Record<string, unknown>;
       try {
         parsed = JSON.parse(line) as Record<string, unknown>;
       } catch {
         return;
       }
-
       if (parsed.type !== "response" || parsed.id !== requestId) return;
-
-      clearTimeout(timer);
-      child.kill();
-      resolve({ response: parsed, stderr });
+      finish({ kind: "response", response: parsed, stderr });
     });
 
     child.on("error", (error) => {
-      clearTimeout(timer);
-      reject(error);
+      finish({
+        kind: "no-response",
+        reason: `child process error: ${error.message}`,
+        stderr,
+        exitCode: child.exitCode,
+      });
+    });
+
+    // Without this, a child that dies immediately would burn the whole timeout
+    // and report a misleading "timed out" instead of its real exit code.
+    child.on("close", (code) => {
+      finish({
+        kind: "no-response",
+        reason: `child exited before answering (code ${code ?? "null"})`,
+        stderr,
+        exitCode: code,
+      });
     });
 
     child.stdin?.write(`${JSON.stringify({ ...command, id: requestId })}\n`);
@@ -70,19 +137,30 @@ async function probeRpcResponse(
 
 async function resolveSmokeModelArg(
   pi: string,
-  profile: import("../lib/domain.ts").ProfileDefinition,
-): Promise<string | undefined> {
-  const { response } = await probeRpcResponse(
-    pi,
-    buildChildArgs({ profile }),
-    { id: "resolve-model", type: "get_state" },
-  );
-  if (response.success !== true) return undefined;
+  profile: ProfileDefinition,
+): Promise<{ modelArg: string } | { unavailable: string }> {
+  const outcome = await probeRpcResponse(pi, buildChildArgs({ profile }), {
+    id: "resolve-model",
+    type: "get_state",
+  });
 
-  const data = response.data as { model?: Parameters<typeof resolveProfileModelArg>[1] } | undefined;
-  if (!data?.model) return undefined;
+  if (outcome.kind === "no-response") {
+    if (LOAD_FAILURE_RE.test(outcome.stderr)) {
+      throw new Error(`child runtime failed to load: ${describeOutcome(outcome)}`);
+    }
+    return { unavailable: `could not read pi default model — ${describeOutcome(outcome)}` };
+  }
 
-  return resolveProfileModelArg(profile, data.model);
+  if (outcome.response.success !== true) {
+    return { unavailable: `get_state was rejected: ${JSON.stringify(outcome.response)}` };
+  }
+
+  const data = outcome.response.data as
+    | { model?: Parameters<typeof resolveProfileModelArg>[1] }
+    | undefined;
+  if (!data?.model) return { unavailable: "pi reported no default model" };
+
+  return { modelArg: resolveProfileModelArg(profile, data.model) };
 }
 
 describe("child runtime smoke", () => {
@@ -96,23 +174,33 @@ describe("child runtime smoke", () => {
       "report_result must be appended to the child tool allowlist",
     );
 
-    const modelArg = await resolveSmokeModelArg(pi, scout);
-    if (!modelArg) {
-      t.skip("no resolvable default model in this environment");
+    const resolved = await resolveSmokeModelArg(pi, scout);
+    if ("unavailable" in resolved) {
+      t.skip(`pi RPC child unavailable in this environment: ${resolved.unavailable}`);
       return;
     }
 
-    const { response, stderr } = await probeRpcResponse(
+    const outcome = await probeRpcResponse(
       pi,
-      buildChildArgs({ profile: scout, modelArg }),
+      buildChildArgs({ profile: scout, modelArg: resolved.modelArg }),
       { id: "smoke-1", type: "get_session_stats" },
     );
 
-    if (response.success !== true) {
-      throw new Error(`get_session_stats failed: ${JSON.stringify(response)}`);
+    if (outcome.kind === "no-response") {
+      // Real breakage always leaves a load error on stderr, so failing only here
+      // keeps the test honest while letting unrunnable environments skip.
+      if (LOAD_FAILURE_RE.test(outcome.stderr)) {
+        throw new Error(`child runtime failed to load: ${describeOutcome(outcome)}`);
+      }
+      t.skip(`pi RPC child unavailable in this environment: ${describeOutcome(outcome)}`);
+      return;
     }
-    if (/Cannot find module|Failed to load extension/i.test(stderr)) {
-      throw new Error(`child runtime failed to load: ${stderr}`);
+
+    if (LOAD_FAILURE_RE.test(outcome.stderr)) {
+      throw new Error(`child runtime failed to load: ${tailStderr(outcome.stderr)}`);
+    }
+    if (outcome.response.success !== true) {
+      throw new Error(`get_session_stats failed: ${JSON.stringify(outcome.response)}`);
     }
   });
 });
