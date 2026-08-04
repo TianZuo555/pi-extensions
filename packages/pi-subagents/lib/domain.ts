@@ -1,5 +1,8 @@
 /** Shared domain types for pi-tian-subagents. */
 
+import type { ChildSemanticReport } from "./run-report.ts";
+import type { WorktreeDelivery } from "./worktree.ts";
+
 export const BUILTIN_PROFILE_NAMES = [
   "scout",
   "planner",
@@ -46,6 +49,8 @@ export interface ProfileDefinition {
   filePath?: string;
   /** SHA-256 prefix of raw profile file bytes (project trust gate) */
   contentHash?: string;
+  /** Soft live-turn budget enforced via RPC turn_start events */
+  maxTurns: number;
 }
 
 export interface RunUsage {
@@ -68,6 +73,9 @@ export interface SubagentRunResult {
   error?: string;
   durationMs: number;
   worktreeBranch?: string;
+  semanticReport?: ChildSemanticReport;
+  worktreeDelivery?: WorktreeDelivery;
+  budgetExhausted?: boolean;
 }
 
 export interface RunRecord {
@@ -82,6 +90,7 @@ export interface RunRecord {
   activity?: string;
   result?: SubagentRunResult;
   worktreeBranch?: string;
+  worktreeDelivery?: WorktreeDelivery;
   cancelReason?: string;
 }
 
@@ -93,6 +102,9 @@ export interface SubagentToolDetails {
   model?: string;
   activity?: string;
   mode?: RunMode;
+  semanticReport?: ChildSemanticReport;
+  worktreeDelivery?: WorktreeDelivery;
+  budgetExhausted?: boolean;
 }
 
 export const TASK_MAX_LENGTH = 16 * 1024;
@@ -102,6 +114,8 @@ export const TRUNCATION_MARKER = "…[truncated]";
 export const MAX_CONCURRENT_RUNS = 4;
 export const MAX_SESSION_RUNS = 20;
 export const DEFAULT_RUN_TIMEOUT_MS = 10 * 60 * 1000;
+export const DEFAULT_MAX_TURNS = 8;
+export const MAX_PROFILE_TURNS = 100;
 export const SESSION_SOFT_COST_USD = 5;
 export const SESSION_COST_WARN_RATIO = 0.8;
 export const BACKGROUND_RESULT_TYPE = "subagent-result";

@@ -11,7 +11,8 @@ export function buildTaskPrompt(profile: string, task: string, context?: string)
   }
   parts.push(
     "",
-    "Respond with your final answer as assistant text when done. Do not delegate to other agents.",
+    "Finish by calling report_result alone with your final structured report.",
+    "If report_result is unavailable, respond with your final answer as assistant text.",
   );
   return parts.join("\n");
 }

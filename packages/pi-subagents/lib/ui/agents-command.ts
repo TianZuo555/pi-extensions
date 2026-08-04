@@ -20,8 +20,12 @@ export async function openAgentsDashboard(
   const profiles = supervisor.listProfiles().map((p) => p.qualifiedId).join(", ");
   const diagnostics = supervisor.getProfileLoadDiagnostics();
   const branches = runs
-    .filter((r) => r.worktreeBranch)
-    .map((r) => `${r.worktreeBranch} (${r.runId})`)
+    .filter((r) => r.worktreeBranch || r.worktreeDelivery?.patch)
+    .map((r) => {
+      const patch = r.worktreeDelivery?.patch;
+      const patchNote = patch ? ` · patch:${patch.applyStatus}` : "";
+      return `${r.worktreeBranch ?? "?"} (${r.runId})${patchNote}`;
+    })
     .join("\n");
 
   const sections: string[] = [`Profiles: ${profiles}`];
@@ -29,7 +33,7 @@ export async function openAgentsDashboard(
     sections.push("", "Skipped profiles:", diagnostics.join("\n"));
   }
   if (branches) {
-    sections.push("", "Worktree branches (merge locally; dirs pruned on shutdown):", branches);
+    sections.push("", "Worktree branches and patch artifacts:", branches);
   }
   sections.push(
     "",

@@ -2,24 +2,37 @@
  * RpcChild — one supervised `pi --mode rpc` child process.
  *
  * Isolation: `--no-extensions` prevents extension MCP and other parent extensions in children.
- * Pi has no built-in MCP; inherited `process.env` still supplies API keys to the child CLI.
+ * The trusted child runtime is loaded explicitly via `-e`.
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import type { SessionStats } from "@earendil-works/pi-coding-agent";
+import { REPORT_RESULT_TOOL_NAME } from "./report-result-tool.ts";
 import { attachJsonlReader } from "./jsonl-reader.ts";
 import { getPiInvocation } from "./pi-spawn.ts";
 import type { DetachedChildTracker } from "./process-tracker.ts";
 import type { ProfileDefinition } from "./domain.ts";
+import {
+  buildSemanticReport,
+  parseRunReportDetails,
+  renderRunReport,
+  type ChildSemanticReport,
+} from "./run-report.ts";
 import { usageFromSessionStats } from "./usage.ts";
 
 const STOP_TIMEOUT_MS = 5_000;
 const FORCE_KILL_AFTER_MS = 2_000;
 const SETTLED_GRACE_MS = 500;
 const STDERR_MAX_BYTES = 64 * 1024;
+
+const CHILD_RUNTIME_PATH = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "child-runtime.ts",
+);
 
 export interface RpcChildRunInput {
   cwd: string;
@@ -32,15 +45,20 @@ export interface RpcChildRunInput {
   onActivity?: (activity: string) => void;
   /** Test hook: replace pi spawn with a fake RPC speaker */
   spawnOverride?: { command: string; args: string[] };
+  /** Test hook: skip loading the child runtime extension */
+  skipChildRuntime?: boolean;
 }
 
 export interface RpcChildRunOutput {
   settled: boolean;
   reportText: string;
+  semanticReport: ChildSemanticReport;
   usage: ReturnType<typeof usageFromSessionStats>;
   stderr: string;
   exitCode: number | null;
   error?: string;
+  budgetExhausted?: boolean;
+  terminalReportReceived?: boolean;
 }
 
 type RpcLine = Record<string, unknown>;
@@ -64,6 +82,54 @@ async function writePromptToTempFile(
   return { dir: tmpDir, filePath };
 }
 
+function buildChildTools(profile: ProfileDefinition): string[] {
+  const tools = [...profile.tools];
+  if (!tools.includes(REPORT_RESULT_TOOL_NAME)) {
+    tools.push(REPORT_RESULT_TOOL_NAME);
+  }
+  return tools;
+}
+
+export { buildChildTools };
+
+export interface BuildChildArgsInput {
+  profile: ProfileDefinition;
+  modelArg?: string;
+  skipChildRuntime?: boolean;
+}
+
+export function buildChildArgs(input: BuildChildArgsInput): string[] {
+  const args: string[] = [
+    "--mode",
+    "rpc",
+    "--no-session",
+    "--no-extensions",
+    "--no-skills",
+    "--no-prompt-templates",
+    "--no-themes",
+    "--no-context-files",
+    "--tools",
+    buildChildTools(input.profile).join(","),
+  ];
+
+  if (input.modelArg !== undefined) {
+    args.push("--model", input.modelArg);
+  }
+
+  if (!input.skipChildRuntime) {
+    args.push("-e", CHILD_RUNTIME_PATH);
+  }
+
+  return args;
+}
+
+function formatTurnBudgetWarning(maxTurns: number): string {
+  return (
+    `Subagent turn budget: you are on turn ${maxTurns} of ${maxTurns}. ` +
+    "Call report_result now to finish with a structured handoff."
+  );
+}
+
 export async function runRpcChild(input: RpcChildRunInput): Promise<RpcChildRunOutput> {
   const stderrChunks: Buffer[] = [];
   let stderrBytes = 0;
@@ -77,20 +143,11 @@ export async function runRpcChild(input: RpcChildRunInput): Promise<RpcChildRunO
 
   let tmpSystemDir: string | null = null;
 
-  const args: string[] = [
-    "--mode",
-    "rpc",
-    "--no-session",
-    "--no-extensions",
-    "--no-skills",
-    "--no-prompt-templates",
-    "--no-themes",
-    "--no-context-files",
-    "--tools",
-    input.profile.tools.join(","),
-    "--model",
-    input.modelArg,
-  ];
+  const args = buildChildArgs({
+    profile: input.profile,
+    modelArg: input.modelArg,
+    skipChildRuntime: input.skipChildRuntime,
+  });
 
   if (input.profile.systemPrompt.trim()) {
     const tmp = await writePromptToTempFile(
@@ -119,6 +176,12 @@ export async function runRpcChild(input: RpcChildRunInput): Promise<RpcChildRunO
   let runError: string | undefined;
   let aborted = false;
   let childExited = false;
+  let budgetExhausted = false;
+  let terminalReportReceived = false;
+  let capturedReportDetails: unknown;
+  let turnCount = 0;
+  let budgetWarningSent = false;
+  const maxTurns = input.profile.maxTurns;
 
   const pendingCommands = new Map<string, {
     resolve: (line: RpcLine) => void;
@@ -177,9 +240,37 @@ export async function runRpcChild(input: RpcChildRunInput): Promise<RpcChildRunO
     }
 
     const type = parsed.type;
-    if (type === "tool_execution_start") {
+    if (type === "turn_start") {
+      turnCount++;
+      if (!terminalReportReceived && !settled) {
+        if (turnCount === maxTurns && !budgetWarningSent) {
+          budgetWarningSent = true;
+          void sendCommand({
+            type: "steer",
+            message: formatTurnBudgetWarning(maxTurns),
+          }).catch(() => {});
+        }
+        // Pi delivers steer before the *next* LLM call (rpc.md), so the warned child
+        // needs one grace turn after maxTurns before hard abort.
+        const abortAfter = budgetWarningSent ? maxTurns + 1 : maxTurns;
+        if (turnCount > abortAfter) {
+          budgetExhausted = true;
+          onAbort();
+        }
+      }
+    } else if (type === "tool_execution_start") {
       const toolName = String(parsed.toolName ?? "tool");
       input.onActivity?.(toolName);
+    } else if (type === "tool_execution_end") {
+      const toolName = String(parsed.toolName ?? "");
+      if (toolName === REPORT_RESULT_TOOL_NAME && parsed.isError !== true) {
+        const result = parsed.result as { details?: unknown } | undefined;
+        const details = result?.details;
+        if (parseRunReportDetails(details)) {
+          capturedReportDetails = details;
+          terminalReportReceived = true;
+        }
+      }
     } else if (type === "message_update") {
       const event = parsed.assistantMessageEvent as { type?: string } | undefined;
       if (event?.type === "text_delta") input.onActivity?.("responding");
@@ -216,7 +307,6 @@ export async function runRpcChild(input: RpcChildRunInput): Promise<RpcChildRunO
   try {
     if (!child.stdin) throw new Error("Child stdin is not available");
 
-    // Prompt the child once RPC is accepting commands.
     const promptResponse = await sendCommand({
       type: "prompt",
       message: input.prompt,
@@ -250,14 +340,16 @@ export async function runRpcChild(input: RpcChildRunInput): Promise<RpcChildRunO
     let usage = usageFromSessionStats({});
 
     if (!childExited) {
-      try {
-        const textResponse = await sendCommand({ type: "get_last_assistant_text" });
-        if (textResponse.success === true) {
-          const data = textResponse.data as { text?: string | null } | undefined;
-          if (data?.text) reportText = data.text;
+      if (!terminalReportReceived) {
+        try {
+          const textResponse = await sendCommand({ type: "get_last_assistant_text" });
+          if (textResponse.success === true) {
+            const data = textResponse.data as { text?: string | null } | undefined;
+            if (data?.text) reportText = data.text;
+          }
+        } catch {
+          // Best-effort before teardown.
         }
-      } catch {
-        // Best-effort before teardown.
       }
 
       try {
@@ -272,7 +364,6 @@ export async function runRpcChild(input: RpcChildRunInput): Promise<RpcChildRunO
     }
 
     if (!childExited) {
-      // Termination ladder: stdin close → wait → SIGTERM → SIGKILL
       try {
         child.stdin.end();
       } catch {
@@ -325,7 +416,11 @@ export async function runRpcChild(input: RpcChildRunInput): Promise<RpcChildRunO
       exitCode = await waitForExit;
     }
 
-    if (timedOut) runError = runError ?? "subagent timed out";
+    if (budgetExhausted && !terminalReportReceived) {
+      runError =
+        runError ??
+        `subagent turn budget exhausted (${maxTurns} turns; provider retries/compaction may not map one-to-one to turn_start)`;
+    } else if (timedOut) runError = runError ?? "subagent timed out";
     else if (aborted) runError = runError ?? "subagent cancelled";
     else if (childExited && !settled) {
       const stderrText = Buffer.concat(stderrChunks).toString("utf8").trim();
@@ -334,13 +429,31 @@ export async function runRpcChild(input: RpcChildRunInput): Promise<RpcChildRunO
         (stderrText.slice(0, 500) || `child exited (code ${exitCode ?? "?"}) before agent_settled`);
     } else if (!settled) runError = runError ?? "child did not emit agent_settled";
 
+    const semanticReport = terminalReportReceived
+      ? buildSemanticReport(capturedReportDetails, reportText, "structured report_result captured")
+      : buildSemanticReport(
+          undefined,
+          reportText,
+          budgetExhausted
+            ? "turn budget exhausted before report_result"
+            : "no valid report_result; fell back to assistant text",
+        );
+
+    const renderedReport =
+      semanticReport.kind === "structured"
+        ? renderRunReport(semanticReport.report)
+        : semanticReport.text;
+
     return {
       settled,
-      reportText,
+      reportText: renderedReport,
+      semanticReport,
       usage,
       stderr: Buffer.concat(stderrChunks).toString("utf8"),
       exitCode,
       error: runError,
+      budgetExhausted,
+      terminalReportReceived,
     };
   } finally {
     if (childPid) input.tracker.untrack(childPid);
@@ -364,3 +477,5 @@ export async function runRpcChild(input: RpcChildRunInput): Promise<RpcChildRunO
     pendingCommands.clear();
   }
 }
+
+export { CHILD_RUNTIME_PATH };

@@ -1,6 +1,6 @@
 {
   "name": "pi-tian-subagents",
-  "version": "0.2.4",
+  "version": "0.3.0",
   "description": "Isolated Pi RPC subagents with profiles, foreground and background runs, and git worktrees.",
   "type": "module",
   "keywords": [

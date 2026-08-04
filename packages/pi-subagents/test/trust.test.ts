@@ -21,6 +21,7 @@ function sampleProjectProfile(hash: string): ProfileDefinition {
     systemPrompt: "You are a test agent.",
     workspace: "shared-readonly",
     timeoutMs: 60_000,
+    maxTurns: 8,
     contentHash: hash,
   };
 }

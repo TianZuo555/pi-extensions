@@ -52,9 +52,14 @@ const SubagentCancelParams = Type.Object({
   reason: Type.Optional(Type.String({ maxLength: 500 })),
 });
 
+const SubagentApplyParams = Type.Object({
+  run_id: Type.String({ minLength: 1, description: "Completed worker run id with a patch artifact." }),
+});
+
 type SubagentInput = Static<typeof SubagentParams>;
 type SubagentStatusInput = Static<typeof SubagentStatusParams>;
 type SubagentCancelInput = Static<typeof SubagentCancelParams>;
+type SubagentApplyInput = Static<typeof SubagentApplyParams>;
 
 const TOOL_DESCRIPTION = `Delegate a bounded task to a subagent in an isolated Pi RPC child process.
 
@@ -64,7 +69,9 @@ Parallel work: call this tool multiple times in one turn (sibling calls run conc
 
 Capabilities (model, tools, workspace) come from the profile — not from tool arguments.
 
-Use mode=background to continue without blocking; completion arrives as a follow-up notification.`;
+Use mode=background to continue without blocking; completion arrives as a follow-up notification.
+
+Children finish with report_result when possible. Worker runs keep a durable branch and private patch artifact under ~/.pi/agent/subagents/runs/<runId>/; apply with subagent_apply after explicit confirmation.`;
 
 let supervisor: SubagentSupervisor | undefined;
 let extensionPi: ExtensionAPI | undefined;
@@ -87,6 +94,9 @@ function buildDetails(
     model: result.model,
     activity,
     mode: mode ?? "foreground",
+    semanticReport: result.semanticReport,
+    worktreeDelivery: result.worktreeDelivery,
+    budgetExhausted: result.budgetExhausted,
   };
 }
 
@@ -109,7 +119,7 @@ function notifySessionCostWarning(ctx: ExtensionContext, sv: SubagentSupervisor)
   );
 }
 
-function deliverBackgroundResult(pi: ExtensionAPI, result: SubagentRunResult): void {
+function deliverBackgroundResult(pi: ExtensionAPI, result: SubagentRunResult): boolean {
   try {
     pi.sendMessage(
       {
@@ -122,14 +132,18 @@ function deliverBackgroundResult(pi: ExtensionAPI, result: SubagentRunResult): v
           status: result.status,
           usage: result.usage,
           worktreeBranch: result.worktreeBranch,
+          worktreeDelivery: result.worktreeDelivery,
+          semanticReport: result.semanticReport,
         },
       },
       { deliverAs: "followUp", triggerTurn: true },
     );
+    return true;
   } catch (error) {
     if (extensionPi) {
       console.error("pi-subagents: failed to deliver background result", error);
     }
+    return false;
   }
 }
 
@@ -162,8 +176,9 @@ export default function subagentsExtension(pi: ExtensionAPI) {
   pi.on("session_start", async (_event, ctx) => {
     supervisor = new SubagentSupervisor(ctx.cwd);
     supervisor.setBackgroundCompleteHandler((result) => {
-      deliverBackgroundResult(pi, result);
+      const delivered = deliverBackgroundResult(pi, result);
       refreshWidget(ctx);
+      return delivered;
     });
   });
 
@@ -177,9 +192,7 @@ export default function subagentsExtension(pi: ExtensionAPI) {
 
   pi.on("agent_settled", () => {
     if (!supervisor || !extensionPi) return;
-    for (const result of supervisor.drainPendingResults()) {
-      deliverBackgroundResult(extensionPi, result);
-    }
+    supervisor.drainPendingResults();
   });
 
   pi.registerTool({
@@ -347,6 +360,94 @@ export default function subagentsExtension(pi: ExtensionAPI) {
           usage: emptyUsage(),
         },
       };
+    },
+  });
+
+  pi.registerTool({
+    name: "subagent_apply",
+    label: "subagent apply",
+    description:
+      "Apply the verified patch artifact from a completed worker run to the current checkout. Requires interactive confirmation; never runs automatically.",
+    parameters: SubagentApplyParams,
+    async execute(_id, params: SubagentApplyInput, _signal, _onUpdate, ctx) {
+      const sv = getSupervisor(ctx);
+      if (!ctx.hasUI) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: "subagent_apply requires interactive confirmation and cannot run without UI.",
+            },
+          ],
+          details: {
+            runId: params.run_id,
+            profile: "?",
+            status: "failed",
+            usage: emptyUsage(),
+          },
+        };
+      }
+
+      const record = sv.getRun(params.run_id);
+      if (!record?.result?.worktreeDelivery?.patch) {
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Run "${params.run_id}" has no patch artifact to apply.`,
+            },
+          ],
+          details: {
+            runId: params.run_id,
+            profile: record?.profile ?? "?",
+            status: "failed",
+            usage: emptyUsage(),
+          },
+        };
+      }
+
+      const confirmed = await ctx.ui.confirm(
+        `Apply subagent patch for ${params.run_id}?`,
+        `Branch: ${record.result.worktreeDelivery.branch ?? "?"}\nPatch: ${record.result.worktreeDelivery.patch.path}`,
+      );
+      if (!confirmed) {
+        return {
+          content: [{ type: "text", text: `Patch apply cancelled for ${params.run_id}.` }],
+          details: {
+            runId: params.run_id,
+            profile: record.profile,
+            status: record.status,
+            usage: record.result.usage,
+            worktreeDelivery: record.result.worktreeDelivery,
+          },
+        };
+      }
+
+      try {
+        const updated = await sv.applyPatch(params.run_id);
+        const status = updated.worktreeDelivery?.patch?.applyStatus ?? "applied";
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Patch ${status} for ${params.run_id} (${updated.worktreeDelivery?.branch ?? "?"}).`,
+            },
+          ],
+          details: buildDetails(updated, record.activity, record.mode),
+        };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        return {
+          content: [{ type: "text", text: `Patch apply failed for ${params.run_id}: ${message}` }],
+          details: {
+            runId: params.run_id,
+            profile: record.profile,
+            status: "failed",
+            usage: record.result.usage,
+            worktreeDelivery: record.result.worktreeDelivery,
+          },
+        };
+      }
     },
   });
 

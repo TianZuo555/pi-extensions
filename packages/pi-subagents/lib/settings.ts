@@ -5,10 +5,12 @@ export interface ProfileOverride {
   model?: string;
   thinking?: string;
   timeoutSeconds?: number;
+  maxTurns?: number;
 }
 
 export interface SubagentsSettings {
   defaultTimeoutMs?: number;
+  defaultMaxTurns?: number;
   sessionSoftCostUsd?: number;
   agentOverrides?: Record<string, ProfileOverride>;
 }
@@ -25,6 +27,9 @@ export function loadSubagentsSettings(paths: string[]): SubagentsSettings {
       if (!block) continue;
       if (block.defaultTimeoutMs !== undefined) {
         merged.defaultTimeoutMs = block.defaultTimeoutMs;
+      }
+      if (block.defaultMaxTurns !== undefined) {
+        merged.defaultMaxTurns = block.defaultMaxTurns;
       }
       if (block.sessionSoftCostUsd !== undefined) {
         merged.sessionSoftCostUsd = block.sessionSoftCostUsd;

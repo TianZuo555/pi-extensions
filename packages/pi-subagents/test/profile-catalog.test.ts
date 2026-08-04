@@ -19,12 +19,13 @@ function isolatedAgentDir(): string {
 }
 
 describe("ProfileCatalog", () => {
-  it("loads builtin profiles including reviewer and worker", () => {
+  it("loads builtin profiles with default maxTurns", () => {
     const agentDir = isolatedAgentDir();
     const catalog = new ProfileCatalog(process.cwd(), agentDir);
     const scout = catalog.resolve("scout");
     assert.equal(scout.qualifiedId, "builtin/scout");
     assert.equal(scout.workspace, "shared-readonly");
+    assert.equal(scout.maxTurns, 8);
     const worker = catalog.resolve("builtin/worker");
     assert.equal(worker.workspace, "worktree");
     assert.ok(worker.tools.includes("write"));

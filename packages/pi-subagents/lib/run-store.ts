@@ -55,6 +55,7 @@ export class RunStore {
     record.completedAt = Date.now();
     record.result = result;
     record.worktreeBranch = result.worktreeBranch;
+    record.worktreeDelivery = result.worktreeDelivery;
     this.abortControllers.delete(runId);
     return record;
   }

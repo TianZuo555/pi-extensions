@@ -6,7 +6,9 @@ import { getAgentDir, parseFrontmatter } from "@earendil-works/pi-coding-agent";
 import {
   ALL_ALLOWED_TOOLS,
   BUILTIN_PROFILE_NAMES,
+  DEFAULT_MAX_TURNS,
   DEFAULT_RUN_TIMEOUT_MS,
+  MAX_PROFILE_TURNS,
   MUTATING_TOOLS,
   READ_ONLY_TOOLS,
   type ProfileDefinition,
@@ -63,6 +65,22 @@ function validateTools(name: string, tools: string[], workspace: WorkspacePolicy
   }
 }
 
+function resolveMaxTurns(
+  name: string,
+  frontmatter: Record<string, unknown>,
+  override: ProfileOverride | undefined,
+  settings: SubagentsSettings,
+): number {
+  const raw = override?.maxTurns ?? frontmatter.maxTurns ?? settings.defaultMaxTurns ?? DEFAULT_MAX_TURNS;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 1 || value > MAX_PROFILE_TURNS) {
+    throw new Error(
+      `Profile "${name}" maxTurns must be an integer from 1 to ${MAX_PROFILE_TURNS}`,
+    );
+  }
+  return value;
+}
+
 function loadProfileFromFile(
   filePath: string,
   source: ProfileSource,
@@ -90,6 +108,7 @@ function loadProfileFromFile(
   const thinkingRef = thinkingRaw !== undefined ? String(thinkingRaw).trim() : "";
 
   const modelRef = override?.model ?? (frontmatter.model as string | undefined)?.trim();
+  const maxTurns = resolveMaxTurns(name, frontmatter, override, settings);
 
   return {
     qualifiedId: `${source}/${name}`,
@@ -104,6 +123,7 @@ function loadProfileFromFile(
     thinkingRef: thinkingRef || undefined,
     filePath,
     contentHash: profileContentHash(raw),
+    maxTurns,
   };
 }
 
