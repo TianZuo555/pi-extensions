@@ -1,5 +1,5 @@
-// usage — show OpenAI Codex, GitHub Copilot, and Z.ai (GLM Coding Plan)
-// account usage in the pi coding agent.
+// usage — show OpenAI Codex, GitHub Copilot, Z.ai (GLM Coding Plan), and
+// DeepSeek account usage in the pi coding agent.
 //
 // Commands:
 //   /usage            open a menu with current usage for configured providers
@@ -7,12 +7,13 @@
 //
 // Statusline:
 //   When the active model belongs to a supported provider, a compact meter is
-//   published to the footer (e.g. `codex 40% wk` or `copilot 49% premium`) and
-//   refreshed at most every 5 minutes.
+//   published to the footer (e.g. `codex 40% wk`, `copilot 49% premium`, or
+//   `deepseek ¥110.00`) and refreshed at most every 5 minutes.
 //
 // Credentials are resolved from the same store pi writes (~/.pi/agent/auth.json).
-// Codex uses the ChatGPT OAuth access token; Copilot uses the GitHub OAuth token.
-// Inspired by @narumitw/pi-usage, trimmed to just Codex and Copilot.
+// Codex uses the ChatGPT OAuth access token; Copilot uses the GitHub OAuth token;
+// Z.ai and DeepSeek use their API keys. Inspired by @narumitw/pi-usage, trimmed
+// to Codex, Copilot, Z.ai, and DeepSeek.
 
 import {
   BorderedLoader,
@@ -23,10 +24,12 @@ import {
 import {
   hasCodexLoginInfo,
   hasCopilotLoginInfo,
+  hasDeepSeekLoginInfo,
   hasProviderLoginInfo,
   hasZaiLoginInfo,
   resolveCodexToken,
   resolveCopilotToken,
+  resolveDeepSeekToken,
   resolveZaiToken,
   type ResolvedToken,
 } from "./lib/auth.ts";
@@ -34,10 +37,12 @@ import { formatReports, formatStatusline, type ProviderState } from "./lib/forma
 import {
   CODEX_PROVIDER_ID,
   COPILOT_PROVIDER_ID,
+  DEEPSEEK_PROVIDER_ID,
   ZAI_PROVIDER_ID,
   type ProviderReport,
   queryCodexUsage,
   queryCopilotUsage,
+  queryDeepSeekUsage,
   queryZaiUsage,
 } from "./lib/providers.ts";
 
@@ -88,6 +93,16 @@ const PROVIDERS: ProviderSpec[] = [
     hasLoginInfo: (ctx) => hasProviderLoginInfo(ctx, ZAI_PROVIDER_ID, hasZaiLoginInfo),
     resolve: async () => resolveZaiToken(),
     query: queryZaiUsage,
+  },
+  {
+    id: DEEPSEEK_PROVIDER_ID,
+    name: "DeepSeek",
+    statusLabel: "deepseek",
+    configureHint: "set DEEPSEEK_API_KEY or sign in with /login and select DeepSeek",
+    hasLoginInfo: (ctx) =>
+      hasProviderLoginInfo(ctx, DEEPSEEK_PROVIDER_ID, hasDeepSeekLoginInfo),
+    resolve: async () => resolveDeepSeekToken(),
+    query: queryDeepSeekUsage,
   },
 ];
 
@@ -339,7 +354,7 @@ export default function usageExtension(pi: ExtensionAPI): void {
   };
 
   pi.registerCommand("usage", {
-    description: "Show OpenAI Codex, GitHub Copilot, and Z.ai GLM Coding Plan usage",
+    description: "Show OpenAI Codex, GitHub Copilot, Z.ai GLM Coding Plan, and DeepSeek usage",
     handler: async (args, ctx) => {
       if (args.trim()) {
         ctx.ui.notify("/usage takes no arguments; use its menu.", "warning");

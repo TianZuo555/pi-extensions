@@ -4,7 +4,9 @@
 // the ChatGPT OAuth *access* token. GitHub Copilot usage
 // (https://api.github.com/copilot_internal/user) is authenticated with the GitHub
 // OAuth token — the `refresh` credential pi stores for github-copilot — NOT the
-// short-lived Copilot chat token that pi hands to model requests.
+// short-lived Copilot chat token that pi hands to model requests. Z.ai usage
+// (https://api.z.ai/api/monitor/usage/quota/limit) and DeepSeek balance
+// (https://api.deepseek.com/user/balance) are authenticated with plain API keys.
 //
 // Pi persists both under ~/.pi/agent/auth.json. We read that file directly (it is
 // the same store pi itself writes) so `/usage` reports every configured provider
@@ -22,6 +24,7 @@ const AUTH_FILE = path.join(os.homedir(), ".pi", "agent", "auth.json");
 const COPILOT_APPS_FILE = path.join(os.homedir(), ".config", "github-copilot", "apps.json");
 const COPILOT_TOKEN_ENV = ["GH_TOKEN", "GITHUB_TOKEN", "GITHUB_COPILOT_TOKEN", "COPILOT_GITHUB_TOKEN"];
 const ZAI_TOKEN_ENV = ["ZAI_API_KEY"];
+const DEEPSEEK_TOKEN_ENV = ["DEEPSEEK_API_KEY"];
 const AUTH_RESOLVE_TIMEOUT_MS = 30_000;
 
 interface PiAuthEntry {
@@ -188,6 +191,23 @@ export function resolveZaiToken(): ResolvedToken | undefined {
   if (key) return { token: key, source: "~/.pi/agent/auth.json" };
 
   for (const name of ZAI_TOKEN_ENV) {
+    const value = process.env[name];
+    if (value) return { token: value, source: `$${name}` };
+  }
+  return undefined;
+}
+
+/** Return whether a supported DeepSeek credential source is configured. */
+export function hasDeepSeekLoginInfo(): boolean {
+  return resolveDeepSeekToken() !== undefined;
+}
+
+/** Resolve the DeepSeek API key used for the balance endpoint. */
+export function resolveDeepSeekToken(): ResolvedToken | undefined {
+  const key = readPiAuth()["deepseek"]?.key;
+  if (key) return { token: key, source: "~/.pi/agent/auth.json" };
+
+  for (const name of DEEPSEEK_TOKEN_ENV) {
     const value = process.env[name];
     if (value) return { token: value, source: `$${name}` };
   }

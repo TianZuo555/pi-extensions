@@ -1,7 +1,7 @@
 # pi-tian-usage
 
-Show **OpenAI Codex**, **GitHub Copilot**, and **Z.ai (GLM Coding Plan)** account
-usage from inside the [pi coding agent](https://pi.dev).
+Show **OpenAI Codex**, **GitHub Copilot**, **Z.ai (GLM Coding Plan)**, and
+**DeepSeek** account usage from inside the [pi coding agent](https://pi.dev).
 
 `/usage` opens a menu with the current usage for every configured provider, and
 a compact meter is shown in the footer whenever the active model belongs to a
@@ -15,6 +15,9 @@ GitHub Copilot · Business
   Quota resets: 2026-08-01
 GLM Coding Plan · Lite
   5h tokens:        [████████████░░░░░░░░] 59% left · resets 16:22
+DeepSeek
+  Balance:          ¥27.00
+  Topped up: ¥27.00
 ```
 
 Only metered quotas are shown. The unmetered `chat` and `completions` seat
@@ -33,10 +36,10 @@ bucket as a `0 / 0` snapshot with 100% remaining; that placeholder is shown as
 
 ## Statusline
 
-When the active model provider is Codex, Copilot, or Z.ai, the footer shows a
-compact Azure Blue meter such as `codex 60% wk`, `copilot 31% credits`,
-`copilot 49% premium`, or `zai 59% 5h`, refreshed at most every five minutes
-(results are cached to avoid hammering the endpoints).
+When the active model provider is Codex, Copilot, Z.ai, or DeepSeek, the footer
+shows a compact Azure Blue meter such as `codex 60% wk`, `copilot 31% credits`,
+`copilot 49% premium`, `zai 59% 5h`, or `deepseek ¥27.00`, refreshed at most
+every five minutes (results are cached to avoid hammering the endpoints).
 
 ## How it works
 
@@ -47,6 +50,7 @@ Credentials are read from the same store pi writes, `~/.pi/agent/auth.json`:
 | OpenAI Codex | `https://chatgpt.com/backend-api/wham/usage` | ChatGPT OAuth **access** token (pi resolves/refreshes it via the model registry, falling back to `auth.json`) |
 | GitHub Copilot | `https://api.github.com/copilot_internal/user` | GitHub OAuth token (the `refresh` credential pi stores for `github-copilot`) |
 | Z.ai (GLM Coding Plan) | `https://api.z.ai/api/monitor/usage/quota/limit` | Z.ai API key (the `key` pi stores for `zai`) |
+| DeepSeek | `https://api.deepseek.com/user/balance` | DeepSeek API key (the `key` pi stores for `deepseek`) |
 
 For Copilot, if pi has no stored credential the extension falls back to the
 `GH_TOKEN` / `GITHUB_TOKEN` / `GITHUB_COPILOT_TOKEN` / `COPILOT_GITHUB_TOKEN`
@@ -60,6 +64,15 @@ the share already **used** (so remaining is `100 - percentage`) and its
 (as **5h tokens**) — the MCP/tool allowance and any other windows are ignored.
 Only the global Z.ai backend (`api.z.ai`) is supported — the domestic BigModel
 plan (`open.bigmodel.cn`) is not.
+
+For DeepSeek, if pi has no stored key the extension falls back to the
+`DEEPSEEK_API_KEY` environment variable. There is no percentage quota to meter:
+the balance endpoint reports the account's money balance per currency
+(`total_balance`, plus the `granted_balance` promotional credit and
+`topped_up_balance` prepaid amount — API fees draw from granted first, then
+topped up). The total is shown as a **Balance** window (e.g. `¥27.00` for CNY
+or `$0.50` for USD), the nonzero parts of the breakdown as notes, and an
+insufficient balance (`is_available: false`) is flagged in the report.
 
 Provider requests allow up to 30 seconds per attempt and retry one transient
 network, timeout, rate-limit, or server failure. Simultaneous startup and

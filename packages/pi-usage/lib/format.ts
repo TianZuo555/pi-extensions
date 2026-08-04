@@ -1,7 +1,15 @@
 // Presentation helpers: a multi-line report for the /usage menu and a compact
 // single-line string for the footer statusline.
 
-import { CODEX_PROVIDER_ID, COPILOT_PROVIDER_ID, ZAI_PROVIDER_ID, type ProviderReport, type UsageWindow } from "./providers.ts";
+import {
+  CODEX_PROVIDER_ID,
+  COPILOT_PROVIDER_ID,
+  DEEPSEEK_PROVIDER_ID,
+  ZAI_PROVIDER_ID,
+  formatMoney,
+  type ProviderReport,
+  type UsageWindow,
+} from "./providers.ts";
 
 const BAR_SEGMENTS = 20;
 const LABEL_COLUMN = 18;
@@ -46,7 +54,9 @@ function formatWindow(window: UsageWindow): string {
     parts.push(`${bar(window.remainingPercent)} ${Math.round(window.remainingPercent)}% left`);
   }
   const unit = window.credits ? " credits" : "";
-  if (window.remaining !== undefined && window.entitlement !== undefined) {
+  if (window.currency && window.remaining !== undefined) {
+    parts.push(formatMoney(window.remaining, window.currency));
+  } else if (window.remaining !== undefined && window.entitlement !== undefined) {
     parts.push(`${formatCount(window.remaining)} / ${formatCount(window.entitlement)}${unit}`);
   } else if (window.remaining !== undefined) {
     parts.push(`${formatCount(window.remaining)}${unit} left`);
@@ -83,6 +93,16 @@ export function formatStatusline(report: ProviderReport): string | undefined {
     const tokens = report.windows.find((window) => /5h/.test(window.label));
     if (tokens?.remainingPercent !== undefined) {
       return `zai ${Math.round(tokens.remainingPercent)}% 5h`;
+    }
+    return undefined;
+  }
+  if (report.id === DEEPSEEK_PROVIDER_ID) {
+    // DeepSeek has no percentage quota — the footer shows the money balance.
+    const balance = report.windows.find(
+      (window) => window.remaining !== undefined && window.currency !== undefined,
+    );
+    if (balance?.remaining !== undefined && balance.currency !== undefined) {
+      return `deepseek ${formatMoney(balance.remaining, balance.currency)}`;
     }
     return undefined;
   }

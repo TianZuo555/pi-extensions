@@ -1,7 +1,7 @@
 {
   "name": "pi-tian-usage",
-  "version": "0.2.3",
-  "description": "Show OpenAI Codex, GitHub Copilot, and Z.ai GLM Coding Plan usage in the pi coding agent.",
+  "version": "0.3.0",
+  "description": "Show OpenAI Codex, GitHub Copilot, Z.ai GLM Coding Plan, and DeepSeek balance usage in the pi coding agent.",
   "type": "module",
   "keywords": [
     "pi",
@@ -14,7 +14,9 @@
     "copilot",
     "zai",
     "glm",
-    "zhipu"
+    "zhipu",
+    "deepseek",
+    "balance"
   ],
   "author": "Tian Zuo",
   "license": "MIT",

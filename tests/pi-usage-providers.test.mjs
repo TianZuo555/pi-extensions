@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { queryCodexUsage, queryCopilotUsage, queryZaiUsage } from "../packages/pi-usage/lib/providers.ts";
+import { queryCodexUsage, queryCopilotUsage, queryDeepSeekUsage, queryZaiUsage } from "../packages/pi-usage/lib/providers.ts";
 import { formatReport, formatReports, formatStatusline } from "../packages/pi-usage/lib/format.ts";
 import { hasProviderLoginInfo } from "../packages/pi-usage/lib/auth.ts";
 
@@ -304,6 +304,77 @@ test("Copilot usage keeps request wording when billing is not credit-based", asy
   assert.equal(report.windows[0].label, "Premium requests");
   assert.equal(report.windows[0].credits, false);
   assert.equal(formatStatusline(report), "copilot 31% premium");
+});
+
+const validDeepSeekBalance = {
+  is_available: true,
+  balance_infos: [
+    {
+      currency: "CNY",
+      total_balance: "110.00",
+      granted_balance: "10.00",
+      topped_up_balance: "100.00",
+    },
+  ],
+};
+
+test("DeepSeek usage reports the money balance", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  globalThis.fetch = async () => jsonResponse(validDeepSeekBalance);
+
+  const report = await queryDeepSeekUsage("test-key", undefined, 50, 0);
+  const balance = report.windows[0];
+  assert.equal(balance?.label, "Balance");
+  assert.equal(balance?.remaining, 110);
+  assert.equal(balance?.currency, "CNY");
+  assert.deepEqual(report.notes, ["Granted: ¥10.00", "Topped up: ¥100.00"]);
+  assert.equal(formatStatusline(report), "deepseek ¥110.00");
+
+  const body = formatReport({ id: report.id, name: report.name, status: "ready", report });
+  assert.match(body, /DeepSeek/);
+  assert.match(body, /Balance:\s+¥110\.00/);
+  assert.match(body, /Granted: ¥10\.00/);
+  assert.match(body, /Topped up: ¥100\.00/);
+});
+
+test("DeepSeek usage flags an insufficient balance and formats USD", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  globalThis.fetch = async () =>
+    jsonResponse({
+      is_available: false,
+      balance_infos: [
+        {
+          currency: "USD",
+          total_balance: "0.50",
+          granted_balance: "0.00",
+          topped_up_balance: "0.50",
+        },
+      ],
+    });
+
+  const report = await queryDeepSeekUsage("test-key", undefined, 50, 0);
+  assert.equal(report.windows[0]?.remaining, 0.5);
+  assert.match(report.notes.join(" "), /insufficient/);
+  assert.equal(formatStatusline(report), "deepseek $0.50");
+});
+
+test("DeepSeek usage errors on a balance-less response", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  globalThis.fetch = async () => jsonResponse({ is_available: true, balance_infos: [] });
+
+  await assert.rejects(
+    queryDeepSeekUsage("test-key", undefined, 50, 0),
+    /no displayable data/,
+  );
 });
 
 test("Z.ai usage treats percentage as used and converts ms resets to seconds", async (t) => {

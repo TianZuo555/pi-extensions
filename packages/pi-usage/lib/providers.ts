@@ -1,4 +1,5 @@
-// Provider queries and normalization for Codex and GitHub Copilot usage.
+// Provider queries and normalization for Codex, GitHub Copilot, Z.ai, and
+// DeepSeek usage.
 //
 // Each provider is normalized into a small, presentation-friendly `ProviderReport`
 // so the formatter does not need to know provider-specific JSON shapes.
@@ -6,10 +7,12 @@
 export const CODEX_PROVIDER_ID = "openai-codex";
 export const COPILOT_PROVIDER_ID = "github-copilot";
 export const ZAI_PROVIDER_ID = "zai";
+export const DEEPSEEK_PROVIDER_ID = "deepseek";
 
 const CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
 const COPILOT_USAGE_URL = "https://api.github.com/copilot_internal/user";
 const ZAI_QUOTA_URL = "https://api.z.ai/api/monitor/usage/quota/limit";
+const DEEPSEEK_BALANCE_URL = "https://api.deepseek.com/user/balance";
 
 // Copilot's internal endpoint expects the editor client headers plus a REST API
 // version. Values mirror the GitHub Copilot chat client.
@@ -39,6 +42,8 @@ export interface UsageWindow {
   credits?: boolean;
   /** Reset time as epoch seconds (Codex) — rendered as a clock/date. */
   resetsAt?: number;
+  /** Currency code for a monetary balance (e.g. "CNY") — rendered with the amount. */
+  currency?: string;
 }
 
 export interface ProviderReport {
@@ -268,6 +273,79 @@ export async function queryZaiUsage(
     windows,
     notes: [],
   };
+}
+
+// --- DeepSeek ---------------------------------------------------------------
+
+// DeepSeek reports the account's money balance at api.deepseek.com/user/balance.
+// The body is { is_available, balance_infos: [{ currency, total_balance,
+// granted_balance, topped_up_balance }] }. Balances are decimal strings;
+// granted balance is the not-yet-expired promotional credit and topped-up
+// balance the prepaid amount — API fees draw from granted first, then topped
+// up. Unlike the other providers there is no usage window or percentage, so
+// the total balance is surfaced as a single monetary window.
+export async function queryDeepSeekUsage(
+  token: string,
+  signal?: AbortSignal,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+  retryCount = DEFAULT_RETRY_COUNT,
+): Promise<ProviderReport> {
+  const data = await fetchProviderJson(
+    DEEPSEEK_BALANCE_URL,
+    token,
+    { "User-Agent": "pi-usage" },
+    signal,
+    timeoutMs,
+    retryCount,
+    token,
+  );
+
+  const infos = Array.isArray(data.balance_infos) ? data.balance_infos : [];
+  const windows: UsageWindow[] = [];
+  const notes: string[] = [];
+  for (const entry of infos) {
+    const info = asObject(entry);
+    if (!info) continue;
+    const currency = asString(info.currency);
+    if (!currency) continue;
+    const total = asNumber(info.total_balance);
+    if (total !== undefined) {
+      windows.push({ label: "Balance", remaining: total, currency });
+    }
+    const granted = asNumber(info.granted_balance);
+    if (granted !== undefined && granted > 0) {
+      notes.push(`Granted: ${formatMoney(granted, currency)}`);
+    }
+    const toppedUp = asNumber(info.topped_up_balance);
+    if (toppedUp !== undefined && toppedUp > 0) {
+      notes.push(`Topped up: ${formatMoney(toppedUp, currency)}`);
+    }
+  }
+  if (data.is_available === false) {
+    notes.push("Balance insufficient for API calls");
+  }
+
+  if (windows.length === 0 && notes.length === 0) {
+    throw new Error("DeepSeek balance endpoint returned no displayable data.");
+  }
+
+  return {
+    id: DEEPSEEK_PROVIDER_ID,
+    name: "DeepSeek",
+    windows,
+    notes,
+  };
+}
+
+/** Format a monetary amount with its currency symbol (used across notes and rendering). */
+export function formatMoney(value: number, currency: string): string {
+  const amount = value.toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+  if (currency === "CNY") return `¥${amount}`;
+  if (currency === "USD") return `$${amount}`;
+  return `${amount} ${currency}`;
 }
 
 // --- fetch helpers ----------------------------------------------------------
