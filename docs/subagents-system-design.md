@@ -505,15 +505,10 @@ On reload, completed history can be reconstructed from current-branch tool detai
 Machine-local state should live outside the repository:
 
 ```text
-~/.pi/subagents/
+~/.pi/agent/subagents/
   approvals.json
-  runs/<parent-session-id>/<run-id>/
-    metadata.json
-    events.jsonl
-    child-session.jsonl
-    stderr.log
-    result.json
-    artifacts/
+  runs/<run-id>/
+    changes.patch
 ```
 
 Requirements:
