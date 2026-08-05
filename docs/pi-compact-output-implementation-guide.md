@@ -5,9 +5,9 @@
 Build a TUI-only Pi extension that:
 
 - Renders every collapsed tool call as one descriptive terminal line.
-- Uses Pi's existing `Ctrl+O` (`app.tools.expand`) action to reveal each tool's original rendering.
+- Uses Pi's existing `Ctrl+O` (`app.tools.expand`) action to reveal each tool's original rendering and the complete reasoning text.
 - Works with FFF's `grep`, `find`, `ffgrep`, and `fffind` tools without registering over them.
-- Hides persisted italic reasoning and shows only Pi's animated working indicator with the label `Thinking`.
+- Keeps persisted italic reasoning to one concise line in compact mode and shows Pi's animated working indicator with `Thinking: <one-line reasoning preview>`.
 - Handles GPT-5.6 models that emit several standalone thinking messages and multiple thinking blocks per turn.
 
 The extension must change presentation only. It must not change tool execution, schemas, results, session data, or model context.
@@ -76,24 +76,24 @@ Returning the original rendering preserves:
 
 ### Reasoning
 
-While Pi is working, display only its normal animated indicator with this label:
+While Pi is working, display only its normal animated indicator with a one-line preview:
 
 ```text
-<spinner> Thinking
+<spinner> Thinking: # Plan
 ```
 
-There must be no persisted italic reasoning rows in the transcript.
+The compact transcript contains one persisted italic reasoning line. `Ctrl+O` expands assistant messages too, restoring the complete reasoning text through Pi's original renderer.
 
 Rules:
 
-- Call `ctx.ui.setWorkingMessage("Thinking")` in TUI mode.
+- Call `ctx.ui.setWorkingMessage("Thinking")` in TUI mode and update it from live assistant `message_update` events with the first sanitized reasoning line.
 - Keep Pi's default animated working indicator; do not call `setWorkingIndicator()`.
-- Remove only visual content blocks whose `type` is `thinking`.
+- Replace visual `thinking` content with one sanitized summary line in collapsed mode.
+- When the assistant component is expanded, pass the original message to Pi's renderer.
 - Preserve text, tool calls, stop reasons, errors, usage, signatures, and every other message property.
-- Never modify messages through `message_update`, `message_end`, or `context` events.
 - Never mutate the message or its `content` array.
 
-GPT-5.6 Luna/Sol can emit repeated assistant messages containing only thinking between tool rounds. A hidden-thinking label alone would leave one persistent `Thinking...` row for each message. Filtering thinking blocks in `AssistantMessageComponent.updateContent()` removes all those rows while the live working indicator supplies the single spinner.
+GPT-5.6 Luna/Sol can emit repeated assistant messages containing only thinking between tool rounds. Summarizing each block keeps the transcript compact while the live working indicator supplies one spinner plus the current one-line preview.
 
 ## Package layout
 
@@ -223,20 +223,25 @@ The interactive mode calls `setExpanded()` for tool components, so the wrapper f
 
 ### 3. Patch `AssistantMessageComponent`
 
-Save `AssistantMessageComponent.prototype.updateContent` and replace it with a wrapper.
+Save `AssistantMessageComponent.prototype.updateContent` and replace it with a wrapper. Add a presentation-only `setExpanded` method to `AssistantMessageComponent` so Pi's existing `app.tools.expand` traversal includes reasoning components.
 
-When `message.content` is an array and contains thinking blocks, create a shallow visual clone:
+When collapsed and `message.content` contains thinking blocks, create a shallow visual clone:
 
 ```ts
+const summary = compactThinkingSummary(message);
 const displayMessage = {
   ...message,
-  content: message.content.filter((part) => part.type !== "thinking"),
+  content: summary
+    ? message.content.map((part) =>
+        part.type === "thinking" ? { ...part, thinking: summary } : part,
+      )
+    : message.content.filter((part) => part.type !== "thinking"),
 };
 
 originalUpdateContent.call(this, displayMessage);
 ```
 
-Call the original method with the original message when there are no thinking blocks.
+Call the original method with the original message when expanded or when there are no thinking blocks. Keep the raw message in a side map because Pi's `invalidate()` replays the display clone.
 
 This intentionally leaves the actual session message unchanged. It also lets the original component continue handling:
 
@@ -256,7 +261,8 @@ The state should contain:
 - Saved original methods.
 - Installed wrapper methods.
 - A reference count.
-- The expanded-state WeakMap.
+- The tool and assistant expanded-state WeakMaps.
+- The raw assistant-message map used to restore full reasoning after invalidation.
 - Installation status or an unsupported-version reason.
 
 Requirements:
@@ -280,10 +286,11 @@ Import Pi's `VERSION` and support only `0.83.x`. On any other version:
 In `packages/pi-compact-output/index.ts`:
 
 1. Install the UI patches immediately when the extension factory runs. This ensures transcript components created during startup or `/reload` use the patched methods.
-2. On `session_start`:
+2. On `session_start` and `agent_start`:
    - If `ctx.mode === "tui"`, call `ctx.ui.setWorkingMessage("Thinking")`.
    - If patch installation was rejected, notify the user once.
-3. On `session_shutdown`:
+3. On assistant `message_start`/`message_update`, set `Thinking: <one-line preview>` in TUI mode.
+4. On `agent_end` and `session_shutdown`:
    - Restore the default working message with `ctx.ui.setWorkingMessage()` in TUI mode.
    - Release the prototype patch once.
 

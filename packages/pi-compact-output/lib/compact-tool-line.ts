@@ -6,6 +6,7 @@ export interface ToolExecutionInternals {
   toolName: string;
   args: unknown;
   callRendererComponent?: Component;
+  resultRendererComponent?: Component;
   isPartial: boolean;
   result?: {
     isError?: boolean;
@@ -42,6 +43,8 @@ function firstNonEmptyRenderedLine(component: Component | undefined, width: numb
   }
   return undefined;
 }
+
+export { firstNonEmptyRenderedLine };
 
 
 function readStringField(args: unknown, key: string): string | undefined {
@@ -104,10 +107,10 @@ export function fallbackToolSummary(toolName: string, args: unknown): string {
   }
 }
 
-function statusMarker(internals: ToolExecutionInternals): string {
-  if (internals.isPartial) return "…";
-  if (internals.result?.isError) return "✗";
-  return "✓";
+const TOOL_EMOJI = "🔧";
+
+function toolMarker(): string {
+  return TOOL_EMOJI;
 }
 
 function firstErrorLine(internals: ToolExecutionInternals): string | undefined {
@@ -129,7 +132,7 @@ export function buildCompactToolLine(internals: ToolExecutionInternals, width: n
     firstNonEmptyRenderedLine(internals.callRendererComponent, width) ??
     fallbackToolSummary(internals.toolName, internals.args);
 
-  let line = `${statusMarker(internals)} ${description}`;
+  let line = `${toolMarker()} ${description}`;
 
   if (internals.result?.isError) {
     const errorLine = firstErrorLine(internals);

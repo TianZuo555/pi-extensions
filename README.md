@@ -14,7 +14,7 @@ A small collection of [pi coding agent](https://pi.dev) extensions.
 | **background-terminals** | `/ps`, overrides tool `bash` | One no-stdin bash path: long commands yield to background and notify once. |
 | **edit-safe** | overrides tool `edit` | Stricter `edit`: verbatim splice, ambiguity throws, one `edits[]` shape. |
 | **subagents** | tool `subagent`, `/agents` | Isolated RPC child processes with profiles, background runs, and worktrees. |
-| **compact-output** | (TUI only) | One-line collapsed tool rows; Ctrl+O expands; hides persisted reasoning. |
+| **compact-output** | (TUI only) | Groups compact tool rows with newest first; Ctrl+O restores execution order; reasoning is one line. |
 
 Each extension is described in detail under [Extensions](#extensions).
 
@@ -348,16 +348,14 @@ matching order and the A/B bench against pi's real built-in edit.
 TUI-only presentation extension for Pi **0.83.x**. It does not register or
 override any tools.
 
-- Every collapsed tool call renders as **one line** (`…` while pending, `✓`
-  after success, `✗` after failure). Failed rows may append the first error line
-  when there is room.
-- Press **Ctrl+O** (`app.tools.expand`) to toggle all tool rows between compact
-  and each tool owner's original renderer — FFF search output, read buffers,
-  edit diffs, background-terminal views, images, and errors return unchanged.
-- Persisted reasoning blocks are hidden from the transcript. During generation,
-  Pi's normal animated working indicator shows the label **Thinking**. Reasoning
-  remains in session data and model context; only the visual transcript is
-  filtered.
+- Consecutive collapsed tool calls share one padded, background-filled area;
+  each row starts with `🔧` and the newest row appears first.
+- Press **Ctrl+O** (`app.tools.expand`) to toggle tool rows and assistant reasoning
+  between compact and each original renderer in execution order — FFF search output,
+  read buffers, edit diffs, background-terminal views, images, errors, and full
+  reasoning text return unchanged.
+- While working, the animated loader shows `Thinking: <one-line reasoning preview>`;
+  the transcript also keeps reasoning to one concise line until Ctrl+O expands it.
 
 ```bash
 pi install npm:pi-tian-compact-output

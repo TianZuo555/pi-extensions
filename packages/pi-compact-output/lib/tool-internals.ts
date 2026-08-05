@@ -33,6 +33,9 @@ export function tryReadToolExecutionInternals(
   const callRendererComponent = runtime.callRendererComponent;
   if (callRendererComponent !== undefined && !isComponent(callRendererComponent)) return undefined;
 
+  const resultRendererComponent = runtime.resultRendererComponent;
+  if (resultRendererComponent !== undefined && !isComponent(resultRendererComponent)) return undefined;
+
   const hideComponent = runtime.hideComponent;
   if (hideComponent !== undefined && typeof hideComponent !== "boolean") return undefined;
 
@@ -43,6 +46,7 @@ export function tryReadToolExecutionInternals(
     toolName,
     args: runtime.args,
     callRendererComponent,
+    resultRendererComponent,
     isPartial,
     result,
     hideComponent: hideComponent as boolean | undefined,

@@ -1,7 +1,7 @@
 {
   "name": "pi-tian-compact-output",
-  "version": "0.1.2",
-  "description": "TUI-only Pi extension that collapses tool calls to one line and hides persisted reasoning while keeping Ctrl+O expansion.",
+  "version": "0.2.0",
+  "description": "TUI-only Pi extension that groups compact tool calls and shows a one-line reasoning preview with Ctrl+O expansion.",
   "type": "module",
   "keywords": [
     "pi",

@@ -67,9 +67,12 @@ test("pending, success, and error markers are correct", () => {
     internals({ isPartial: false, result: { isError: true, content: [{ type: "text", text: "boom" }] } }),
     80,
   )[0];
-  assert.match(pending, /^… /);
-  assert.match(success, /^✓ /);
-  assert.match(error, /^✗ /);
+  assert.match(pending, /^🔧 /);
+  assert.match(success, /^🔧 /);
+  assert.match(error, /^🔧 /);
+  assert.doesNotMatch(pending, /✓|✗/);
+  assert.doesNotMatch(success, /✓/);
+  assert.doesNotMatch(error, /✓/);
 });
 
 test("error includes a bounded first error line when space permits", () => {
@@ -94,7 +97,7 @@ test("successful result output is absent while collapsed", () => {
     }),
     120,
   )[0];
-  assert.equal(line, "✓ read packages/pi-commit/index.ts");
+  assert.equal(line, "🔧 read packages/pi-commit/index.ts");
 });
 
 test("intentionally hidden component stays hidden", () => {
@@ -150,7 +153,7 @@ test("styled FFF-like call lines preserve trailing ANSI reset codes", () => {
     }),
     120,
   )[0];
-  assert.equal(line, `… ${styled}`);
+  assert.equal(line, `🔧 ${styled}`);
 });
 
 test("error output strips terminal control sequences", () => {
