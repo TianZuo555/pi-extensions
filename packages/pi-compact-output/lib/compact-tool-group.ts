@@ -43,6 +43,7 @@ function groupBackground(items: readonly CompactToolGroupItem[]): ToolBackground
 export function buildCompactToolGroup(
   items: readonly CompactToolGroupItem[],
   width: number,
+  lineCount: number = 3,
 ): string[] {
   const safeWidth = Math.max(1, Math.floor(width));
   const paddingX = safeWidth >= 3 ? 1 : 0;
@@ -52,12 +53,12 @@ export function buildCompactToolGroup(
     return [];
   }
 
-  const lineParts = buildCompactToolLine(last.internals, contentWidth);
+  const lineParts = buildCompactToolLine(last.internals, contentWidth, lineCount);
   if (lineParts.length === 0) {
     return [];
   }
 
-  const contentLines = lineParts.slice(0, 3);
+  const contentLines = lineParts.slice(0, lineCount);
   if (contentLines.length > 0 && items.length > 1) {
     const lastIndex = contentLines.length - 1;
     contentLines[lastIndex] = truncateToWidth(
@@ -80,6 +81,8 @@ export function buildCompactToolGroup(
     box.addChild(new Text(line, 0, 0));
   }
 
+  // One blank line above and below keeps the block visually separated from
+  // the surrounding transcript text without wasting vertical space.
   const topSpacer = new Spacer(1);
   const bottomSpacer = new Spacer(1);
   return [...topSpacer.render(safeWidth), ...box.render(safeWidth), ...bottomSpacer.render(safeWidth)];

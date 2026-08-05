@@ -17,6 +17,8 @@ import {
   installUiPatches,
   isSupportedPiVersion,
   releaseUiPatches,
+  setCompactOutputLimits,
+  setReasoningStreaming,
 } from "../lib/patch-ui-components.ts";
 import { tryReadToolExecutionInternals } from "../lib/tool-internals.ts";
 
@@ -260,7 +262,7 @@ test("working indicator preview summarizes up to three reasoning lines", () => {
   assert.doesNotMatch(preview.message, /\r?\n/);
 });
 
-test("GPT-5.6 fixture with several headings in a thinking block renders three reasoning lines", () => {
+test("GPT-5.6 fixture with several headings renders the latest five reasoning lines", () => {
   const install = installUiPatches();
   if (!install.installed) {
     return;
@@ -271,16 +273,18 @@ test("GPT-5.6 fixture with several headings in a thinking block renders three re
       [
         {
           type: "thinking",
-          thinking: "# Plan\n\n## Search\nLook for registerTool.\n\n## Edit\nPatch index.ts.",
+          thinking:
+            "# Plan\n\n## Search\nLook for registerTool.\n\n## Edit\nPatch index.ts.\n\n## Verify\nRun the tests.",
         },
       ],
       "toolUse",
     ),
   );
-  assert.match(rendered, /Plan/i);
-  assert.match(rendered, /Search/i);
+  assert.doesNotMatch(rendered, /Plan/i, "first lines scroll out of view");
+  assert.doesNotMatch(rendered, /Search/i, "first lines scroll out of view");
   assert.match(rendered, /Look for registerTool/i);
-  assert.doesNotMatch(rendered, /Patch index/i);
+  assert.match(rendered, /Patch index/i);
+  assert.match(rendered, /Run the tests/i, "the latest streamed line stays visible");
 });
 
 test("Ctrl+O expands the full reasoning block and collapses it again", () => {
@@ -295,33 +299,35 @@ test("Ctrl+O expands the full reasoning block and collapses it again", () => {
     [
       {
         type: "thinking",
-        thinking: "# Plan\n\n## Search\nLook for registerTool.\n\n## Edit\nPatch index.ts.",
+        thinking:
+          "# Plan\n\n## Search\nLook for registerTool.\n\n## Edit\nPatch index.ts.\n\n## Verify\nRun the tests.",
       },
     ],
     "toolUse",
   );
   parent.addChild(component);
   component.updateContent(message);
-  assert.match(parent.render(120).join("\n"), /Plan/i);
-  assert.match(parent.render(120).join("\n"), /Search/i);
-  assert.doesNotMatch(parent.render(120).join("\n"), /Patch index/i);
+  assert.match(parent.render(120).join("\n"), /Patch index/i);
+  assert.match(parent.render(120).join("\n"), /Run the tests/i);
+  assert.doesNotMatch(parent.render(120).join("\n"), /# Plan/);
   component.invalidate();
-  assert.match(parent.render(120).join("\n"), /Plan/i);
-  assert.doesNotMatch(parent.render(120).join("\n"), /Patch index/i);
+  assert.match(parent.render(120).join("\n"), /Patch index/i);
+  assert.doesNotMatch(parent.render(120).join("\n"), /# Plan/);
 
   const expandable = component as unknown as { setExpanded(expanded: boolean): void };
   expandable.setExpanded(true);
   const expanded = parent.render(120).join("\n");
-  assert.match(expanded, /Plan|Search|Patch index/i);
+  assert.match(expanded, /# Plan/);
+  assert.match(expanded, /Patch index/i);
 
   expandable.setExpanded(false);
   const collapsedAgain = parent.render(120).join("\n");
-  assert.match(collapsedAgain, /Plan/i);
-  assert.match(collapsedAgain, /Search/i);
-  assert.doesNotMatch(collapsedAgain, /Patch index/i);
+  assert.match(collapsedAgain, /Patch index/i);
+  assert.doesNotMatch(collapsedAgain, /# Plan/);
   component.invalidate();
   expandable.setExpanded(true);
-  assert.match(parent.render(120).join("\n"), /Plan|Search|Patch index/i);
+  assert.match(parent.render(120).join("\n"), /# Plan/);
+  assert.match(parent.render(120).join("\n"), /Patch index/i);
 });
 
 test("several consecutive thinking blocks render the latest compact reasoning segment", () => {
@@ -499,6 +505,8 @@ test("extension leaves pi's default working message untouched", () => {
   let setWorkingMessageCalls = 0;
   const ctx = {
     mode: "tui",
+    cwd: process.cwd(),
+    isProjectTrusted: () => true,
     ui: {
       setWorkingMessage() {
         setWorkingMessageCalls++;
@@ -510,12 +518,46 @@ test("extension leaves pi's default working message untouched", () => {
   assert.ok(sessionStart);
   sessionStart({}, ctx);
 
-  // No per-agent or message wiring: the floating line stays pi's own
-  // "Working..." and never mirrors reasoning content.
-  assert.equal(handlers.get("agent_start"), undefined);
-  assert.equal(handlers.get("agent_end"), undefined);
+  // The agent handlers only drive the reasoning loading sign; the floating
+  // line stays pi's own "Working..." and never mirrors reasoning content.
+  const agentStart = handlers.get("agent_start");
+  assert.ok(agentStart);
+  agentStart({}, ctx);
+  const agentEnd = handlers.get("agent_end");
+  assert.ok(agentEnd);
+  agentEnd({}, ctx);
   assert.equal(handlers.get("message_update"), undefined);
   assert.equal(setWorkingMessageCalls, 0);
+});
+
+test("compact reasoning renders a bordered header with a loading sign while streaming", () => {
+  const install = installUiPatches();
+  if (!install.installed) {
+    return;
+  }
+
+  const parent = createGroupParent();
+  const component = new AssistantMessageComponent();
+  parent.addChild(component);
+  component.updateContent(
+    assistantMessage([{ type: "thinking", thinking: "Inspect the registry." }], "toolUse"),
+  );
+
+  const done = parent.render(120).join("\n");
+  assert.match(done, /Reasoning/, "header label on the border");
+  assert.match(done, /╭/, "top border");
+  assert.match(done, /╯/, "bottom border");
+  assert.match(done, /│/, "side borders");
+  assert.doesNotMatch(done, /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/, "no loading sign when idle");
+
+  setReasoningStreaming(true);
+  const streaming = parent.render(120).join("\n");
+  assert.match(streaming, /Reasoning/);
+  assert.match(streaming, /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/, "loading sign while streaming");
+
+  setReasoningStreaming(false);
+  const stopped = parent.render(120).join("\n");
+  assert.doesNotMatch(stopped, /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/);
 });
 
 test("streaming within one reasoning segment keeps the first compact preview", () => {
@@ -555,6 +597,82 @@ test("streaming within one reasoning segment grows the compact transcript previe
   );
   const secondRender = parent.render(120).join("\n");
   assert.match(secondRender, /plan is to search the registry/);
+});
+
+test("setCompactOutputLimits controls tool and reasoning line counts", () => {
+  const install = installUiPatches();
+  if (!install.installed) {
+    return;
+  }
+
+  setCompactOutputLimits(2, 2);
+
+  // Tool group: two tools, only two lines shown.
+  const toolParent = createGroupParent();
+  const assistant = new AssistantMessageComponent();
+  toolParent.addChild(assistant);
+  assistant.updateContent(
+    assistantMessage(
+      [
+        { type: "toolCall", id: "t1", name: "grep", arguments: {} },
+        { type: "toolCall", id: "t2", name: "read", arguments: {} },
+      ],
+      "toolUse",
+    ),
+  );
+  for (const id of ["t1", "t2"]) {
+    toolParent.addChild(
+      new ToolExecutionComponent(
+        id === "t1" ? "grep" : "read",
+        id,
+        {},
+        {},
+        {
+          name: id === "t1" ? "grep" : "read",
+          renderCall: () => new Text(id === "t1" ? "grep t1" : "read t2", 0, 0),
+          renderResult: () => new Text("", 0, 0),
+        } as never,
+        createTui(),
+        process.cwd(),
+      ),
+    );
+  }
+  const toolRendered = toolParent.render(120).join("\n");
+  assert.match(toolRendered, /read t2 · \+1 more/);
+
+  // Reasoning: three lines of thinking, only two shown (auto-scroll keeps the tail).
+  const reasonParent = createGroupParent();
+  const reasonAssistant = new AssistantMessageComponent();
+  reasonParent.addChild(reasonAssistant);
+  reasonAssistant.updateContent(
+    assistantMessage(
+      [{ type: "thinking", thinking: "one\ntwo\nthree" }],
+      "toolUse",
+    ),
+  );
+  const reasonRendered = reasonParent.render(120).join("\n");
+  assert.doesNotMatch(reasonRendered, /one/);
+  assert.match(reasonRendered, /two/);
+  assert.match(reasonRendered, /three/);
+});
+
+test("compact reasoning auto-scrolls to the latest five lines while collapsed", () => {
+  const install = installUiPatches();
+  if (!install.installed) {
+    return;
+  }
+
+  const parent = createGroupParent();
+  const component = new AssistantMessageComponent();
+  parent.addChild(component);
+  const thinking = Array.from({ length: 7 }, (_, i) => `line ${i + 1}`).join("\n");
+  component.updateContent(assistantMessage([{ type: "thinking", thinking }], "toolUse"));
+
+  const rendered = parent.render(120).join("\n");
+  assert.doesNotMatch(rendered, /line 1/, "first lines scroll out of view");
+  assert.doesNotMatch(rendered, /line 2/, "first lines scroll out of view");
+  assert.match(rendered, /line 3/);
+  assert.match(rendered, /line 7/, "the latest streamed line stays visible");
 });
 
 test("codex commentary text is hidden while thinking is compact", () => {

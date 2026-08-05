@@ -56,3 +56,17 @@ export function firstSanitizedLines(text: string, count: number): string[] {
   }
   return lines;
 }
+
+/** Return up to `count` non-empty sanitized lines from the END of capped text.
+ * Keeps the newest streamed lines visible (auto-scroll to bottom). */
+export function lastSanitizedLines(text: string, count: number): string[] {
+  if (count <= 0) return [];
+  const capped = capUntrustedText(text);
+  const lines: string[] = [];
+  for (const line of capped.split("\n")) {
+    const sanitized = sanitizeBoundedLine(line);
+    if (!sanitized) continue;
+    lines.push(sanitized);
+  }
+  return lines.slice(-count);
+}

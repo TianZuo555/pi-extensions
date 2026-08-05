@@ -76,6 +76,10 @@ interface PatchState {
   nextToolOrder: number;
   toolSequence: number;
   installed: boolean;
+  reasoningStreaming: boolean;
+  reasoningComponents: CompactReasoningComponent[];
+  toolLineCount: number;
+  reasoningLineCount: number;
   unsupportedReason?: string;
   originalContainerAddChild?: ContainerAddChild;
   originalToolRender?: ToolRender;
@@ -121,8 +125,12 @@ function createPatchState(): PatchState {
     reorderingTurn: false,
     toolRecords: [],
     nextToolOrder: 0,
-  toolSequence: 0,
-  installed: false,
+    toolSequence: 0,
+    installed: false,
+    reasoningStreaming: false,
+    reasoningComponents: [],
+    toolLineCount: 3,
+    reasoningLineCount: 5,
   };
 }
 
@@ -297,6 +305,43 @@ function assignToolSequences(
   }
 }
 
+function captureRequestRender(state: PatchState): (() => void) | undefined {
+  for (const record of state.toolRecords) {
+    const ui = (record.component as unknown as {
+      ui?: { requestRender?: unknown };
+    }).ui;
+    if (ui && typeof ui.requestRender === "function") {
+      const requestRender = ui.requestRender as () => void;
+      return () => requestRender.call(ui);
+    }
+  }
+  return undefined;
+}
+
+/** Set the reasoning blocks' streaming state (drives the loading sign). */
+export function setReasoningStreaming(streaming: boolean): void {
+  const state = getPatchState();
+  if (!state) return;
+  state.reasoningStreaming = streaming;
+  const requestRender = captureRequestRender(state);
+  for (const component of state.reasoningComponents) {
+    component.setStreaming(streaming, requestRender);
+  }
+}
+
+function clampLineCount(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.min(12, Math.max(1, Math.floor(value)));
+}
+
+/** Configure the maximum collapsed lines for tool and reasoning blocks. */
+export function setCompactOutputLimits(toolLines: number, reasoningLines: number): void {
+  const state = getPatchState();
+  if (!state) return;
+  state.toolLineCount = clampLineCount(toolLines);
+  state.reasoningLineCount = clampLineCount(reasoningLines);
+}
+
 function syncReasoningComponents(
   state: PatchState,
   turn: AssistantTurnState,
@@ -316,7 +361,12 @@ function syncReasoningComponents(
     const previous = turn.reasoningPreviews.get(segment.segmentIndex);
     const preview = expanded
       ? undefined
-      : buildCompactReasoningPreview(thinking, segment.segmentIndex, previous);
+      : buildCompactReasoningPreview(
+          thinking,
+          segment.segmentIndex,
+          previous,
+          state.reasoningLineCount,
+        );
     if (preview) {
       turn.reasoningPreviews.set(segment.segmentIndex, preview);
     }
@@ -325,12 +375,14 @@ function syncReasoningComponents(
     if (!component) {
       component = new CompactReasoningComponent();
       turn.reasoningComponents.set(segment.segmentIndex, component);
+      state.reasoningComponents.push(component);
       const parent = turn.parent;
       if (parent) {
         parent.addChild(component);
       }
     }
-    component.updateContent(thinking, preview, expanded);
+    component.setStreaming(state.reasoningStreaming, captureRequestRender(state));
+    component.updateContent(thinking, preview, expanded, state.reasoningLineCount);
   }
 
   for (const [segmentIndex, component] of turn.reasoningComponents.entries()) {
@@ -484,7 +536,7 @@ function buildToolGroup(state: PatchState, record: ToolRecord, width: number): s
       if (!internals || internals.hideComponent) return [];
       return [{ internals }];
     });
-  return buildCompactToolGroup(items, width);
+  return buildCompactToolGroup(items, width, state.toolLineCount);
 }
 
 export function installUiPatches(): PatchInstallResult {

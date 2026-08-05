@@ -147,28 +147,35 @@ function firstResultLines(internals: ToolExecutionInternals, limit: number): str
 
 const COMPACT_TOOL_LINE_COUNT = 3;
 
-export function buildCompactToolLine(internals: ToolExecutionInternals, width: number): string[] {
+export function buildCompactToolLine(
+  internals: ToolExecutionInternals,
+  width: number,
+  lineCount: number = COMPACT_TOOL_LINE_COUNT,
+): string[] {
   if (internals.hideComponent) {
+    return [];
+  }
+  if (lineCount <= 0) {
     return [];
   }
 
   const descriptionLines = firstNonEmptyRenderedLines(
     internals.callRendererComponent,
     width,
-    COMPACT_TOOL_LINE_COUNT,
+    lineCount,
   );
   if (descriptionLines.length === 0) {
     descriptionLines.push(fallbackToolSummary(internals.toolName, internals.args));
   }
 
   const lines: string[] = [];
-  for (let i = 0; i < descriptionLines.length && lines.length < COMPACT_TOOL_LINE_COUNT; i++) {
+  for (let i = 0; i < descriptionLines.length && lines.length < lineCount; i++) {
     const prefix = i === 0 ? `${toolMarker()} ` : "";
     lines.push(truncateToWidth(`${prefix}${descriptionLines[i]}`, width));
   }
 
   if (!internals.result?.isError) {
-    for (const line of firstResultLines(internals, COMPACT_TOOL_LINE_COUNT - lines.length)) {
+    for (const line of firstResultLines(internals, lineCount - lines.length)) {
       lines.push(truncateToWidth(line, width));
     }
   }

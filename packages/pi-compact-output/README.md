@@ -6,7 +6,7 @@ TUI-only [pi coding agent](https://pi.dev) extension that keeps the transcript c
 
 - Consecutive collapsed tool calls share one padded, background-filled area that shows up to three lines: the last tool's call summary plus the first lines of its result output — e.g. a grep shows `grep /pattern/ in path` followed by two match lines. Groups show a `· +N more` count. FFF-style outputs (read buffers, ffgrep/fffind) get the same compact treatment, and the full output of every tool returns on expand.
 - Press **Ctrl+O** (`app.tools.expand`) to reveal each tool's original renderer and the complete reasoning text in execution order — FFF search output, read buffers, edit diffs, background-terminal views, images, and errors all return unchanged.
-- Reasoning blocks stay in transcript order and use the same padded block style as tools. Pi's built-in thinking label/markdown is hidden; only the compact blocks show while collapsed. Ctrl+O expands those blocks in place.
+- Reasoning blocks stay in transcript order as **bordered boxes with a `Reasoning` label** in the top-left corner; while the agent is working, an animated loading sign spins next to the label. Inside, plain italic text shows the latest five streamed lines while collapsed (auto-scroll to the bottom — the newest reasoning is always visible). Pi's built-in thinking label/markdown is hidden; only the compact blocks show while collapsed. Ctrl+O expands those blocks in place to the full thinking text.
 - While working, the footer keeps pi's default `Working...` spinner — the floating line is left untouched and never mirrors reasoning content (previews live in the transcript, not the footer). Codex commentary text that duplicates thinking stays hidden.
 
 ## Requirements
@@ -26,6 +26,19 @@ pi -e ./packages/pi-compact-output
 ```
 
 ## Behavior notes
+
+- Maximum collapsed lines are configurable in settings.json (project `.pi/settings.json` overrides the global one when the project is trusted):
+
+```json
+{
+  "compactOutput": {
+    "toolLines": 3,
+    "reasoningLines": 5
+  }
+}
+```
+
+  Both default to the values above and are clamped to 1–12.
 
 - The extension does **not** register, replace, or proxy any tools. It patches presentation around Pi's exported `ToolExecutionComponent` and `AssistantMessageComponent` after the real tool owner has already been selected. Pi's existing Ctrl+O action also expands the assistant reasoning view.
 - Load order does not matter relative to FFF, `pi-tian-background-terminals`, or `pi-tian-edit-safe`.

@@ -140,6 +140,28 @@ test("result fill respects narrow widths", () => {
   assert.ok(lines.every((line) => visibleWidth(line) <= 10));
 });
 
+test("tool line count is configurable", () => {
+  const fourLines = new FakeComponent(["one", "two", "three", "four"]);
+  const full = buildCompactToolLine(
+    internals({ callRendererComponent: fourLines }),
+    120,
+  );
+  assert.equal(full.length, 3, "defaults to three lines");
+
+  const two = buildCompactToolLine(
+    internals({
+      callRendererComponent: new FakeComponent(["one", "two", "three", "four"]),
+      result: { isError: false, content: [{ type: "text", text: "RESULT" }] },
+    }),
+    120,
+    2,
+  );
+  assert.equal(two.length, 2, "custom limit wins over result fill");
+  assert.doesNotMatch(two.join("\n"), /RESULT/);
+  assert.match(two.join("\n"), /two/);
+  assert.doesNotMatch(two.join("\n"), /four/, "lines beyond the limit are dropped");
+});
+
 test("intentionally hidden component stays hidden", () => {
   assert.deepEqual(buildCompactToolLine(internals({ hideComponent: true }), 80), []);
 });
