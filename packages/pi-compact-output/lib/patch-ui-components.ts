@@ -8,6 +8,7 @@ import type { Component, Container } from "@earendil-works/pi-tui";
 import {
   buildCompactReasoningPreview,
   CompactReasoningComponent,
+  normalizeReasoningText,
   type CompactReasoningPreview,
 } from "./compact-reasoning.ts";
 import { buildCompactToolGroup } from "./compact-tool-group.ts";
@@ -16,6 +17,7 @@ import {
   parseAssistantContentSegments,
 } from "./content-segments.ts";
 import { firstSanitizedLines } from "./sanitize-text.ts";
+import { SPINNER_FRAMES, SPINNER_INTERVAL_MS } from "./compact-status.ts";
 import { tryReadToolExecutionInternals } from "./tool-internals.ts";
 
 const PATCH_SYMBOL = Symbol.for("pi-tian-compact-output.patch-state");
@@ -78,6 +80,8 @@ interface PatchState {
   installed: boolean;
   reasoningStreaming: boolean;
   reasoningComponents: CompactReasoningComponent[];
+  toolSpinnerFrame: number;
+  toolSpinnerInterval?: ReturnType<typeof setInterval>;
   toolLineCount: number;
   reasoningLineCount: number;
   unsupportedReason?: string;
@@ -129,6 +133,7 @@ function createPatchState(): PatchState {
     installed: false,
     reasoningStreaming: false,
     reasoningComponents: [],
+    toolSpinnerFrame: 0,
     toolLineCount: 3,
     reasoningLineCount: 5,
   };
@@ -173,7 +178,7 @@ export function compactThinkingSummary(
     return { summary: previous.summary, state: previous };
   }
 
-  const latest = segments[segmentIndex] ?? "";
+  const latest = normalizeReasoningText(segments[segmentIndex] ?? "");
   if (segmentIndex > (previous?.segmentIndex ?? -1) && firstSanitizedLines(latest, 1).length === 0) {
     return {
       summary: previous?.summary,
@@ -318,11 +323,29 @@ function captureRequestRender(state: PatchState): (() => void) | undefined {
   return undefined;
 }
 
+/** Drive the compact tool status spinner while the agent is working. */
+function setToolSpinnerStreaming(state: PatchState, streaming: boolean): void {
+  if (!streaming) {
+    if (state.toolSpinnerInterval) {
+      clearInterval(state.toolSpinnerInterval);
+      state.toolSpinnerInterval = undefined;
+    }
+    return;
+  }
+
+  if (state.toolSpinnerInterval) return;
+  state.toolSpinnerInterval = setInterval(() => {
+    state.toolSpinnerFrame = (state.toolSpinnerFrame + 1) % SPINNER_FRAMES.length;
+    captureRequestRender(state)?.();
+  }, SPINNER_INTERVAL_MS);
+}
+
 /** Set the reasoning blocks' streaming state (drives the loading sign). */
 export function setReasoningStreaming(streaming: boolean): void {
   const state = getPatchState();
-  if (!state) return;
+  if (!state?.installed) return;
   state.reasoningStreaming = streaming;
+  setToolSpinnerStreaming(state, streaming);
   const requestRender = captureRequestRender(state);
   for (const component of state.reasoningComponents) {
     component.setStreaming(streaming, requestRender);
@@ -342,6 +365,22 @@ export function setCompactOutputLimits(toolLines: number, reasoningLines: number
   state.reasoningLineCount = clampLineCount(reasoningLines);
 }
 
+function endsWithThinkingContent(message: AssistantMessage): boolean {
+  for (let index = message.content.length - 1; index >= 0; index--) {
+    const part = message.content[index];
+    if (!part) continue;
+    if (part.type === "thinking") {
+      if (part.thinking.trim()) return true;
+      continue;
+    }
+    if (part.type === "text" && (!part.text.trim() || isCommentaryText(part))) {
+      continue;
+    }
+    return false;
+  }
+  return false;
+}
+
 function syncReasoningComponents(
   state: PatchState,
   turn: AssistantTurnState,
@@ -349,6 +388,10 @@ function syncReasoningComponents(
   expanded: boolean,
 ): void {
   const segments = parseAssistantContentSegments(message.content);
+  const latestThinkingSegment = [...segments]
+    .reverse()
+    .find((segment) => segment.kind === "thinking");
+  const thinkingIsActive = state.reasoningStreaming && endsWithThinkingContent(message);
   const activeSegments = new Set<number>();
 
   for (const segment of segments) {
@@ -381,7 +424,9 @@ function syncReasoningComponents(
         parent.addChild(component);
       }
     }
-    component.setStreaming(state.reasoningStreaming, captureRequestRender(state));
+    const isActive =
+      thinkingIsActive && latestThinkingSegment?.segmentIndex === segment.segmentIndex;
+    component.setStreaming(isActive, captureRequestRender(state));
     component.updateContent(thinking, preview, expanded, state.reasoningLineCount);
   }
 
@@ -536,7 +581,12 @@ function buildToolGroup(state: PatchState, record: ToolRecord, width: number): s
       if (!internals || internals.hideComponent) return [];
       return [{ internals }];
     });
-  return buildCompactToolGroup(items, width, state.toolLineCount);
+  return buildCompactToolGroup(
+    items,
+    width,
+    state.toolLineCount,
+    state.toolSpinnerFrame,
+  );
 }
 
 export function installUiPatches(): PatchInstallResult {
@@ -581,6 +631,17 @@ export function installUiPatches(): PatchInstallResult {
     if (component instanceof AssistantMessageComponent) {
       const turn = getAssistantTurn(current, component);
       turn.parent = this;
+
+      // Pi constructs restored assistant components with their message before
+      // adding them to the chat container. In that path updateContent() has
+      // already created the compact reasoning children while the turn had no
+      // parent, so mount them now that the assistant is attached.
+      for (const reasoning of turn.reasoningComponents.values()) {
+        if (!this.children.includes(reasoning)) {
+          originalContainerAddChild.call(this, reasoning);
+        }
+      }
+      tryReorderAssistantTurn(current, component);
       return;
     }
 
@@ -776,6 +837,10 @@ export function releaseUiPatches(): void {
     restorePatchedMethods(state);
   }
 
+  if (state.toolSpinnerInterval) {
+    clearInterval(state.toolSpinnerInterval);
+    state.toolSpinnerInterval = undefined;
+  }
   setPatchState(undefined);
 }
 
@@ -795,9 +860,17 @@ export function __getPatchStateForTests(): PatchState | undefined {
 export function __resetPatchStateForTests(): void {
   const state = getPatchState();
   if (!state?.installed) {
+    if (state?.toolSpinnerInterval) {
+      clearInterval(state.toolSpinnerInterval);
+      state.toolSpinnerInterval = undefined;
+    }
     setPatchState(undefined);
     return;
   }
   restorePatchedMethods(state);
+  if (state.toolSpinnerInterval) {
+    clearInterval(state.toolSpinnerInterval);
+    state.toolSpinnerInterval = undefined;
+  }
   setPatchState(undefined);
 }

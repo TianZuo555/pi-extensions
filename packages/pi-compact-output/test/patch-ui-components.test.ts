@@ -10,6 +10,12 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Container, Image, Text, type TUI, visibleWidth } from "@earendil-works/pi-tui";
 import compactOutputExtension from "../index.ts";
+import { buildCompactToolGroup } from "../lib/compact-tool-group.ts";
+import {
+  CompactReasoningComponent,
+  normalizeReasoningText,
+} from "../lib/compact-reasoning.ts";
+import type { ToolExecutionInternals } from "../lib/compact-tool-line.ts";
 import {
   __getPatchStateForTests,
   __resetPatchStateForTests,
@@ -262,6 +268,17 @@ test("working indicator preview summarizes up to three reasoning lines", () => {
   assert.doesNotMatch(preview.message, /\r?\n/);
 });
 
+test("reasoning display removes provider bold wrappers", () => {
+  assert.equal(
+    normalizeReasoningText("** Reasoning **\n\n**Plan**\nUse the registry."),
+    "Reasoning\n\nPlan\nUse the registry.",
+  );
+  assert.equal(
+    normalizeReasoningText("**Reasoning\nfirst step\nlast step**"),
+    "Reasoning\nfirst step\nlast step",
+  );
+});
+
 test("GPT-5.6 fixture with several headings renders the latest five reasoning lines", () => {
   const install = installUiPatches();
   if (!install.installed) {
@@ -285,6 +302,52 @@ test("GPT-5.6 fixture with several headings renders the latest five reasoning li
   assert.match(rendered, /Look for registerTool/i);
   assert.match(rendered, /Patch index/i);
   assert.match(rendered, /Run the tests/i, "the latest streamed line stays visible");
+});
+
+test("long reasoning lines wrap instead of being truncated", () => {
+  const install = installUiPatches();
+  if (!install.installed) {
+    return;
+  }
+
+  const parent = createGroupParent();
+  const component = new AssistantMessageComponent();
+  parent.addChild(component);
+  component.updateContent(
+    assistantMessage(
+      [
+        {
+          type: "thinking",
+          thinking:
+            "Claude reasoning starts with a long explanation that should wrap across several terminal lines and keep its final detail visible.",
+        },
+      ],
+      "toolUse",
+    ),
+  );
+
+  const lines = parent.render(48);
+  const rendered = lines.join("\n");
+  assert.match(rendered, /Claude reasoning starts/);
+  assert.match(rendered, /final detail/);
+  assert.match(rendered, /visible\./);
+  assert.ok(lines.every((line) => visibleWidth(line) <= 48));
+});
+
+test("expanded reasoning preserves paragraph breaks while wrapping long lines", () => {
+  const component = new CompactReasoningComponent();
+  component.updateContent(
+    "first paragraph\n\nsecond paragraph with a long line that needs wrapping",
+    undefined,
+    true,
+  );
+
+  const lines = component.render(48);
+  const first = lines.findIndex((line) => line.includes("first paragraph"));
+  const second = lines.findIndex((line) => line.includes("second paragraph"));
+  assert.ok(first >= 0);
+  assert.equal(second, first + 2, "the explicit blank line remains visible");
+  assert.ok(lines.every((line) => visibleWidth(line) <= 48));
 });
 
 test("Ctrl+O expands the full reasoning block and collapses it again", () => {
@@ -328,6 +391,37 @@ test("Ctrl+O expands the full reasoning block and collapses it again", () => {
   expandable.setExpanded(true);
   assert.match(parent.render(120).join("\n"), /# Plan/);
   assert.match(parent.render(120).join("\n"), /Patch index/i);
+});
+
+test("completed reasoning sections show a check mark", () => {
+  const install = installUiPatches();
+  if (!install.installed) {
+    return;
+  }
+
+  const parent = createGroupParent();
+  const component = new AssistantMessageComponent();
+  parent.addChild(component);
+  setReasoningStreaming(true);
+  component.updateContent(
+    assistantMessage([{ type: "thinking", thinking: "Still working" }], "toolUse"),
+  );
+  assert.match(parent.render(120).join("\n"), /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/);
+
+  component.updateContent(
+    assistantMessage(
+      [
+        { type: "thinking", thinking: "Finished this section" },
+        { type: "toolCall", id: "tool-1", name: "grep", arguments: {} },
+      ],
+      "toolUse",
+    ),
+  );
+  const finished = parent.render(120).join("\n");
+  assert.match(finished, /Finished this section/);
+  assert.match(finished, /✓/);
+  assert.doesNotMatch(finished, /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/);
+  setReasoningStreaming(false);
 });
 
 test("several consecutive thinking blocks render the latest compact reasoning segment", () => {
@@ -548,6 +642,7 @@ test("compact reasoning renders a bordered header with a loading sign while stre
   assert.match(done, /╭/, "top border");
   assert.match(done, /╯/, "bottom border");
   assert.match(done, /│/, "side borders");
+  assert.match(done, /✓/, "check mark when idle");
   assert.doesNotMatch(done, /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/, "no loading sign when idle");
 
   setReasoningStreaming(true);
@@ -557,6 +652,7 @@ test("compact reasoning renders a bordered header with a loading sign while stre
 
   setReasoningStreaming(false);
   const stopped = parent.render(120).join("\n");
+  assert.match(stopped, /✓/);
   assert.doesNotMatch(stopped, /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/);
 });
 
@@ -638,7 +734,7 @@ test("setCompactOutputLimits controls tool and reasoning line counts", () => {
     );
   }
   const toolRendered = toolParent.render(120).join("\n");
-  assert.match(toolRendered, /read t2 · \+1 more/);
+  assert.match(toolRendered, /read t2[^\n]*\n[^\n]*· \+1 more/);
 
   // Reasoning: three lines of thinking, only two shown (auto-scroll keeps the tail).
   const reasonParent = createGroupParent();
@@ -871,8 +967,8 @@ test("tool runs in separate turns keep their own blocks", () => {
   runTurn([["t3", "grep"], ["t4", "edit"]]);
 
   const rendered = parent.render(120).join("\n");
-  assert.match(rendered, /read t2 · \+1 more/, "first turn keeps its block");
-  assert.match(rendered, /edit t4 · \+1 more/, "second turn gets its own block");
+  assert.match(rendered, /read t2[^\n]*\n[^\n]*· \+1 more/, "first turn keeps its block");
+  assert.match(rendered, /edit t4[^\n]*\n[^\n]*· \+1 more/, "second turn gets its own block");
   assert.doesNotMatch(rendered, /\+3 more/, "runs must not merge across turns");
 });
 
@@ -893,6 +989,24 @@ test("assistant component hides original thinking while compact block renders it
   assert.match(parent.render(120).join("\n"), /secret reasoning/i);
 });
 
+test("rebuild-style assistant construction restores compact reasoning after compaction", () => {
+  const install = installUiPatches();
+  if (!install.installed) {
+    return;
+  }
+
+  const parent = createGroupParent();
+  const assistant = new AssistantMessageComponent(
+    assistantMessage([{ type: "thinking", thinking: "restored reasoning" }], "toolUse"),
+    false,
+  );
+  parent.addChild(assistant);
+
+  const rendered = parent.render(120).join("\n");
+  assert.match(rendered, /Reasoning/);
+  assert.match(rendered, /restored reasoning/);
+});
+
 test("extension never calls registerTool", () => {
   let registerToolCalls = 0;
   const pi = {
@@ -904,6 +1018,31 @@ test("extension never calls registerTool", () => {
 
   compactOutputExtension(pi);
   assert.equal(registerToolCalls, 0);
+});
+
+test("tool status blocks use the loading, success, and error markers", () => {
+  const internals: ToolExecutionInternals = {
+    toolName: "grep",
+    args: { pattern: "needle", path: "packages" },
+    callRendererComponent: new Text("grep needle in packages", 0, 0),
+    isPartial: true,
+  };
+  const pending = buildCompactToolGroup([{ internals }], 80).join("\n");
+  assert.match(pending, /╭/);
+  assert.match(pending, /│/);
+  assert.match(pending, /╯/);
+  assert.match(pending, /Tool[\s\S]*⠋/);
+
+  internals.isPartial = false;
+  internals.result = { isError: false, content: [] };
+  const success = buildCompactToolGroup([{ internals }], 80).join("\n");
+  assert.match(success, /Tool[\s\S]*✓/);
+  assert.doesNotMatch(success, /✗/);
+
+  internals.result = { isError: true, content: [{ type: "text", text: "failed" }] };
+  const error = buildCompactToolGroup([{ internals }], 80).join("\n");
+  assert.match(error, /Tool[\s\S]*✗/);
+  assert.doesNotMatch(error, /✓/);
 });
 
 test("consecutive tools collapse to one line with the last tool's message, and expand first-to-last", () => {
@@ -940,7 +1079,9 @@ test("consecutive tools collapse to one line with the last tool's message, and e
   const collapsedLines = parent.render(100);
   const collapsed = collapsedLines.join("\n");
   assert.ok(collapsedLines.length >= 5, "padded three-line tool area with margins");
-  assert.match(collapsed, /🔧 edit second\.ts/);
+  assert.match(collapsed, /Tool[\s\S]*✓/);
+  assert.match(collapsed, /edit second\.ts/);
+  assert.doesNotMatch(collapsed, /✓ edit second\.ts/);
   assert.match(collapsed, /\+1 more/);
   assert.doesNotMatch(collapsed, /read first\.ts/);
   assert.ok(collapsedLines.every((line) => visibleWidth(line) <= 100));
@@ -1006,7 +1147,9 @@ test("collapsed group shows the last tool's call and result lines, never earlier
   parent.addChild(fffTool);
 
   const collapsed = parent.render(100).join("\n");
-  assert.match(collapsed, /🔧 read haystack\/one\.ts/);
+  assert.match(collapsed, /Tool[\s\S]*✓/);
+  assert.match(collapsed, /read haystack\/one\.ts/);
+  assert.doesNotMatch(collapsed, /✓ read haystack\/one\.ts/);
   assert.match(collapsed, /SECRET BUFFER/);
   assert.doesNotMatch(collapsed, /one\.ts:1:export/);
   assert.match(collapsed, /\+1 more/);

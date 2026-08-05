@@ -75,11 +75,11 @@ test("pending, success, and error markers are correct", () => {
     internals({ isPartial: false, result: { isError: true, content: [{ type: "text", text: "boom" }] } }),
     80,
   )[0];
-  assert.match(pending, /^🔧 /);
-  assert.match(success, /^🔧 /);
-  assert.match(error, /^🔧 /);
+  assert.match(pending, /^⠋ /);
+  assert.match(success, /^✓ /);
+  assert.match(error, /^✗ /);
   assert.doesNotMatch(pending, /✓|✗/);
-  assert.doesNotMatch(success, /✓/);
+  assert.doesNotMatch(success, /✗/);
   assert.doesNotMatch(error, /✓/);
 });
 
@@ -111,9 +111,32 @@ test("successful result output fills the remaining collapsed lines", () => {
     120,
   );
   assert.equal(lines.length, 3);
-  assert.equal(lines[0], "🔧 grep /registerTool/ in packages");
+  assert.equal(lines[0], "✓ grep /registerTool/ in packages");
   assert.equal(lines[1], "packages/foo.ts:12: const x = 1");
   assert.equal(lines[2], "packages/bar.ts:3: const y = 2");
+});
+
+test("rendered result components fill missing compact grep lines", () => {
+  const lines = buildCompactToolLine(
+    internals({
+      callRendererComponent: new FakeComponent(["grep /needle/ in packages"]),
+      result: {
+        isError: false,
+        content: [{ type: "text", text: "packages/one.ts:1:match" }],
+      },
+      resultRendererComponent: new FakeComponent([
+        "packages/one.ts:1:match",
+        "packages/two.ts:2:match",
+        "packages/three.ts:3:match",
+      ]),
+    }),
+    120,
+  );
+  assert.deepEqual(lines, [
+    "✓ grep /needle/ in packages",
+    "packages/one.ts:1:match",
+    "packages/two.ts:2:match",
+  ]);
 });
 
 test("result output never replaces a three-line call renderer", () => {
@@ -215,7 +238,7 @@ test("styled FFF-like call lines preserve trailing ANSI reset codes", () => {
     }),
     120,
   )[0];
-  assert.equal(line, `🔧 ${styled}`);
+  assert.equal(line, `⠋ ${styled}`);
 });
 
 test("error output strips terminal control sequences", () => {

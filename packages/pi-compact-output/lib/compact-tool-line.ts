@@ -1,6 +1,10 @@
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { Component } from "@earendil-works/pi-tui";
 import { firstSanitizedLine, firstSanitizedLines, sanitizeCompactText } from "./sanitize-text.ts";
+import {
+  SPINNER_FRAMES,
+  type CompactToolStatus,
+} from "./compact-status.ts";
 
 export interface ToolExecutionInternals {
   toolName: string;
@@ -116,10 +120,23 @@ export function fallbackToolSummary(toolName: string, args: unknown): string {
   }
 }
 
-const TOOL_EMOJI = "🔧";
+export function getCompactToolStatus(internals: ToolExecutionInternals): CompactToolStatus {
+  if (internals.isPartial) return "pending";
+  if (internals.result?.isError) return "error";
+  return "success";
+}
 
-function toolMarker(): string {
-  return TOOL_EMOJI;
+export function compactToolStatusMarker(
+  status: CompactToolStatus,
+  spinnerFrame: number = 0,
+): string {
+  if (status === "pending") {
+    const index =
+      ((Math.floor(spinnerFrame) % SPINNER_FRAMES.length) + SPINNER_FRAMES.length) %
+      SPINNER_FRAMES.length;
+    return SPINNER_FRAMES[index] ?? SPINNER_FRAMES[0] ?? "⠋";
+  }
+  return status === "error" ? "✗" : "✓";
 }
 
 function firstErrorLine(internals: ToolExecutionInternals): string | undefined {
@@ -145,12 +162,40 @@ function firstResultLines(internals: ToolExecutionInternals, limit: number): str
   return lines;
 }
 
+function renderedResultLines(
+  internals: ToolExecutionInternals,
+  width: number,
+  limit: number,
+): string[] {
+  if (limit <= 0 || !internals.resultRendererComponent) return [];
+  const rendered = firstNonEmptyRenderedLines(
+    internals.resultRendererComponent,
+    width,
+    Number.MAX_SAFE_INTEGER,
+  );
+  const lines: string[] = [];
+  for (const line of rendered) {
+    const sanitized = sanitizeCompactText(stripAnsi(line));
+    if (!sanitized || lines.includes(sanitized)) continue;
+    lines.push(sanitized);
+    if (lines.length >= limit) break;
+  }
+  return lines;
+}
+
 const COMPACT_TOOL_LINE_COUNT = 3;
+
+export interface CompactToolLineOptions {
+  status?: CompactToolStatus;
+  spinnerFrame?: number;
+  showStatusMarker?: boolean;
+}
 
 export function buildCompactToolLine(
   internals: ToolExecutionInternals,
   width: number,
   lineCount: number = COMPACT_TOOL_LINE_COUNT,
+  options: CompactToolLineOptions = {},
 ): string[] {
   if (internals.hideComponent) {
     return [];
@@ -169,14 +214,23 @@ export function buildCompactToolLine(
   }
 
   const lines: string[] = [];
+  const status = options.status ?? getCompactToolStatus(internals);
+  const marker = compactToolStatusMarker(status, options.spinnerFrame);
   for (let i = 0; i < descriptionLines.length && lines.length < lineCount; i++) {
-    const prefix = i === 0 ? `${toolMarker()} ` : "";
+    const prefix = i === 0 && options.showStatusMarker !== false ? `${marker} ` : "";
     lines.push(truncateToWidth(`${prefix}${descriptionLines[i]}`, width));
   }
 
   if (!internals.result?.isError) {
-    for (const line of firstResultLines(internals, lineCount - lines.length)) {
+    const remaining = lineCount - lines.length;
+    const resultLines = firstResultLines(internals, remaining);
+    for (const line of resultLines) {
       lines.push(truncateToWidth(line, width));
+    }
+    for (const line of renderedResultLines(internals, width, lineCount)) {
+      if (lines.includes(line)) continue;
+      lines.push(truncateToWidth(line, width));
+      if (lines.length >= lineCount) break;
     }
   }
 

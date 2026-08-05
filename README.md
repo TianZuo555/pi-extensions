@@ -14,7 +14,7 @@ A small collection of [pi coding agent](https://pi.dev) extensions.
 | **background-terminals** | `/ps`, overrides tool `bash` | One no-stdin bash path: long commands yield to background and notify once. |
 | **edit-safe** | overrides tool `edit` | Stricter `edit`: verbatim splice, ambiguity throws, one `edits[]` shape. |
 | **subagents** | tool `subagent`, `/agents` | Isolated RPC child processes with profiles, background runs, and worktrees. |
-| **compact-output** | (TUI only) | Groups compact tool rows with newest first; Ctrl+O restores execution order; reasoning is one line. |
+| **compact-output** | (TUI only) | Shows bordered tool status blocks with up to three preview lines; Ctrl+O restores full output; reasoning stays compact. |
 
 Each extension is described in detail under [Extensions](#extensions).
 

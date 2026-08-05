@@ -1,7 +1,7 @@
 {
   "name": "pi-tian-compact-output",
-  "version": "0.2.3",
-  "description": "TUI-only Pi extension that groups compact tool calls and shows a three-line reasoning preview with Ctrl+O expansion.",
+  "version": "0.2.10",
+  "description": "TUI-only Pi extension with bordered tool status previews and compact reasoning blocks with Ctrl+O expansion.",
   "type": "module",
   "keywords": [
     "pi",

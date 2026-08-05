@@ -1,8 +1,9 @@
 // compact-output — grouped collapsed tool calls and compact reasoning summaries.
 //
 // Presentation-only TUI extension for Pi 0.83.x:
-// - Consecutive collapsed tool calls share one padded area with up to three lines.
-// - Reasoning appears in-sequence as compact blocks; Pi's default thinking UI stays hidden.
+// - Consecutive collapsed tool calls share one bordered status block with up to three lines.
+// - Reasoning appears in-sequence as wrapped compact blocks; provider bold wrappers and
+//   finished sections show a success check mark instead of a stale spinner.
 // - Ctrl+O (app.tools.expand) reveals each tool's original renderer and full reasoning.
 //
 // Maximum collapsed lines are configurable via settings.json:
@@ -107,7 +108,14 @@ export default function compactOutputExtension(pi: ExtensionAPI): void {
   });
 }
 
-export { buildCompactToolLine, fallbackToolSummary } from "./lib/compact-tool-line.ts";
+export {
+  buildCompactToolLine,
+  compactToolStatusMarker,
+  fallbackToolSummary,
+  getCompactToolStatus,
+} from "./lib/compact-tool-line.ts";
+export { normalizeReasoningText } from "./lib/compact-reasoning.ts";
+export { SPINNER_INTERVAL_MS } from "./lib/compact-status.ts";
 export {
   getPatchDiagnostics,
   installUiPatches,
