@@ -4,9 +4,10 @@ TUI-only [pi coding agent](https://pi.dev) extension that keeps the transcript c
 
 ## What it does
 
-- Consecutive collapsed tool calls share one padded, background-filled area that shows a single line: the last tool's call and a `· +N more` count. FFF-style outputs (read buffers, ffgrep/fffind) get the same one-line treatment, and the full output of every tool returns on expand.
+- Consecutive collapsed tool calls share one padded, background-filled area that shows up to three lines: the last tool's call summary plus the first lines of its result output — e.g. a grep shows `grep /pattern/ in path` followed by two match lines. Groups show a `· +N more` count. FFF-style outputs (read buffers, ffgrep/fffind) get the same compact treatment, and the full output of every tool returns on expand.
 - Press **Ctrl+O** (`app.tools.expand`) to reveal each tool's original renderer and the complete reasoning text in execution order — FFF search output, read buffers, edit diffs, background-terminal views, images, and errors all return unchanged.
-- While working, the animated loader shows `Thinking: <one-line reasoning preview>`, and the transcript keeps reasoning to one concise line. Ctrl+O restores the complete reasoning text.
+- Reasoning blocks stay in transcript order and use the same padded block style as tools. Pi's built-in thinking label/markdown is hidden; only the compact blocks show while collapsed. Ctrl+O expands those blocks in place.
+- While working, the footer keeps pi's default `Working...` spinner — the floating line is left untouched and never mirrors reasoning content (previews live in the transcript, not the footer). Codex commentary text that duplicates thinking stays hidden.
 
 ## Requirements
 

@@ -1,6 +1,6 @@
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { Component } from "@earendil-works/pi-tui";
-import { firstSanitizedLine, sanitizeCompactText } from "./sanitize-text.ts";
+import { firstSanitizedLine, firstSanitizedLines, sanitizeCompactText } from "./sanitize-text.ts";
 
 export interface ToolExecutionInternals {
   toolName: string;
@@ -33,18 +33,27 @@ function isVisuallyNonEmpty(line: string): boolean {
 }
 
 function firstNonEmptyRenderedLine(component: Component | undefined, width: number): string | undefined {
-  if (!component) return undefined;
-  const lines = component.render(width);
-  for (const line of lines) {
-    const trimmed = trimTrailingPaddingPreservingAnsi(line);
-    if (isVisuallyNonEmpty(trimmed)) {
-      return trimmed;
-    }
-  }
-  return undefined;
+  return firstNonEmptyRenderedLines(component, width, 1)[0];
 }
 
-export { firstNonEmptyRenderedLine };
+function firstNonEmptyRenderedLines(
+  component: Component | undefined,
+  width: number,
+  count: number,
+): string[] {
+  if (!component || count <= 0) return [];
+  const lines = component.render(width);
+  const picked: string[] = [];
+  for (const line of lines) {
+    const trimmed = trimTrailingPaddingPreservingAnsi(line);
+    if (!isVisuallyNonEmpty(trimmed)) continue;
+    picked.push(trimmed);
+    if (picked.length >= count) break;
+  }
+  return picked;
+}
+
+export { firstNonEmptyRenderedLine, firstNonEmptyRenderedLines };
 
 
 function readStringField(args: unknown, key: string): string | undefined {
@@ -123,29 +132,60 @@ function firstErrorLine(internals: ToolExecutionInternals): string | undefined {
   return undefined;
 }
 
+function firstResultLines(internals: ToolExecutionInternals, limit: number): string[] {
+  if (limit <= 0 || !internals.result?.content) return [];
+  const lines: string[] = [];
+  for (const block of internals.result.content) {
+    if (block.type !== "text" || !block.text) continue;
+    for (const line of firstSanitizedLines(block.text, limit - lines.length)) {
+      lines.push(line);
+      if (lines.length >= limit) return lines;
+    }
+  }
+  return lines;
+}
+
+const COMPACT_TOOL_LINE_COUNT = 3;
+
 export function buildCompactToolLine(internals: ToolExecutionInternals, width: number): string[] {
   if (internals.hideComponent) {
     return [];
   }
 
-  const description =
-    firstNonEmptyRenderedLine(internals.callRendererComponent, width) ??
-    fallbackToolSummary(internals.toolName, internals.args);
+  const descriptionLines = firstNonEmptyRenderedLines(
+    internals.callRendererComponent,
+    width,
+    COMPACT_TOOL_LINE_COUNT,
+  );
+  if (descriptionLines.length === 0) {
+    descriptionLines.push(fallbackToolSummary(internals.toolName, internals.args));
+  }
 
-  let line = `${toolMarker()} ${description}`;
+  const lines: string[] = [];
+  for (let i = 0; i < descriptionLines.length && lines.length < COMPACT_TOOL_LINE_COUNT; i++) {
+    const prefix = i === 0 ? `${toolMarker()} ` : "";
+    lines.push(truncateToWidth(`${prefix}${descriptionLines[i]}`, width));
+  }
+
+  if (!internals.result?.isError) {
+    for (const line of firstResultLines(internals, COMPACT_TOOL_LINE_COUNT - lines.length)) {
+      lines.push(truncateToWidth(line, width));
+    }
+  }
 
   if (internals.result?.isError) {
     const errorLine = firstErrorLine(internals);
     if (errorLine) {
+      const lastIndex = lines.length - 1;
       const separator = " — ";
-      const withError = `${line}${separator}${errorLine}`;
+      const withError = `${lines[lastIndex]}${separator}${errorLine}`;
       if (visibleWidth(withError) <= width) {
-        line = withError;
+        lines[lastIndex] = withError;
       } else {
-        line = truncateToWidth(withError, width);
+        lines[lastIndex] = truncateToWidth(withError, width);
       }
     }
   }
 
-  return [truncateToWidth(line, width)];
+  return lines;
 }

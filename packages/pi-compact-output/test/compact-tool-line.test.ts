@@ -36,14 +36,22 @@ function internals(overrides: Partial<ToolExecutionInternals> = {}): ToolExecuti
   };
 }
 
-test("collapsed tool returns exactly one line", () => {
+test("collapsed tool returns up to three lines", () => {
   const lines = buildCompactToolLine(
     internals({
-      callRendererComponent: new FakeComponent(["grep /registerTool/ in packages"]),
+      callRendererComponent: new FakeComponent([
+        "grep /registerTool/ in packages",
+        "line two",
+        "line three",
+        "line four",
+      ]),
     }),
     120,
   );
-  assert.equal(lines.length, 1);
+  assert.equal(lines.length, 3);
+  assert.match(lines[0], /grep \/registerTool\/ in packages/);
+  assert.match(lines[1], /line two/);
+  assert.match(lines[2], /line three/);
 });
 
 test("widths 120, 20, and 1 never overflow", () => {
@@ -55,8 +63,8 @@ test("widths 120, 20, and 1 never overflow", () => {
   });
   for (const width of [120, 20, 1]) {
     const lines = buildCompactToolLine(source, width);
-    assert.equal(lines.length, 1);
-    assert.ok(visibleWidth(lines[0]) <= width, `width ${width}: ${lines[0]}`);
+    assert.ok(lines.length >= 1 && lines.length <= 3);
+    assert.ok(lines.every((line) => visibleWidth(line) <= width), `width ${width}: ${lines.join(" | ")}`);
   }
 });
 
@@ -86,18 +94,50 @@ test("error includes a bounded first error line when space permits", () => {
   assert.match(line, /oldText not found/);
 });
 
-test("successful result output is absent while collapsed", () => {
-  const line = buildCompactToolLine(
+test("successful result output fills the remaining collapsed lines", () => {
+  const lines = buildCompactToolLine(
     internals({
-      callRendererComponent: new FakeComponent(["read packages/pi-commit/index.ts"]),
+      callRendererComponent: new FakeComponent(["grep /registerTool/ in packages"]),
       result: {
         isError: false,
-        content: [{ type: "text", text: "export default function commitExtension" }],
+        content: [
+          {
+            type: "text",
+            text: "packages/foo.ts:12: const x = 1\npackages/bar.ts:3: const y = 2\npackages/baz.ts:9: const z = 3",
+          },
+        ],
       },
     }),
     120,
-  )[0];
-  assert.equal(line, "🔧 read packages/pi-commit/index.ts");
+  );
+  assert.equal(lines.length, 3);
+  assert.equal(lines[0], "🔧 grep /registerTool/ in packages");
+  assert.equal(lines[1], "packages/foo.ts:12: const x = 1");
+  assert.equal(lines[2], "packages/bar.ts:3: const y = 2");
+});
+
+test("result output never replaces a three-line call renderer", () => {
+  const lines = buildCompactToolLine(
+    internals({
+      callRendererComponent: new FakeComponent(["line one", "line two", "line three"]),
+      result: { isError: false, content: [{ type: "text", text: "RESULT" }] },
+    }),
+    120,
+  );
+  assert.equal(lines.length, 3);
+  assert.doesNotMatch(lines.join("\n"), /RESULT/);
+});
+
+test("result fill respects narrow widths", () => {
+  const lines = buildCompactToolLine(
+    internals({
+      callRendererComponent: new FakeComponent(["grep /x/ in packages"]),
+      result: { isError: false, content: [{ type: "text", text: "abcdefghij" }] },
+    }),
+    10,
+  );
+  assert.equal(lines.length, 2);
+  assert.ok(lines.every((line) => visibleWidth(line) <= 10));
 });
 
 test("intentionally hidden component stays hidden", () => {

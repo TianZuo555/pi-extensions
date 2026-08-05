@@ -1,12 +1,21 @@
-import type { AssistantMessage } from "@earendil-works/pi-ai";
+import type { AssistantMessage, TextContent } from "@earendil-works/pi-ai";
 import {
   AssistantMessageComponent,
   ToolExecutionComponent,
   VERSION,
 } from "@earendil-works/pi-coding-agent";
 import type { Component, Container } from "@earendil-works/pi-tui";
+import {
+  buildCompactReasoningPreview,
+  CompactReasoningComponent,
+  type CompactReasoningPreview,
+} from "./compact-reasoning.ts";
 import { buildCompactToolGroup } from "./compact-tool-group.ts";
-import { firstSanitizedLine, sanitizeCompactText } from "./sanitize-text.ts";
+import {
+  getThinkingSegmentText,
+  parseAssistantContentSegments,
+} from "./content-segments.ts";
+import { firstSanitizedLines } from "./sanitize-text.ts";
 import { tryReadToolExecutionInternals } from "./tool-internals.ts";
 
 const PATCH_SYMBOL = Symbol.for("pi-tian-compact-output.patch-state");
@@ -23,9 +32,33 @@ type AssistantPrototype = typeof AssistantMessageComponent.prototype & {
 
 interface ToolRecord {
   component: ToolExecutionComponent;
+  toolCallId?: string;
   sequence: number;
   order: number;
   parent?: Container;
+  assistant?: AssistantMessageComponent;
+  /** True when a later component re-created the same toolCallId (pi re-creates
+   * components for finished tools on every message_update). Ghosts never
+   * execute, never group, and render nothing; the first record wins. */
+  duplicate: boolean;
+}
+
+interface AssistantTurnState {
+  assistant: AssistantMessageComponent;
+  parent?: Container;
+  lastMessage?: AssistantMessage;
+  reasoningComponents: Map<number, CompactReasoningComponent>;
+  reasoningPreviews: Map<number, CompactReasoningPreview>;
+  /** Index of each tools segment (among tools segments, per message) mapped to
+   * its global sequence. Stable across stream chunks, unique across turns. */
+  toolRunSequences: Map<number, number>;
+}
+
+const COMPACT_REASON_LINE_COUNT = 3;
+
+export interface CompactReasonState {
+  segmentIndex: number;
+  summary?: string;
 }
 
 interface PatchState {
@@ -35,10 +68,13 @@ interface PatchState {
   assistantMessages: WeakMap<AssistantMessageComponent, AssistantMessage>;
   assistantDisplayMessages: WeakMap<AssistantMessage, AssistantMessage>;
   reasoningExpanded: boolean;
+  assistantReasonStates: WeakMap<AssistantMessageComponent, CompactReasonState>;
+  assistantTurns: WeakMap<AssistantMessageComponent, AssistantTurnState>;
+  lastUpdatedAssistant?: AssistantMessageComponent;
+  reorderingTurn: boolean;
   toolRecords: ToolRecord[];
   nextToolOrder: number;
   toolSequence: number;
-  toolSequenceOpen: boolean;
   installed: boolean;
   unsupportedReason?: string;
   originalContainerAddChild?: ContainerAddChild;
@@ -80,11 +116,13 @@ function createPatchState(): PatchState {
     assistantMessages: new WeakMap(),
     assistantDisplayMessages: new WeakMap(),
     reasoningExpanded: false,
+    assistantReasonStates: new WeakMap(),
+    assistantTurns: new WeakMap(),
+    reorderingTurn: false,
     toolRecords: [],
     nextToolOrder: 0,
-    toolSequence: 0,
-    toolSequenceOpen: false,
-    installed: false,
+  toolSequence: 0,
+  installed: false,
   };
 }
 
@@ -102,71 +140,93 @@ function hasPatchablePrototypeMethods(): boolean {
   );
 }
 
-function hasNonEmptyAssistantText(message: AssistantMessage): boolean {
-  return message.content.some(
-    (part) => part.type === "text" && typeof part.text === "string" && part.text.trim().length > 0,
-  );
-}
-
-function hasAssistantToolCall(message: AssistantMessage): boolean {
-  return message.content.some((part) => part.type === "toolCall");
-}
-
-function noteAssistantMessage(state: PatchState, message: AssistantMessage): void {
-  if (hasAssistantToolCall(message)) {
-    if (!state.toolSequenceOpen) {
-      state.toolSequence++;
-      state.toolSequenceOpen = true;
-    }
-    return;
-  }
-
-  if (hasNonEmptyAssistantText(message)) {
-    state.toolSequence++;
-    state.toolSequenceOpen = false;
-  }
-}
-
-export function compactThinkingSummary(message: AssistantMessage): string | undefined {
-  const lines: string[] = [];
+function getThinkingSegments(message: AssistantMessage): string[] {
+  const segments: string[] = [];
   for (const part of message.content) {
     if (part.type !== "thinking") continue;
-    const line = firstSanitizedLine(part.thinking);
-    if (line) lines.push(line);
+    const thinking = part.thinking.trim();
+    if (thinking) segments.push(thinking);
   }
-  if (lines.length === 0) return undefined;
-  return sanitizeCompactText(lines.join(" · "));
+  return segments;
 }
 
-export function formatThinkingWorkingMessage(message: AssistantMessage): string {
-  const summary = compactThinkingSummary(message);
-  return summary ? `Thinking: ${summary}` : "Thinking";
+export function compactThinkingSummary(
+  message: AssistantMessage,
+  previous?: CompactReasonState,
+): { summary?: string; state: CompactReasonState } {
+  const segments = getThinkingSegments(message);
+  if (segments.length === 0) {
+    return { summary: undefined, state: { segmentIndex: -1 } };
+  }
+
+  const segmentIndex = segments.length - 1;
+
+  if (previous?.summary !== undefined && segmentIndex === previous.segmentIndex) {
+    return { summary: previous.summary, state: previous };
+  }
+
+  const latest = segments[segmentIndex] ?? "";
+  if (segmentIndex > (previous?.segmentIndex ?? -1) && firstSanitizedLines(latest, 1).length === 0) {
+    return {
+      summary: previous?.summary,
+      state: previous ?? { segmentIndex: -1 },
+    };
+  }
+
+  const lines = firstSanitizedLines(latest, COMPACT_REASON_LINE_COUNT);
+  if (lines.length === 0) {
+    return {
+      summary: previous?.summary,
+      state: previous ?? { segmentIndex: -1 },
+    };
+  }
+
+  const summary = lines.join("\n");
+  return { summary, state: { segmentIndex, summary } };
+}
+
+export function formatThinkingWorkingMessage(
+  message: AssistantMessage,
+  previous?: CompactReasonState,
+): { message: string; state: CompactReasonState } {
+  const { summary, state } = compactThinkingSummary(message, previous);
+  if (!summary) {
+    return { message: "Thinking", state };
+  }
+  const oneLine = summary.replace(/\s*\n\s*/g, " · ");
+  return { message: `Thinking: ${oneLine}`, state };
+}
+
+function isCommentaryText(part: TextContent): boolean {
+  const signature = part.textSignature;
+  if (!signature?.startsWith("{")) return false;
+  try {
+    const parsed = JSON.parse(signature) as { v?: number; phase?: string };
+    return parsed.v === 1 && parsed.phase === "commentary";
+  } catch {
+    return false;
+  }
 }
 
 function compactAssistantMessage(message: AssistantMessage): AssistantMessage {
-  if (!message.content.some((part) => part.type === "thinking")) {
+  const hasThinking = message.content.some((part) => part.type === "thinking");
+  const hasCommentary = message.content.some(
+    (part) => part.type === "text" && isCommentaryText(part),
+  );
+  if (!hasThinking && !hasCommentary) {
     return message;
   }
 
-  const summary = compactThinkingSummary(message);
-  const content: AssistantMessage["content"] = [];
-  let insertedThinking = false;
-
-  for (const part of message.content) {
-    if (part.type !== "thinking") {
-      content.push(part);
-      continue;
-    }
-    if (!insertedThinking && summary) {
-      content.push({ ...part, thinking: summary });
-      insertedThinking = true;
-    }
-  }
+  const content = message.content.filter((part) => {
+    if (part.type === "thinking") return false;
+    if (part.type === "text" && isCommentaryText(part)) return false;
+    return true;
+  });
 
   return { ...message, content };
 }
 
-function withAssistantThinkingVisible<T>(
+function withAssistantThinkingHidden<T>(
   component: AssistantMessageComponent,
   render: () => T,
 ): T {
@@ -176,7 +236,7 @@ function withAssistantThinkingVisible<T>(
   }
 
   const wasHidden = internals.hideThinkingBlock;
-  internals.hideThinkingBlock = false;
+  internals.hideThinkingBlock = true;
   try {
     return render();
   } finally {
@@ -184,24 +244,215 @@ function withAssistantThinkingVisible<T>(
   }
 }
 
+function readToolCallId(component: ToolExecutionComponent): string | undefined {
+  const value = (component as unknown as { toolCallId?: unknown }).toolCallId;
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function findToolRecordByCallId(state: PatchState, toolCallId: string): ToolRecord | undefined {
+  return state.toolRecords.find(
+    (record) => record.toolCallId === toolCallId && !record.duplicate,
+  );
+}
+
+function findToolComponent(state: PatchState, toolCallId: string): ToolExecutionComponent | undefined {
+  return findToolRecordByCallId(state, toolCallId)?.component;
+}
+
+function getAssistantTurn(state: PatchState, assistant: AssistantMessageComponent): AssistantTurnState {
+  const existing = state.assistantTurns.get(assistant);
+  if (existing) return existing;
+  const turn: AssistantTurnState = {
+    assistant,
+    reasoningComponents: new Map(),
+    reasoningPreviews: new Map(),
+    toolRunSequences: new Map(),
+  };
+  state.assistantTurns.set(assistant, turn);
+  return turn;
+}
+
+function assignToolSequences(
+  state: PatchState,
+  turn: AssistantTurnState,
+  message: AssistantMessage,
+): void {
+  const segments = parseAssistantContentSegments(message.content);
+  let runIndex = 0;
+  for (const segment of segments) {
+    if (segment.kind !== "tools") continue;
+    let sequence = turn.toolRunSequences.get(runIndex);
+    if (sequence === undefined) {
+      state.toolSequence++;
+      sequence = state.toolSequence;
+      turn.toolRunSequences.set(runIndex, sequence);
+    }
+    for (const toolCallId of segment.toolCallIds) {
+      const record = findToolRecordByCallId(state, toolCallId);
+      if (record) {
+        record.sequence = sequence;
+      }
+    }
+    runIndex++;
+  }
+}
+
+function syncReasoningComponents(
+  state: PatchState,
+  turn: AssistantTurnState,
+  message: AssistantMessage,
+  expanded: boolean,
+): void {
+  const segments = parseAssistantContentSegments(message.content);
+  const activeSegments = new Set<number>();
+
+  for (const segment of segments) {
+    if (segment.kind !== "thinking") continue;
+    activeSegments.add(segment.segmentIndex);
+
+    const thinking = getThinkingSegmentText(message.content, segment.segmentIndex);
+    if (!thinking) continue;
+
+    const previous = turn.reasoningPreviews.get(segment.segmentIndex);
+    const preview = expanded
+      ? undefined
+      : buildCompactReasoningPreview(thinking, segment.segmentIndex, previous);
+    if (preview) {
+      turn.reasoningPreviews.set(segment.segmentIndex, preview);
+    }
+
+    let component = turn.reasoningComponents.get(segment.segmentIndex);
+    if (!component) {
+      component = new CompactReasoningComponent();
+      turn.reasoningComponents.set(segment.segmentIndex, component);
+      const parent = turn.parent;
+      if (parent) {
+        parent.addChild(component);
+      }
+    }
+    component.updateContent(thinking, preview, expanded);
+  }
+
+  for (const [segmentIndex, component] of turn.reasoningComponents.entries()) {
+    if (activeSegments.has(segmentIndex)) continue;
+    component.updateContent(undefined, undefined, false);
+    turn.reasoningPreviews.delete(segmentIndex);
+  }
+}
+
+function buildTurnComponentOrder(state: PatchState, turn: AssistantTurnState): Component[] {
+  if (!turn.lastMessage) return [];
+
+  const ordered: Component[] = [];
+  const segments = parseAssistantContentSegments(turn.lastMessage.content);
+
+  for (const segment of segments) {
+    if (segment.kind === "thinking") {
+      const component = turn.reasoningComponents.get(segment.segmentIndex);
+      if (component) ordered.push(component);
+      continue;
+    }
+    for (const toolCallId of segment.toolCallIds) {
+      const component = findToolComponent(state, toolCallId);
+      if (component) ordered.push(component);
+    }
+  }
+
+  ordered.push(turn.assistant);
+  return ordered.filter((component) => {
+    const parent = turn.parent;
+    return parent ? parent.children.includes(component) : true;
+  });
+}
+
+function reorderTurnComponents(parent: Container, ordered: readonly Component[]): void {
+  if (ordered.length === 0) return;
+
+  const orderedSet = new Set(ordered);
+  const indices = ordered
+    .map((component) => parent.children.indexOf(component))
+    .filter((index) => index >= 0);
+  if (indices.length === 0) return;
+
+  const minIndex = Math.min(...indices);
+  const maxIndex = Math.max(...indices);
+  const tail = parent.children.slice(maxIndex + 1);
+
+  for (const component of ordered) {
+    parent.removeChild(component);
+  }
+  for (const component of tail) {
+    parent.removeChild(component);
+  }
+  for (const component of ordered) {
+    parent.addChild(component);
+  }
+  for (const component of tail) {
+    parent.addChild(component);
+  }
+}
+
+function tryReorderAssistantTurn(state: PatchState, assistant: AssistantMessageComponent): void {
+  if (state.reorderingTurn) return;
+
+  const turn = state.assistantTurns.get(assistant);
+  if (!turn?.lastMessage) return;
+
+  const expanded = state.assistantExpandedStates.get(assistant) ?? state.reasoningExpanded;
+  if (expanded) return;
+
+  assignToolSequences(state, turn, turn.lastMessage);
+
+  const parent = turn.parent;
+  if (!parent) return;
+
+  turn.parent = parent;
+  const ordered = buildTurnComponentOrder(state, turn);
+  if (ordered.length === 0) return;
+
+  state.reorderingTurn = true;
+  try {
+    reorderTurnComponents(parent, ordered);
+  } finally {
+    state.reorderingTurn = false;
+  }
+}
+
 function findToolRecord(state: PatchState, component: ToolExecutionComponent): ToolRecord | undefined {
   return state.toolRecords.find((record) => record.component === component);
 }
 
-function ensureToolRecord(state: PatchState, component: ToolExecutionComponent): ToolRecord {
+function ensureToolRecord(
+  state: PatchState,
+  component: ToolExecutionComponent,
+  assistant?: AssistantMessageComponent,
+): ToolRecord {
   const existing = findToolRecord(state, component);
-  if (existing) return existing;
-
-  if (!state.toolSequenceOpen) {
-    state.toolSequence++;
-    state.toolSequenceOpen = true;
+  if (existing) {
+    if (assistant) existing.assistant = assistant;
+    const toolCallId = readToolCallId(component);
+    if (toolCallId) existing.toolCallId = toolCallId;
+    return existing;
   }
 
   const record: ToolRecord = {
     component,
-    sequence: state.toolSequence,
+    toolCallId: readToolCallId(component),
+    sequence: 0,
     order: state.nextToolOrder++,
+    assistant,
+    duplicate: false,
   };
+  const callId = record.toolCallId;
+  record.duplicate =
+    callId !== undefined &&
+    state.toolRecords.some(
+      (other) =>
+        other !== record &&
+        other.toolCallId === callId &&
+        !other.duplicate &&
+        isMounted(other),
+    );
   state.toolRecords.push(record);
   return record;
 }
@@ -213,7 +464,13 @@ function isMounted(record: ToolRecord): boolean {
 function getToolGroup(state: PatchState, record: ToolRecord): ToolRecord[] {
   return state.toolRecords
     .filter((candidate) => {
-      if (candidate.sequence !== record.sequence || !isMounted(candidate)) return false;
+      if (
+        candidate.duplicate ||
+        candidate.sequence !== record.sequence ||
+        !isMounted(candidate)
+      ) {
+        return false;
+      }
       if (record.parent) return candidate.parent === record.parent;
       return !candidate.parent;
     })
@@ -267,9 +524,22 @@ export function installUiPatches(): PatchInstallResult {
   ) {
     originalContainerAddChild.call(this, component);
     const current = getPatchState();
-    if (current?.installed && component instanceof ToolExecutionComponent) {
-      const record = ensureToolRecord(current, component);
+    if (!current?.installed) return;
+
+    if (component instanceof AssistantMessageComponent) {
+      const turn = getAssistantTurn(current, component);
+      turn.parent = this;
+      return;
+    }
+
+    if (component instanceof ToolExecutionComponent) {
+      const record = ensureToolRecord(current, component, current.lastUpdatedAssistant);
       record.parent = this;
+      if (current.lastUpdatedAssistant) {
+        const turn = getAssistantTurn(current, current.lastUpdatedAssistant);
+        turn.parent = this;
+        tryReorderAssistantTurn(current, current.lastUpdatedAssistant);
+      }
     }
   };
 
@@ -307,6 +577,9 @@ export function installUiPatches(): PatchInstallResult {
       }
 
       const record = ensureToolRecord(current, this);
+      if (record.duplicate) {
+        return [];
+      }
       const group = getToolGroup(current, record);
       if (group.at(-1)?.component !== this) {
         return [];
@@ -329,14 +602,21 @@ export function installUiPatches(): PatchInstallResult {
 
     try {
       const sourceMessage = current.assistantDisplayMessages.get(message) ?? message;
-      noteAssistantMessage(current, sourceMessage);
+      current.lastUpdatedAssistant = this;
       current.assistantMessages.set(this, sourceMessage);
+
+      const turn = getAssistantTurn(current, this);
+      turn.lastMessage = sourceMessage;
+
       const expanded = current.assistantExpandedStates.get(this) ?? current.reasoningExpanded;
-      const displayMessage = expanded ? sourceMessage : compactAssistantMessage(sourceMessage);
+      syncReasoningComponents(current, turn, sourceMessage, expanded);
+
+      const displayMessage = compactAssistantMessage(sourceMessage);
       if (displayMessage !== sourceMessage) {
         current.assistantDisplayMessages.set(displayMessage, sourceMessage);
       }
-      withAssistantThinkingVisible(this, () => originalAssistantUpdateContent.call(this, displayMessage));
+      withAssistantThinkingHidden(this, () => originalAssistantUpdateContent.call(this, displayMessage));
+      tryReorderAssistantTurn(current, this);
     } catch {
       originalAssistantUpdateContent.call(this, message);
     }
@@ -353,11 +633,15 @@ export function installUiPatches(): PatchInstallResult {
       const message = current.assistantMessages.get(this);
       if (message) {
         try {
-          const displayMessage = expanded ? message : compactAssistantMessage(message);
+          const turn = getAssistantTurn(current, this);
+          turn.lastMessage = message;
+          syncReasoningComponents(current, turn, message, expanded);
+          const displayMessage = compactAssistantMessage(message);
           if (displayMessage !== message) {
             current.assistantDisplayMessages.set(displayMessage, message);
           }
-          withAssistantThinkingVisible(this, () => originalAssistantUpdateContent.call(this, displayMessage));
+          withAssistantThinkingHidden(this, () => originalAssistantUpdateContent.call(this, displayMessage));
+          tryReorderAssistantTurn(current, this);
         } catch {
           originalAssistantUpdateContent.call(this, message);
         }

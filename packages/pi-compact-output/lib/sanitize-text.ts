@@ -40,10 +40,19 @@ export function sanitizeCompactText(text: string): string {
 
 /** Return the first non-empty sanitized line from capped tool error text. */
 export function firstSanitizedLine(text: string): string | undefined {
+  return firstSanitizedLines(text, 1)[0];
+}
+
+/** Return up to `count` non-empty sanitized lines from capped text. */
+export function firstSanitizedLines(text: string, count: number): string[] {
+  if (count <= 0) return [];
   const capped = capUntrustedText(text);
+  const lines: string[] = [];
   for (const line of capped.split("\n")) {
     const sanitized = sanitizeBoundedLine(line);
-    if (sanitized) return sanitized;
+    if (!sanitized) continue;
+    lines.push(sanitized);
+    if (lines.length >= count) break;
   }
-  return undefined;
+  return lines;
 }

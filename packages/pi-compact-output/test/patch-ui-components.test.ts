@@ -43,6 +43,35 @@ function createGroupParent(): Container {
   return new ToolContainer();
 }
 
+function renderAssistantTurn(
+  message: AssistantMessage,
+  tools: Array<{ id: string; name: string; description: string }> = [],
+): string {
+  const parent = createGroupParent();
+  const assistant = new AssistantMessageComponent(undefined, true);
+  parent.addChild(assistant);
+  assistant.updateContent(message);
+  for (const tool of tools) {
+    const component = new ToolExecutionComponent(
+      tool.name,
+      tool.id,
+      {},
+      {},
+      {
+        name: tool.name,
+        renderCall: () => new Text(tool.description, 0, 0),
+        renderResult: () => new Text("", 0, 0),
+      } as never,
+      createTui(),
+      process.cwd(),
+    );
+    component.setExpanded(false);
+    component.updateResult({ isError: false, content: [] }, false);
+    parent.addChild(component);
+  }
+  return parent.render(120).join("\n");
+}
+
 function testUsage() {
   return {
     input: 1,
@@ -162,7 +191,7 @@ test("images are absent from the collapsed tool area and restored when expanded"
   assert.deepEqual(expanded, expected);
 });
 
-test("FFF-style grep results show one collapsed line and return expanded", () => {
+test("FFF-style grep results show the call plus two result lines and return expanded", () => {
   const install = installUiPatches();
   if (!install.installed) {
     return;
@@ -201,8 +230,8 @@ test("FFF-style grep results show one collapsed line and return expanded", () =>
 
     const collapsed = component.render(120).join("\n");
     assert.match(collapsed, /needle/);
-    assert.doesNotMatch(collapsed, /one\.ts/);
-    assert.doesNotMatch(collapsed, /two\.ts/);
+    assert.match(collapsed, /one\.ts/);
+    assert.match(collapsed, /two\.ts/);
     assert.doesNotMatch(collapsed, /more matches/);
 
     component.setExpanded(true);
@@ -214,7 +243,7 @@ test("FFF-style grep results show one collapsed line and return expanded", () =>
   }
 });
 
-test("working indicator preview keeps reasoning on one line", () => {
+test("working indicator preview summarizes up to three reasoning lines", () => {
   const message = assistantMessage(
     [
       {
@@ -227,18 +256,17 @@ test("working indicator preview keeps reasoning on one line", () => {
   );
 
   const preview = formatThinkingWorkingMessage(message);
-  assert.equal(preview, "Thinking: # Plan · second pass");
-  assert.doesNotMatch(preview, /\r?\n/);
+  assert.equal(preview.message, "Thinking: second pass · with more detail");
+  assert.doesNotMatch(preview.message, /\r?\n/);
 });
 
-test("GPT-5.6 fixture with several headings in a thinking block renders one reasoning line", () => {
+test("GPT-5.6 fixture with several headings in a thinking block renders three reasoning lines", () => {
   const install = installUiPatches();
   if (!install.installed) {
     return;
   }
 
-  const component = new AssistantMessageComponent(undefined, true);
-  component.updateContent(
+  const rendered = renderAssistantTurn(
     assistantMessage(
       [
         {
@@ -249,13 +277,10 @@ test("GPT-5.6 fixture with several headings in a thinking block renders one reas
       "toolUse",
     ),
   );
-  const rendered = component.render(120).join("\n");
   assert.match(rendered, /Plan/i);
-  assert.doesNotMatch(rendered, /Search|Patch index/i);
-  assert.equal(
-    (component as unknown as { hideThinkingBlock: boolean }).hideThinkingBlock,
-    true,
-  );
+  assert.match(rendered, /Search/i);
+  assert.match(rendered, /Look for registerTool/i);
+  assert.doesNotMatch(rendered, /Patch index/i);
 });
 
 test("Ctrl+O expands the full reasoning block and collapses it again", () => {
@@ -264,6 +289,7 @@ test("Ctrl+O expands the full reasoning block and collapses it again", () => {
     return;
   }
 
+  const parent = createGroupParent();
   const component = new AssistantMessageComponent();
   const message = assistantMessage(
     [
@@ -274,35 +300,37 @@ test("Ctrl+O expands the full reasoning block and collapses it again", () => {
     ],
     "toolUse",
   );
+  parent.addChild(component);
   component.updateContent(message);
-  assert.match(component.render(120).join("\n"), /Plan/i);
-  assert.doesNotMatch(component.render(120).join("\n"), /Search|Patch index/i);
+  assert.match(parent.render(120).join("\n"), /Plan/i);
+  assert.match(parent.render(120).join("\n"), /Search/i);
+  assert.doesNotMatch(parent.render(120).join("\n"), /Patch index/i);
   component.invalidate();
-  assert.match(component.render(120).join("\n"), /Plan/i);
-  assert.doesNotMatch(component.render(120).join("\n"), /Search|Patch index/i);
+  assert.match(parent.render(120).join("\n"), /Plan/i);
+  assert.doesNotMatch(parent.render(120).join("\n"), /Patch index/i);
 
   const expandable = component as unknown as { setExpanded(expanded: boolean): void };
   expandable.setExpanded(true);
-  const expanded = component.render(120).join("\n");
+  const expanded = parent.render(120).join("\n");
   assert.match(expanded, /Plan|Search|Patch index/i);
 
   expandable.setExpanded(false);
-  const collapsedAgain = component.render(120).join("\n");
+  const collapsedAgain = parent.render(120).join("\n");
   assert.match(collapsedAgain, /Plan/i);
-  assert.doesNotMatch(collapsedAgain, /Search|Patch index/i);
+  assert.match(collapsedAgain, /Search/i);
+  assert.doesNotMatch(collapsedAgain, /Patch index/i);
   component.invalidate();
   expandable.setExpanded(true);
-  assert.match(component.render(120).join("\n"), /Plan|Search|Patch index/i);
+  assert.match(parent.render(120).join("\n"), /Plan|Search|Patch index/i);
 });
 
-test("several consecutive thinking blocks render one compact reasoning line", () => {
+test("several consecutive thinking blocks render the latest compact reasoning segment", () => {
   const install = installUiPatches();
   if (!install.installed) {
     return;
   }
 
-  const component = new AssistantMessageComponent();
-  component.updateContent(
+  const rendered = renderAssistantTurn(
     assistantMessage(
       [
         { type: "thinking", thinking: "first pass" },
@@ -311,7 +339,7 @@ test("several consecutive thinking blocks render one compact reasoning line", ()
       "toolUse",
     ),
   );
-  assert.match(component.render(120).join("\n"), /first pass · second pass/);
+  assert.match(rendered, /first pass/);
 });
 
 test("several separate thinking-only assistant messages each render one line", () => {
@@ -321,11 +349,10 @@ test("several separate thinking-only assistant messages each render one line", (
   }
 
   for (const thinking of ["round one", "round two", "round three"]) {
-    const component = new AssistantMessageComponent();
-    component.updateContent(
+    const rendered = renderAssistantTurn(
       assistantMessage([{ type: "thinking", thinking }], "toolUse"),
     );
-    assert.match(component.render(120).join("\n"), new RegExp(thinking));
+    assert.match(rendered, new RegExp(thinking));
   }
 });
 
@@ -335,8 +362,7 @@ test("thinking followed by final text preserves the final text", () => {
     return;
   }
 
-  const component = new AssistantMessageComponent();
-  component.updateContent(
+  const rendered = renderAssistantTurn(
     assistantMessage(
       [
         { type: "thinking", thinking: "hidden reasoning" },
@@ -345,7 +371,6 @@ test("thinking followed by final text preserves the final text", () => {
       "stop",
     ),
   );
-  const rendered = component.render(120).join("\n");
   assert.match(rendered, /final answer/);
   assert.match(rendered, /hidden reasoning/);
 });
@@ -462,7 +487,7 @@ test("unsupported Pi versions leave original rendering active", () => {
   assert.equal(ToolExecutionComponent.prototype.render, beforeRender);
 });
 
-test("live assistant updates put the one-line reasoning preview in the working message", () => {
+test("extension leaves pi's default working message untouched", () => {
   const handlers = new Map<string, (event: unknown, ctx: unknown) => unknown>();
   const pi = {
     on(event: string, handler: (event: unknown, ctx: unknown) => unknown) {
@@ -471,27 +496,283 @@ test("live assistant updates put the one-line reasoning preview in the working m
   } as unknown as ExtensionAPI;
   compactOutputExtension(pi);
 
-  let workingMessage: string | undefined;
+  let setWorkingMessageCalls = 0;
   const ctx = {
     mode: "tui",
     ui: {
-      setWorkingMessage(message?: string) {
-        workingMessage = message;
+      setWorkingMessage() {
+        setWorkingMessageCalls++;
       },
     },
   } as unknown as ExtensionContext;
-  const handler = handlers.get("message_update");
-  assert.ok(handler);
-  handler(
-    {
-      message: assistantMessage(
-        [{ type: "thinking", thinking: "# Plan\n\n## Search\nInspect the registry." }],
-        "toolUse",
-      ),
-    },
-    ctx,
+
+  const sessionStart = handlers.get("session_start");
+  assert.ok(sessionStart);
+  sessionStart({}, ctx);
+
+  // No per-agent or message wiring: the floating line stays pi's own
+  // "Working..." and never mirrors reasoning content.
+  assert.equal(handlers.get("agent_start"), undefined);
+  assert.equal(handlers.get("agent_end"), undefined);
+  assert.equal(handlers.get("message_update"), undefined);
+  assert.equal(setWorkingMessageCalls, 0);
+});
+
+test("streaming within one reasoning segment keeps the first compact preview", () => {
+  const install = installUiPatches();
+  if (!install.installed) {
+    return;
+  }
+
+  const first = assistantMessage([{ type: "thinking", thinking: "alpha" }], "toolUse");
+  const second = assistantMessage([{ type: "thinking", thinking: "alpha beta" }], "toolUse");
+  const firstPreview = formatThinkingWorkingMessage(first);
+  const secondPreview = formatThinkingWorkingMessage(second, firstPreview.state);
+  assert.equal(firstPreview.message, "Thinking: alpha");
+  assert.equal(secondPreview.message, "Thinking: alpha");
+});
+
+test("streaming within one reasoning segment grows the compact transcript preview", () => {
+  const install = installUiPatches();
+  if (!install.installed) {
+    return;
+  }
+
+  const parent = createGroupParent();
+  const component = new AssistantMessageComponent();
+  parent.addChild(component);
+
+  component.updateContent(assistantMessage([{ type: "thinking", thinking: "The" }], "toolUse"));
+  const firstRender = parent.render(120).join("\n");
+  assert.match(firstRender, /The/);
+  assert.doesNotMatch(firstRender, /registry/);
+
+  component.updateContent(
+    assistantMessage(
+      [{ type: "thinking", thinking: "The plan is to search the registry for registerTool." }],
+      "toolUse",
+    ),
   );
-  assert.equal(workingMessage, "Thinking: # Plan");
+  const secondRender = parent.render(120).join("\n");
+  assert.match(secondRender, /plan is to search the registry/);
+});
+
+test("codex commentary text is hidden while thinking is compact", () => {
+  const install = installUiPatches();
+  if (!install.installed) {
+    return;
+  }
+
+  const parent = createGroupParent();
+  const component = new AssistantMessageComponent();
+  parent.addChild(component);
+  component.updateContent(
+    assistantMessage(
+      [
+        { type: "thinking", thinking: "Inspect the registry." },
+        {
+          type: "text",
+          text: "Inspect the registry.",
+          textSignature: JSON.stringify({ v: 1, id: "msg_1", phase: "commentary" }),
+        },
+      ],
+      "toolUse",
+    ),
+  );
+  const collapsed = parent.render(120).join("\n");
+  assert.match(collapsed, /Inspect the registry/i);
+  assert.equal((collapsed.match(/Inspect the registry/gi) ?? []).length, 1);
+
+  const expandable = component as unknown as { setExpanded(expanded: boolean): void };
+  expandable.setExpanded(true);
+  const expanded = parent.render(120).join("\n");
+  assert.match(expanded, /Inspect the registry/i);
+  assert.doesNotMatch(expanded, /Thinking\.\.\./i);
+  assert.equal((expanded.match(/Inspect the registry/gi) ?? []).length, 1);
+});
+
+test("reasoning and tool groups stay in content order", () => {
+  const install = installUiPatches();
+  if (!install.installed) {
+    return;
+  }
+
+  const rendered = renderAssistantTurn(
+    assistantMessage(
+      [
+        { type: "thinking", thinking: "before tools" },
+        { type: "toolCall", id: "t1", name: "read", arguments: {} },
+        { type: "toolCall", id: "t2", name: "edit", arguments: {} },
+        { type: "thinking", thinking: "after tools" },
+        { type: "toolCall", id: "t3", name: "bash", arguments: {} },
+      ],
+      "toolUse",
+    ),
+    [
+      { id: "t1", name: "read", description: "read one.ts" },
+      { id: "t2", name: "edit", description: "edit two.ts" },
+      { id: "t3", name: "bash", description: "npm test" },
+    ],
+  );
+
+  const beforeIdx = rendered.indexOf("before tools");
+  const toolGroupIdx = rendered.indexOf("edit two.ts");
+  const afterIdx = rendered.indexOf("after tools");
+  const bashIdx = rendered.indexOf("npm test");
+  assert.ok(beforeIdx >= 0 && toolGroupIdx >= 0 && afterIdx >= 0 && bashIdx >= 0);
+  assert.ok(beforeIdx < toolGroupIdx);
+  assert.ok(toolGroupIdx < afterIdx);
+  assert.ok(afterIdx < bashIdx);
+});
+
+test("re-created components for finished tools keep one block per run", () => {
+  const install = installUiPatches();
+  if (!install.installed) {
+    return;
+  }
+
+  const parent = createGroupParent();
+  const assistant = new AssistantMessageComponent();
+  parent.addChild(assistant);
+  const pendingTools = new Map<string, ToolExecutionComponent>();
+  const toolCall = (id: string, name: string) => ({
+    type: "toolCall" as const,
+    id,
+    name,
+    arguments: {},
+  });
+
+  const makeTool = (id: string, name: string) => {
+    const component = new ToolExecutionComponent(
+      name,
+      id,
+      {},
+      {},
+      {
+        name,
+        renderCall: () => new Text(`${name} ${id}`, 0, 0),
+        renderResult: () => new Text("", 0, 0),
+      } as never,
+      createTui(),
+      process.cwd(),
+    );
+    component.setExpanded(false);
+    return component;
+  };
+
+  // Mirrors pi's message_update: updateContent, then create components for
+  // toolCalls that are not pending (finished tools get re-created as ghosts).
+  const messageUpdate = (message: AssistantMessage) => {
+    assistant.updateContent(message);
+    for (const content of message.content) {
+      if (content.type === "toolCall" && !pendingTools.has(content.id)) {
+        const component = makeTool(content.id, content.name);
+        parent.addChild(component);
+        pendingTools.set(content.id, component);
+      }
+    }
+  };
+
+  // First tool run: t1, t2 — both finish before the next chunk arrives.
+  messageUpdate(assistantMessage([toolCall("t1", "grep"), toolCall("t2", "read")], "toolUse"));
+  pendingTools.delete("t1");
+  pendingTools.delete("t2");
+
+  // Next chunk re-lists t1/t2 (finished => pi re-creates ghost components),
+  // then a reasoning block and the second tool run t3.
+  messageUpdate(
+    assistantMessage(
+      [
+        toolCall("t1", "grep"),
+        toolCall("t2", "read"),
+        { type: "thinking", thinking: "Now check the second thing." },
+        toolCall("t3", "grep"),
+      ],
+      "toolUse",
+    ),
+  );
+
+  const rendered = parent.render(120).join("\n");
+  assert.match(rendered, /read t2/);
+  assert.equal(
+    (rendered.match(/read t2/g) ?? []).length,
+    1,
+    "ghost re-creations must not render a duplicate block",
+  );
+  assert.match(rendered, /Now check the second thing/);
+  assert.match(rendered, /grep t3/);
+  assert.ok(rendered.indexOf("read t2") < rendered.indexOf("Now check"), "first run before reasoning");
+  assert.ok(rendered.indexOf("Now check") < rendered.indexOf("grep t3"), "reasoning before second run");
+});
+
+test("tool runs in separate turns keep their own blocks", () => {
+  const install = installUiPatches();
+  if (!install.installed) {
+    return;
+  }
+
+  const parent = createGroupParent();
+  const toolCall = (id: string, name: string) => ({
+    type: "toolCall" as const,
+    id,
+    name,
+    arguments: {},
+  });
+
+  const makeTool = (id: string, name: string) => {
+    const component = new ToolExecutionComponent(
+      name,
+      id,
+      {},
+      {},
+      {
+        name,
+        renderCall: () => new Text(`${name} ${id}`, 0, 0),
+        renderResult: () => new Text("", 0, 0),
+      } as never,
+      createTui(),
+      process.cwd(),
+    );
+    component.setExpanded(false);
+    return component;
+  };
+
+  const runTurn = (tools: Array<[string, string]>) => {
+    const assistant = new AssistantMessageComponent();
+    parent.addChild(assistant);
+    assistant.updateContent(
+      assistantMessage(tools.map(([id, name]) => toolCall(id, name)), "toolUse"),
+    );
+    for (const [id, name] of tools) {
+      parent.addChild(makeTool(id, name));
+    }
+  };
+
+  // Turn 1: t1, t2 finish; user sends a new input; turn 2: t3, t4 run.
+  runTurn([["t1", "grep"], ["t2", "read"]]);
+  runTurn([["t3", "grep"], ["t4", "edit"]]);
+
+  const rendered = parent.render(120).join("\n");
+  assert.match(rendered, /read t2 · \+1 more/, "first turn keeps its block");
+  assert.match(rendered, /edit t4 · \+1 more/, "second turn gets its own block");
+  assert.doesNotMatch(rendered, /\+3 more/, "runs must not merge across turns");
+});
+
+test("assistant component hides original thinking while compact block renders it", () => {
+  const install = installUiPatches();
+  if (!install.installed) {
+    return;
+  }
+
+  const parent = createGroupParent();
+  const assistant = new AssistantMessageComponent(undefined, false);
+  parent.addChild(assistant);
+  assistant.updateContent(
+    assistantMessage([{ type: "thinking", thinking: "secret reasoning" }], "toolUse"),
+  );
+
+  assert.doesNotMatch(assistant.render(120).join("\n"), /secret reasoning/i);
+  assert.match(parent.render(120).join("\n"), /secret reasoning/i);
 });
 
 test("extension never calls registerTool", () => {
@@ -540,7 +821,7 @@ test("consecutive tools collapse to one line with the last tool's message, and e
 
   const collapsedLines = parent.render(100);
   const collapsed = collapsedLines.join("\n");
-  assert.ok(collapsedLines.length === 3, "one padded line area");
+  assert.ok(collapsedLines.length >= 5, "padded three-line tool area with margins");
   assert.match(collapsed, /🔧 edit second\.ts/);
   assert.match(collapsed, /\+1 more/);
   assert.doesNotMatch(collapsed, /read first\.ts/);
@@ -552,7 +833,7 @@ test("consecutive tools collapse to one line with the last tool's message, and e
   assert.ok(expanded.indexOf("read first.ts") < expanded.indexOf("edit second.ts"));
 });
 
-test("collapsed group shows only the last tool's call — no result preview", () => {
+test("collapsed group shows the last tool's call and result lines, never earlier results", () => {
   const install = installUiPatches();
   if (!install.installed) {
     return;
@@ -608,7 +889,7 @@ test("collapsed group shows only the last tool's call — no result preview", ()
 
   const collapsed = parent.render(100).join("\n");
   assert.match(collapsed, /🔧 read haystack\/one\.ts/);
-  assert.doesNotMatch(collapsed, /SECRET BUFFER/);
+  assert.match(collapsed, /SECRET BUFFER/);
   assert.doesNotMatch(collapsed, /one\.ts:1:export/);
   assert.match(collapsed, /\+1 more/);
 

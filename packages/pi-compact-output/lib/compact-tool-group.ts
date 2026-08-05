@@ -1,4 +1,4 @@
-import { Box, Text, truncateToWidth } from "@earendil-works/pi-tui";
+import { Box, Spacer, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import {
   buildCompactToolLine,
   type ToolExecutionInternals,
@@ -57,11 +57,18 @@ export function buildCompactToolGroup(
     return [];
   }
 
-  let line = lineParts[0];
-  if (items.length > 1) {
-    line = `${line} · +${items.length - 1} more`;
+  const contentLines = lineParts.slice(0, 3);
+  if (contentLines.length > 0 && items.length > 1) {
+    const lastIndex = contentLines.length - 1;
+    contentLines[lastIndex] = truncateToWidth(
+      `${contentLines[lastIndex]} · +${items.length - 1} more`,
+      contentWidth,
+    );
+  } else {
+    for (let i = 0; i < contentLines.length; i++) {
+      contentLines[i] = truncateToWidth(contentLines[i], contentWidth);
+    }
   }
-  line = truncateToWidth(line, contentWidth);
 
   const theme = getTheme();
   const box = new Box(
@@ -69,6 +76,11 @@ export function buildCompactToolGroup(
     1,
     theme ? (text) => theme.bg(groupBackground(items), text) : undefined,
   );
-  box.addChild(new Text(line, 0, 0));
-  return box.render(safeWidth);
+  for (const line of contentLines) {
+    box.addChild(new Text(line, 0, 0));
+  }
+
+  const topSpacer = new Spacer(1);
+  const bottomSpacer = new Spacer(1);
+  return [...topSpacer.render(safeWidth), ...box.render(safeWidth), ...bottomSpacer.render(safeWidth)];
 }
