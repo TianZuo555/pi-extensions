@@ -1,6 +1,11 @@
 // usage — show OpenAI Codex, GitHub Copilot, Z.ai (GLM Coding Plan), and
 // DeepSeek account usage in the pi coding agent.
 //
+// Architecture: query cache and in-flight dedup live in an Effect v4
+// `UsageRuntime` service behind one `ManagedRuntime` (see `src/runtime.ts`).
+// HTTP fetch/retry is in `src/fetch.ts`. This file is the thin imperative
+// boundary that runs effect programs via `runUsage` and owns UI sequencing.
+//
 // Commands:
 //   /usage            open a menu with current usage for configured providers
 //                     (Refresh re-queries; Close dismisses)
@@ -31,7 +36,6 @@ import {
   resolveCopilotToken,
   resolveDeepSeekToken,
   resolveZaiToken,
-  type ResolvedToken,
 } from "./lib/auth.ts";
 import { formatReports, formatStatusline, type ProviderState } from "./lib/format.ts";
 import {
@@ -39,15 +43,19 @@ import {
   COPILOT_PROVIDER_ID,
   DEEPSEEK_PROVIDER_ID,
   ZAI_PROVIDER_ID,
-  type ProviderReport,
-  queryCodexUsage,
-  queryCopilotUsage,
-  queryDeepSeekUsage,
-  queryZaiUsage,
+  queryCodexUsageEffect,
+  queryCopilotUsageEffect,
+  queryDeepSeekUsageEffect,
+  queryZaiUsageEffect,
 } from "./lib/providers.ts";
+import {
+  createUsageRuntime,
+  type ProviderQuerySpec,
+  runUsage,
+  UsageRuntime,
+} from "./src/runtime.ts";
 
 const STATUS_KEY = "usage";
-const CACHE_TTL_MS = 5 * 60 * 1000;
 const AZURE_BLUE = "\x1b[38;2;0;127;255m";
 const RESET_FOREGROUND = "\x1b[39m";
 const REFRESH = "Refresh";
@@ -55,14 +63,8 @@ const CLOSE = "Close";
 const NO_PROVIDER_LOGIN_MESSAGE =
   "No usage provider is configured. Log in to at least one provider with /login to view usage information.";
 
-interface ProviderSpec {
-  id: string;
-  name: string;
+interface ProviderSpec extends ProviderQuerySpec {
   statusLabel: string;
-  configureHint: string;
-  hasLoginInfo: (ctx: ExtensionContext) => boolean;
-  resolve: (ctx: ExtensionContext) => Promise<ResolvedToken | undefined>;
-  query: (token: string, signal?: AbortSignal) => Promise<ProviderReport>;
 }
 
 const PROVIDERS: ProviderSpec[] = [
@@ -73,7 +75,7 @@ const PROVIDERS: ProviderSpec[] = [
     configureHint: "sign in with /login and select OpenAI Codex",
     hasLoginInfo: (ctx) => hasProviderLoginInfo(ctx, CODEX_PROVIDER_ID, hasCodexLoginInfo),
     resolve: (ctx) => resolveCodexToken(ctx),
-    query: queryCodexUsage,
+    queryEffect: queryCodexUsageEffect,
   },
   {
     id: COPILOT_PROVIDER_ID,
@@ -83,7 +85,7 @@ const PROVIDERS: ProviderSpec[] = [
     hasLoginInfo: (ctx) =>
       hasProviderLoginInfo(ctx, COPILOT_PROVIDER_ID, hasCopilotLoginInfo),
     resolve: async () => resolveCopilotToken(),
-    query: queryCopilotUsage,
+    queryEffect: queryCopilotUsageEffect,
   },
   {
     id: ZAI_PROVIDER_ID,
@@ -92,7 +94,7 @@ const PROVIDERS: ProviderSpec[] = [
     configureHint: "set ZAI_API_KEY or sign in with /login and select Z.ai",
     hasLoginInfo: (ctx) => hasProviderLoginInfo(ctx, ZAI_PROVIDER_ID, hasZaiLoginInfo),
     resolve: async () => resolveZaiToken(),
-    query: queryZaiUsage,
+    queryEffect: queryZaiUsageEffect,
   },
   {
     id: DEEPSEEK_PROVIDER_ID,
@@ -102,14 +104,16 @@ const PROVIDERS: ProviderSpec[] = [
     hasLoginInfo: (ctx) =>
       hasProviderLoginInfo(ctx, DEEPSEEK_PROVIDER_ID, hasDeepSeekLoginInfo),
     resolve: async () => resolveDeepSeekToken(),
-    query: queryDeepSeekUsage,
+    queryEffect: queryDeepSeekUsageEffect,
   },
 ];
 
 export default function usageExtension(pi: ExtensionAPI): void {
-  const cache = new Map<string, { at: number; report: ProviderReport }>();
-  const inFlight = new Map<string, Promise<ProviderState>>();
+  const usageRuntime = createUsageRuntime();
+  const usageService = usageRuntime.runSync(UsageRuntime);
+  const sessionAbort = new AbortController();
   let statusBusy = false;
+  let closing: Promise<void> | undefined;
 
   const safeSetStatus = (ctx: ExtensionContext, value: string | undefined) => {
     try {
@@ -134,96 +138,30 @@ export default function usageExtension(pi: ExtensionAPI): void {
     }
   };
 
-  const queryProvider = async (
+  const queryProvider = (
     ctx: ExtensionContext,
     provider: ProviderSpec,
     force: boolean,
     signal?: AbortSignal,
   ): Promise<ProviderState> => {
-    // Do not even resolve auth (which can refresh OAuth) unless pi or one of
-    // this extension's documented fallback sources reports login information.
-    // This preflight is intentionally before cache lookup so logging out hides
-    // a previously cached report immediately.
-    if (!provider.hasLoginInfo(ctx)) {
-      return {
-        id: provider.id,
-        name: provider.name,
-        status: "unconfigured",
-        message: provider.configureHint,
-      };
-    }
-
-    const cached = cache.get(provider.id);
-    if (!force && cached && Date.now() - cached.at < CACHE_TTL_MS) {
-      return { id: provider.id, name: provider.name, status: "ready", report: cached.report };
-    }
-
-    // session_start and an immediate /usage command can otherwise resolve OAuth
-    // and hit the same endpoint concurrently. Share one request per provider to
-    // avoid token-refresh races and duplicate cold-start traffic.
-    const pending = inFlight.get(provider.id);
-    if (pending) return pending;
-
-    // Resolve + query inside one guard so a failure for one provider can never
-    // reject the sibling query (each provider is fully independent of the active
-    // model / the other provider).
-    const request = (async (): Promise<ProviderState> => {
-      try {
-        const resolved = await provider.resolve(ctx);
-        if (!resolved) {
-          return {
-            id: provider.id,
-            name: provider.name,
-            status: "unconfigured",
-            message: provider.configureHint,
-          };
-        }
-        const report = await provider.query(resolved.token, signal);
-        cache.set(provider.id, { at: Date.now(), report });
-        return { id: provider.id, name: provider.name, status: "ready", report };
-      } catch (error) {
-        return {
-          id: provider.id,
-          name: provider.name,
-          status: "error",
-          message: errorMessage(error),
-        };
-      }
-    })();
-
-    inFlight.set(provider.id, request);
-    try {
-      return await request;
-    } finally {
-      if (inFlight.get(provider.id) === request) inFlight.delete(provider.id);
-    }
+    const linked = signal
+      ? AbortSignal.any([sessionAbort.signal, signal])
+      : sessionAbort.signal;
+    return runUsage(usageRuntime, usageService.queryProvider(ctx, provider, force, linked), {
+      signal: linked,
+    });
   };
 
-  const collectStates = async (
+  const collectStates = (
     ctx: ExtensionContext,
     force: boolean,
     signal?: AbortSignal,
   ): Promise<ProviderState[]> => {
-    // Check every provider independently of the active model. Providers without
-    // login information return "unconfigured" before their usage endpoint is
-    // fetched and are omitted from the displayed state list. allSettled is
-    // belt-and-braces: queryProvider already never rejects.
-    const settled = await Promise.allSettled(
-      PROVIDERS.map((provider) => queryProvider(ctx, provider, force, signal)),
-    );
-    return settled.flatMap((result, index) => {
-      if (result.status === "fulfilled") {
-        return result.value.status === "unconfigured" ? [] : [result.value];
-      }
-      const provider = PROVIDERS[index];
-      return [
-        {
-          id: provider.id,
-          name: provider.name,
-          status: "error" as const,
-          message: errorMessage(result.reason),
-        },
-      ];
+    const linked = signal
+      ? AbortSignal.any([sessionAbort.signal, signal])
+      : sessionAbort.signal;
+    return runUsage(usageRuntime, usageService.collectStates(ctx, PROVIDERS, force, linked), {
+      signal: linked,
     });
   };
 
@@ -382,10 +320,26 @@ export default function usageExtension(pi: ExtensionAPI): void {
   pi.on("turn_start", (_event, ctx) => {
     publishStatusDetached(ctx);
   });
-  pi.on("session_shutdown", (_event, ctx) => {
-    cache.clear();
-    inFlight.clear();
+  pi.on("session_shutdown", async (_event, ctx) => {
+    sessionAbort.abort();
     safeSetStatus(ctx, undefined);
+    if (closing) {
+      await closing.catch(() => {});
+      return;
+    }
+    closing = (async () => {
+      try {
+        await runUsage(usageRuntime, usageService.close);
+      } catch {
+        // Never let shutdown cleanup take the process down.
+      }
+      try {
+        await usageRuntime.dispose();
+      } catch {
+        // ManagedRuntime may already be disposed on reload races.
+      }
+    })();
+    await closing.catch(() => {});
   });
 }
 
@@ -403,10 +357,6 @@ function compactSummary(states: ProviderState[]): string {
       return `${state.name}: error`;
     })
     .join("  |  ");
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function isAbortError(error: unknown): boolean {

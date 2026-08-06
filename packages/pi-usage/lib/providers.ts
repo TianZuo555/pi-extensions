@@ -3,6 +3,16 @@
 //
 // Each provider is normalized into a small, presentation-friendly `ProviderReport`
 // so the formatter does not need to know provider-specific JSON shapes.
+// HTTP fetch/retry lives in `src/fetch.ts` (Effect v4).
+
+import { Data, Effect } from "effect";
+import {
+  DEFAULT_RETRY_COUNT,
+  DEFAULT_TIMEOUT_MS,
+  fetchProviderJson,
+  fetchProviderJsonEffect,
+  type ProviderQueryError,
+} from "../src/fetch.ts";
 
 export const CODEX_PROVIDER_ID = "openai-codex";
 export const COPILOT_PROVIDER_ID = "github-copilot";
@@ -22,11 +32,6 @@ const COPILOT_HEADERS: Record<string, string> = {
   "Copilot-Integration-Id": "vscode-chat",
   "X-GitHub-Api-Version": "2025-04-01",
 };
-
-const DEFAULT_TIMEOUT_MS = 30_000;
-const DEFAULT_RETRY_COUNT = 1;
-const RETRY_DELAY_MS = 300;
-const MAX_BODY_BYTES = 128 * 1024;
 
 /** One usage window/bucket, already normalized for display. */
 export interface UsageWindow {
@@ -54,7 +59,57 @@ export interface ProviderReport {
   notes: string[];
 }
 
-// --- Codex ------------------------------------------------------------------
+export class ProviderNormalizationError extends Data.TaggedError("ProviderNormalizationError")<{
+  readonly message: string;
+  readonly cause: unknown;
+}> {}
+
+export type ProviderQueryFailure = ProviderQueryError | ProviderNormalizationError | Error;
+
+/** Run fetch then normalization; normalizer throws become typed Effect failures. */
+function queryFromFetch(
+  fetchEffect: Effect.Effect<Record<string, unknown>, ProviderQueryError | Error>,
+  normalize: (data: Record<string, unknown>) => ProviderReport,
+): Effect.Effect<ProviderReport, ProviderQueryFailure> {
+  return Effect.gen(function* () {
+    const data = yield* fetchEffect;
+    return yield* Effect.try({
+      try: () => normalize(data),
+      catch: (cause) =>
+        new ProviderNormalizationError({
+          message: cause instanceof Error ? cause.message : String(cause),
+          cause,
+        }),
+    });
+  });
+}
+
+function runQueryPromise(
+  effect: Effect.Effect<ProviderReport, ProviderQueryFailure>,
+  signal?: AbortSignal,
+): Promise<ProviderReport> {
+  return Effect.runPromise(effect, signal ? { signal } : undefined);
+}
+
+export function queryCodexUsageEffect(
+  token: string,
+  signal?: AbortSignal,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+  retryCount = DEFAULT_RETRY_COUNT,
+): Effect.Effect<ProviderReport, ProviderQueryFailure> {
+  return queryFromFetch(
+    fetchProviderJsonEffect(
+      CODEX_USAGE_URL,
+      token,
+      { "User-Agent": "pi-usage" },
+      signal,
+      timeoutMs,
+      retryCount,
+      token,
+    ),
+    normalizeCodexReport,
+  );
+}
 
 export async function queryCodexUsage(
   token: string,
@@ -62,16 +117,10 @@ export async function queryCodexUsage(
   timeoutMs = DEFAULT_TIMEOUT_MS,
   retryCount = DEFAULT_RETRY_COUNT,
 ): Promise<ProviderReport> {
-  const data = await fetchProviderJson(
-    CODEX_USAGE_URL,
-    token,
-    { "User-Agent": "pi-usage" },
-    signal,
-    timeoutMs,
-    retryCount,
-    token,
-  );
+  return runQueryPromise(queryCodexUsageEffect(token, signal, timeoutMs, retryCount), signal);
+}
 
+function normalizeCodexReport(data: Record<string, unknown>): ProviderReport {
   const windows: UsageWindow[] = [];
   const rateLimit = asObject(data.rate_limit);
   addCodexWindow(windows, "5h", rateLimit?.primary_window);
@@ -137,22 +186,36 @@ const COPILOT_SNAPSHOT_ORDER = ["premium_interactions"];
 // every paid plan and pi never spends them).
 const COPILOT_HIDDEN_SNAPSHOTS = new Set(["chat", "completions"]);
 
+export function queryCopilotUsageEffect(
+  token: string,
+  signal?: AbortSignal,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+  retryCount = DEFAULT_RETRY_COUNT,
+): Effect.Effect<ProviderReport, ProviderQueryFailure> {
+  return queryFromFetch(
+    fetchProviderJsonEffect(
+      COPILOT_USAGE_URL,
+      token,
+      { ...COPILOT_HEADERS, "User-Agent": "GitHubCopilotChat/0.30.0" },
+      signal,
+      timeoutMs,
+      retryCount,
+      token,
+    ),
+    normalizeCopilotReport,
+  );
+}
+
 export async function queryCopilotUsage(
   token: string,
   signal?: AbortSignal,
   timeoutMs = DEFAULT_TIMEOUT_MS,
   retryCount = DEFAULT_RETRY_COUNT,
 ): Promise<ProviderReport> {
-  const data = await fetchProviderJson(
-    COPILOT_USAGE_URL,
-    token,
-    { ...COPILOT_HEADERS, "User-Agent": "GitHubCopilotChat/0.30.0" },
-    signal,
-    timeoutMs,
-    retryCount,
-    token,
-  );
+  return runQueryPromise(queryCopilotUsageEffect(token, signal, timeoutMs, retryCount), signal);
+}
 
+function normalizeCopilotReport(data: Record<string, unknown>): ProviderReport {
   const snapshots = asObject(data.quota_snapshots) ?? {};
   if (Object.keys(snapshots).length === 0) {
     throw new Error("Copilot usage endpoint returned no quota snapshots.");
@@ -167,10 +230,6 @@ export async function queryCopilotUsage(
     if (COPILOT_HIDDEN_SNAPSHOTS.has(key)) continue;
     const snapshot = asObject(snapshots[key]);
     if (!snapshot) continue;
-    // Business/org-managed seats can return the premium bucket as a 0/0
-    // placeholder even though the account may continue using it. Treat the
-    // 100%-remaining placeholder as unmetered instead of rendering "100% ·
-    // 0 / 0". A zero balance with 0% remaining is still an exhausted quota.
     const remaining =
       asNumber(snapshot.quota_remaining) ?? asNumber(snapshot.remaining);
     const entitlement = asNumber(snapshot.entitlement);
@@ -219,22 +278,36 @@ const ZAI_LIMIT_LABELS: Record<string, string> = {
   TOKENS_LIMIT: "5h tokens",
 };
 
+export function queryZaiUsageEffect(
+  token: string,
+  signal?: AbortSignal,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+  retryCount = DEFAULT_RETRY_COUNT,
+): Effect.Effect<ProviderReport, ProviderQueryFailure> {
+  return queryFromFetch(
+    fetchProviderJsonEffect(
+      ZAI_QUOTA_URL,
+      token,
+      { "User-Agent": "pi-usage" },
+      signal,
+      timeoutMs,
+      retryCount,
+      token,
+    ),
+    normalizeZaiReport,
+  );
+}
+
 export async function queryZaiUsage(
   token: string,
   signal?: AbortSignal,
   timeoutMs = DEFAULT_TIMEOUT_MS,
   retryCount = DEFAULT_RETRY_COUNT,
 ): Promise<ProviderReport> {
-  const data = await fetchProviderJson(
-    ZAI_QUOTA_URL,
-    token,
-    { "User-Agent": "pi-usage" },
-    signal,
-    timeoutMs,
-    retryCount,
-    token,
-  );
+  return runQueryPromise(queryZaiUsageEffect(token, signal, timeoutMs, retryCount), signal);
+}
 
+function normalizeZaiReport(data: Record<string, unknown>): ProviderReport {
   const payload = asObject(data.data);
   if (!payload) {
     const msg = asString(data.msg);
@@ -284,22 +357,36 @@ export async function queryZaiUsage(
 // balance the prepaid amount — API fees draw from granted first, then topped
 // up. Unlike the other providers there is no usage window or percentage, so
 // the total balance is surfaced as a single monetary window.
+export function queryDeepSeekUsageEffect(
+  token: string,
+  signal?: AbortSignal,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+  retryCount = DEFAULT_RETRY_COUNT,
+): Effect.Effect<ProviderReport, ProviderQueryFailure> {
+  return queryFromFetch(
+    fetchProviderJsonEffect(
+      DEEPSEEK_BALANCE_URL,
+      token,
+      { "User-Agent": "pi-usage" },
+      signal,
+      timeoutMs,
+      retryCount,
+      token,
+    ),
+    normalizeDeepSeekReport,
+  );
+}
+
 export async function queryDeepSeekUsage(
   token: string,
   signal?: AbortSignal,
   timeoutMs = DEFAULT_TIMEOUT_MS,
   retryCount = DEFAULT_RETRY_COUNT,
 ): Promise<ProviderReport> {
-  const data = await fetchProviderJson(
-    DEEPSEEK_BALANCE_URL,
-    token,
-    { "User-Agent": "pi-usage" },
-    signal,
-    timeoutMs,
-    retryCount,
-    token,
-  );
+  return runQueryPromise(queryDeepSeekUsageEffect(token, signal, timeoutMs, retryCount), signal);
+}
 
+function normalizeDeepSeekReport(data: Record<string, unknown>): ProviderReport {
   const infos = Array.isArray(data.balance_infos) ? data.balance_infos : [];
   const windows: UsageWindow[] = [];
   const notes: string[] = [];
@@ -346,170 +433,6 @@ export function formatMoney(value: number, currency: string): string {
   if (currency === "CNY") return `¥${amount}`;
   if (currency === "USD") return `$${amount}`;
   return `${amount} ${currency}`;
-}
-
-// --- fetch helpers ----------------------------------------------------------
-
-class ProviderQueryError extends Error {
-  readonly retryable: boolean;
-  readonly status: number | undefined;
-
-  constructor(message: string, retryable: boolean, status?: number) {
-    super(message);
-    this.name = "ProviderQueryError";
-    this.retryable = retryable;
-    this.status = status;
-  }
-}
-
-async function fetchProviderJson(
-  url: string,
-  token: string,
-  extraHeaders: Record<string, string>,
-  signal: AbortSignal | undefined,
-  timeoutMs: number,
-  retryCount: number,
-  secret: string,
-): Promise<Record<string, unknown>> {
-  let lastError: unknown;
-  for (let attempt = 0; attempt <= retryCount; attempt += 1) {
-    try {
-      return await fetchProviderJsonOnce(url, token, extraHeaders, signal, timeoutMs, secret);
-    } catch (error) {
-      lastError = error;
-      if (
-        attempt >= retryCount ||
-        signal?.aborted ||
-        !(error instanceof ProviderQueryError) ||
-        !error.retryable
-      ) {
-        throw error;
-      }
-      await abortableDelay(RETRY_DELAY_MS, signal);
-    }
-  }
-  throw lastError;
-}
-
-async function fetchProviderJsonOnce(
-  url: string,
-  token: string,
-  extraHeaders: Record<string, string>,
-  signal: AbortSignal | undefined,
-  timeoutMs: number,
-  secret: string,
-): Promise<Record<string, unknown>> {
-  if (signal?.aborted) throw abortError();
-
-  const controller = new AbortController();
-  const onAbort = () => controller.abort();
-  signal?.addEventListener("abort", onAbort, { once: true });
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
-  try {
-    const response = await fetch(url, {
-      headers: { Accept: "application/json", Authorization: `Bearer ${token}`, ...extraHeaders },
-      signal: controller.signal,
-    });
-    const text = redact(await readBounded(response), secret);
-    if (!response.ok) {
-      throw new ProviderQueryError(
-        `${response.status} ${response.statusText}${text ? `: ${truncate(text, 200)}` : ""}`,
-        isRetryableStatus(response.status),
-        response.status,
-      );
-    }
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(text) as unknown;
-    } catch {
-      throw new ProviderQueryError("provider returned invalid JSON", false);
-    }
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      throw new ProviderQueryError("provider response was not an object", false);
-    }
-    return parsed as Record<string, unknown>;
-  } catch (error) {
-    if (signal?.aborted) throw abortError();
-    if (error instanceof ProviderQueryError) throw error;
-    if (error instanceof Error && error.name === "AbortError") {
-      throw new ProviderQueryError(`timed out after ${Math.round(timeoutMs / 1000)}s`, true);
-    }
-    const message = error instanceof Error ? redact(error.message, secret) : String(error);
-    throw new ProviderQueryError(message, true);
-  } finally {
-    clearTimeout(timer);
-    signal?.removeEventListener("abort", onAbort);
-  }
-}
-
-function isRetryableStatus(status: number): boolean {
-  return status === 408 || status === 425 || status === 429 || status >= 500;
-}
-
-function abortError(): Error {
-  const error = new Error("usage query aborted");
-  error.name = "AbortError";
-  return error;
-}
-
-async function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
-  if (signal?.aborted) throw abortError();
-  await new Promise<void>((resolve, reject) => {
-    const cleanup = () => signal?.removeEventListener("abort", onAbort);
-    const timer = setTimeout(() => {
-      cleanup();
-      resolve();
-    }, ms);
-    const onAbort = () => {
-      clearTimeout(timer);
-      cleanup();
-      reject(abortError());
-    };
-    signal?.addEventListener("abort", onAbort, { once: true });
-  });
-}
-
-async function readBounded(response: Response): Promise<string> {
-  if (!response.body) return "";
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      total += value.byteLength;
-      if (total > MAX_BODY_BYTES) {
-        chunks.push(value.subarray(0, Math.max(0, value.byteLength - (total - MAX_BODY_BYTES))));
-        await reader.cancel();
-        break;
-      }
-      chunks.push(value);
-    }
-  } finally {
-    reader.releaseLock();
-  }
-  return new TextDecoder().decode(concat(chunks));
-}
-
-function concat(chunks: Uint8Array[]): Uint8Array {
-  const total = chunks.reduce((sum, chunk) => sum + chunk.byteLength, 0);
-  const out = new Uint8Array(total);
-  let offset = 0;
-  for (const chunk of chunks) {
-    out.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return out;
-}
-
-function redact(text: string, secret: string): string {
-  return secret ? text.split(secret).join("[redacted]") : text;
-}
-
-function truncate(text: string, max: number): string {
-  const trimmed = text.trim();
-  return trimmed.length > max ? `${trimmed.slice(0, max)}…` : trimmed;
 }
 
 // --- small value helpers ----------------------------------------------------
