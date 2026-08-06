@@ -49,6 +49,24 @@ jobs:
       - name: Typecheck goal extension
         run: npm run check -w pi-tian-goal
 
+      - name: Typecheck usage extension
+        run: npm run check -w pi-tian-usage
+
+      - name: Typecheck commit extension
+        run: npm run check -w pi-tian-commit
+
+      - name: Typecheck subagents extension
+        run: npm run check -w pi-tian-subagents
+
+      - name: Typecheck image-cache extension
+        run: npm run check -w pi-tian-image-cache
+
+      - name: Test usage providers (repo-level)
+        run: npm run test:usage
+
+      - name: Test usage extension
+        run: npm test -w pi-tian-usage
+
       - name: Test background terminals
         run: npm test -w pi-tian-background-terminals
 
@@ -69,6 +87,9 @@ jobs:
 
       - name: Test goal extension
         run: npm test -w pi-tian-goal
+
+      - name: Test image-cache extension
+        run: npm test -w pi-tian-image-cache
 
       - name: Publish changed packages
         env:

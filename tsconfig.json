@@ -16,6 +16,14 @@
     "extensions/background-terminals.ts",
     "packages/pi-background-terminals/**/*.ts",
     "extensions/goal.ts",
-    "packages/pi-goal/**/*.ts"
+    "packages/pi-goal/**/*.ts",
+    "extensions/usage.ts",
+    "packages/pi-usage/**/*.ts",
+    "extensions/commit.ts",
+    "packages/pi-commit/**/*.ts",
+    "extensions/subagents.ts",
+    "packages/pi-subagents/**/*.ts",
+    "extensions/image-cache.ts",
+    "packages/pi-image-cache/**/*.ts"
   ]
 }
