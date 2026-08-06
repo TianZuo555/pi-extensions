@@ -15,6 +15,7 @@ interface Captured {
   messages: any[];
   notifications: Array<{ message: string; type?: string }>;
   statuses: Map<string, string | undefined>;
+  workingMessage: string | undefined;
   aborted: number;
   branch: any[];
   ctx: any;
@@ -29,6 +30,7 @@ function setup(): Captured {
     messages: [],
     notifications: [],
     statuses: new Map(),
+    workingMessage: undefined,
     aborted: 0,
     branch: [],
     ctx: undefined,
@@ -44,6 +46,9 @@ function setup(): Captured {
     ui: {
       setStatus(key: string, value: string | undefined) {
         captured.statuses.set(key, value);
+      },
+      setWorkingMessage(message?: string) {
+        captured.workingMessage = message;
       },
       notify(message: string, type?: string) {
         captured.notifications.push({ message, type });
@@ -141,6 +146,7 @@ test("goal command persists state, exposes tools, and queues a continuation", as
   assert.equal(captured.messages.length, 1);
   assert.match(captured.messages[0].message.content, /Run the checkout benchmark/);
   assert.match(captured.statuses.get("pi-tian-goal")!, /goal active/);
+  assert.equal(captured.workingMessage, "Pursuing goal: Run the checkout benchmark");
 
   const getResult = await captured.tools.get("get_goal").execute(
     "get-1",
@@ -151,6 +157,27 @@ test("goal command persists state, exposes tools, and queues a continuation", as
   );
   assert.match(textFrom(getResult), /Run the checkout benchmark/);
   assert.match(textFrom(getResult), /5k/);
+});
+
+test("the working loader names the active goal and restores its default otherwise", async () => {
+  const captured = setup();
+  await captured.commands.get("goal").handler("Investigate the flaky test", captured.ctx);
+  assert.equal(captured.workingMessage, "Pursuing goal: Investigate the flaky test");
+
+  await captured.commands.get("goal").handler("pause", captured.ctx);
+  assert.equal(captured.workingMessage, undefined);
+
+  await captured.commands.get("goal").handler("resume", captured.ctx);
+  assert.equal(captured.workingMessage, "Pursuing goal: Investigate the flaky test");
+
+  await captured.tools.get("update_goal").execute(
+    "complete-1",
+    { status: "complete" },
+    undefined,
+    undefined,
+    captured.ctx,
+  );
+  assert.equal(captured.workingMessage, undefined);
 });
 
 test("model cannot create over an unfinished goal, but can complete it", async () => {

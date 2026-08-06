@@ -121,6 +121,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
   function refreshStatus(ctx: ExtensionContext, goal: Goal | null): void {
     if (!goal) {
       ctx.ui.setStatus(STATUS_KEY, undefined);
+      ctx.ui.setWorkingMessage();
       return;
     }
     const budget =
@@ -132,6 +133,9 @@ export default function goalExtension(pi: ExtensionAPI): void {
     ctx.ui.setStatus(
       STATUS_KEY,
       `goal ${goal.status} · ${budget} · ${preview}`,
+    );
+    ctx.ui.setWorkingMessage(
+      goal.status === "active" ? `Pursuing goal: ${preview}` : undefined,
     );
   }
 

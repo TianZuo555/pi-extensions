@@ -93,8 +93,10 @@ and implemented in Codex's [goal runtime](https://github.com/openai/codex/tree/m
   commands, tests, benchmarks, artifacts, or research evidence before
   `update_goal` is called.
 
-A goal is therefore a persisted completion contract, not an unbounded loop.
-It stops when it is complete, blocked under the documented audit rule,
+While an active goal is running, Pi's working loader reads
+`Pursuing goal: <brief of the objective>` instead of the default `Working...`
+message. A goal is therefore a persisted completion contract, not an unbounded
+loop. It stops when it is complete, blocked under the documented audit rule,
 paused, usage-limited, budget-limited, cleared, or when continuation suppression
 is reached.
 
