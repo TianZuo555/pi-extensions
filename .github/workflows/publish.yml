@@ -46,6 +46,9 @@ jobs:
       - name: Typecheck background terminals
         run: npm run check -w pi-tian-background-terminals
 
+      - name: Typecheck goal extension
+        run: npm run check -w pi-tian-goal
+
       - name: Test background terminals
         run: npm test -w pi-tian-background-terminals
 
@@ -63,6 +66,9 @@ jobs:
 
       - name: Test compact-output extension
         run: npm test -w pi-tian-compact-output
+
+      - name: Test goal extension
+        run: npm test -w pi-tian-goal
 
       - name: Publish changed packages
         env:

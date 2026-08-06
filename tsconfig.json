@@ -14,6 +14,8 @@
   "include": ["extensions/**/*.ts", "packages/**/*.ts"],
   "exclude": [
     "extensions/background-terminals.ts",
-    "packages/pi-background-terminals/**/*.ts"
+    "packages/pi-background-terminals/**/*.ts",
+    "extensions/goal.ts",
+    "packages/pi-goal/**/*.ts"
   ]
 }

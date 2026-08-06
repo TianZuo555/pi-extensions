@@ -35,7 +35,8 @@
       "extensions/edit-safe.ts",
       "extensions/background-terminals.ts",
       "extensions/subagents.ts",
-      "extensions/compact-output.ts"
+      "extensions/compact-output.ts",
+      "extensions/goal.ts"
     ]
   },
   "scripts": {
@@ -47,6 +48,7 @@
     "test:todo": "npm test -w pi-tian-todo",
     "test:subagents": "npm test -w pi-tian-subagents",
     "test:compact-output": "npm test -w pi-tian-compact-output",
+    "test:goal": "npm test -w pi-tian-goal",
     "pack:check": "npm pack --dry-run --workspaces"
   },
   "peerDependencies": {

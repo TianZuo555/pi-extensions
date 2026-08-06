@@ -15,6 +15,7 @@ A small collection of [pi coding agent](https://pi.dev) extensions.
 | **edit-safe** | overrides tool `edit` | Stricter `edit`: verbatim splice, ambiguity throws, one `edits[]` shape. |
 | **subagents** | tool `subagent`, `/agents` | Isolated RPC child processes with profiles, background runs, and worktrees. |
 | **compact-output** | (TUI only) | Shows bordered tool status blocks with up to three preview lines; Ctrl+O restores full output; reasoning stays compact. |
+| **goal** | `/goal`, tools `get_goal`/`create_goal`/`update_goal` | Codex-style persistent, evidence-checked objective with bounded automatic continuation. |
 
 Each extension is described in detail under [Extensions](#extensions).
 
@@ -41,6 +42,7 @@ pi install npm:pi-tian-background-terminals
 pi install npm:pi-tian-edit-safe
 pi install npm:pi-tian-subagents
 pi install npm:pi-tian-compact-output
+pi install npm:pi-tian-goal
 ```
 
 Restart pi or run `/reload` in an existing session after installation.
@@ -60,7 +62,8 @@ The commands above add these entries to `~/.pi/agent/settings.json`:
     "npm:pi-tian-background-terminals",
     "npm:pi-tian-edit-safe",
     "npm:pi-tian-subagents",
-    "npm:pi-tian-compact-output"
+    "npm:pi-tian-compact-output",
+    "npm:pi-tian-goal"
   ]
 }
 ```
@@ -80,6 +83,7 @@ The commands above add these entries to `~/.pi/agent/settings.json`:
 | [pi-tian-edit-safe](https://www.npmjs.com/package/pi-tian-edit-safe) | `pi install npm:pi-tian-edit-safe` |
 | [pi-tian-subagents](https://www.npmjs.com/package/pi-tian-subagents) | `pi install npm:pi-tian-subagents` |
 | [pi-tian-compact-output](https://www.npmjs.com/package/pi-tian-compact-output) | `pi install npm:pi-tian-compact-output` |
+| [pi-tian-goal](https://www.npmjs.com/package/pi-tian-goal) | `pi install npm:pi-tian-goal` |
 
 Try an extension temporarily without adding it to settings:
 
@@ -362,6 +366,23 @@ pi install npm:pi-tian-compact-output
 pi -e ./packages/pi-compact-output
 ```
 
+### goal
+
+Codex-style long-running goals for Pi. `/goal <objective>` persists a
+thread-scoped completion contract, injects it into each turn, accounts token and
+elapsed-time usage, and continues only while the thread is idle. A continuation
+that makes no tool call suppresses the next automatic continuation, so this is
+not an unbounded loop.
+
+```bash
+pi install npm:pi-tian-goal
+pi -e ./packages/pi-goal
+```
+
+Use `/goal pause`, `/goal resume`, `/goal clear`, or `/goal --budget 50000
+<objective>` to manage it. See [packages/pi-goal](packages/pi-goal/README.md)
+for the full lifecycle and Codex design mapping.
+
 The repository is an npm workspace with one publishable package per extension:
 
 | Workspace | npm package |
@@ -377,6 +398,7 @@ The repository is an npm workspace with one publishable package per extension:
 | `packages/pi-edit-safe` | `pi-tian-edit-safe` |
 | `packages/pi-subagents` | `pi-tian-subagents` |
 | `packages/pi-compact-output` | `pi-tian-compact-output` |
+| `packages/pi-goal` | `pi-tian-goal` |
 
 Install dependencies, typecheck every workspace, run the commit and
 managed-terminal suites, and inspect publishable tarballs:
@@ -390,6 +412,7 @@ npm test -w pi-tian-commit
 npm test -w pi-tian-edit-safe
 npm test -w pi-tian-subagents
 npm test -w pi-tian-compact-output
+npm test -w pi-tian-goal
 npm run pack:check
 ```
 
@@ -414,7 +437,8 @@ at runtime.
 
 The [`Publish`](.github/workflows/publish.yml) workflow publishes packages to npm
 automatically. On every push to `main` that touches `packages/**`, it runs both
-TypeScript checks plus the commit and background-terminals test suites, then
+TypeScript checks plus the extension test suites, including goal and
+background-terminals, then
 checks each workspace's version against npm and publishes only versions not yet present
 (so bumping one `package.json` version is enough to release it). Packages are
 published with [npm provenance](https://docs.npmjs.com/generating-provenance-statements).
@@ -440,6 +464,7 @@ npm publish --workspace packages/pi-image-cache
 npm publish --workspace packages/pi-ask-user
 npm publish --workspace packages/pi-usage
 npm publish --workspace packages/pi-background-terminals
+npm publish --workspace packages/pi-goal
 ```
 
 Version and publish only the package that changed, or bump them all together for
