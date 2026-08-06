@@ -1,5 +1,9 @@
 /**
  * pi-tian-subagents — isolated Pi RPC subagents with profiles, background runs, and worktrees.
+ *
+ * Architecture: supervisor lifecycle and run orchestration live in an Effect v4
+ * `SubagentRuntime` service (see `src/runtime.ts`). This file is the imperative
+ * boundary for tools, UI, and session hooks.
  */
 
 import type { AgentToolResult } from "@earendil-works/pi-coding-agent";
@@ -16,7 +20,15 @@ import {
   type SubagentToolDetails,
 } from "./lib/domain.ts";
 import { openAgentsDashboard } from "./lib/ui/agents-command.ts";
-import { formatRunSummary, SubagentSupervisor } from "./lib/supervisor.ts";
+import { formatRunSummary, type SubagentSupervisor } from "./lib/supervisor.ts";
+import {
+  createSubagentRuntime,
+  getSupervisor,
+  runSubagent,
+  SubagentRuntime,
+  type SubagentRuntimeInstance,
+  type SubagentRuntimeShape,
+} from "./src/runtime.ts";
 
 const WIDGET_KEY = "pi-tian-subagents";
 
@@ -73,126 +85,166 @@ Use mode=background to continue without blocking; completion arrives as a follow
 
 Children finish with report_result when possible. Worker runs keep a durable branch and private patch artifact under ~/.pi/agent/subagents/runs/<runId>/; apply with subagent_apply after explicit confirmation.`;
 
-let supervisor: SubagentSupervisor | undefined;
-let extensionPi: ExtensionAPI | undefined;
-
-function getSupervisor(ctx: ExtensionContext): SubagentSupervisor {
-  if (!supervisor) supervisor = new SubagentSupervisor(ctx.cwd);
-  return supervisor;
-}
-
-function buildDetails(
-  result: SubagentRunResult,
-  activity?: string,
-  mode?: SubagentInput["mode"],
-): SubagentToolDetails {
-  return {
-    runId: result.runId,
-    profile: result.profile,
-    status: result.status,
-    usage: result.usage,
-    model: result.model,
-    activity,
-    mode: mode ?? "foreground",
-    semanticReport: result.semanticReport,
-    worktreeDelivery: result.worktreeDelivery,
-    budgetExhausted: result.budgetExhausted,
-  };
-}
-
-function formatResultMessage(result: SubagentRunResult): string {
-  const header = formatRunSummary(result);
-  if (result.status === "running" || result.status === "completed") {
-    return `${header}\n\n${result.report}`;
-  }
-  const err = result.error ?? result.status;
-  return `${header}\n\nError: ${err}\n\nPartial output:\n${result.report}`;
-}
-
-function notifySessionCostWarning(ctx: ExtensionContext, sv: SubagentSupervisor): void {
-  if (!sv.needsCostWarning() || !ctx.hasUI) return;
-  sv.markCostWarned();
-  const ceiling = sv.getSessionSoftCostUsd();
-  ctx.ui.notify(
-    `Subagent session spend is $${sv.getSessionCostUsd().toFixed(4)} (soft ceiling $${ceiling.toFixed(2)}).`,
-    "warning",
-  );
-}
-
-function deliverBackgroundResult(pi: ExtensionAPI, result: SubagentRunResult): boolean {
-  try {
-    pi.sendMessage(
-      {
-        customType: BACKGROUND_RESULT_TYPE,
-        content: formatResultMessage(result),
-        display: true,
-        details: {
-          runId: result.runId,
-          profile: result.profile,
-          status: result.status,
-          usage: result.usage,
-          worktreeBranch: result.worktreeBranch,
-          worktreeDelivery: result.worktreeDelivery,
-          semanticReport: result.semanticReport,
-        },
-      },
-      { deliverAs: "followUp", triggerTurn: true },
-    );
-    return true;
-  } catch (error) {
-    if (extensionPi) {
-      console.error("pi-subagents: failed to deliver background result", error);
-    }
-    return false;
-  }
-}
-
-function refreshWidget(ctx: ExtensionContext): void {
-  if (ctx.mode !== "tui") return;
-  const sv = supervisor;
-  if (!sv) return;
-  const active = sv.listRuns().filter((r) => r.status === "running").length;
-  try {
-    if (active === 0) {
-      ctx.ui.setWidget(WIDGET_KEY, undefined);
-      return;
-    }
-    ctx.ui.setWidget(WIDGET_KEY, (_tui, theme) => {
-      return new Text(
-        theme.fg("accent", `${active} subagent${active === 1 ? "" : "s"} running`) +
-          theme.fg("dim", " · /agents"),
-        0,
-        0,
-      );
-    });
-  } catch {
-    // UI may be unavailable during teardown.
-  }
+interface SessionState {
+  subagentRuntime?: SubagentRuntimeInstance;
+  subagentService?: SubagentRuntimeShape;
+  supervisor?: SubagentSupervisor;
+  extensionPi?: ExtensionAPI;
+  closing?: Promise<void>;
 }
 
 export default function subagentsExtension(pi: ExtensionAPI) {
-  extensionPi = pi;
+  const session: SessionState = { extensionPi: pi };
+
+  function service(): SubagentRuntimeShape {
+    if (!session.subagentService) throw new Error("Subagent runtime is not initialized.");
+    return session.subagentService;
+  }
+
+  function runtime(): SubagentRuntimeInstance {
+    if (!session.subagentRuntime) throw new Error("Subagent runtime is not initialized.");
+    return session.subagentRuntime;
+  }
+
+  function requireSupervisor(): SubagentSupervisor {
+    if (!session.supervisor) throw new Error("Subagent supervisor is not initialized.");
+    return session.supervisor;
+  }
+
+  function buildDetails(
+    result: SubagentRunResult,
+    activity?: string,
+    mode?: SubagentInput["mode"],
+  ): SubagentToolDetails {
+    return {
+      runId: result.runId,
+      profile: result.profile,
+      status: result.status,
+      usage: result.usage,
+      model: result.model,
+      activity,
+      mode: mode ?? "foreground",
+      semanticReport: result.semanticReport,
+      worktreeDelivery: result.worktreeDelivery,
+      budgetExhausted: result.budgetExhausted,
+    };
+  }
+
+  function formatResultMessage(result: SubagentRunResult): string {
+    const header = formatRunSummary(result);
+    if (result.status === "running" || result.status === "completed") {
+      return `${header}\n\n${result.report}`;
+    }
+    const err = result.error ?? result.status;
+    return `${header}\n\nError: ${err}\n\nPartial output:\n${result.report}`;
+  }
+
+  function notifySessionCostWarning(ctx: ExtensionContext, sv: SubagentSupervisor): void {
+    if (!sv.needsCostWarning() || !ctx.hasUI) return;
+    sv.markCostWarned();
+    const ceiling = sv.getSessionSoftCostUsd();
+    ctx.ui.notify(
+      `Subagent session spend is $${sv.getSessionCostUsd().toFixed(4)} (soft ceiling $${ceiling.toFixed(2)}).`,
+      "warning",
+    );
+  }
+
+  function deliverBackgroundResult(result: SubagentRunResult): boolean {
+    try {
+      pi.sendMessage(
+        {
+          customType: BACKGROUND_RESULT_TYPE,
+          content: formatResultMessage(result),
+          display: true,
+          details: {
+            runId: result.runId,
+            profile: result.profile,
+            status: result.status,
+            usage: result.usage,
+            worktreeBranch: result.worktreeBranch,
+            worktreeDelivery: result.worktreeDelivery,
+            semanticReport: result.semanticReport,
+          },
+        },
+        { deliverAs: "followUp", triggerTurn: true },
+      );
+      return true;
+    } catch (error) {
+      if (session.extensionPi) {
+        console.error("pi-subagents: failed to deliver background result", error);
+      }
+      return false;
+    }
+  }
+
+  function refreshWidget(ctx: ExtensionContext): void {
+    if (ctx.mode !== "tui") return;
+    const sv = session.supervisor;
+    if (!sv) return;
+    const active = sv.listRuns().filter((r) => r.status === "running").length;
+    try {
+      if (active === 0) {
+        ctx.ui.setWidget(WIDGET_KEY, undefined);
+        return;
+      }
+      ctx.ui.setWidget(WIDGET_KEY, (_tui, theme) => {
+        return new Text(
+          theme.fg("accent", `${active} subagent${active === 1 ? "" : "s"} running`) +
+            theme.fg("dim", " · /agents"),
+          0,
+          0,
+        );
+      });
+    } catch {
+      // UI may be unavailable during teardown.
+    }
+  }
 
   pi.on("session_start", async (_event, ctx) => {
-    supervisor = new SubagentSupervisor(ctx.cwd);
-    supervisor.setBackgroundCompleteHandler((result) => {
-      const delivered = deliverBackgroundResult(pi, result);
-      refreshWidget(ctx);
-      return delivered;
-    });
+    session.subagentRuntime = createSubagentRuntime();
+    session.subagentService = session.subagentRuntime.runSync(SubagentRuntime);
+    await runSubagent(
+      session.subagentRuntime,
+      service().init(ctx.cwd, undefined, (result) => {
+        const delivered = deliverBackgroundResult(result);
+        refreshWidget(ctx);
+        return delivered;
+      }),
+    );
+    session.supervisor = await getSupervisor(session.subagentRuntime, service());
   });
 
-  pi.on("session_shutdown", () => {
-    if (supervisor) {
-      supervisor.dispose();
-      supervisor = undefined;
+  pi.on("session_shutdown", async () => {
+    if (!session.subagentRuntime || !session.subagentService) {
+      session.extensionPi = undefined;
+      return;
     }
-    extensionPi = undefined;
+    if (session.closing) {
+      await session.closing.catch(() => {});
+      return;
+    }
+    session.closing = (async () => {
+      const closingRuntime = session.subagentRuntime;
+      const closingService = session.subagentService;
+      try {
+        await runSubagent(closingRuntime!, closingService!.close);
+      } finally {
+        await closingRuntime!.dispose();
+        if (session.subagentRuntime === closingRuntime) {
+          session.subagentRuntime = undefined;
+          session.subagentService = undefined;
+          session.supervisor = undefined;
+          session.extensionPi = undefined;
+        }
+        if (session.closing) session.closing = undefined;
+      }
+    })();
+    await session.closing;
   });
 
-  pi.on("agent_settled", () => {
-    if (!supervisor || !extensionPi) return;
-    supervisor.drainPendingResults();
+  pi.on("agent_settled", async () => {
+    if (!session.subagentRuntime || !session.subagentService || !session.extensionPi) return;
+    await runSubagent(session.subagentRuntime, service().drainPendingResults).catch(() => {});
   });
 
   pi.registerTool({
@@ -207,49 +259,53 @@ export default function subagentsExtension(pi: ExtensionAPI) {
       onUpdate,
       ctx: ExtensionContext,
     ): Promise<AgentToolResult<SubagentToolDetails>> {
-      const sv = getSupervisor(ctx);
+      const sv = requireSupervisor();
       let activity = "starting";
       const mode = params.mode ?? "foreground";
 
-      const result = await sv.run({
-        profile: params.profile,
-        task: params.task,
-        context: params.context,
-        cwd: ctx.cwd,
-        parentModel: ctx.model,
-        mode,
-        signal,
-        projectTrusted: ctx.isProjectTrusted(),
-        hasUI: ctx.hasUI,
-        requestProfileApproval: async (profile) => {
-          if (!ctx.hasUI) return false;
-          return ctx.ui.confirm(
-            `Approve project profile ${profile.qualifiedId}?`,
-            `${profile.description || profile.name}\n\nHash: ${profile.contentHash}\nTools: ${profile.tools.join(", ")}\nWorkspace: ${profile.workspace}`,
-          );
-        },
-        onActivity: (name) => {
-          activity = name;
-          if (!onUpdate) return;
-          const partial: AgentToolResult<SubagentToolDetails> = {
-            content: [{ type: "text", text: `[${params.profile}] ${activity}…` }],
-            details: buildDetails(
-              {
-                runId: "…",
-                profile: params.profile,
-                qualifiedProfile: params.profile,
-                status: "running",
-                report: "",
-                usage: emptyUsage(),
-                durationMs: 0,
-              },
-              activity,
-              mode,
-            ),
-          };
-          onUpdate(partial);
-        },
-      });
+      const result = await runSubagent(
+        runtime(),
+        service().run({
+          profile: params.profile,
+          task: params.task,
+          context: params.context,
+          cwd: ctx.cwd,
+          parentModel: ctx.model,
+          mode,
+          signal,
+          projectTrusted: ctx.isProjectTrusted(),
+          hasUI: ctx.hasUI,
+          requestProfileApproval: async (profile) => {
+            if (!ctx.hasUI) return false;
+            return ctx.ui.confirm(
+              `Approve project profile ${profile.qualifiedId}?`,
+              `${profile.description || profile.name}\n\nHash: ${profile.contentHash}\nTools: ${profile.tools.join(", ")}\nWorkspace: ${profile.workspace}`,
+            );
+          },
+          onActivity: (name) => {
+            activity = name;
+            if (!onUpdate) return;
+            const partial: AgentToolResult<SubagentToolDetails> = {
+              content: [{ type: "text", text: `[${params.profile}] ${activity}…` }],
+              details: buildDetails(
+                {
+                  runId: "…",
+                  profile: params.profile,
+                  qualifiedProfile: params.profile,
+                  status: "running",
+                  report: "",
+                  usage: emptyUsage(),
+                  durationMs: 0,
+                },
+                activity,
+                mode,
+              ),
+            };
+            onUpdate(partial);
+          },
+        }),
+        { signal },
+      );
 
       notifySessionCostWarning(ctx, sv);
       refreshWidget(ctx);
@@ -296,8 +352,8 @@ export default function subagentsExtension(pi: ExtensionAPI) {
     label: "subagent status",
     description: "Check a background subagent run by run_id.",
     parameters: SubagentStatusParams,
-    async execute(_id, params: SubagentStatusInput, _signal, _onUpdate, ctx) {
-      const sv = getSupervisor(ctx);
+    async execute(_id, params: SubagentStatusInput) {
+      const sv = requireSupervisor();
       const record = sv.getRun(params.run_id);
       if (!record) {
         return {
@@ -341,8 +397,7 @@ export default function subagentsExtension(pi: ExtensionAPI) {
     description: "Cancel a running subagent by run_id.",
     parameters: SubagentCancelParams,
     async execute(_id, params: SubagentCancelInput, _signal, _onUpdate, ctx) {
-      const sv = getSupervisor(ctx);
-      const ok = sv.cancelRun(params.run_id, params.reason);
+      const ok = await runSubagent(runtime(), service().cancelRun(params.run_id, params.reason));
       refreshWidget(ctx);
       return {
         content: [
@@ -370,7 +425,7 @@ export default function subagentsExtension(pi: ExtensionAPI) {
       "Apply the verified patch artifact from a completed worker run to the current checkout. Requires interactive confirmation; never runs automatically.",
     parameters: SubagentApplyParams,
     async execute(_id, params: SubagentApplyInput, _signal, _onUpdate, ctx) {
-      const sv = getSupervisor(ctx);
+      const sv = requireSupervisor();
       if (!ctx.hasUI) {
         return {
           content: [
@@ -424,7 +479,7 @@ export default function subagentsExtension(pi: ExtensionAPI) {
       }
 
       try {
-        const updated = await sv.applyPatch(params.run_id);
+        const updated = await runSubagent(runtime(), service().applyPatch(params.run_id));
         const status = updated.worktreeDelivery?.patch?.applyStatus ?? "applied";
         return {
           content: [
@@ -469,8 +524,7 @@ export default function subagentsExtension(pi: ExtensionAPI) {
   pi.registerCommand("agents", {
     description: "List subagent runs and available profiles",
     handler: async (_args, ctx) => {
-      const sv = getSupervisor(ctx);
-      await openAgentsDashboard(ctx, sv);
+      await openAgentsDashboard(ctx, requireSupervisor());
     },
   });
 }
