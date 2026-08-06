@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { queryCodexUsage, queryCopilotUsage, queryDeepSeekUsage, queryZaiUsage } from "../packages/pi-usage/lib/providers.ts";
+import {
+  queryCodexUsage,
+  queryCopilotUsage,
+  queryDeepSeekUsage,
+  queryZaiCnUsage,
+  queryZaiUsage,
+} from "../packages/pi-usage/lib/providers.ts";
 import { formatReport, formatReports, formatStatusline } from "../packages/pi-usage/lib/format.ts";
 import { hasProviderLoginInfo } from "../packages/pi-usage/lib/auth.ts";
 
@@ -120,6 +126,12 @@ test("usage reports omit providers without login information", () => {
     {
       id: "zai",
       name: "GLM Coding Plan",
+      status: "unconfigured",
+      message: "sign in",
+    },
+    {
+      id: "zai-coding-cn",
+      name: "GLM Coding Plan (China)",
       status: "unconfigured",
       message: "sign in",
     },
@@ -396,6 +408,26 @@ test("Z.ai usage treats percentage as used and converts ms resets to seconds", a
   assert.match(body, /5h tokens:/);
   assert.doesNotMatch(body, /MCP tools/);
   assert.equal(formatStatusline(report), "zai 59% 5h");
+});
+
+test("Z.ai China usage uses the domestic endpoint and raw API-key auth", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  let request;
+  globalThis.fetch = async (url, init) => {
+    request = { url: String(url), init };
+    return jsonResponse(validZaiUsage);
+  };
+
+  const report = await queryZaiCnUsage("test-key", undefined, 50, 0);
+  assert.equal(request.url, "https://open.bigmodel.cn/api/monitor/usage/quota/limit");
+  assert.equal(request.init.headers.Authorization, "test-key");
+  assert.equal(report.id, "zai-coding-cn");
+  assert.equal(report.name, "GLM Coding Plan (China)");
+  assert.equal(formatStatusline(report), "zai-cn 59% 5h");
 });
 
 test("Z.ai usage surfaces in-body error messages", async (t) => {

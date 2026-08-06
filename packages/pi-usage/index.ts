@@ -1,5 +1,5 @@
-// usage — show OpenAI Codex, GitHub Copilot, Z.ai (GLM Coding Plan), and
-// DeepSeek account usage in the pi coding agent.
+// usage — show OpenAI Codex, GitHub Copilot, Z.ai (GLM Coding Plan), Z.ai
+// China (BigModel), and DeepSeek account usage in the pi coding agent.
 //
 // Architecture: query cache and in-flight dedup live in an Effect v4
 // `UsageRuntime` service behind one `ManagedRuntime` (see `src/runtime.ts`).
@@ -17,8 +17,8 @@
 //
 // Credentials are resolved from the same store pi writes (~/.pi/agent/auth.json).
 // Codex uses the ChatGPT OAuth access token; Copilot uses the GitHub OAuth token;
-// Z.ai and DeepSeek use their API keys. Inspired by @narumitw/pi-usage, trimmed
-// to Codex, Copilot, Z.ai, and DeepSeek.
+// Z.ai, Z.ai China, and DeepSeek use their API keys. Inspired by
+// @narumitw/pi-usage, trimmed to Codex, Copilot, Z.ai, and DeepSeek.
 
 import {
   BorderedLoader,
@@ -31,10 +31,12 @@ import {
   hasCopilotLoginInfo,
   hasDeepSeekLoginInfo,
   hasProviderLoginInfo,
+  hasZaiCnLoginInfo,
   hasZaiLoginInfo,
   resolveCodexToken,
   resolveCopilotToken,
   resolveDeepSeekToken,
+  resolveZaiCnToken,
   resolveZaiToken,
 } from "./lib/auth.ts";
 import { formatReports, formatStatusline, type ProviderState } from "./lib/format.ts";
@@ -42,10 +44,12 @@ import {
   CODEX_PROVIDER_ID,
   COPILOT_PROVIDER_ID,
   DEEPSEEK_PROVIDER_ID,
+  ZAI_CN_PROVIDER_ID,
   ZAI_PROVIDER_ID,
   queryCodexUsageEffect,
   queryCopilotUsageEffect,
   queryDeepSeekUsageEffect,
+  queryZaiCnUsageEffect,
   queryZaiUsageEffect,
 } from "./lib/providers.ts";
 import {
@@ -95,6 +99,17 @@ const PROVIDERS: ProviderSpec[] = [
     hasLoginInfo: (ctx) => hasProviderLoginInfo(ctx, ZAI_PROVIDER_ID, hasZaiLoginInfo),
     resolve: async () => resolveZaiToken(),
     queryEffect: queryZaiUsageEffect,
+  },
+  {
+    id: ZAI_CN_PROVIDER_ID,
+    name: "GLM Coding Plan (China)",
+    statusLabel: "zai-cn",
+    configureHint:
+      "set ZAI_CODING_CN_API_KEY or sign in with /login and select ZAI Coding Plan (China)",
+    hasLoginInfo: (ctx) =>
+      hasProviderLoginInfo(ctx, ZAI_CN_PROVIDER_ID, hasZaiCnLoginInfo),
+    resolve: async () => resolveZaiCnToken(),
+    queryEffect: queryZaiCnUsageEffect,
   },
   {
     id: DEEPSEEK_PROVIDER_ID,
@@ -292,7 +307,8 @@ export default function usageExtension(pi: ExtensionAPI): void {
   };
 
   pi.registerCommand("usage", {
-    description: "Show OpenAI Codex, GitHub Copilot, Z.ai GLM Coding Plan, and DeepSeek usage",
+    description:
+      "Show OpenAI Codex, GitHub Copilot, Z.ai GLM Coding Plan (global and China), and DeepSeek usage",
     handler: async (args, ctx) => {
       if (args.trim()) {
         ctx.ui.notify("/usage takes no arguments; use its menu.", "warning");

@@ -1,7 +1,7 @@
 {
   "name": "pi-tian-usage",
-  "version": "0.3.1",
-  "description": "Show OpenAI Codex, GitHub Copilot, Z.ai GLM Coding Plan, and DeepSeek balance usage in the pi coding agent.",
+  "version": "0.3.2",
+  "description": "Show OpenAI Codex, GitHub Copilot, Z.ai GLM Coding Plan (global and China), and DeepSeek balance usage in the pi coding agent.",
   "type": "module",
   "keywords": [
     "pi",
@@ -13,8 +13,10 @@
     "codex",
     "copilot",
     "zai",
+    "zai-coding-cn",
     "glm",
     "zhipu",
+    "bigmodel",
     "deepseek",
     "balance"
   ],

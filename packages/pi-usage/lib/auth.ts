@@ -5,7 +5,8 @@
 // (https://api.github.com/copilot_internal/user) is authenticated with the GitHub
 // OAuth token — the `refresh` credential pi stores for github-copilot — NOT the
 // short-lived Copilot chat token that pi hands to model requests. Z.ai usage
-// (https://api.z.ai/api/monitor/usage/quota/limit) and DeepSeek balance
+// (https://api.z.ai/api/monitor/usage/quota/limit), Z.ai China usage
+// (https://open.bigmodel.cn/api/monitor/usage/quota/limit), and DeepSeek balance
 // (https://api.deepseek.com/user/balance) are authenticated with plain API keys.
 //
 // Pi persists both under ~/.pi/agent/auth.json. We read that file directly (it is
@@ -24,6 +25,7 @@ const AUTH_FILE = path.join(os.homedir(), ".pi", "agent", "auth.json");
 const COPILOT_APPS_FILE = path.join(os.homedir(), ".config", "github-copilot", "apps.json");
 const COPILOT_TOKEN_ENV = ["GH_TOKEN", "GITHUB_TOKEN", "GITHUB_COPILOT_TOKEN", "COPILOT_GITHUB_TOKEN"];
 const ZAI_TOKEN_ENV = ["ZAI_API_KEY"];
+const ZAI_CN_TOKEN_ENV = ["ZAI_CODING_CN_API_KEY", "ZHIPU_API_KEY"];
 const DEEPSEEK_TOKEN_ENV = ["DEEPSEEK_API_KEY"];
 const AUTH_RESOLVE_TIMEOUT_MS = 30_000;
 
@@ -191,6 +193,23 @@ export function resolveZaiToken(): ResolvedToken | undefined {
   if (key) return { token: key, source: "~/.pi/agent/auth.json" };
 
   for (const name of ZAI_TOKEN_ENV) {
+    const value = process.env[name];
+    if (value) return { token: value, source: `$${name}` };
+  }
+  return undefined;
+}
+
+/** Return whether a supported Z.ai China credential source is configured. */
+export function hasZaiCnLoginInfo(): boolean {
+  return resolveZaiCnToken() !== undefined;
+}
+
+/** Resolve the API key used for the domestic BigModel.cn quota endpoint. */
+export function resolveZaiCnToken(): ResolvedToken | undefined {
+  const key = readPiAuth()["zai-coding-cn"]?.key;
+  if (key) return { token: key, source: "~/.pi/agent/auth.json" };
+
+  for (const name of ZAI_CN_TOKEN_ENV) {
     const value = process.env[name];
     if (value) return { token: value, source: `$${name}` };
   }

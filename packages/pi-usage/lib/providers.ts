@@ -1,5 +1,5 @@
-// Provider queries and normalization for Codex, GitHub Copilot, Z.ai, and
-// DeepSeek usage.
+// Provider queries and normalization for Codex, GitHub Copilot, Z.ai (global
+// and China), and DeepSeek usage.
 //
 // Each provider is normalized into a small, presentation-friendly `ProviderReport`
 // so the formatter does not need to know provider-specific JSON shapes.
@@ -17,11 +17,13 @@ import {
 export const CODEX_PROVIDER_ID = "openai-codex";
 export const COPILOT_PROVIDER_ID = "github-copilot";
 export const ZAI_PROVIDER_ID = "zai";
+export const ZAI_CN_PROVIDER_ID = "zai-coding-cn";
 export const DEEPSEEK_PROVIDER_ID = "deepseek";
 
 const CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
 const COPILOT_USAGE_URL = "https://api.github.com/copilot_internal/user";
 const ZAI_QUOTA_URL = "https://api.z.ai/api/monitor/usage/quota/limit";
+const ZAI_CN_QUOTA_URL = "https://open.bigmodel.cn/api/monitor/usage/quota/limit";
 const DEEPSEEK_BALANCE_URL = "https://api.deepseek.com/user/balance";
 
 // Copilot's internal endpoint expects the editor client headers plus a REST API
@@ -267,7 +269,8 @@ function copilotSnapshotLabel(key: string, creditBilled: boolean): string {
 
 // --- Z.ai (GLM Coding Plan) ------------------------------------------------
 
-// Z.ai reports the GLM Coding Plan quota at api.z.ai. The body is
+// Z.ai reports the GLM Coding Plan quota at api.z.ai (and the China variant at
+// open.bigmodel.cn). The body is
 // { code, msg, data: { level, limits: [...] }, success }. Each limit carries a
 // `percentage` = the share of the allowance already *used* (so remaining is
 // 100 - percentage) and a `nextResetTime` in epoch *milliseconds* — unlike
@@ -307,7 +310,11 @@ export async function queryZaiUsage(
   return runQueryPromise(queryZaiUsageEffect(token, signal, timeoutMs, retryCount), signal);
 }
 
-function normalizeZaiReport(data: Record<string, unknown>): ProviderReport {
+function normalizeZaiReport(
+  data: Record<string, unknown>,
+  id: string = ZAI_PROVIDER_ID,
+  name = "GLM Coding Plan",
+): ProviderReport {
   const payload = asObject(data.data);
   if (!payload) {
     const msg = asString(data.msg);
@@ -340,12 +347,49 @@ function normalizeZaiReport(data: Record<string, unknown>): ProviderReport {
   }
 
   return {
-    id: ZAI_PROVIDER_ID,
-    name: "GLM Coding Plan",
+    id,
+    name,
     plan: asString(payload.level),
     windows,
     notes: [],
   };
+}
+
+/** Query the domestic BigModel.cn GLM Coding Plan quota endpoint. */
+export function queryZaiCnUsageEffect(
+  token: string,
+  signal?: AbortSignal,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+  retryCount = DEFAULT_RETRY_COUNT,
+): Effect.Effect<ProviderReport, ProviderQueryFailure> {
+  return queryFromFetch(
+    fetchProviderJsonEffect(
+      ZAI_CN_QUOTA_URL,
+      token,
+      {
+        // The domestic quota endpoint expects the raw API key, unlike the
+        // OpenAI-compatible model endpoint and the international monitor API.
+        Authorization: token,
+        "Accept-Language": "en-US,en",
+        "Content-Type": "application/json",
+        "User-Agent": "pi-usage",
+      },
+      signal,
+      timeoutMs,
+      retryCount,
+      token,
+    ),
+    (data) => normalizeZaiReport(data, ZAI_CN_PROVIDER_ID, "GLM Coding Plan (China)"),
+  );
+}
+
+export async function queryZaiCnUsage(
+  token: string,
+  signal?: AbortSignal,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+  retryCount = DEFAULT_RETRY_COUNT,
+): Promise<ProviderReport> {
+  return runQueryPromise(queryZaiCnUsageEffect(token, signal, timeoutMs, retryCount), signal);
 }
 
 // --- DeepSeek ---------------------------------------------------------------

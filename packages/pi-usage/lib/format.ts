@@ -5,6 +5,7 @@ import {
   CODEX_PROVIDER_ID,
   COPILOT_PROVIDER_ID,
   DEEPSEEK_PROVIDER_ID,
+  ZAI_CN_PROVIDER_ID,
   ZAI_PROVIDER_ID,
   formatMoney,
   type ProviderReport,
@@ -88,11 +89,12 @@ export function formatStatusline(report: ProviderReport): string | undefined {
     }
     return undefined;
   }
-  if (report.id === ZAI_PROVIDER_ID) {
-    // The GLM Coding Plan surfaces only the 5-hour token pool.
+  if (report.id === ZAI_PROVIDER_ID || report.id === ZAI_CN_PROVIDER_ID) {
+    // Both GLM Coding Plan regions surface the 5-hour token pool.
     const tokens = report.windows.find((window) => /5h/.test(window.label));
     if (tokens?.remainingPercent !== undefined) {
-      return `zai ${Math.round(tokens.remainingPercent)}% 5h`;
+      const label = report.id === ZAI_CN_PROVIDER_ID ? "zai-cn" : "zai";
+      return `${label} ${Math.round(tokens.remainingPercent)}% 5h`;
     }
     return undefined;
   }
