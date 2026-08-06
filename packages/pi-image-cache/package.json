@@ -1,6 +1,6 @@
 {
   "name": "pi-tian-image-cache",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Temporary pasted-image cache with compact placeholders for the pi coding agent.",
   "type": "module",
   "keywords": [
@@ -22,17 +22,30 @@
     "url": "https://github.com/TianZuo555/pi-tian-extensions/issues"
   },
   "files": [
-    "index.ts"
+    "index.ts",
+    "lib",
+    "src"
   ],
   "pi": {
     "extensions": [
       "./index.ts"
     ]
   },
+  "scripts": {
+    "check": "tsc --noEmit -p .",
+    "test": "node --test --experimental-strip-types test/*.test.ts"
+  },
+  "dependencies": {
+    "effect": "4.0.0-beta.101"
+  },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-tui": "*"
+  },
+  "devDependencies": {
+    "@effect/language-service": "^0.87.0",
+    "typescript": "^7.0.2"
   },
   "publishConfig": {
     "access": "public"
