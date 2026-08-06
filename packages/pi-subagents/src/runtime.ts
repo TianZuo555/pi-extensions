@@ -5,7 +5,6 @@
  * wraps it with typed disposal and exposes run/cancel/apply as Effect programs.
  */
 
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
   Cause,
   Context,
@@ -18,6 +17,7 @@ import {
   Result,
 } from "effect";
 import type { SubagentRunResult } from "../lib/domain.ts";
+import { SubagentBackendPool } from "../lib/backend-pool.ts";
 import {
   SubagentSupervisor,
   type BackgroundCompleteHandler,
@@ -94,9 +94,16 @@ const makeSubagentRuntime = Effect.gen(function* () {
     init: (cwd, options, onBackgroundComplete) =>
       ensureOpen.pipe(
         Effect.andThen(
-          Effect.sync(() => {
-            supervisor?.dispose();
-            supervisor = new SubagentSupervisor(cwd, undefined, options);
+          Effect.promise(async () => {
+            if (supervisor) await supervisor.dispose();
+            const artifactRoot = options?.artifactRoot;
+            const backendPool =
+              options?.backendPool ??
+              new SubagentBackendPool({ artifactRoot });
+            supervisor = new SubagentSupervisor(cwd, undefined, {
+              artifactRoot,
+              backendPool,
+            });
             supervisor.setBackgroundCompleteHandler(onBackgroundComplete);
           }),
         ),
@@ -147,9 +154,9 @@ const makeSubagentRuntime = Effect.gen(function* () {
 
     close: ensureOpen.pipe(
       Effect.andThen(
-        Effect.sync(() => {
+        Effect.promise(async () => {
           MutableRef.set(closed, true);
-          supervisor?.dispose();
+          if (supervisor) await supervisor.dispose();
           supervisor = undefined;
         }),
       ),

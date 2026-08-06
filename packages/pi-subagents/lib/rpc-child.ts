@@ -37,7 +37,7 @@ const CHILD_RUNTIME_PATH = path.join(
 export interface RpcChildRunInput {
   cwd: string;
   profile: ProfileDefinition;
-  modelArg: string;
+  modelArg?: string;
   prompt: string;
   timeoutMs: number;
   signal?: AbortSignal;
@@ -220,6 +220,12 @@ export async function runRpcChild(input: RpcChildRunInput): Promise<RpcChildRunO
   if (input.signal) {
     if (input.signal.aborted) onAbort();
     else input.signal.addEventListener("abort", onAbort, { once: true });
+  }
+
+  if (child.stdin) {
+    child.stdin.on("error", () => {
+      rejectAllPending("RpcChild stdin error");
+    });
   }
 
   attachJsonlReader(child.stdout!, (line) => {

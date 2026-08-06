@@ -176,7 +176,7 @@ describe("patch apply", () => {
     const replay = await sv.applyPatch("apply-run");
     assert.equal(replay.worktreeDelivery?.patch?.applyStatus, "already-applied");
 
-    sv.dispose();
+    await sv.dispose();
     fs.rmSync(repo, { recursive: true, force: true });
     fs.rmSync(artifactRoot, { recursive: true, force: true });
     fs.rmSync(agentDir, { recursive: true, force: true });
@@ -305,7 +305,7 @@ describe("patch apply", () => {
     assert.equal(stored?.result?.worktreeDelivery?.patch?.applyStatus, "failed");
     assert.equal(stored?.worktreeDelivery?.patch?.applyStatus, "failed");
 
-    sv.dispose();
+    await sv.dispose();
     fs.rmSync(repo, { recursive: true, force: true });
     fs.rmSync(artifactRoot, { recursive: true, force: true });
     fs.rmSync(agentDir, { recursive: true, force: true });

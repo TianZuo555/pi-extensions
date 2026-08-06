@@ -38,7 +38,7 @@ describe("SubagentSupervisor budgets", () => {
         }),
       /Session subagent limit reached/,
     );
-    sv.dispose();
+    await sv.dispose();
     fs.rmSync(agentDir, { recursive: true, force: true });
   });
 
@@ -73,7 +73,7 @@ describe("SubagentSupervisor budgets", () => {
       /Too many concurrent subagents/,
     );
 
-    sv.dispose();
+    await sv.dispose();
     fs.rmSync(agentDir, { recursive: true, force: true });
   });
 });

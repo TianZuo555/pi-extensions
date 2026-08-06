@@ -31,6 +31,34 @@ export type RunLifecycleStatus = RunTerminalStatus | "running";
 
 export type RunMode = "foreground" | "background";
 
+export const SUPPORTED_AGENT_KINDS = [
+  "pi",
+  "claude",
+  "codex",
+  "gemini",
+  "cursor",
+  "devin",
+  "agy",
+  "cline",
+  "omp",
+  "mastracode",
+  "opencode",
+  "copilot",
+  "kimi",
+  "kiro",
+  "droid",
+  "amp",
+  "grok",
+  "hermes",
+  "kilo",
+  "qodercli",
+  "maki",
+] as const;
+
+export type AgentKind = (typeof SUPPORTED_AGENT_KINDS)[number];
+
+export type SubagentBackendKind = "auto" | "herdr" | "rpc";
+
 export interface ProfileDefinition {
   /** e.g. builtin/scout, user/my-agent, project/scout */
   qualifiedId: string;
@@ -51,6 +79,9 @@ export interface ProfileDefinition {
   contentHash?: string;
   /** Soft live-turn budget enforced via RPC turn_start events */
   maxTurns: number;
+  kind: AgentKind;
+  backend: SubagentBackendKind;
+  agentArgs: readonly string[];
 }
 
 export interface RunUsage {
@@ -69,6 +100,7 @@ export interface SubagentRunResult {
   status: RunLifecycleStatus;
   report: string;
   usage: RunUsage;
+  usageAvailable?: boolean;
   model?: string;
   error?: string;
   durationMs: number;
@@ -76,6 +108,14 @@ export interface SubagentRunResult {
   semanticReport?: ChildSemanticReport;
   worktreeDelivery?: WorktreeDelivery;
   budgetExhausted?: boolean;
+  profileKind?: AgentKind;
+  backendId?: "rpc" | "herdr";
+  herdr?: {
+    paneId: string;
+    alias: string;
+    workspaceId?: string;
+    agentStatus?: string;
+  };
 }
 
 export interface RunRecord {
@@ -92,6 +132,9 @@ export interface RunRecord {
   worktreeBranch?: string;
   worktreeDelivery?: WorktreeDelivery;
   cancelReason?: string;
+  profileKind?: AgentKind;
+  backendId?: "rpc" | "herdr";
+  herdr?: SubagentRunResult["herdr"];
 }
 
 export interface SubagentToolDetails {
@@ -99,6 +142,7 @@ export interface SubagentToolDetails {
   profile: string;
   status: RunLifecycleStatus | RunTerminalStatus;
   usage: RunUsage;
+  usageAvailable?: boolean;
   model?: string;
   activity?: string;
   mode?: RunMode;

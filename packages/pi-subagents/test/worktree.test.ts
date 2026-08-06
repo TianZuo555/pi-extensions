@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, it } from "node:test";
 import {
   finalizeWorktree,
@@ -11,7 +12,38 @@ import {
   pruneStaleWorktrees,
   writePatchArtifact,
   PATCH_ARTIFACT_RETENTION_RUNS,
+  type WorktreeInfo,
 } from "../lib/worktree.ts";
+
+const FIXTURE = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "fixtures",
+  "fake-herdr.mjs",
+);
+
+function fakeCliOptions(): { command: string; argsPrefix: string[] } {
+  return { command: process.execPath, argsPrefix: [FIXTURE] };
+}
+
+function withEnv(
+  overrides: Record<string, string | undefined>,
+  fn: () => Promise<void>,
+): Promise<void> {
+  const saved: Record<string, string | undefined> = {};
+  for (const key of Object.keys(overrides)) {
+    saved[key] = process.env[key];
+    const value = overrides[key];
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+  return fn().finally(() => {
+    for (const key of Object.keys(overrides)) {
+      const value = saved[key];
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  });
+}
 
 const artifactDirs: string[] = [];
 
@@ -316,5 +348,76 @@ describe("worktree finalization", () => {
     assert.equal(remaining.length, PATCH_ARTIFACT_RETENTION_RUNS);
     assert.ok(!remaining.includes("run-000"));
     assert.ok(remaining.includes(`run-${String(total - 1).padStart(3, "0")}`));
+  });
+
+  it("finalizes when Herdr already created the run branch", async () => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-wt-"));
+    initGitRepo(repo);
+
+    const worktree = createWorktree(repo, "herdr-branch-run");
+    assert.ok(worktree);
+    execFileSync("git", ["checkout", "-B", worktree!.branch], { cwd: worktree!.workPath, stdio: "pipe" });
+    const herdrWorktree: WorktreeInfo = {
+      ...worktree!,
+      branchPreexisting: true,
+      herdrWorkspaceId: "ws-herdr-test",
+    };
+    fs.writeFileSync(path.join(herdrWorktree.workPath, "herdr-change.txt"), "herdr branch\n", "utf8");
+
+    const artifactRoot = mkArtifactRoot();
+    const removeLog = path.join(os.tmpdir(), `herdr-remove-log-${process.pid}`);
+    try {
+      await withEnv({ FAKE_HERDR_RECORD_REMOVE: removeLog }, async () => {
+        const result = await finalizeWorktree(herdrWorktree, {
+          description: "herdr preexisting branch",
+          runId: "herdr-branch-run",
+          artifactRoot,
+          herdrCliOptions: fakeCliOptions(),
+        });
+        assert.equal(result.hasChanges, true);
+        assert.equal(result.delivery.branch, herdrWorktree.branch);
+        assert.ok(result.delivery.patch);
+        const logged = JSON.parse(fs.readFileSync(removeLog, "utf8").trim().split("\n")[0]) as string[];
+        assert.deepEqual(logged.slice(-5), [
+          "worktree",
+          "remove",
+          "--workspace",
+          "ws-herdr-test",
+          "--force",
+        ]);
+      });
+    } finally {
+      fs.rmSync(removeLog, { force: true });
+      if (fs.existsSync(herdrWorktree.path)) {
+        execFileSync("git", ["worktree", "remove", "--force", herdrWorktree.path], {
+          cwd: repo,
+          stdio: "pipe",
+        });
+      }
+      fs.rmSync(repo, { recursive: true, force: true });
+    }
+  });
+
+  it("records herdr worktree remove argv shape via stubbed CLI", async () => {
+    const removeLog = path.join(os.tmpdir(), `herdr-remove-shape-${process.pid}`);
+    try {
+      await withEnv({ FAKE_HERDR_RECORD_REMOVE: removeLog }, async () => {
+        const { removeHerdrWorktree } = await import("../lib/herdr/workspace.ts");
+        const { Effect } = await import("effect");
+        await Effect.runPromise(
+          removeHerdrWorktree("ws-shape-test", fakeCliOptions()),
+        );
+        const logged = JSON.parse(fs.readFileSync(removeLog, "utf8").trim()) as string[];
+        assert.deepEqual(logged.slice(-5), [
+          "worktree",
+          "remove",
+          "--workspace",
+          "ws-shape-test",
+          "--force",
+        ]);
+      });
+    } finally {
+      fs.rmSync(removeLog, { force: true });
+    }
   });
 });

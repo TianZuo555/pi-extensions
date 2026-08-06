@@ -1,7 +1,7 @@
 {
   "name": "pi-tian-subagents",
-  "version": "0.3.1",
-  "description": "Isolated Pi RPC subagents with profiles, foreground and background runs, and git worktrees.",
+  "version": "0.4.0",
+  "description": "Isolated subagent runs via Herdr panes or Pi RPC children \u2014 profiles, background runs, and git worktrees.",
   "type": "module",
   "keywords": [
     "pi",
@@ -26,6 +26,7 @@
     "lib",
     "src",
     "profiles",
+    "docs",
     "README.md"
   ],
   "pi": {
@@ -35,7 +36,7 @@
   },
   "scripts": {
     "check": "tsc --noEmit -p .",
-    "test": "node --test --experimental-strip-types test/*.test.ts"
+    "test": "PI_SUBAGENTS_DISABLE_HERDR=1 node --test --experimental-strip-types test/*.test.ts"
   },
   "dependencies": {
     "effect": "4.0.0-beta.101"

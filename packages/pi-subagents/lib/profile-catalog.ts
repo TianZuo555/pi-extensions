@@ -11,8 +11,11 @@ import {
   MAX_PROFILE_TURNS,
   MUTATING_TOOLS,
   READ_ONLY_TOOLS,
+  SUPPORTED_AGENT_KINDS,
+  type AgentKind,
   type ProfileDefinition,
   type ProfileSource,
+  type SubagentBackendKind,
   type WorkspacePolicy,
 } from "./domain.ts";
 import { createProfileDiagnosticBuffer, type ProfileDiagnosticCollector } from "./profile-diagnostics.ts";
@@ -26,6 +29,48 @@ import {
 import { profileContentHash } from "./trust.ts";
 
 const PACKAGE_ROOT = path.dirname(fileURLToPath(import.meta.url));
+
+/** Each entry is passed to a subprocess argv; reject shell metacharacters. */
+export const SAFE_AGENT_ARG_PATTERN = /^[A-Za-z0-9_@.,:=\/+\-\[\]]+$/;
+
+const AGENT_KIND_ALIASES: Record<string, AgentKind> = {
+  "cursor-agent": "cursor",
+};
+
+function parseKind(raw: unknown, name: string): AgentKind {
+  const value = String(raw ?? "pi").trim();
+  const normalized = AGENT_KIND_ALIASES[value] ?? value;
+  if (!SUPPORTED_AGENT_KINDS.includes(normalized as AgentKind)) {
+    throw new Error(`Profile "${name}" kind "${value}" is not supported`);
+  }
+  return normalized as AgentKind;
+}
+
+function parseBackend(raw: unknown, name: string): SubagentBackendKind {
+  const value = String(raw ?? "auto").trim();
+  if (value === "auto" || value === "herdr" || value === "rpc") {
+    return value;
+  }
+  throw new Error(`Profile "${name}" backend "${value}" is not valid`);
+}
+
+function parseAgentArgs(raw: unknown, name: string): readonly string[] {
+  let entries: string[];
+  if (Array.isArray(raw)) {
+    entries = raw.map(String);
+  } else if (typeof raw === "string" && raw.trim()) {
+    entries = raw.trim().split(/\s+/);
+  } else {
+    return [];
+  }
+
+  for (const entry of entries) {
+    if (!SAFE_AGENT_ARG_PATTERN.test(entry)) {
+      throw new Error(`Profile "${name}" agentArgs entry "${entry}" contains unsafe characters`);
+    }
+  }
+  return entries;
+}
 
 function parseTools(raw: unknown): string[] {
   if (Array.isArray(raw)) {
@@ -109,6 +154,9 @@ function loadProfileFromFile(
 
   const modelRef = override?.model ?? (frontmatter.model as string | undefined)?.trim();
   const maxTurns = resolveMaxTurns(name, frontmatter, override, settings);
+  const kind = parseKind(frontmatter.kind, name);
+  const backend = parseBackend(frontmatter.backend, name);
+  const agentArgs = parseAgentArgs(frontmatter.agentArgs, name);
 
   return {
     qualifiedId: `${source}/${name}`,
@@ -124,6 +172,9 @@ function loadProfileFromFile(
     filePath,
     contentHash: profileContentHash(raw),
     maxTurns,
+    kind,
+    backend,
+    agentArgs,
   };
 }
 

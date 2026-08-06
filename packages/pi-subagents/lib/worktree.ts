@@ -20,7 +20,10 @@ import {
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import { Effect } from "effect";
 import { GIT_DEFAULT_TIMEOUT_MS, runGitBuffer, runGitText } from "./git-exec.ts";
+import type { HerdrCliOptions } from "./herdr/cli.ts";
+import { createHerdrWorktree, removeHerdrWorktree } from "./herdr/workspace.ts";
 
 export interface WorktreeInfo {
   path: string;
@@ -28,6 +31,12 @@ export interface WorktreeInfo {
   baseSha: string;
   workPath: string;
   repoRoot: string;
+  /** True when Herdr created and checked out the run branch (skip createRunBranch). */
+  branchPreexisting: boolean;
+  /** Herdr workspace id when the worktree was created via herdr worktree create. */
+  herdrWorkspaceId?: string;
+  /** Root pane from herdr worktree create (Herdr path only). */
+  rootPaneId?: string;
 }
 
 export type PatchApplyStatus = "not-applied" | "applied" | "already-applied" | "failed";
@@ -43,6 +52,7 @@ export interface WorktreeDelivery {
   baseSha: string;
   branch?: string;
   retainedWorktreePath?: string;
+  retainedHerdrWorkspaceId?: string;
   patch?: WorktreePatchArtifact;
   error?: string;
 }
@@ -56,6 +66,7 @@ export interface WorktreeFinalizeOptions {
   description: string;
   artifactRoot?: string;
   runId?: string;
+  herdrCliOptions?: HerdrCliOptions;
 }
 
 const LOCAL_GIT_NAME = "pi-subagent";
@@ -145,42 +156,64 @@ export function getRunArtifactDir(artifactRoot: string, runId: string): string {
   return join(artifactRoot, "runs", runId);
 }
 
-export function createWorktree(cwd: string, runId: string): WorktreeInfo | undefined {
-  let baseSha: string;
-  let subdir: string;
-  let repoRoot: string;
+function resolveWorktreeRoots(cwd: string): { repoRoot: string; subdir: string; branch: string } | undefined {
   const inside = safeGitSync(["rev-parse", "--is-inside-work-tree"], cwd);
   if (!inside.ok) return undefined;
 
-  const head = safeGitSync(["rev-parse", "HEAD"], cwd);
   const root = safeGitSync(["rev-parse", "--show-toplevel"], cwd);
-  if (!head.ok || !root.ok) return undefined;
+  if (!root.ok) return undefined;
 
-  baseSha = head.out;
-  repoRoot = root.out;
+  let subdir: string;
   try {
-    subdir = relative(realpathSync(repoRoot), realpathSync(cwd));
+    subdir = relative(realpathSync(root.out), realpathSync(cwd));
   } catch {
     return undefined;
   }
+
+  return { repoRoot: root.out, subdir, branch: "" };
+}
+
+export function createWorktree(cwd: string, runId: string): WorktreeInfo | undefined {
+  const roots = resolveWorktreeRoots(cwd);
+  if (!roots) return undefined;
+
+  const head = safeGitSync(["rev-parse", "HEAD"], cwd);
+  if (!head.ok) return undefined;
 
   const branch = `pi-subagent-${runId}`;
   const suffix = randomUUID().slice(0, 8);
   const worktreePath = join(tmpdir(), `pi-subagent-${runId}-${suffix}`);
 
-  const added = safeGitSync(["worktree", "add", "--detach", worktreePath, baseSha], repoRoot);
+  const added = safeGitSync(["worktree", "add", "--detach", worktreePath, head.out], roots.repoRoot);
   if (!added.ok) return undefined;
 
   return {
     path: worktreePath,
     branch,
-    baseSha,
-    repoRoot,
-    workPath: subdir ? join(worktreePath, subdir) : worktreePath,
+    baseSha: head.out,
+    repoRoot: roots.repoRoot,
+    workPath: roots.subdir ? join(worktreePath, roots.subdir) : worktreePath,
+    branchPreexisting: false,
   };
 }
 
-async function removeWorktreeRegistration(worktree: WorktreeInfo): Promise<GitResult> {
+async function removeWorktreeRegistration(
+  worktree: WorktreeInfo,
+  options?: WorktreeFinalizeOptions,
+): Promise<GitResult> {
+  if (worktree.herdrWorkspaceId) {
+    return Effect.runPromise(
+      removeHerdrWorktree(worktree.herdrWorkspaceId, options?.herdrCliOptions).pipe(
+        Effect.map(() => ({ ok: true as const, out: "" })),
+        Effect.catch((error) =>
+          Effect.succeed({
+            ok: false as const,
+            error: error instanceof Error ? error.message : String(error),
+          }),
+        ),
+      ),
+    );
+  }
   if (!existsSync(worktree.path)) return { ok: true, out: "" };
   return safeGit(["worktree", "remove", "--force", worktree.path], worktree.repoRoot);
 }
@@ -212,6 +245,9 @@ function retainWorktree(
 ): WorktreeFinalizeResult {
   delivery.error = delivery.error ? `${delivery.error}; ${error}` : error;
   delivery.retainedWorktreePath = worktree.path;
+  if (worktree.herdrWorkspaceId) {
+    delivery.retainedHerdrWorkspaceId = worktree.herdrWorkspaceId;
+  }
   return { hasChanges: true, delivery };
 }
 
@@ -220,7 +256,48 @@ async function branchExists(repoRoot: string, branch: string): Promise<boolean> 
   return result.ok;
 }
 
+export function createWorktreeViaHerdr(
+  cwd: string,
+  runId: string,
+  cliOptions?: HerdrCliOptions,
+): Promise<WorktreeInfo | undefined> {
+  return Effect.runPromise(createWorktreeViaHerdrEffect(cwd, runId, cliOptions)).catch(
+    () => undefined,
+  );
+}
+
+export function createWorktreeViaHerdrEffect(
+  cwd: string,
+  runId: string,
+  cliOptions?: HerdrCliOptions,
+): Effect.Effect<WorktreeInfo | undefined> {
+  return Effect.gen(function* () {
+    const roots = resolveWorktreeRoots(cwd);
+    if (!roots) return undefined;
+
+    const branch = `pi-subagent-${runId}`;
+    const created = yield* createHerdrWorktree({ repoRoot: roots.repoRoot, branch }, cliOptions);
+
+    const baseSha = safeGitSync(["rev-parse", "HEAD"], created.worktreePath);
+    if (!baseSha.ok) return undefined;
+
+    return {
+      path: created.worktreePath,
+      branch,
+      baseSha: baseSha.out,
+      repoRoot: roots.repoRoot,
+      workPath: roots.subdir ? join(created.worktreePath, roots.subdir) : created.worktreePath,
+      branchPreexisting: true,
+      herdrWorkspaceId: created.workspaceId,
+      rootPaneId: created.rootPaneId,
+    };
+  }).pipe(Effect.orElseSucceed(() => undefined));
+}
+
 async function createRunBranch(worktree: WorktreeInfo): Promise<GitResult> {
+  if (worktree.branchPreexisting) {
+    return { ok: true, out: "" };
+  }
   if (await branchExists(worktree.repoRoot, worktree.branch)) {
     return { ok: false, error: `branch ${worktree.branch} already exists` };
   }
@@ -304,7 +381,7 @@ export async function finalizeWorktree(
     const dirty = porcelainBefore.dirty;
 
     if (!committed && !dirty) {
-      const removed = await removeWorktreeRegistration(worktree);
+      const removed = await removeWorktreeRegistration(worktree, options);
       if (!removed.ok) {
         return retainWorktree(delivery, worktree, `worktree removal failed: ${removed.error}`);
       }
@@ -337,7 +414,7 @@ export async function finalizeWorktree(
     }
 
     if (!hasCommittedChanges(worktree, headAfter.out) && !porcelainAfter.dirty) {
-      const removed = await removeWorktreeRegistration(worktree);
+      const removed = await removeWorktreeRegistration(worktree, options);
       if (!removed.ok) {
         return retainWorktree(delivery, worktree, `worktree removal failed: ${removed.error}`);
       }
@@ -368,7 +445,7 @@ export async function finalizeWorktree(
       };
     }
 
-    const removed = await removeWorktreeRegistration(worktree);
+    const removed = await removeWorktreeRegistration(worktree, options);
     if (!removed.ok) {
       return retainWorktree(delivery, worktree, `worktree removal failed: ${removed.error}`);
     }

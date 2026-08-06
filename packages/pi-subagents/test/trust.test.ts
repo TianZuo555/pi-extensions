@@ -23,6 +23,9 @@ function sampleProjectProfile(hash: string): ProfileDefinition {
     timeoutMs: 60_000,
     maxTurns: 8,
     contentHash: hash,
+    kind: "pi",
+    backend: "auto",
+    agentArgs: [],
   };
 }
 

@@ -42,7 +42,7 @@ describe("RpcChild structured reports via fake child", () => {
       assert.match(result.semanticReport.report.summary, /structured completed/);
     }
     assert.match(result.report, /Status: completed/);
-    sv.dispose();
+    await sv.dispose();
     fs.rmSync(agentDir, { recursive: true, force: true });
   });
 
@@ -78,7 +78,7 @@ describe("RpcChild structured reports via fake child", () => {
       "failed",
     );
 
-    sv.dispose();
+    await sv.dispose();
     fs.rmSync(agentDir, { recursive: true, force: true });
   });
 
@@ -94,7 +94,7 @@ describe("RpcChild structured reports via fake child", () => {
     });
     assert.equal(result.semanticReport?.kind, "unstructured");
     assert.match(result.report, /fake subagent report/);
-    sv.dispose();
+    await sv.dispose();
     fs.rmSync(agentDir, { recursive: true, force: true });
   });
 
@@ -110,7 +110,7 @@ describe("RpcChild structured reports via fake child", () => {
     });
     assert.equal(result.semanticReport?.kind, "unstructured");
     assert.match(result.report, /fake subagent report/);
-    sv.dispose();
+    await sv.dispose();
     fs.rmSync(agentDir, { recursive: true, force: true });
   });
 
@@ -138,7 +138,7 @@ describe("RpcChild structured reports via fake child", () => {
     });
     assert.equal(result.semanticReport?.kind, "unstructured");
     assert.match(result.report, /fake subagent report/);
-    sv.dispose();
+    await sv.dispose();
     fs.rmSync(agentDir, { recursive: true, force: true });
   });
 
@@ -175,7 +175,7 @@ Tight turn budget profile.
       assert.equal(result.semanticReport.report.status, "completed");
     }
 
-    sv.dispose();
+    await sv.dispose();
     fs.rmSync(agentDir, { recursive: true, force: true });
   });
 
@@ -210,7 +210,7 @@ Tight turn budget profile.
     assert.match(result.error ?? "", /turn budget exhausted/i);
     assert.equal(sv.listRuns().filter((r) => r.status === "running").length, 0);
 
-    sv.dispose();
+    await sv.dispose();
     fs.rmSync(agentDir, { recursive: true, force: true });
   });
 });
@@ -229,7 +229,7 @@ describe("SubagentSupervisor with fake RPC child", () => {
     assert.equal(result.status, "completed");
     assert.match(result.report, /fake subagent report/);
     assert.ok(result.usage.input > 0);
-    sv.dispose();
+    await sv.dispose();
     fs.rmSync(agentDir, { recursive: true, force: true });
   });
 
@@ -245,7 +245,7 @@ describe("SubagentSupervisor with fake RPC child", () => {
       spawnOverride: { command: process.execPath, args: [FIXTURE, "--mode=hang"] },
     });
     assert.notEqual(result.status, "completed");
-    sv.dispose();
+    await sv.dispose();
     fs.rmSync(agentDir, { recursive: true, force: true });
   });
 
@@ -263,7 +263,7 @@ describe("SubagentSupervisor with fake RPC child", () => {
     assert.notEqual(result.status, "completed");
     assert.ok(Date.now() - started < 10_000);
     assert.equal(sv.listRuns().filter((r) => r.status === "running").length, 0);
-    sv.dispose();
+    await sv.dispose();
     fs.rmSync(agentDir, { recursive: true, force: true });
   });
 });

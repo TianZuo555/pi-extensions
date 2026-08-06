@@ -19,10 +19,12 @@ import {
   ProfileCatalog,
   resolveProfileModelArg,
 } from "./profile-catalog.ts";
-import { createDetachedChildTracker, type DetachedChildTracker } from "./process-tracker.ts";
+import type { BackendRunOutput, SubagentBackend } from "./backend.ts";
+import { SubagentBackendPool } from "./backend-pool.ts";
+import type { ResolvedBackendKind } from "./backend-selection.ts";
 import { applyVerifiedPatch } from "./patch-apply.ts";
 import { createDeferredResultDelivery } from "./result-delivery.ts";
-import { runRpcChild, type RpcChildRunInput } from "./rpc-child.ts";
+import type { RpcChildRunInput } from "./rpc-child.ts";
 import { RunStore } from "./run-store.ts";
 import {
   createWorktree,
@@ -63,10 +65,12 @@ interface PreparedSubagentRun {
   linkedSignal: AbortSignal | undefined;
   taskPreview: string;
   timeoutMs: number;
+  backendId: ResolvedBackendKind;
 }
 
 export interface SubagentSupervisorOptions {
   artifactRoot?: string;
+  backendPool?: SubagentBackendPool;
 }
 
 const RECOVERY_BLOCK_MAX_BYTES = 4_096;
@@ -75,16 +79,25 @@ function formatRecoveryBlock(delivery: WorktreeDelivery): string | undefined {
   const lines: string[] = [];
   if (delivery.error) lines.push(`Finalization error: ${delivery.error}`);
   if (delivery.retainedWorktreePath) lines.push(`Retained worktree: ${delivery.retainedWorktreePath}`);
+  if (delivery.retainedHerdrWorkspaceId) {
+    lines.push(`Retained workspace: ${delivery.retainedHerdrWorkspaceId}`);
+  }
   if (delivery.branch) lines.push(`Branch: ${delivery.branch}`);
   if (delivery.patch?.path) lines.push(`Patch: ${delivery.patch.path}`);
   if (!lines.length) return undefined;
   return truncateUtf8(`## Recovery\n${lines.join("\n")}`, RECOVERY_BLOCK_MAX_BYTES);
 }
 
+/** RPC-only controls: honoring them requires the RPC child, never an interactive agent. */
+function usesRpcOnlyControls(input: SupervisorRunInput): boolean {
+  return input.spawnOverride !== undefined || input.skipChildRuntime !== undefined;
+}
+
 function formatRecoveryErrorSummary(delivery: WorktreeDelivery): string | undefined {
   const parts: string[] = [];
   if (delivery.error) parts.push(delivery.error);
   if (delivery.retainedWorktreePath) parts.push(`retained=${delivery.retainedWorktreePath}`);
+  if (delivery.retainedHerdrWorkspaceId) parts.push(`workspace=${delivery.retainedHerdrWorkspaceId}`);
   if (delivery.branch) parts.push(`branch=${delivery.branch}`);
   if (delivery.patch?.path) parts.push(`patch=${delivery.patch.path}`);
   return parts.length ? parts.join("; ") : undefined;
@@ -99,7 +112,7 @@ export class SubagentSupervisor {
   private readonly cwd: string;
   private readonly agentDir: string;
   private readonly artifactRoot: string;
-  private readonly tracker: DetachedChildTracker = createDetachedChildTracker();
+  private readonly backendPool: SubagentBackendPool;
   private readonly runs = new RunStore();
   private readonly pendingDelivery = createDeferredResultDelivery<SubagentRunResult>();
   private activeRuns = 0;
@@ -115,6 +128,8 @@ export class SubagentSupervisor {
     this.catalog = new ProfileCatalog(cwd, agentDir);
     this.agentDir = this.catalog.getAgentDir();
     this.artifactRoot = options?.artifactRoot ?? getDefaultArtifactRoot();
+    this.backendPool =
+      options?.backendPool ?? new SubagentBackendPool({ artifactRoot: this.artifactRoot });
     pruneStalePatchArtifacts(this.artifactRoot);
     this.reloadCostSettings();
   }
@@ -134,12 +149,12 @@ export class SubagentSupervisor {
     this.sessionSoftCostUsd = settings.sessionSoftCostUsd ?? SESSION_SOFT_COST_USD;
   }
 
-  dispose(): void {
+  async dispose(): Promise<void> {
     this.disposed = true;
     this.onBackgroundComplete = undefined;
     this.pendingDelivery.clear();
     this.runs.clear();
-    this.tracker.dispose();
+    await this.backendPool.dispose();
     pruneStalePatchArtifacts(this.artifactRoot);
     pruneStaleWorktrees(this.cwd);
   }
@@ -189,7 +204,13 @@ export class SubagentSupervisor {
   }
 
   cancelRun(runId: string, reason?: string): boolean {
-    return this.runs.cancel(runId, reason);
+    const cancelled = this.runs.cancel(runId, reason);
+    if (!cancelled) return false;
+    const record = this.runs.get(runId);
+    if (record?.backendId) {
+      void this.backendPool.cancel(record.backendId, runId, reason);
+    }
+    return true;
   }
 
   drainPendingResults(): void {
@@ -291,6 +312,10 @@ export class SubagentSupervisor {
     }
   }
 
+  getBackendPool(): SubagentBackendPool {
+    return this.backendPool;
+  }
+
   private async startBackground(input: SupervisorRunInput): Promise<SubagentRunResult> {
     const prepared = await this.prepareRun(input);
     const record = this.runs.register({
@@ -300,6 +325,8 @@ export class SubagentSupervisor {
       taskPreview: prepared.taskPreview,
       mode: "background",
       abortController: prepared.abortController,
+      profileKind: prepared.profile.kind,
+      backendId: prepared.backendId,
     });
 
     const promise = this.executeRun(prepared, input);
@@ -336,6 +363,8 @@ export class SubagentSupervisor {
       taskPreview: prepared.taskPreview,
       mode: "foreground",
       abortController: prepared.abortController,
+      profileKind: prepared.profile.kind,
+      backendId: prepared.backendId,
     });
 
     const result = await this.executeRun(prepared, input);
@@ -382,6 +411,8 @@ export class SubagentSupervisor {
       const taskPreview =
         input.task.length > 80 ? `${input.task.slice(0, 80)}…` : input.task;
 
+      const { backendId } = this.backendPool.resolve(profile, usesRpcOnlyControls(input));
+
       return {
         runId,
         profile,
@@ -390,6 +421,7 @@ export class SubagentSupervisor {
         linkedSignal,
         taskPreview,
         timeoutMs: input.timeoutMs ?? profile.timeoutMs ?? DEFAULT_RUN_TIMEOUT_MS,
+        backendId,
       };
     } catch (error) {
       this.activeRuns--;
@@ -400,7 +432,7 @@ export class SubagentSupervisor {
   private composeRunResult(
     prepared: PreparedSubagentRun,
     started: number,
-    output: Awaited<ReturnType<typeof runRpcChild>> | undefined,
+    output: BackendRunOutput | undefined,
     executeError: unknown,
     worktreeDelivery: WorktreeDelivery | undefined,
   ): SubagentRunResult {
@@ -454,12 +486,16 @@ export class SubagentSupervisor {
       report: truncateUtf8(bodyParts.join("\n\n"), REPORT_MAX_BYTES),
       semanticReport: output?.semanticReport,
       usage: output?.usage ?? emptyUsage(),
+      usageAvailable: output?.usageAvailable,
       model: prepared.modelArg,
       error: status === "completed" ? undefined : combinedError,
       durationMs: Date.now() - started,
       worktreeBranch: worktreeDelivery?.branch,
       worktreeDelivery,
       budgetExhausted: output?.budgetExhausted,
+      profileKind: prepared.profile.kind,
+      backendId: prepared.backendId,
+      herdr: output?.herdr,
     };
   }
 
@@ -471,11 +507,15 @@ export class SubagentSupervisor {
     let worktree: WorktreeInfo | undefined;
     let worktreeDelivery: WorktreeDelivery | undefined;
     let workCwd = input.cwd;
-    let output: Awaited<ReturnType<typeof runRpcChild>> | undefined;
+    let output: BackendRunOutput | undefined;
     let executeError: unknown;
+    const { backend, backendId } = this.backendPool.resolve(
+      prepared.profile,
+      usesRpcOnlyControls(input),
+    );
 
     try {
-      if (prepared.profile.workspace === "worktree") {
+      if (prepared.profile.workspace === "worktree" && backendId !== "herdr") {
         worktree = createWorktree(input.cwd, prepared.runId);
         if (!worktree) {
           throw new Error(
@@ -485,32 +525,50 @@ export class SubagentSupervisor {
         workCwd = worktree.workPath;
       }
 
-      output = await runRpcChild({
-        cwd: workCwd,
+      const rpcOverrides =
+        input.spawnOverride !== undefined || input.skipChildRuntime !== undefined
+          ? {
+              spawnOverride: input.spawnOverride,
+              skipChildRuntime: input.skipChildRuntime,
+            }
+          : undefined;
+
+      output = await backend.run({
+        runId: prepared.runId,
         profile: prepared.profile,
-        modelArg: prepared.modelArg,
+        cwd: workCwd,
         prompt: buildTaskPrompt(prepared.profile.name, input.task, input.context),
+        task: input.task,
+        context: input.context,
+        modelArg: prepared.modelArg,
         timeoutMs: prepared.timeoutMs,
         signal: prepared.abortController.signal,
-        tracker: this.tracker,
-        spawnOverride: input.spawnOverride,
-        skipChildRuntime: input.skipChildRuntime,
         onActivity: (name) => {
           this.runs.updateActivity(prepared.runId, name);
           input.onActivity?.(name);
         },
+        rpcOverrides,
       });
 
-      this.sessionCostUsd += output.usage.cost;
+      if (!worktree && output?.worktree) {
+        worktree = output.worktree;
+      }
+
+      if (output.usageAvailable) {
+        this.sessionCostUsd += output.usage.cost;
+      }
     } catch (error) {
       executeError = error;
     } finally {
       try {
         if (worktree) {
+          const herdrCliOptions =
+            backendId === "herdr" ? this.backendPool.getHerdrCliOptions() : undefined;
           const finalized = await finalizeWorktree(worktree, {
             description: input.task,
             runId: prepared.runId,
             artifactRoot: this.artifactRoot,
+            herdrCliOptions,
           });
           worktreeDelivery = finalized.delivery;
         }
@@ -523,11 +581,16 @@ export class SubagentSupervisor {
   }
 }
 
+export function formatUsageCost(result: Pick<SubagentRunResult, "usage" | "usageAvailable">): string {
+  if (result.usageAvailable === false) return "n/a";
+  return `$${result.usage.cost.toFixed(4)}`;
+}
+
 export function formatRunSummary(result: SubagentRunResult): string {
   const parts = [
     `[${result.profile}] ${result.status}`,
     `${result.durationMs}ms`,
-    `$${result.usage.cost.toFixed(4)}`,
+    formatUsageCost(result),
   ];
   if (result.usage.turns) parts.push(`${result.usage.turns} turns`);
   if (result.semanticReport?.kind === "structured") {

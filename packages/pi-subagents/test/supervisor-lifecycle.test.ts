@@ -106,7 +106,7 @@ describe("SubagentSupervisor lifecycle", () => {
     sv.drainPendingResults();
     assert.equal(deliveries, 1);
 
-    sv.dispose();
+    await sv.dispose();
     fs.rmSync(agentDir, { recursive: true, force: true });
   });
 
@@ -133,7 +133,7 @@ describe("SubagentSupervisor lifecycle", () => {
     sv.drainPendingResults();
     assert.equal(deliveries, 2);
 
-    sv.dispose();
+    await sv.dispose();
     fs.rmSync(agentDir, { recursive: true, force: true });
   });
 
@@ -162,7 +162,7 @@ describe("SubagentSupervisor lifecycle", () => {
     assert.equal(deliveries, 1);
     assert.deepEqual(sv.pendingBackgroundRunIds().length, 0);
 
-    sv.dispose();
+    await sv.dispose();
     fs.rmSync(agentDir, { recursive: true, force: true });
   });
 
@@ -188,7 +188,7 @@ describe("SubagentSupervisor lifecycle", () => {
     assert.equal(record!.status, "cancelled");
     assert.match(record!.result?.error ?? "", /user stopped/);
 
-    sv.dispose();
+    await sv.dispose();
     fs.rmSync(agentDir, { recursive: true, force: true });
   });
 
@@ -206,7 +206,7 @@ describe("SubagentSupervisor lifecycle", () => {
     assert.equal(result.status, "failed");
     assert.equal(sv.listRuns().filter((r) => r.status === "running").length, 0);
 
-    sv.dispose();
+    await sv.dispose();
     fs.rmSync(agentDir, { recursive: true, force: true });
   });
 
@@ -222,7 +222,7 @@ describe("SubagentSupervisor lifecycle", () => {
       spawnOverride: { command: process.execPath, args: [FIXTURE, "--mode=hang"] },
     });
     assert.equal(result.status, "timed_out");
-    sv.dispose();
+    await sv.dispose();
     fs.rmSync(agentDir, { recursive: true, force: true });
   });
 
@@ -245,7 +245,7 @@ describe("SubagentSupervisor lifecycle", () => {
     });
 
     await sleep(50);
-    sv.dispose();
+    await sv.dispose();
     assert.equal(sv.isDisposed(), true);
     assert.deepEqual(sv.pendingBackgroundRunIds().length, 0);
     sv.drainPendingResults();
@@ -287,7 +287,7 @@ describe("SubagentSupervisor lifecycle", () => {
     );
     assert.match(branchDiff, /orphan/);
 
-    sv.dispose();
+    await sv.dispose();
     fs.rmSync(repo, { recursive: true, force: true });
     fs.rmSync(artifactRoot, { recursive: true, force: true });
     fs.rmSync(agentDir, { recursive: true, force: true });
@@ -324,14 +324,14 @@ describe("SubagentSupervisor lifecycle", () => {
     assert.equal(deliveries, 1);
 
     sv["executeRun"] = executeRun;
-    sv.dispose();
+    await sv.dispose();
     fs.rmSync(agentDir, { recursive: true, force: true });
   });
 
   it("rejects run after supervisor disposal", async () => {
     const agentDir = isolatedAgentDir();
     const sv = new SubagentSupervisor(process.cwd(), agentDir);
-    sv.dispose();
+    await sv.dispose();
     await assert.rejects(
       () =>
         sv.run({
@@ -378,7 +378,7 @@ describe("SubagentSupervisor lifecycle", () => {
       });
     }
 
-    sv.dispose();
+    await sv.dispose();
     fs.rmSync(repo, { recursive: true, force: true });
     fs.rmSync(agentDir, { recursive: true, force: true });
   });

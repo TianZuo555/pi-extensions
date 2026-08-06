@@ -16,6 +16,8 @@ export class RunStore {
     taskPreview: string;
     mode: RunMode;
     abortController: AbortController;
+    profileKind?: RunRecord["profileKind"];
+    backendId?: RunRecord["backendId"];
   }): RunRecord {
     const record: RunRecord = {
       runId: input.runId,
@@ -25,6 +27,8 @@ export class RunStore {
       mode: input.mode,
       status: "running",
       startedAt: Date.now(),
+      profileKind: input.profileKind,
+      backendId: input.backendId,
     };
     this.runs.set(input.runId, record);
     this.abortControllers.set(input.runId, input.abortController);
@@ -56,6 +60,7 @@ export class RunStore {
     record.result = result;
     record.worktreeBranch = result.worktreeBranch;
     record.worktreeDelivery = result.worktreeDelivery;
+    record.herdr = result.herdr;
     this.abortControllers.delete(runId);
     return record;
   }

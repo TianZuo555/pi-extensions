@@ -20,7 +20,7 @@ import {
   type SubagentToolDetails,
 } from "./lib/domain.ts";
 import { openAgentsDashboard } from "./lib/ui/agents-command.ts";
-import { formatRunSummary, type SubagentSupervisor } from "./lib/supervisor.ts";
+import { formatRunSummary, formatUsageCost, type SubagentSupervisor } from "./lib/supervisor.ts";
 import {
   createSubagentRuntime,
   getSupervisor,
@@ -121,6 +121,7 @@ export default function subagentsExtension(pi: ExtensionAPI) {
       profile: result.profile,
       status: result.status,
       usage: result.usage,
+      usageAvailable: result.usageAvailable,
       model: result.model,
       activity,
       mode: mode ?? "foreground",
@@ -338,7 +339,10 @@ export default function subagentsExtension(pi: ExtensionAPI) {
       let text =
         icon +
         theme.fg("accent", details.profile) +
-        theme.fg("muted", ` · ${details.status} · $${details.usage.cost.toFixed(4)}`);
+        theme.fg(
+          "muted",
+          ` · ${details.status} · ${formatUsageCost({ usage: details.usage, usageAvailable: details.usageAvailable })}`,
+        );
       if (expanded) {
         const body = result.content[0]?.type === "text" ? result.content[0].text : "";
         text += `\n${body}`;
