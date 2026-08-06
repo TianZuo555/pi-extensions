@@ -1,5 +1,9 @@
 // pi-commit — generate reviewed Git commit messages with a dedicated model.
 //
+// Architecture: model resolution and LLM generation live in an Effect v4
+// `CommitRuntime` service (see `src/runtime.ts`). Git mutations and pi UI
+// sequencing stay in this imperative boundary.
+//
 // Commands:
 //   /commit [guidance]      generate a message for already-staged changes
 //   /commit-all [guidance]  explicitly stage every change, then plan logical commits
@@ -8,15 +12,6 @@
 //   { "piCommit": { "model": "provider/model", "thinkingLevel": "high" } }
 // Project .pi/settings.json overrides the global setting when the project is trusted.
 
-import { randomUUID } from "node:crypto";
-import type {
-  Api,
-  AssistantMessage,
-  Context,
-  Model,
-  SimpleStreamOptions,
-} from "@earendil-works/pi-ai";
-import { completeSimple } from "@earendil-works/pi-ai/compat";
 import {
   BorderedLoader,
   type ExtensionAPI,
@@ -24,66 +19,41 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import {
   loadCommitSettings,
-  type CommitThinkingLevel,
-  type ModelReference,
 } from "./lib/config.ts";
 import {
-  commitWithMessage,
   describeGitFailure,
-  ensureNoUnmergedEntries,
-  hasUnstagedChanges,
   hasWorkingTreeChanges,
-  openGitRepository,
-  pushCurrentBranch,
-  readLatestCommitSummary,
-  readStagedPaths,
-  readStagedSnapshot,
-  resetStagedChanges,
-  stageAllChanges,
-  stageSelectedPaths,
   truncateUtf8,
-  verifyStagedSnapshot,
   type ExecFunction,
   type GitRepository,
   type StagedSnapshot,
 } from "./lib/git.ts";
 import {
-  buildCommitAllPrompt,
-  buildCommitPrompt,
-  COMMIT_ALL_SYSTEM_PROMPT,
-  COMMIT_SYSTEM_PROMPT,
   MAX_PATCH_BYTES,
   normalizeEditedCommitMessage,
-  normalizeGeneratedCommitMessage,
-  normalizeGeneratedCommitPlan,
   type CommitPlan,
 } from "./lib/prompt.ts";
-
-interface ResolvedAuth {
-  apiKey?: string;
-  headers?: Record<string, string>;
-  env?: Record<string, string>;
-}
-
-interface ProviderInvoker {
-  streamSimple(
-    model: Model<Api>,
-    context: Context,
-    options?: SimpleStreamOptions,
-  ): { result(): Promise<AssistantMessage> };
-}
-
-interface ProviderRegistry {
-  getProvider?: (provider: string) => ProviderInvoker | undefined;
-}
-
-interface ResolvedModel {
-  model: Model<Api>;
-  reference: ModelReference;
-  thinkingLevel?: CommitThinkingLevel;
-  auth: ResolvedAuth;
-  providerInvoker?: ProviderInvoker;
-}
+import {
+  commitSinglePlannedGroupEffect,
+  commitWithMessageEffect,
+  ensureCleanIndexEffect,
+  GitWorkflowError,
+  openRepositoryEffect,
+  plannedCommitPreflightEffect,
+  pushCurrentBranchEffect,
+  readLatestCommitSummaryEffect,
+  readStagedSnapshotEffect,
+  stageAllChangesEffect,
+  verifySnapshotEffect,
+} from "./src/git-workflow.ts";
+import {
+  CommitRuntime,
+  createCommitRuntime,
+  runCommit,
+  type CommitRuntimeInstance,
+  type CommitRuntimeShape,
+  type ResolvedModel,
+} from "./src/runtime.ts";
 
 type GenerationOutcome<T> =
   | { status: "success"; value: T }
@@ -110,121 +80,8 @@ function compactError(error: unknown): string {
     : truncated.text;
 }
 
-function getProviderInvoker(
-  registry: ExtensionCommandContext["modelRegistry"],
-  provider: string,
-): ProviderInvoker | undefined {
-  const registryWithProvider = registry as ProviderRegistry;
-  return registryWithProvider.getProvider?.(provider);
-}
-
-async function resolveConfiguredModel(
-  ctx: ExtensionCommandContext,
-  reference: ModelReference,
-  thinkingLevel?: CommitThinkingLevel,
-): Promise<ResolvedModel> {
-  const model = ctx.modelRegistry.find(reference.provider, reference.id);
-  if (!model) {
-    throw new Error(
-      `Commit model ${reference.value} was not found. Check piCommit.model in settings.json or configure the model in models.json.`,
-    );
-  }
-
-  const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-  if (!auth.ok) {
-    throw new Error(`Commit model ${reference.value} is unavailable: ${auth.error}`);
-  }
-
-  return {
-    model,
-    reference,
-    thinkingLevel,
-    auth,
-    // Newer Pi runtimes expose the native provider on the registry. Using it
-    // keeps provider-specific request handling inside Pi's SDK.
-    providerInvoker: getProviderInvoker(ctx.modelRegistry, reference.provider),
-  };
-}
-
-async function requestModelText(
-  resolved: ResolvedModel,
-  systemPrompt: string,
-  userPrompt: string,
-  maxTokens: number,
-  signal?: AbortSignal,
-): Promise<string | undefined> {
-  const context: Context = {
-    systemPrompt,
-    messages: [
-      {
-        role: "user",
-        content: [{ type: "text", text: userPrompt }],
-        timestamp: Date.now(),
-      },
-    ],
-  };
-  const options: SimpleStreamOptions = {
-    apiKey: resolved.auth.apiKey,
-    headers: resolved.auth.headers,
-    env: resolved.auth.env,
-    signal,
-    cacheRetention: "none",
-    maxTokens,
-    reasoning: resolved.thinkingLevel === "off" ? undefined : resolved.thinkingLevel,
-    timeoutMs: 120_000,
-    maxRetries: 0,
-    maxRetryDelayMs: 60_000,
-    sessionId: randomUUID(),
-  };
-  const response = resolved.providerInvoker
-    ? await resolved.providerInvoker.streamSimple(resolved.model, context, options).result()
-    : await completeSimple(resolved.model, context, options);
-
-  if (response.stopReason === "aborted") return undefined;
-  if (response.stopReason !== "stop") {
-    throw new Error(
-      response.errorMessage
-        ? `${response.stopReason}: ${response.errorMessage}`
-        : `model stopped with ${response.stopReason}`,
-    );
-  }
-
-  return response.content
-    .filter((part): part is { type: "text"; text: string } => part.type === "text")
-    .map((part) => part.text)
-    .join("\n");
-}
-
-async function requestCommitMessage(
-  resolved: ResolvedModel,
-  snapshot: StagedSnapshot,
-  guidance: string,
-  signal?: AbortSignal,
-): Promise<string | undefined> {
-  const text = await requestModelText(
-    resolved,
-    COMMIT_SYSTEM_PROMPT,
-    buildCommitPrompt(snapshot, guidance),
-    2048,
-    signal,
-  );
-  return text === undefined ? undefined : normalizeGeneratedCommitMessage(text);
-}
-
-async function requestCommitPlan(
-  resolved: ResolvedModel,
-  snapshot: StagedSnapshot,
-  guidance: string,
-  signal?: AbortSignal,
-): Promise<CommitPlan | undefined> {
-  const text = await requestModelText(
-    resolved,
-    COMMIT_ALL_SYSTEM_PROMPT,
-    buildCommitAllPrompt(snapshot, guidance),
-    8192,
-    signal,
-  );
-  return text === undefined ? undefined : normalizeGeneratedCommitPlan(text, snapshot.paths);
+function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
 }
 
 async function runWithLoader<T>(
@@ -258,14 +115,14 @@ async function generateWithLoader<T>(
   ctx: ExtensionCommandContext,
   resolved: ResolvedModel,
   loaderMessage: string,
-  operation: (signal?: AbortSignal) => Promise<T | undefined>,
+  operation: (signal?: AbortSignal) => Promise<T | undefined | void>,
 ): Promise<GenerationOutcome<T>> {
   const run = async (signal?: AbortSignal): Promise<GenerationOutcome<T>> => {
     try {
       const value = await operation(signal);
       return value === undefined ? { status: "cancelled" } : { status: "success", value };
     } catch (error) {
-      if (signal?.aborted) return { status: "cancelled" };
+      if (signal?.aborted || isAbortError(error)) return { status: "cancelled" };
       return { status: "error", error: asError(error) };
     }
   };
@@ -292,6 +149,8 @@ async function generateWithLoader<T>(
 
 async function generateCommitMessage(
   ctx: ExtensionCommandContext,
+  commit: CommitRuntimeShape,
+  runtime: CommitRuntimeInstance,
   resolved: ResolvedModel,
   snapshot: StagedSnapshot,
   guidance: string,
@@ -300,12 +159,19 @@ async function generateCommitMessage(
     ctx,
     resolved,
     `Generating commit message with ${resolved.reference.value}…`,
-    (signal) => requestCommitMessage(resolved, snapshot, guidance, signal),
+    (signal) =>
+      runCommit(
+        runtime,
+        commit.requestCommitMessage(resolved, snapshot, guidance, signal),
+        { signal },
+      ),
   );
 }
 
 async function generateCommitPlan(
   ctx: ExtensionCommandContext,
+  commit: CommitRuntimeShape,
+  runtime: CommitRuntimeInstance,
   resolved: ResolvedModel,
   snapshot: StagedSnapshot,
   guidance: string,
@@ -314,7 +180,12 @@ async function generateCommitPlan(
     ctx,
     resolved,
     `Generating logical commit plan with ${resolved.reference.value}…`,
-    (signal) => requestCommitPlan(resolved, snapshot, guidance, signal),
+    (signal) =>
+      runCommit(
+        runtime,
+        commit.requestCommitPlan(resolved, snapshot, guidance, signal),
+        { signal },
+      ),
   );
 }
 
@@ -326,12 +197,6 @@ function cancellationNotice(stageAllWasRun: boolean): string {
 
 function failureSuffix(stageAllWasRun: boolean): string {
   return stageAllWasRun ? "\nChanges staged by /commit-all remain staged." : "";
-}
-
-function samePathSet(left: readonly string[], right: readonly string[]): boolean {
-  if (left.length !== right.length) return false;
-  const rightSet = new Set(right);
-  return left.every((filePath) => rightSet.has(filePath));
 }
 
 async function editCommitPlan(
@@ -353,77 +218,47 @@ async function editCommitPlan(
   return { commits };
 }
 
-async function restageAfterPlanFailure(
-  repository: GitRepository,
-): Promise<string | undefined> {
-  try {
-    await stageAllChanges(repository);
-    return undefined;
-  } catch (error) {
-    return `Could not restore all remaining changes to the index: ${asError(error).message}`;
-  }
-}
-
 async function commitPlannedChanges(
   ctx: ExtensionCommandContext,
+  runtime: CommitRuntimeInstance,
   repository: GitRepository,
   snapshot: StagedSnapshot,
   plan: CommitPlan,
 ): Promise<PlannedCommitRun> {
-  const summaries: string[] = [];
-
-  try {
-    await verifyStagedSnapshot(repository, snapshot);
-    if (await hasUnstagedChanges(repository)) {
-      throw new Error("The working tree changed while reviewing the commit plan. Run /commit-all again.");
-    }
-
-    for (const [index, commit] of plan.commits.entries()) {
-      if (index > 0) {
-        const unexpectedPaths = await readStagedPaths(repository);
-        if (unexpectedPaths.length > 0) {
-          throw new Error(
-            `The index changed while creating commit ${index + 1}; staged paths: ${unexpectedPaths.join(", ")}.`,
-          );
-        }
-      }
-
-      await resetStagedChanges(repository);
-      await stageSelectedPaths(repository, commit.paths);
-      const stagedPaths = await readStagedPaths(repository);
-      if (!samePathSet(stagedPaths, commit.paths)) {
-        throw new Error(
-          `Could not stage exactly the paths for commit ${index + 1}. Expected ${commit.paths.join(", ")}; got ${stagedPaths.join(", ") || "none"}.`,
-        );
-      }
-
-      const commitResult = await runWithLoader(ctx, `Creating commit ${index + 1}/${plan.commits.length}…`, () =>
-        commitWithMessage(repository, commit.message),
-      );
-      if (commitResult.code !== 0) {
-        const restorationError = await restageAfterPlanFailure(repository);
-        const detail = describeGitFailure(`Creating commit ${index + 1}`, commitResult);
-        return {
-          status: "error",
-          error: new Error(restorationError ? `${detail}\n${restorationError}` : detail),
-          summaries,
-        };
-      }
-
-      try {
-        summaries.push(await readLatestCommitSummary(repository));
-      } catch {
-        summaries.push(`commit ${index + 1}/${plan.commits.length}`);
-      }
-    }
-  } catch (error) {
-    const restorationError = await restageAfterPlanFailure(repository);
-    const detail = asError(error).message;
+  const preflight = await runCommit(runtime, plannedCommitPreflightEffect(repository, snapshot));
+  if (preflight !== undefined) {
     return {
       status: "error",
-      error: new Error(restorationError ? `${detail}\n${restorationError}` : detail),
-      summaries,
+      error: new Error(preflight.error.message),
+      summaries: [...preflight.summaries],
     };
+  }
+
+  const summaries: string[] = [];
+  for (const [index, commit] of plan.commits.entries()) {
+    const step = await runWithLoader(
+      ctx,
+      `Creating commit ${index + 1}/${plan.commits.length}…`,
+      () =>
+        runCommit(
+          runtime,
+          commitSinglePlannedGroupEffect(
+            repository,
+            commit,
+            index,
+            plan.commits.length,
+            summaries,
+          ),
+        ),
+    );
+    if (step.kind === "failure") {
+      return {
+        status: "error",
+        error: new Error(step.result.error.message),
+        summaries: [...step.result.summaries],
+      };
+    }
+    summaries.push(step.summary);
   }
 
   return { status: "success", summaries };
@@ -432,6 +267,8 @@ async function commitPlannedChanges(
 async function runCommitWorkflow(
   pi: ExtensionAPI,
   ctx: ExtensionCommandContext,
+  commit: CommitRuntimeShape,
+  runtime: CommitRuntimeInstance,
   guidance: string,
   stageAll: boolean,
 ): Promise<void> {
@@ -442,15 +279,14 @@ async function runCommitWorkflow(
     if (settings.warnings.length > 0) {
       throw new Error(`pi-commit settings:\n${settings.warnings.join("\n")}`);
     }
-    const resolvedModel = await resolveConfiguredModel(
-      ctx,
-      settings.model,
-      settings.thinkingLevel,
+    const resolvedModel = await runCommit(
+      runtime,
+      commit.resolveConfiguredModel(ctx, settings.model, settings.thinkingLevel),
     );
 
     const exec: ExecFunction = (command, args, options) => pi.exec(command, args, options);
-    const repository = await openGitRepository(exec, ctx.cwd);
-    await ensureNoUnmergedEntries(repository);
+    const repository = await runCommit(runtime, openRepositoryEffect(exec, ctx.cwd));
+    await runCommit(runtime, ensureCleanIndexEffect(repository));
 
     if (stageAll) {
       if (!(await hasWorkingTreeChanges(repository))) {
@@ -468,11 +304,11 @@ async function runCommitWorkflow(
       }
 
       stageAllWasRun = true;
-      await stageAllChanges(repository);
-      await ensureNoUnmergedEntries(repository);
+      await runCommit(runtime, stageAllChangesEffect(repository));
+      await runCommit(runtime, ensureCleanIndexEffect(repository));
     }
 
-    const snapshot = await readStagedSnapshot(repository, MAX_PATCH_BYTES);
+    const snapshot = await runCommit(runtime, readStagedSnapshotEffect(repository, MAX_PATCH_BYTES));
     if (snapshot.omittedPatchBytes > 0) {
       ctx.ui.notify(
         `The staged patch is large; ${snapshot.omittedPatchBytes} bytes were omitted from model context. The complete file list and stat are still included.`,
@@ -485,7 +321,7 @@ async function runCommitWorkflow(
     const CHOICE_CANCEL = "Cancel";
 
     if (!stageAll) {
-      const generation = await generateCommitMessage(ctx, resolvedModel, snapshot, guidance);
+      const generation = await generateCommitMessage(ctx, commit, runtime, resolvedModel, snapshot, guidance);
       if (generation.status === "cancelled") {
         ctx.ui.notify(cancellationNotice(stageAllWasRun), "info");
         return;
@@ -512,9 +348,9 @@ async function runCommitWorkflow(
         return;
       }
 
-      await verifyStagedSnapshot(repository, snapshot);
+      await runCommit(runtime, verifySnapshotEffect(repository, snapshot));
       const commitResult = await runWithLoader(ctx, "Creating commit…", () =>
-        commitWithMessage(repository, message),
+        runCommit(runtime, commitWithMessageEffect(repository, message)),
       );
       if (commitResult.code !== 0) {
         ctx.ui.notify(
@@ -526,7 +362,7 @@ async function runCommitWorkflow(
 
       let summary: string;
       try {
-        summary = await readLatestCommitSummary(repository);
+        summary = await runCommit(runtime, readLatestCommitSummaryEffect(repository));
       } catch {
         ctx.ui.notify("Commit created successfully.", "info");
         return;
@@ -534,7 +370,7 @@ async function runCommitWorkflow(
 
       if (choice === CHOICE_PUSH) {
         const pushResult = await runWithLoader(ctx, `Pushing ${snapshot.branch}…`, () =>
-          pushCurrentBranch(repository),
+          runCommit(runtime, pushCurrentBranchEffect(repository)),
         );
         if (pushResult.code !== 0) {
           ctx.ui.notify(
@@ -551,7 +387,7 @@ async function runCommitWorkflow(
       return;
     }
 
-    const generation = await generateCommitPlan(ctx, resolvedModel, snapshot, guidance);
+    const generation = await generateCommitPlan(ctx, commit, runtime, resolvedModel, snapshot, guidance);
     if (generation.status === "cancelled") {
       ctx.ui.notify(cancellationNotice(stageAllWasRun), "info");
       return;
@@ -578,7 +414,7 @@ async function runCommitWorkflow(
       return;
     }
 
-    const plannedRun = await commitPlannedChanges(ctx, repository, snapshot, editedPlan);
+    const plannedRun = await commitPlannedChanges(ctx, runtime, repository, snapshot, editedPlan);
     if (plannedRun.status === "error") {
       const completed = plannedRun.summaries.length > 0
         ? `\nPreviously created commits: ${plannedRun.summaries.join("; ")}`
@@ -593,8 +429,8 @@ async function runCommitWorkflow(
     const summaries = plannedRun.summaries.join("; ");
     if (choice === CHOICE_PUSH) {
       const pushResult = await runWithLoader(ctx, `Pushing ${snapshot.branch}…`, () =>
-        pushCurrentBranch(repository),
-      );
+          runCommit(runtime, pushCurrentBranchEffect(repository)),
+        );
       if (pushResult.code !== 0) {
         ctx.ui.notify(
           `${describeGitFailure("Pushing commits", pushResult)}\nCommits ${summaries} were created locally.`,
@@ -608,12 +444,31 @@ async function runCommitWorkflow(
 
     ctx.ui.notify(`Committed ${summaries}`, "info");
   } catch (error) {
-    ctx.ui.notify(`${compactError(error)}${failureSuffix(stageAllWasRun)}`, "error");
+    const message =
+      error instanceof GitWorkflowError
+        ? error.message
+        : compactError(error);
+    ctx.ui.notify(`${message}${failureSuffix(stageAllWasRun)}`, "error");
   }
 }
 
 export default function commitExtension(pi: ExtensionAPI): void {
   let commandRunning = false;
+  let commitRuntime: CommitRuntimeInstance | undefined;
+  let commitService: CommitRuntimeShape | undefined;
+
+  pi.on("session_start", () => {
+    commitRuntime = createCommitRuntime();
+    commitService = commitRuntime.runSync(CommitRuntime);
+  });
+
+  pi.on("session_shutdown", async () => {
+    if (commitRuntime) {
+      await commitRuntime.dispose();
+      commitRuntime = undefined;
+      commitService = undefined;
+    }
+  });
 
   const register = (name: "commit" | "commit-all", stageAll: boolean, description: string) => {
     pi.registerCommand(name, {
@@ -628,10 +483,15 @@ export default function commitExtension(pi: ExtensionAPI): void {
           return;
         }
 
+        if (!commitRuntime || !commitService) {
+          ctx.ui.notify("Commit runtime is not initialized.", "error");
+          return;
+        }
+
         commandRunning = true;
         try {
           await ctx.waitForIdle();
-          await runCommitWorkflow(pi, ctx, args.trim(), stageAll);
+          await runCommitWorkflow(pi, ctx, commitService, commitRuntime, args.trim(), stageAll);
         } finally {
           commandRunning = false;
         }

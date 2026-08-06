@@ -1,0 +1,87 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
+import { Effect } from "effect";
+import {
+  CommitRuntime,
+  createCommitRuntime,
+  GenerationError,
+  runCommit,
+  type ResolvedModel,
+} from "../src/runtime.ts";
+
+function mockResolvedModel(responseText: string): ResolvedModel {
+  return {
+    model: { provider: "openai", id: "test" } as ResolvedModel["model"],
+    reference: { provider: "openai", id: "test", value: "openai/test" },
+    auth: {},
+    providerInvoker: {
+      streamSimple: () => ({
+        result: async () =>
+          ({
+            stopReason: "stop",
+            content: [{ type: "text", text: responseText }],
+          }) as AssistantMessage,
+      }),
+    },
+  };
+}
+
+const mockSnapshot = {
+  branch: "main",
+  fingerprint: { head: "abc", tree: "def" },
+  paths: ["file.ts"],
+  nameStatus: "M\tfile.ts",
+  stat: " file.ts | 1 +",
+  patch: "diff",
+  patchBytes: 4,
+  omittedPatchBytes: 0,
+  recentCommitSubjects: "init",
+};
+
+test("runCommit throws AbortError on runtime interruption", async () => {
+  const runtime = createCommitRuntime();
+  const commit = runtime.runSync(CommitRuntime);
+
+  const hang = Effect.never;
+  const runPromise = runCommit(runtime, hang);
+  await runtime.dispose();
+
+  await assert.rejects(runPromise, (error: unknown) => {
+    assert.ok(error instanceof Error);
+    assert.equal(error.name, "AbortError");
+    return true;
+  });
+});
+
+test("runCommit throws GenerationError for invalid generated commit message normalization", async () => {
+  const runtime = createCommitRuntime();
+  const commit = runtime.runSync(CommitRuntime);
+
+  await assert.rejects(
+    () =>
+      runCommit(
+        runtime,
+        commit.requestCommitMessage(mockResolvedModel("   "), mockSnapshot, ""),
+      ),
+    (error: unknown) => error instanceof GenerationError,
+  );
+
+  await runtime.dispose();
+});
+
+test("runCommit throws GenerationError for invalid generated commit plan normalization", async () => {
+  const runtime = createCommitRuntime();
+  const commit = runtime.runSync(CommitRuntime);
+
+  await assert.rejects(
+    () =>
+      runCommit(
+        runtime,
+        commit.requestCommitPlan(mockResolvedModel("not json"), mockSnapshot, ""),
+      ),
+    (error: unknown) => error instanceof GenerationError,
+  );
+
+  await runtime.dispose();
+});
