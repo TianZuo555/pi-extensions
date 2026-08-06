@@ -30,11 +30,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { type ModelRuntime, resolveModelScopeWithDiagnostics, type ScopedModel } from "@earendil-works/pi-coding-agent";
-import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
 import { Container, Spacer, Text } from "@earendil-works/pi-tui";
-import { getRepoMeta, piConfigDir, readJson, type RepoMeta, writeJson } from "./lib/repo-registry";
+import { getRepoMeta, piConfigDir, type RepoMeta, readJson, writeJson } from "./lib/repo-registry";
 
 // off + the reasoning levels pi supports.
 type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
@@ -45,6 +45,18 @@ const DEFAULT_TRIGGERS: SessionStartReason[] = ["startup", "new"];
 const CONFIG_FILE = path.join(piConfigDir("repo-model"), "config.json");
 
 const NO_OVERRIDE = "(no thinking override)";
+
+/**
+ * The extension API exposes the resolved current model, but not whether it came
+ * from the CLI. Inspect argv so an explicit `pi --model ...` remains the
+ * user's choice instead of being replaced by the repository default.
+ */
+function hasExplicitCliModel(): boolean {
+  const args = process.argv.slice(2);
+  return args.some((arg, index) =>
+    arg === "--model" ? index + 1 < args.length : arg.startsWith("--model="),
+  );
+}
 
 interface RepoModelEntry {
   name?: string;
@@ -550,6 +562,11 @@ export default function repoModelExtension(pi: ExtensionAPI): void {
   // repo. Only the configured triggers fire (default: fresh start + new session),
   // so resumed/forked/reloaded sessions keep whatever model they already have.
   pi.on("session_start", async (event, ctx) => {
+    // A command-line model takes precedence over the stored repo default for
+    // the initial session. The `new` trigger still applies the repo default to
+    // sessions created later in the same pi process.
+    if (event.reason === "startup" && hasExplicitCliModel()) return;
+
     const config = loadConfig();
     const triggers = config.triggers ?? DEFAULT_TRIGGERS;
     if (!triggers.includes(event.reason)) return;

@@ -158,7 +158,7 @@ New installations should prefer the individual npm packages above.
 ### pi-repo-model
 
 Stores one model preference per repository in `~/.pi/repo-model/config.json` and
-applies it at session start (default triggers: fresh start + new session).
+applies it at session start (default triggers: fresh start + new session). An explicit `pi --model ...` takes precedence on startup.
 
 - `/repo-model` — pick a model, then a thinking level, from dropdowns.
 - `/repo-model provider/model[:thinking]` — set directly, e.g. `/repo-model cursor/composer-2.5:high`.
