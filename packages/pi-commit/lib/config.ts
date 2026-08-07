@@ -24,7 +24,9 @@ export interface ModelReference {
 
 export interface CommitSettingsResolution {
   model: ModelReference;
+  fallbackModel?: ModelReference;
   thinkingLevel?: CommitThinkingLevel;
+  fallbackThinkingLevel?: CommitThinkingLevel;
   warnings: string[];
 }
 
@@ -55,7 +57,9 @@ export function parseModelReference(raw: string): ModelReference {
 
 interface ConfiguredCommitSettings {
   model?: ModelReference;
+  fallbackModel?: ModelReference;
   thinkingLevel?: CommitThinkingLevel;
+  fallbackThinkingLevel?: CommitThinkingLevel;
 }
 
 function configuredSettings(
@@ -91,6 +95,23 @@ function configuredSettings(
     }
   }
 
+  const fallbackModel = section.fallbackModel;
+  if (fallbackModel !== undefined) {
+    if (typeof fallbackModel !== "string" || fallbackModel.trim().length === 0) {
+      warnings.push(
+        `${source} ${COMMIT_SETTINGS_KEY}.fallbackModel must be a non-empty provider/model string`,
+      );
+    } else {
+      try {
+        configured.fallbackModel = parseModelReference(fallbackModel);
+      } catch (error) {
+        warnings.push(
+          `${source} ${COMMIT_SETTINGS_KEY}.fallbackModel: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
+  }
+
   const thinkingLevel = section.thinkingLevel;
   if (thinkingLevel !== undefined) {
     if (
@@ -102,6 +123,20 @@ function configuredSettings(
       );
     } else {
       configured.thinkingLevel = thinkingLevel as CommitThinkingLevel;
+    }
+  }
+
+  const fallbackThinkingLevel = section.fallbackThinkingLevel;
+  if (fallbackThinkingLevel !== undefined) {
+    if (
+      typeof fallbackThinkingLevel !== "string" ||
+      !COMMIT_THINKING_LEVELS.includes(fallbackThinkingLevel as CommitThinkingLevel)
+    ) {
+      warnings.push(
+        `${source} ${COMMIT_SETTINGS_KEY}.fallbackThinkingLevel must be one of ${COMMIT_THINKING_LEVELS.join(", ")}`,
+      );
+    } else {
+      configured.fallbackThinkingLevel = fallbackThinkingLevel as CommitThinkingLevel;
     }
   }
 
@@ -118,7 +153,9 @@ export function resolveCommitSettings(
 
   return {
     model: project.model ?? global.model ?? parseModelReference(DEFAULT_COMMIT_MODEL),
+    fallbackModel: project.fallbackModel ?? global.fallbackModel,
     thinkingLevel: project.thinkingLevel ?? global.thinkingLevel,
+    fallbackThinkingLevel: project.fallbackThinkingLevel ?? global.fallbackThinkingLevel,
     warnings,
   };
 }

@@ -25,7 +25,7 @@ import {
   ManagedRuntime,
   Result,
 } from "effect";
-import type { CommitThinkingLevel, ModelReference } from "../lib/config.ts";
+import type { CommitThinkingLevel, CommitSettingsResolution, ModelReference } from "../lib/config.ts";
 import type { StagedSnapshot } from "../lib/git.ts";
 import {
   buildCommitAllPrompt,
@@ -85,12 +85,22 @@ function getProviderInvoker(
   return registryWithProvider.getProvider?.(provider);
 }
 
+export interface ResolvedCommitModels {
+  readonly active: ResolvedModel;
+  readonly primary?: ResolvedModel;
+  readonly fallback?: ResolvedModel;
+}
+
 export interface CommitRuntimeShape {
   readonly resolveConfiguredModel: (
     ctx: ExtensionCommandContext,
     reference: ModelReference,
     thinkingLevel?: CommitThinkingLevel,
   ) => Effect.Effect<ResolvedModel, CommitModelError>;
+  readonly resolveCommitModels: (
+    ctx: ExtensionCommandContext,
+    settings: CommitSettingsResolution,
+  ) => Effect.Effect<ResolvedCommitModels, CommitModelError>;
   readonly requestCommitMessage: (
     resolved: ResolvedModel,
     snapshot: StagedSnapshot,
@@ -112,34 +122,48 @@ export class CommitRuntime extends EffectContext.Service<CommitRuntime, CommitRu
 const makeCommitRuntime = Effect.succeed(
   CommitRuntime.of({
     resolveConfiguredModel: (ctx, reference, thinkingLevel) =>
-      Effect.tryPromise({
-        try: async () => {
-          const model = ctx.modelRegistry.find(reference.provider, reference.id);
-          if (!model) {
-            throw new ModelNotFoundError({
-              message: `Commit model ${reference.value} was not found. Check piCommit.model in settings.json or configure the model in models.json.`,
-            });
-          }
-          const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-          if (!auth.ok) {
-            throw new ModelUnavailableError({
-              message: `Commit model ${reference.value} is unavailable: ${auth.error}`,
-            });
-          }
+      resolveConfiguredModelEffect(ctx, reference, thinkingLevel),
+
+    resolveCommitModels: (ctx, settings) =>
+      Effect.gen(function* () {
+        const fallbackThinkingLevel = settings.fallbackThinkingLevel ?? settings.thinkingLevel;
+        const fallbackReference =
+          settings.fallbackModel && settings.fallbackModel.value !== settings.model.value
+            ? settings.fallbackModel
+            : undefined;
+
+        const primary = yield* resolveConfiguredModelEffect(
+          ctx,
+          settings.model,
+          settings.thinkingLevel,
+        ).pipe(Effect.option);
+
+        const fallback = fallbackReference
+          ? yield* resolveConfiguredModelEffect(
+              ctx,
+              fallbackReference,
+              fallbackThinkingLevel,
+            ).pipe(Effect.option)
+          : undefined;
+
+        if (primary._tag === "Some") {
           return {
-            model,
-            reference,
-            thinkingLevel,
-            auth,
-            providerInvoker: getProviderInvoker(ctx.modelRegistry, reference.provider),
-          } satisfies ResolvedModel;
-        },
-        catch: (error) =>
-          error instanceof ModelNotFoundError || error instanceof ModelUnavailableError
-            ? error
-            : new ModelUnavailableError({
-                message: error instanceof Error ? error.message : String(error),
-              }),
+            active: primary.value,
+            primary: primary.value,
+            fallback: fallback?._tag === "Some" ? fallback.value : undefined,
+          } satisfies ResolvedCommitModels;
+        }
+
+        if (fallback?._tag === "Some") {
+          return {
+            active: fallback.value,
+            fallback: fallback.value,
+          } satisfies ResolvedCommitModels;
+        }
+
+        return yield* resolveConfiguredModelEffect(ctx, settings.model, settings.thinkingLevel).pipe(
+          Effect.map((active) => ({ active } satisfies ResolvedCommitModels)),
+        );
       }),
 
     requestCommitMessage: (resolved, snapshot, guidance, signal) =>
@@ -179,6 +203,42 @@ const makeCommitRuntime = Effect.succeed(
       ),
   }),
 );
+
+function resolveConfiguredModelEffect(
+  ctx: ExtensionCommandContext,
+  reference: ModelReference,
+  thinkingLevel?: CommitThinkingLevel,
+): Effect.Effect<ResolvedModel, CommitModelError> {
+  return Effect.tryPromise({
+    try: async () => {
+      const model = ctx.modelRegistry.find(reference.provider, reference.id);
+      if (!model) {
+        throw new ModelNotFoundError({
+          message: `Commit model ${reference.value} was not found. Check piCommit.model in settings.json or configure the model in models.json.`,
+        });
+      }
+      const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
+      if (!auth.ok) {
+        throw new ModelUnavailableError({
+          message: `Commit model ${reference.value} is unavailable: ${auth.error}`,
+        });
+      }
+      return {
+        model,
+        reference,
+        thinkingLevel,
+        auth,
+        providerInvoker: getProviderInvoker(ctx.modelRegistry, reference.provider),
+      } satisfies ResolvedModel;
+    },
+    catch: (error) =>
+      error instanceof ModelNotFoundError || error instanceof ModelUnavailableError
+        ? error
+        : new ModelUnavailableError({
+            message: error instanceof Error ? error.message : String(error),
+          }),
+  });
+}
 
 function requestModelText(
   resolved: ResolvedModel,

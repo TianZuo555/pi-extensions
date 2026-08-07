@@ -33,17 +33,20 @@ Global setting (`~/.pi/agent/settings.json`):
 {
   "piCommit": {
     "model": "deepseek/deepseek-v4-flash",
-    "thinkingLevel": "high"
+    "fallbackModel": "openai-codex/gpt-5.6-luna",
+    "thinkingLevel": "high",
+    "fallbackThinkingLevel": "low"
   }
 }
 ```
 
-A trusted project can override either value in `.pi/settings.json`:
+A trusted project can override any value in `.pi/settings.json`:
 
 ```json
 {
   "piCommit": {
     "model": "openai-codex/gpt-5.6-luna",
+    "fallbackModel": "deepseek/deepseek-v4-flash",
     "thinkingLevel": "max"
   }
 }
@@ -51,7 +54,9 @@ A trusted project can override either value in `.pi/settings.json`:
 
 The model value must use `provider/model` format. Model IDs may themselves contain slashes, such as `openrouter/anthropic/claude-sonnet-4`.
 
-`thinkingLevel` accepts `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`. The selected model's supported levels are respected; omit it to use the provider default. When the model setting is absent, the default is `deepseek/deepseek-v4-flash`. Invalid settings stop the command instead of silently sending the diff to a fallback provider. Configure authentication for the selected provider with Pi's `/login` command or `models.json`.
+`thinkingLevel` accepts `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, or `max`. The selected model's supported levels are respected; omit it to use the provider default. When the model setting is absent, the default is `deepseek/deepseek-v4-flash`. Invalid settings stop the command instead of silently changing the configured model.
+
+Optional `fallbackModel` uses the same `provider/model` format. When the primary model cannot be resolved or authenticated, or when generation with the primary model fails, the extension retries with the fallback and shows a warning. `fallbackThinkingLevel` overrides the thinking level for the fallback model; when omitted, the primary `thinkingLevel` is reused. Configure authentication for each provider with Pi's `/login` command or `models.json`.
 
 ## Workflow and safety
 

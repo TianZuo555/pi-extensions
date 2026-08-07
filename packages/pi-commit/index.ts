@@ -9,7 +9,7 @@
 //   /commit-all [guidance]  explicitly stage every change, then plan logical commits
 //
 // Model configuration is read on every invocation from Pi settings:
-//   { "piCommit": { "model": "provider/model", "thinkingLevel": "high" } }
+//   { "piCommit": { "model": "provider/model", "fallbackModel": "provider/fallback", "thinkingLevel": "high" } }
 // Project .pi/settings.json overrides the global setting when the project is trusted.
 
 import {
@@ -19,6 +19,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import {
   loadCommitSettings,
+  type CommitSettingsResolution,
 } from "./lib/config.ts";
 import {
   describeGitFailure,
@@ -52,6 +53,7 @@ import {
   runCommit,
   type CommitRuntimeInstance,
   type CommitRuntimeShape,
+  type ResolvedCommitModels,
   type ResolvedModel,
 } from "./src/runtime.ts";
 
@@ -151,19 +153,26 @@ async function generateCommitMessage(
   ctx: ExtensionCommandContext,
   commit: CommitRuntimeShape,
   runtime: CommitRuntimeInstance,
-  resolved: ResolvedModel,
+  models: ResolvedCommitModels,
+  settings: CommitSettingsResolution,
   snapshot: StagedSnapshot,
   guidance: string,
 ): Promise<GenerationOutcome<string>> {
-  return generateWithLoader(
+  return generateWithModelFallback(
     ctx,
-    resolved,
-    `Generating commit message with ${resolved.reference.value}…`,
-    (signal) =>
-      runCommit(
-        runtime,
-        commit.requestCommitMessage(resolved, snapshot, guidance, signal),
-        { signal },
+    models,
+    settings,
+    (resolved) =>
+      generateWithLoader(
+        ctx,
+        resolved,
+        `Generating commit message with ${resolved.reference.value}…`,
+        (signal) =>
+          runCommit(
+            runtime,
+            commit.requestCommitMessage(resolved, snapshot, guidance, signal),
+            { signal },
+          ),
       ),
   );
 }
@@ -172,21 +181,58 @@ async function generateCommitPlan(
   ctx: ExtensionCommandContext,
   commit: CommitRuntimeShape,
   runtime: CommitRuntimeInstance,
-  resolved: ResolvedModel,
+  models: ResolvedCommitModels,
+  settings: CommitSettingsResolution,
   snapshot: StagedSnapshot,
   guidance: string,
 ): Promise<GenerationOutcome<CommitPlan>> {
-  return generateWithLoader(
+  return generateWithModelFallback(
     ctx,
-    resolved,
-    `Generating logical commit plan with ${resolved.reference.value}…`,
-    (signal) =>
-      runCommit(
-        runtime,
-        commit.requestCommitPlan(resolved, snapshot, guidance, signal),
-        { signal },
+    models,
+    settings,
+    (resolved) =>
+      generateWithLoader(
+        ctx,
+        resolved,
+        `Generating logical commit plan with ${resolved.reference.value}…`,
+        (signal) =>
+          runCommit(
+            runtime,
+            commit.requestCommitPlan(resolved, snapshot, guidance, signal),
+            { signal },
+          ),
       ),
   );
+}
+
+async function generateWithModelFallback<T>(
+  ctx: ExtensionCommandContext,
+  models: ResolvedCommitModels,
+  settings: CommitSettingsResolution,
+  generate: (resolved: ResolvedModel) => Promise<GenerationOutcome<T>>,
+): Promise<GenerationOutcome<T>> {
+  const first = await generate(models.active);
+  if (
+    first.status !== "error" ||
+    !models.fallback ||
+    models.active.reference.value === models.fallback.reference.value
+  ) {
+    return first;
+  }
+
+  ctx.ui.notify(
+    `Generating with ${models.active.reference.value} failed; retrying with ${models.fallback.reference.value}.`,
+    "warning",
+  );
+  return generate(models.fallback);
+}
+
+function resolutionFallbackNotice(
+  models: ResolvedCommitModels,
+  settings: CommitSettingsResolution,
+): string | undefined {
+  if (models.primary || !models.fallback || !settings.fallbackModel) return undefined;
+  return `Commit model ${settings.model.value} is unavailable; using fallback ${models.fallback.reference.value}.`;
 }
 
 function cancellationNotice(stageAllWasRun: boolean): string {
@@ -279,10 +325,11 @@ async function runCommitWorkflow(
     if (settings.warnings.length > 0) {
       throw new Error(`pi-commit settings:\n${settings.warnings.join("\n")}`);
     }
-    const resolvedModel = await runCommit(
-      runtime,
-      commit.resolveConfiguredModel(ctx, settings.model, settings.thinkingLevel),
-    );
+    const models = await runCommit(runtime, commit.resolveCommitModels(ctx, settings));
+    const resolutionNotice = resolutionFallbackNotice(models, settings);
+    if (resolutionNotice) {
+      ctx.ui.notify(resolutionNotice, "warning");
+    }
 
     const exec: ExecFunction = (command, args, options) => pi.exec(command, args, options);
     const repository = await runCommit(runtime, openRepositoryEffect(exec, ctx.cwd));
@@ -321,14 +368,14 @@ async function runCommitWorkflow(
     const CHOICE_CANCEL = "Cancel";
 
     if (!stageAll) {
-      const generation = await generateCommitMessage(ctx, commit, runtime, resolvedModel, snapshot, guidance);
+      const generation = await generateCommitMessage(ctx, commit, runtime, models, settings, snapshot, guidance);
       if (generation.status === "cancelled") {
         ctx.ui.notify(cancellationNotice(stageAllWasRun), "info");
         return;
       }
       if (generation.status === "error") {
         throw new Error(
-          `Generating a commit message with ${resolvedModel.reference.value} failed: ${generation.error.message}`,
+          `Generating a commit message with ${models.active.reference.value} failed: ${generation.error.message}`,
         );
       }
 
@@ -387,14 +434,14 @@ async function runCommitWorkflow(
       return;
     }
 
-    const generation = await generateCommitPlan(ctx, commit, runtime, resolvedModel, snapshot, guidance);
+    const generation = await generateCommitPlan(ctx, commit, runtime, models, settings, snapshot, guidance);
     if (generation.status === "cancelled") {
       ctx.ui.notify(cancellationNotice(stageAllWasRun), "info");
       return;
     }
     if (generation.status === "error") {
       throw new Error(
-        `Generating a logical commit plan with ${resolvedModel.reference.value} failed: ${generation.error.message}`,
+        `Generating a logical commit plan with ${models.active.reference.value} failed: ${generation.error.message}`,
       );
     }
 

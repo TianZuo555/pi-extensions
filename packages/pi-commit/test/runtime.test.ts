@@ -6,9 +6,11 @@ import {
   CommitRuntime,
   createCommitRuntime,
   GenerationError,
+  ModelUnavailableError,
   runCommit,
   type ResolvedModel,
 } from "../src/runtime.ts";
+import { parseModelReference } from "../lib/config.ts";
 
 function mockResolvedModel(responseText: string): ResolvedModel {
   return {
@@ -81,6 +83,97 @@ test("runCommit throws GenerationError for invalid generated commit plan normali
         commit.requestCommitPlan(mockResolvedModel("not json"), mockSnapshot, ""),
       ),
     (error: unknown) => error instanceof GenerationError,
+  );
+
+  await runtime.dispose();
+});
+
+function mockCommandContext(models: Record<string, { ok: boolean; error?: string }>) {
+  return {
+    modelRegistry: {
+      find: (provider: string, id: string) => {
+        const key = `${provider}/${id}`;
+        return models[key] ? { provider, id } : undefined;
+      },
+      getApiKeyAndHeaders: async (model: { provider: string; id: string }) => {
+        const key = `${model.provider}/${model.id}`;
+        const entry = models[key];
+        if (!entry) return { ok: false, error: "missing" };
+        return entry.ok
+          ? { ok: true as const, apiKey: "test-key" }
+          : { ok: false as const, error: entry.error ?? "unavailable" };
+      },
+    },
+  };
+}
+
+test("resolveCommitModels uses fallback when the primary model is unavailable", async () => {
+  const runtime = createCommitRuntime();
+  const commit = runtime.runSync(CommitRuntime);
+  const ctx = mockCommandContext({
+    "openai/primary": { ok: false, error: "no auth" },
+    "deepseek/fallback": { ok: true },
+  });
+
+  const models = await runCommit(
+    runtime,
+    commit.resolveCommitModels(ctx as never, {
+      model: parseModelReference("openai/primary"),
+      fallbackModel: parseModelReference("deepseek/fallback"),
+      warnings: [],
+    }),
+  );
+
+  assert.equal(models.active.reference.value, "deepseek/fallback");
+  assert.equal(models.primary, undefined);
+  assert.equal(models.fallback?.reference.value, "deepseek/fallback");
+
+  await runtime.dispose();
+});
+
+test("resolveCommitModels keeps primary when both models resolve", async () => {
+  const runtime = createCommitRuntime();
+  const commit = runtime.runSync(CommitRuntime);
+  const ctx = mockCommandContext({
+    "openai/primary": { ok: true },
+    "deepseek/fallback": { ok: true },
+  });
+
+  const models = await runCommit(
+    runtime,
+    commit.resolveCommitModels(ctx as never, {
+      model: parseModelReference("openai/primary"),
+      fallbackModel: parseModelReference("deepseek/fallback"),
+      warnings: [],
+    }),
+  );
+
+  assert.equal(models.active.reference.value, "openai/primary");
+  assert.equal(models.primary?.reference.value, "openai/primary");
+  assert.equal(models.fallback?.reference.value, "deepseek/fallback");
+
+  await runtime.dispose();
+});
+
+test("resolveCommitModels fails when neither primary nor fallback resolves", async () => {
+  const runtime = createCommitRuntime();
+  const commit = runtime.runSync(CommitRuntime);
+  const ctx = mockCommandContext({
+    "openai/primary": { ok: false, error: "no auth" },
+    "deepseek/fallback": { ok: false, error: "no auth" },
+  });
+
+  await assert.rejects(
+    () =>
+      runCommit(
+        runtime,
+        commit.resolveCommitModels(ctx as never, {
+          model: parseModelReference("openai/primary"),
+          fallbackModel: parseModelReference("deepseek/fallback"),
+          warnings: [],
+        }),
+      ),
+    (error: unknown) => error instanceof ModelUnavailableError,
   );
 
   await runtime.dispose();

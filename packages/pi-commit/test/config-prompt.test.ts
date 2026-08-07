@@ -35,6 +35,35 @@ test("trusted project commit settings override the global settings", () => {
   assert.equal(resolved.thinkingLevel, "max");
 });
 
+test("fallback model and fallback thinking level resolve with project overrides", () => {
+  const resolved = resolveCommitSettings(
+    {
+      piCommit: {
+        model: "openai/gpt-test",
+        fallbackModel: "deepseek/deepseek-v4-flash",
+        fallbackThinkingLevel: "low",
+      },
+    },
+    {
+      piCommit: {
+        fallbackModel: "anthropic/claude-sonnet",
+        fallbackThinkingLevel: "high",
+      },
+    },
+  );
+  assert.equal(resolved.fallbackModel?.value, "anthropic/claude-sonnet");
+  assert.equal(resolved.fallbackThinkingLevel, "high");
+});
+
+test("invalid fallback model is reported without blocking the primary model", () => {
+  const resolved = resolveCommitSettings(
+    { piCommit: { model: "openai/gpt-test", fallbackModel: "missing-provider" } },
+  );
+  assert.equal(resolved.model.value, "openai/gpt-test");
+  assert.equal(resolved.fallbackModel, undefined);
+  assert.match(resolved.warnings.join("\n"), /fallbackModel/);
+});
+
 test("invalid commit thinking levels are reported", () => {
   const resolved = resolveCommitSettings(
     { piCommit: { model: "openai/gpt-test", thinkingLevel: "max" } },
