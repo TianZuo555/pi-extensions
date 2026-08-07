@@ -29,6 +29,7 @@ import {
   type GitRepository,
   type StagedSnapshot,
 } from "./lib/git.ts";
+import { CommitPlanEditor } from "./lib/commit-plan-editor.ts";
 import {
   MAX_PATCH_BYTES,
   normalizeEditedCommitMessage,
@@ -249,6 +250,15 @@ async function editCommitPlan(
   ctx: ExtensionCommandContext,
   plan: CommitPlan,
 ): Promise<CommitPlan | undefined> {
+  if (ctx.mode === "tui" && plan.commits.length > 1) {
+    const edited = await ctx.ui.custom<CommitPlan | undefined>((tui, theme, keybindings, done) =>
+      new CommitPlanEditor(tui, theme, keybindings, plan.commits, (result) =>
+        done(result ?? undefined),
+      ),
+    );
+    return edited;
+  }
+
   const commits: CommitPlan["commits"] = [];
   for (const [index, commit] of plan.commits.entries()) {
     const label = commit.paths.length === 1
