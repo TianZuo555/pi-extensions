@@ -190,10 +190,16 @@ export class CompactReasoningComponent implements Component {
     const contentLines = wrappedLines.map((line) => {
       const formatted = formatReasonLine(line, contentWidth);
       const padding = Math.max(0, contentWidth - visibleWidth(formatted));
-      return border("│ ") + formatted + " ".repeat(padding) + border(" │");
+      return truncateToWidth(
+        border("│ ") + formatted + " ".repeat(padding) + border(" │"),
+        safeWidth,
+      );
     });
 
-    const bottom = border("╰") + border("─".repeat(innerWidth) + "╯");
+    const bottom = truncateToWidth(
+      border("╰") + border("─".repeat(innerWidth) + "╯"),
+      safeWidth,
+    );
 
     const topSpacer = new Spacer(1);
     const bottomSpacer = new Spacer(1);

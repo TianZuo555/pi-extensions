@@ -47,6 +47,7 @@ Workspace → npm package map: `pi-repo-model`→`pi-tian-repo-model`, `pi-repo-
 
 ## Conventions
 - When developing extensions, use **Effect** for non-trivial async orchestration, mutable session state, subprocess/file lifecycle, or concurrent cleanup — prefer `Effect`/`@effect/*` idioms (typed effects, `Effect.gen`, dependency injection via `Context`) over raw async/throw patterns. Follow `pi-background-terminals`, `pi-commit`, `pi-goal`, `pi-image-cache`, `pi-subagents`, and `pi-usage` as reference implementations.
+- **TUI width safety:** every custom `Component.render(width)`, `ctx.ui.setWidget` renderer, custom footer/editor, tool renderer, and message renderer must return lines whose ANSI-aware `visibleWidth()` is no greater than `width`. Use `truncateToWidth(line, width, "")` (or width-aware wrapping) after composing prefixes, content, and suffixes; never return fixed-width strings. Exercise renderers at narrow widths such as 42 columns.
 - **Intentional non-Effect packages** (linear/sync UI or trivial I/O only): `pi-ask-user`, `pi-compact-output`, `pi-edit-safe`, `pi-repo-model`, `pi-repo-skills`, `pi-todo`, `pi-token-speed`.
 - One extension per package; the package `name`/version in each `packages/*/package.json` is the source of truth for npm publishing.
 - `files` arrays in each package's `package.json` define tarball contents — add new source files there when they should ship (e.g. `lib`, `src`, `docs`).

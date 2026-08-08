@@ -350,6 +350,19 @@ test("expanded reasoning preserves paragraph breaks while wrapping long lines", 
   assert.ok(lines.every((line) => visibleWidth(line) <= 48));
 });
 
+test("reasoning boxes stay within tiny render widths", () => {
+  const component = new CompactReasoningComponent();
+  component.updateContent("reasoning", undefined, true);
+
+  for (const width of [48, 4, 3, 1]) {
+    const lines = component.render(width);
+    assert.ok(
+      lines.every((line) => visibleWidth(line) <= width),
+      `width ${width}: ${lines.join(" | ")}`,
+    );
+  }
+});
+
 test("Ctrl+O expands the full reasoning block and collapses it again", () => {
   const install = installUiPatches();
   if (!install.installed) {

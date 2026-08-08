@@ -284,7 +284,7 @@ class TerminalDashboard implements Component {
     // chat, editor, and extra footer lines while leaving pi's final footer
     // row visible.
     const bodyHeight = Math.max(6, rows - 5);
-    const innerWidth = width - 2;
+    const innerWidth = Math.max(0, width - 2);
 
     const lines: string[] = [];
 
@@ -308,26 +308,37 @@ class TerminalDashboard implements Component {
     // Top border with panel title
     const running = terminals.filter((s) => s.status === "running").length;
     lines.push(
-      theme.fg("border", "╭") +
-        this.borderSegment(
-          innerWidth,
-          `terminals · ${running} running / ${terminals.length}`,
-        ) +
-        theme.fg("border", "╮"),
+      truncateToWidth(
+        theme.fg("border", "╭") +
+          this.borderSegment(
+            innerWidth,
+            `terminals · ${running} running / ${terminals.length}`,
+          ) +
+          theme.fg("border", "╮"),
+        width,
+      ),
     );
 
     // Rows
     const divider = theme.fg("border", "│");
     const rowLines = this.renderRows(terminals, innerWidth, bodyHeight);
     for (let i = 0; i < bodyHeight; i++) {
-      lines.push(divider + this.pad(rowLines[i] ?? "", innerWidth) + divider);
+      lines.push(
+        truncateToWidth(
+          divider + this.pad(rowLines[i] ?? "", innerWidth) + divider,
+          width,
+        ),
+      );
     }
 
     // Bottom border
     lines.push(
-      theme.fg("border", "╰") +
-        theme.fg("border", "─".repeat(Math.max(0, innerWidth))) +
-        theme.fg("border", "╯"),
+      truncateToWidth(
+        theme.fg("border", "╰") +
+          theme.fg("border", "─".repeat(Math.max(0, innerWidth))) +
+          theme.fg("border", "╯"),
+        width,
+      ),
     );
 
     // Hints
@@ -672,7 +683,7 @@ class TerminalDetailView implements Component {
 
     if (!snap) {
       lines.push(border);
-      lines.push(theme.fg("dim", `${this.id} is no longer tracked`));
+      lines.push(truncateToWidth(theme.fg("dim", `${this.id} is no longer tracked`), width));
       lines.push(border);
       return lines;
     }
@@ -808,9 +819,12 @@ class TerminalDetailView implements Component {
     const visible = output.slice(Math.max(0, end - capacity), end);
     if (visible.length === 0) {
       body.push(
-        theme.fg(
-          "dim",
-          active === "info" ? "(no invocation metadata)" : `(no ${active} yet)`,
+        truncateToWidth(
+          theme.fg(
+            "dim",
+            active === "info" ? "(no invocation metadata)" : `(no ${active} yet)`,
+          ),
+          width,
         ),
       );
     } else {

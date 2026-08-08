@@ -31,7 +31,7 @@ import {
   getAgentDir,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import {
   SpawnError,
@@ -284,7 +284,10 @@ export function createBackgroundTerminalsExtension(
           theme.fg("dim", " • ") +
           theme.fg("accent", "/ps") +
           theme.fg("dim", " to view");
-        return { render: () => [line], invalidate: () => {} };
+        return {
+          render: (width: number) => [truncateToWidth(line, width, "")],
+          invalidate: () => {},
+        };
       });
     } catch {
       // UI may be unavailable (print/RPC modes or teardown).
