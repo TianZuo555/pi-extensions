@@ -18,7 +18,7 @@ A collection of extensions for the [pi coding agent](https://pi.dev): per-repo m
 - `tsconfig.json` — root typecheck config. **Excludes all Effect-based packages** (each carries its own `tsconfig.json`).
 - `mise.toml`, `package-lock.json` — tooling/lockfile.
 
-Workspace → npm package map: `pi-repo-model`→`pi-tian-repo-model`, `pi-repo-skills`→`pi-tian-repo-skills`, `pi-commit`→`pi-tian-commit`, `pi-token-speed`→`pi-tian-token-speed`, `pi-image-cache`→`pi-tian-image-cache`, `pi-ask-user`→`pi-tian-ask-user`, `pi-usage`→`pi-tian-usage`, `pi-background-terminals`→`pi-tian-background-terminals`, `pi-edit-safe`→`pi-tian-edit-safe`, `pi-todo`→`pi-tian-todo`, `pi-subagents`→`pi-tian-subagents`, `pi-compact-output`→`pi-tian-compact-output`, `pi-goal`→`pi-tian-goal`.
+Workspace → npm package map: `pi-repo-model`→`pi-tian-repo-model`, `pi-repo-skills`→`pi-tian-repo-skills`, `pi-commit`→`pi-tian-commit`, `pi-token-speed`→`pi-tian-token-speed`, `pi-image-cache`→`pi-tian-image-cache`, `pi-ask-user`→`pi-tian-ask-user`, `pi-usage`→`pi-tian-usage`, `pi-background-terminals`→`pi-tian-background-terminals`, `pi-edit-safe`→`pi-tian-edit-safe`, `pi-todo`→`pi-tian-todo`, `pi-subagents`→`pi-tian-subagents`, `pi-compact-output`→`pi-tian-compact-output`, `pi-goal`→`pi-tian-goal`, `pi-vscode-review`→`pi-tian-vscode-review`.
 
 ## Common tasks
 - Install deps: `npm install`
@@ -41,6 +41,7 @@ Workspace → npm package map: `pi-repo-model`→`pi-tian-repo-model`, `pi-repo-
 - Test `pi-compact-output`: `npm test -w pi-tian-compact-output`
 - Test `pi-goal`: `npm test -w pi-tian-goal`
 - Test `pi-image-cache`: `npm test -w pi-tian-image-cache`
+- Test `pi-vscode-review`: `npm test -w pi-tian-vscode-review`, then compile its VS Code host with `npm run compile:vscode -w pi-tian-vscode-review`
 - Inspect publishable tarballs: `npm run pack:check`
 - Try an extension in a live pi session without installing: `pi -e ./packages/pi-repo-model`
 - Publish one workspace manually (after `npm login`): `npm publish --workspace packages/pi-repo-model`

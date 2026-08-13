@@ -36,7 +36,8 @@
       "extensions/background-terminals.ts",
       "extensions/subagents.ts",
       "extensions/compact-output.ts",
-      "extensions/goal.ts"
+      "extensions/goal.ts",
+      "extensions/vscode-review.ts"
     ]
   },
   "scripts": {

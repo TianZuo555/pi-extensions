@@ -16,6 +16,7 @@ A small collection of [pi coding agent](https://pi.dev) extensions.
 | **subagents** | tool `subagent`, `/agents` | Isolated RPC child processes with profiles, background runs, and worktrees. |
 | **compact-output** | (TUI only) | Shows bordered tool status blocks with up to three preview lines; Ctrl+O restores full output; reasoning stays compact. |
 | **goal** | `/goal`, tools `get_goal`/`create_goal`/`update_goal` | Codex-style persistent, evidence-checked objective with bounded automatic continuation. |
+| **vscode-review** | `/vscode-review` | Opens the current Git diff in a VS Code review panel and sends line-addressed feedback back to Pi. |
 
 Each extension is described in detail under [Extensions](#extensions).
 
@@ -84,6 +85,7 @@ The commands above add these entries to `~/.pi/agent/settings.json`:
 | [pi-tian-subagents](https://www.npmjs.com/package/pi-tian-subagents) | `pi install npm:pi-tian-subagents` |
 | [pi-tian-compact-output](https://www.npmjs.com/package/pi-tian-compact-output) | `pi install npm:pi-tian-compact-output` |
 | [pi-tian-goal](https://www.npmjs.com/package/pi-tian-goal) | `pi install npm:pi-tian-goal` |
+| [pi-tian-vscode-review](https://www.npmjs.com/package/pi-tian-vscode-review) | `pi install npm:pi-tian-vscode-review` |
 
 Try an extension temporarily without adding it to settings:
 
@@ -366,6 +368,23 @@ pi install npm:pi-tian-compact-output
 pi -e ./packages/pi-compact-output
 ```
 
+### vscode-review
+
+Opens the current tracked worktree diff in a local VS Code Webview. Select an
+added/deleted line range or whole hunk, add a comment or suggested code, then
+send the review back into the active Pi session as a user message.
+
+Install both sides:
+
+```bash
+pi install npm:pi-tian-vscode-review
+npm run package:vscode -w pi-tian-vscode-review
+code --install-extension packages/pi-vscode-review/pi-tian-vscode-review-0.1.0.vsix
+```
+
+Run `/vscode-review` in Pi. See [packages/pi-vscode-review](packages/pi-vscode-review/README.md)
+for the local bridge protocol and current MVP scope.
+
 ### goal
 
 Codex-style long-running goals for Pi. `/goal <objective>` persists a
@@ -399,6 +418,7 @@ The repository is an npm workspace with one publishable package per extension:
 | `packages/pi-subagents` | `pi-tian-subagents` |
 | `packages/pi-compact-output` | `pi-tian-compact-output` |
 | `packages/pi-goal` | `pi-tian-goal` |
+| `packages/pi-vscode-review` | `pi-tian-vscode-review` |
 
 Install dependencies, typecheck every workspace, run the commit and
 managed-terminal suites, and inspect publishable tarballs:
@@ -465,6 +485,7 @@ npm publish --workspace packages/pi-ask-user
 npm publish --workspace packages/pi-usage
 npm publish --workspace packages/pi-background-terminals
 npm publish --workspace packages/pi-goal
+npm publish --workspace packages/pi-vscode-review
 ```
 
 Version and publish only the package that changed, or bump them all together for

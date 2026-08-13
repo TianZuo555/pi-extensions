@@ -1,3 +1,5 @@
 node_modules/
 *.log
 .DS_Store
+packages/pi-vscode-review/vscode/out/
+packages/pi-vscode-review/*.vsix
