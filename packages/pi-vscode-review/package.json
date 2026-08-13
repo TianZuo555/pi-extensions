@@ -1,0 +1,82 @@
+{
+  "name": "pi-tian-vscode-review",
+  "version": "0.1.0",
+  "description": "Review the current Git diff in VS Code and send precise feedback back to pi.",
+  "type": "module",
+  "keywords": [
+    "pi",
+    "pi-package",
+    "pi-extension",
+    "pi-coding-agent",
+    "vscode",
+    "code-review"
+  ],
+  "author": "Tian Zuo",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TianZuo555/pi-tian-extensions.git",
+    "directory": "packages/pi-vscode-review"
+  },
+  "homepage": "https://github.com/TianZuo555/pi-tian-extensions#pi-vscode-review",
+  "bugs": {
+    "url": "https://github.com/TianZuo555/pi-tian-extensions/issues"
+  },
+  "files": [
+    "index.ts",
+    "lib",
+    "protocol.ts",
+    "vscode/package.json",
+    "vscode/out",
+    "vscode/media"
+  ],
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "main": "./vscode/out/extension.js",
+  "publisher": "tianzuo",
+  "displayName": "Pi VS Code Review",
+  "categories": [
+    "Other"
+  ],
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "activationEvents": [
+    "onUri",
+    "onCommand:pi-vscode-review.open"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "pi-vscode-review.open",
+        "title": "Pi Review: Open Review Panel"
+      }
+    ]
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "compile:vscode": "tsc -p vscode/tsconfig.json",
+    "watch:vscode": "tsc -watch -p vscode/tsconfig.json",
+    "prepack": "npm run compile:vscode",
+    "package:vscode": "npx --yes @vscode/vsce package --no-dependencies",
+    "vscode:prepublish": "npm run compile:vscode",
+    "test": "node --test --experimental-strip-types test/*.test.ts"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^26.0.0",
+    "@types/vscode": "^1.90.0",
+    "typescript": "^7.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
