@@ -25,16 +25,17 @@ import {
   TODO_TOOL_DESCRIPTION,
 } from "./lib/prompt.ts";
 import {
-  describeDropped,
-  findDroppedItems,
-  findDuplicateIds,
   statsFor,
   type TodoItem,
 } from "./lib/state.ts";
+import {
+  createTodoRuntime,
+  runTodo,
+  TodoRuntime,
+  type TodoRuntimeInstance,
+} from "./src/runtime.ts";
 
 const WIDGET_KEY = "todo-list";
-/** Older sessions stored their list under the replaced tool's name. */
-const LEGACY_TOOL_NAME = "manage_todo_list";
 
 const TodoItemSchema = Type.Object({
   id: Type.Number({ description: TODO_PARAMETER_DESCRIPTIONS.id }),
@@ -68,9 +69,11 @@ const STATUS_ICON: Record<TodoItem["status"], string> = {
 };
 
 export default function todoExtension(pi: ExtensionAPI): void {
-  let todos: TodoItem[] = [];
+  const runtime: TodoRuntimeInstance = createTodoRuntime();
+  const todoService = runtime.runSync(TodoRuntime);
 
-  const renderWidget = (ctx: ExtensionContext) => {
+  const renderWidget = async (ctx: ExtensionContext) => {
+    const todos = await runTodo(runtime, todoService.getTodos);
     if (todos.length === 0) {
       ctx.ui.setWidget(WIDGET_KEY, undefined);
       return;
@@ -106,30 +109,23 @@ export default function todoExtension(pi: ExtensionAPI): void {
 
   // State lives in tool-result details, so branching, forking, and resuming all
   // rebuild the list that belongs to that point in history.
-  const reconstruct = (ctx: ExtensionContext) => {
-    todos = [];
-    for (const entry of ctx.sessionManager.getBranch()) {
-      if (entry.type !== "message") continue;
-      const message = entry.message;
-      if (message.role !== "toolResult") continue;
-      if (message.toolName !== "todo" && message.toolName !== LEGACY_TOOL_NAME) {
-        continue;
-      }
-      const details = message.details as { todos?: TodoItem[] } | undefined;
-      if (!details?.todos) continue;
-      todos = details.todos.map(({ id, title, status }) => ({
-        id,
-        title,
-        status,
-      }));
-    }
-    renderWidget(ctx);
+  const reconstruct = async (ctx: ExtensionContext) => {
+    const branch = ctx.sessionManager.getBranch();
+    await runTodo(runtime, todoService.reconstructFromBranch(branch));
+    await renderWidget(ctx);
   };
 
   // Only these two exist in pi's event union; `session_tree` already covers
   // branching, forking, and navigating history.
   pi.on("session_start", async (_event, ctx) => reconstruct(ctx));
   pi.on("session_tree", async (_event, ctx) => reconstruct(ctx));
+  pi.on("session_shutdown", async () => {
+    try {
+      await runtime.dispose();
+    } catch {
+      // Disposed gracefully
+    }
+  });
 
   pi.registerTool({
     name: "todo",
@@ -141,45 +137,19 @@ export default function todoExtension(pi: ExtensionAPI): void {
 
     async execute(_toolCallId, params: TodoInput, _signal, _onUpdate, ctx) {
       if (params.operation === "read") {
+        const result = await runTodo(runtime, todoService.read);
         return {
-          content: [
-            {
-              type: "text" as const,
-              text: todos.length
-                ? todos
-                    .map((todo) => `${todo.id}. [${todo.status}] ${todo.title}`)
-                    .join("\n")
-                : "The todo list is empty.",
-            },
-          ],
-          details: { operation: "read", todos: [...todos] } satisfies TodoDetails,
+          content: [{ type: "text" as const, text: result.text }],
+          details: { operation: "read", todos: result.todos } satisfies TodoDetails,
         };
       }
 
-      const next = params.todoList;
-      if (!next) {
-        throw new Error("todo: write requires todoList — send every item, not just the changed ones.");
-      }
-      const duplicates = findDuplicateIds(next);
-      if (duplicates.length > 0) {
-        throw new Error(
-          `todo: duplicate id${duplicates.length === 1 ? "" : "s"} ${duplicates.join(", ")}. Ids identify items across writes, so each must appear once.`,
-        );
-      }
-
-      // Warn rather than refuse: pruning a list is legitimate, but losing
-      // unfinished work to a partial resend is invisible without this.
-      const dropped = findDroppedItems(todos, next);
-      todos = next.map(({ id, title, status }) => ({ id, title, status }));
-      renderWidget(ctx);
-
-      const { total, completed } = statsFor(todos);
-      let text = `Todo list updated: ${completed}/${total} completed.`;
-      if (dropped.length > 0) text += `\n${describeDropped(dropped)}`;
+      const result = await runTodo(runtime, todoService.write(params.todoList));
+      await renderWidget(ctx);
 
       return {
-        content: [{ type: "text" as const, text }],
-        details: { operation: "write", todos: [...todos] } satisfies TodoDetails,
+        content: [{ type: "text" as const, text: result.text }],
+        details: { operation: "write", todos: result.todos } satisfies TodoDetails,
       };
     },
 
@@ -213,12 +183,13 @@ export default function todoExtension(pi: ExtensionAPI): void {
     description: "Show the todo list, or clear it with /todos clear",
     handler: async (args, ctx) => {
       if (args?.trim().toLowerCase() === "clear") {
-        todos = [];
+        await runTodo(runtime, todoService.clear);
         ctx.ui.setWidget(WIDGET_KEY, undefined);
         ctx.ui.notify("Todo list cleared.", "info");
         return;
       }
-      renderWidget(ctx);
+      await renderWidget(ctx);
+      const todos = await runTodo(runtime, todoService.getTodos);
       const { total, completed } = statsFor(todos);
       ctx.ui.notify(
         total === 0 ? "No todos." : `${completed}/${total} todos completed.`,

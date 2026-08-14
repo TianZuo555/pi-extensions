@@ -9,23 +9,8 @@
     "esModuleInterop": true,
     "resolveJsonModule": true,
     "allowImportingTsExtensions": true,
-    "types": ["node"]
+    "types": ["node"],
+    "plugins": [{ "name": "@effect/language-service" }]
   },
-  "include": ["extensions/**/*.ts", "packages/**/*.ts"],
-  "exclude": [
-    "extensions/background-terminals.ts",
-    "packages/pi-background-terminals/**/*.ts",
-    "extensions/goal.ts",
-    "packages/pi-goal/**/*.ts",
-    "extensions/usage.ts",
-    "packages/pi-usage/**/*.ts",
-    "extensions/commit.ts",
-    "packages/pi-commit/**/*.ts",
-    "extensions/subagents.ts",
-    "packages/pi-subagents/**/*.ts",
-    "extensions/image-cache.ts",
-    "packages/pi-image-cache/**/*.ts",
-    "extensions/vscode-bridge.ts",
-    "packages/pi-vscode-bridge/**/*.ts"
-  ]
+  "include": ["extensions/**/*.ts", "packages/**/*.ts"]
 }

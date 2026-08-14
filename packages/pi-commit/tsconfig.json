@@ -1,18 +1,4 @@
 {
-  "compilerOptions": {
-    "target": "ES2022",
-    "module": "ESNext",
-    "moduleResolution": "bundler",
-    "lib": ["ES2022"],
-    "strict": true,
-    "noEmit": true,
-    "skipLibCheck": true,
-    "esModuleInterop": true,
-    "resolveJsonModule": true,
-    "allowImportingTsExtensions": true,
-    "verbatimModuleSyntax": true,
-    "types": ["node"],
-    "plugins": [{ "name": "@effect/language-service" }]
-  },
+  "extends": "../../tsconfig.json",
   "include": ["index.ts", "lib/**/*.ts", "src/**/*.ts", "test/**/*.ts"]
 }

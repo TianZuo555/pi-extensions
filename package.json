@@ -37,7 +37,8 @@
       "extensions/subagents.ts",
       "extensions/compact-output.ts",
       "extensions/goal.ts",
-      "extensions/vscode-bridge.ts"
+      "extensions/vscode-bridge.ts",
+      "extensions/web-search.ts"
     ]
   },
   "scripts": {
@@ -46,10 +47,14 @@
     "test:ask-user": "npm test -w pi-tian-ask-user",
     "test:commit": "npm test -w pi-tian-commit",
     "test:edit-safe": "npm test -w pi-tian-edit-safe",
+    "test:repo-model": "npm test -w pi-tian-repo-model",
+    "test:repo-skills": "npm test -w pi-tian-repo-skills",
     "test:todo": "npm test -w pi-tian-todo",
+    "test:token-speed": "npm test -w pi-tian-token-speed",
     "test:subagents": "npm test -w pi-tian-subagents",
     "test:compact-output": "npm test -w pi-tian-compact-output",
     "test:goal": "npm test -w pi-tian-goal",
+    "test:web-search": "npm test -w pi-tian-web-search",
     "pack:check": "npm pack --dry-run --workspaces"
   },
   "peerDependencies": {

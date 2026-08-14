@@ -1,30 +1,38 @@
 {
-  "name": "pi-tian-repo-skills",
-  "version": "0.2.0",
-  "description": "Per-repository skill enable and disable controls for the pi coding agent.",
+  "name": "pi-tian-web-search",
+  "version": "0.1.0",
+  "description": "Web search (OpenAI Responses with simple prompt, Exa, Firecrawl, Ollama) and web fetch for the pi coding agent.",
   "type": "module",
   "keywords": [
     "pi",
     "pi-package",
     "pi-extension",
     "pi-coding-agent",
-    "skills"
+    "web-search",
+    "web-fetch",
+    "search",
+    "openai",
+    "exa",
+    "firecrawl",
+    "ollama"
   ],
   "author": "Tian Zuo",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/TianZuo555/pi-tian-extensions.git",
-    "directory": "packages/pi-repo-skills"
+    "directory": "packages/pi-web-search"
   },
-  "homepage": "https://github.com/TianZuo555/pi-tian-extensions#pi-repo-skills",
+  "homepage": "https://github.com/TianZuo555/pi-tian-extensions#pi-web-search",
   "bugs": {
     "url": "https://github.com/TianZuo555/pi-tian-extensions/issues"
   },
   "files": [
     "index.ts",
     "lib",
-    "src"
+    "src",
+    "README.md",
+    "LICENSE"
   ],
   "pi": {
     "extensions": [
@@ -39,8 +47,10 @@
     "effect": "4.0.0-beta.101"
   },
   "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-coding-agent": "*",
-    "@earendil-works/pi-tui": "*"
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
   },
   "devDependencies": {
     "@effect/language-service": "^0.87.0",

@@ -4,53 +4,35 @@
 // registry (~/.pi/repo-model/config.json) and auto-applies it at session start,
 // so each repo remembers its own default model + thinking level without you
 // touching global settings or the repo's own .pi/ folder.
-//
-// Inspired by how pi-memory-md keeps per-project data keyed by git root.
-//
-// Commands (interactive):
-//   /repo-model                    pick model, then thinking level, from dropdowns
-//                                  (models come from your scoped enabledModels list;
-//                                   rendered as one custom picker so both steps show)
-//   /repo-model provider/model[:t] set directly, e.g. /repo-model cursor/composer-2.5:high
-//   /repo-model-unset              clear current repo's default
-//   /repo-model-list               list every configured repo
-//
-// Config lives at ~/.pi/repo-model/config.json (machine-local, never synced):
-//   {
-//     "version": 1,
-//     "triggers": ["startup", "new"],
-//     "repos": {
-//       "/abs/path/to/repo": {
-//         "name": "repo", "provider": "cursor", "model": "composer-2.5",
-//         "thinkingLevel": "high", "updatedAt": "..."
-//       }
-//     }
-//   }
 
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { type ModelRuntime, resolveModelScopeWithDiagnostics, type ScopedModel } from "@earendil-works/pi-coding-agent";
+import {
+  type ModelRuntime,
+  resolveModelScopeWithDiagnostics,
+  type ScopedModel,
+} from "@earendil-works/pi-coding-agent";
 import { Container, Spacer, Text } from "@earendil-works/pi-tui";
-import { getRepoMeta, piConfigDir, type RepoMeta, readJson, writeJson } from "./lib/repo-registry";
+import { type RepoMeta } from "./lib/repo-registry.ts";
+import {
+  createRepoModelRuntime,
+  DEFAULT_TRIGGERS,
+  type RepoModelConfig,
+  type RepoModelEntry,
+  RepoModelRuntime,
+  type RepoModelRuntimeInstance,
+  runRepoModel,
+  type SessionStartReason,
+} from "./src/runtime.ts";
 
 // off + the reasoning levels pi supports.
 type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
-type SessionStartReason = "startup" | "new" | "resume" | "fork" | "reload";
-
-const DEFAULT_TRIGGERS: SessionStartReason[] = ["startup", "new"];
-
-const CONFIG_FILE = path.join(piConfigDir("repo-model"), "config.json");
 
 const NO_OVERRIDE = "(no thinking override)";
 
-/**
- * The extension API exposes the resolved current model, but not whether it came
- * from the CLI. Inspect argv so an explicit `pi --model ...` remains the
- * user's choice instead of being replaced by the repository default.
- */
 function hasExplicitCliModel(): boolean {
   const args = process.argv.slice(2);
   return args.some((arg, index) =>
@@ -58,49 +40,14 @@ function hasExplicitCliModel(): boolean {
   );
 }
 
-interface RepoModelEntry {
-  name?: string;
-  provider: string;
-  model: string;
-  thinkingLevel?: ThinkingLevel;
-  updatedAt?: string;
-}
-
-interface RepoModelConfig {
-  version: number;
-  triggers?: SessionStartReason[];
-  repos?: Record<string, RepoModelEntry>;
-}
-
 type ActionResult = { message: string; level: "info" | "warning" | "error" };
 
-// Minimal structural type for the Theme and KeybindingsManager we use inside the
-// picker. Kept loose so we don't depend on private type re-exports.
 interface PickerTheme {
   fg(name: string, text: string): string;
   bold(text: string): string;
 }
 interface PickerKeybindings {
   matches(data: string, keybinding: string): boolean;
-}
-
-// --- config persistence -----------------------------------------------------
-
-function loadConfig(): RepoModelConfig {
-  const data = readJson<RepoModelConfig>(CONFIG_FILE, { version: 1, triggers: DEFAULT_TRIGGERS, repos: {} });
-  return {
-    version: 1,
-    triggers: (data.triggers?.length ? data.triggers : DEFAULT_TRIGGERS) as SessionStartReason[],
-    repos: data.repos ?? {},
-  };
-}
-
-function saveConfig(config: RepoModelConfig): void {
-  try {
-    writeJson(CONFIG_FILE, config);
-  } catch (error) {
-    console.warn("[pi-repo-model] Failed to write config:", error);
-  }
 }
 
 // --- scoped model list (your enabledModels) --------------------------------
@@ -110,14 +57,12 @@ interface ScopedModelOption {
   label: string; // friendly text shown in the dropdown
   provider: string;
   id: string;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  model: any;
+  model: unknown;
   patternThinking?: ThinkingLevel; // thinking level hinted by the enabledModels pattern
 }
 
 function readEnabledModelPatterns(cwd: string): string[] {
   const agentDir = process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi", "agent");
-  // project overrides global for arrays, so check it first.
   const files = [path.join(cwd, ".pi", "settings.json"), path.join(agentDir, "settings.json")];
   for (const file of files) {
     try {
@@ -127,7 +72,7 @@ function readEnabledModelPatterns(cwd: string): string[] {
         return data.enabledModels.filter((x): x is string => typeof x === "string");
       }
     } catch {
-      // ignore malformed settings, try the next file
+      // ignore malformed settings
     }
   }
   return [];
@@ -137,13 +82,12 @@ async function getScopedModelOptions(ctx: ExtensionContext): Promise<ScopedModel
   const patterns = readEnabledModelPatterns(ctx.cwd);
   let scoped: ScopedModel[] = [];
   if (patterns.length) {
-    // ctx.modelRegistry is the runtime pi hands us; the exported type is narrower
-    // than what this helper accepts, so bridge it explicitly.
-    const result = await resolveModelScopeWithDiagnostics(patterns, ctx.modelRegistry as unknown as ModelRuntime);
+    const result = await resolveModelScopeWithDiagnostics(
+      patterns,
+      ctx.modelRegistry as unknown as ModelRuntime,
+    );
     scoped = result.scopedModels;
   }
-  // No enabledModels configured (or nothing matched): fall back to every model
-  // that has auth so the picker is never empty.
   if (scoped.length === 0) {
     scoped = ctx.modelRegistry.getAvailable().map((model) => ({ model }));
   }
@@ -174,10 +118,8 @@ function thinkingLevelsForModel(model: unknown): ThinkingLevel[] {
     ) as ThinkingLevel[];
     if (levels.length) return levels;
   } catch {
-    // fall through to the heuristic below
+    // fall through to heuristic
   }
-  // Heuristic fallback if the helper surprises us: reasoning models get the
-  // full ladder, non-reasoning models only get "off".
   const m = model as { reasoning?: boolean } | null | undefined;
   return m?.reasoning ? ["off", "minimal", "low", "medium", "high", "xhigh", "max"] : ["off"];
 }
@@ -198,11 +140,12 @@ function parseModelRef(raw: string): ParsedRef {
   let thinkingLevel: ThinkingLevel | undefined;
   let ref = ref0;
   const lastColon = ref.lastIndexOf(":");
-  // A trailing :level only counts when it sits after the provider/model slash
-  // and matches a known thinking level.
   if (lastColon > ref.lastIndexOf("/")) {
     const candidate = ref.slice(lastColon + 1).trim().toLowerCase();
-    if (candidate === "off" || ["minimal", "low", "medium", "high", "xhigh", "max"].includes(candidate)) {
+    if (
+      candidate === "off" ||
+      ["minimal", "low", "medium", "high", "xhigh", "max"].includes(candidate)
+    ) {
       thinkingLevel = candidate as ThinkingLevel;
       ref = ref.slice(0, lastColon).trim();
     }
@@ -220,7 +163,9 @@ function parseModelRef(raw: string): ParsedRef {
   return { provider, model, thinkingLevel };
 }
 
-function describeEntry(entry: Pick<RepoModelEntry, "provider" | "model" | "thinkingLevel">): string {
+function describeEntry(
+  entry: Pick<RepoModelEntry, "provider" | "model" | "thinkingLevel">,
+): string {
   const th = entry.thinkingLevel ? `:${entry.thinkingLevel}` : "";
   return `${entry.provider}/${entry.model}${th}`;
 }
@@ -249,7 +194,11 @@ async function applyEntry(
 
   if (sameModel && sameThinking) {
     if (options.silentIfNoChange) return { message: "", level: "info", changed: false };
-    return { message: `${meta.name}: already on ${describeEntry(entry)}`, level: "info", changed: false };
+    return {
+      message: `${meta.name}: already on ${describeEntry(entry)}`,
+      level: "info",
+      changed: false,
+    };
   }
 
   const ok = await pi.setModel(model);
@@ -261,16 +210,12 @@ async function applyEntry(
     };
   }
   if (entry.thinkingLevel) {
-    pi.setThinkingLevel(entry.thinkingLevel);
+    pi.setThinkingLevel(entry.thinkingLevel as ThinkingLevel);
   }
   return { message: `${meta.name}: set to ${describeEntry(entry)}`, level: "info", changed: true };
 }
 
 // --- interactive two-stage picker (single custom component) -----------------
-//
-// Both stages live inside ONE ctx.ui.custom() component. This avoids the
-// rendering race that happens when two ctx.ui.select() calls run back-to-back
-// (the second dropdown's options can render blank).
 
 interface PickerResult {
   model: ScopedModelOption;
@@ -300,162 +245,196 @@ class RepoModelPicker extends Container {
   private thinkingValues: (ThinkingLevel | undefined)[] = [];
   private thinkingIndex = 0;
 
-  private readonly titleText: Text;
-  private readonly footerText: Text;
-  private readonly listContainer: Container;
-
   constructor(args: PickerArgs) {
     super();
     this.repoName = args.repoName;
     this.modelOptions = args.modelOptions;
+    this.modelIndex = Math.max(0, Math.min(args.defaultModelIndex, args.modelOptions.length - 1));
     this.theme = args.theme;
     this.keybindings = args.keybindings;
     this.done = args.done;
-    this.modelIndex = args.defaultModelIndex;
-
-    this.addChild(new Spacer(1));
-    this.titleText = new Text(this.titleLine(), 1, 0);
-    this.addChild(this.titleText);
-    this.addChild(new Spacer(1));
-    this.listContainer = new Container();
-    this.addChild(this.listContainer);
-    this.addChild(new Spacer(1));
-    this.footerText = new Text(this.footerLine(), 1, 0);
-    this.addChild(this.footerText);
-    this.addChild(new Spacer(1));
-    this.updateList();
+    this.rebuildUI();
   }
 
-  private titleLine(): string {
-    const title =
-      this.stage === "model"
-        ? `repo-model · pick a model for ${this.repoName}`
-        : `repo-model · thinking level for ${this.picked?.key ?? ""}`;
-    return this.theme.fg("accent", this.theme.bold(title));
-  }
+  private rebuildUI(): void {
+    const lines: string[] = [];
+    const t = this.theme;
 
-  private footerLine(): string {
-    const hint = this.stage === "model" ? "esc cancel" : "esc back to models";
-    return this.theme.fg("dim", `↑↓ navigate · enter select · ${hint}`);
-  }
-
-  private refreshChrome(): void {
-    this.titleText.setText(this.titleLine());
-    this.footerText.setText(this.footerLine());
-  }
-
-  private updateList(): void {
-    this.listContainer.clear();
-    const labels = this.stage === "model" ? this.modelOptions.map((o) => o.label) : this.thinkingOptions;
-    const idx = this.stage === "model" ? this.modelIndex : this.thinkingIndex;
-    for (let i = 0; i < labels.length; i++) {
-      const selected = i === idx;
-      const line = selected
-        ? this.theme.fg("accent", `→ ${labels[i]}`)
-        : this.theme.fg("text", `  ${labels[i]}`);
-      this.listContainer.addChild(new Text(line, 1, 0));
-    }
-  }
-
-  handleInput(keyData: string): void {
-    const kb = this.keybindings;
-    if (kb.matches(keyData, "tui.select.up") || keyData === "k") {
-      this.move(-1);
-    } else if (kb.matches(keyData, "tui.select.down") || keyData === "j") {
-      this.move(1);
-    } else if (kb.matches(keyData, "tui.select.confirm") || keyData === "\n" || keyData === "\r") {
-      this.confirm();
-    } else if (kb.matches(keyData, "tui.select.cancel") || keyData === "\u001b") {
-      this.cancel();
-    }
-  }
-
-  private move(delta: number): void {
     if (this.stage === "model") {
-      const n = this.modelOptions.length;
-      if (n === 0) return;
-      this.modelIndex = (this.modelIndex + delta + n) % n;
+      lines.push(t.bold(t.fg("accent", `repo-model · ${this.repoName}`)));
+      lines.push(t.fg("muted", "Step 1 of 2: pick the default model (Enter next · Esc cancel)"));
+      lines.push("");
+
+      const visibleRows = 10;
+      const start = Math.max(
+        0,
+        Math.min(this.modelIndex - Math.floor(visibleRows / 2), this.modelOptions.length - visibleRows),
+      );
+      const end = Math.min(start + visibleRows, this.modelOptions.length);
+
+      for (let i = start; i < end; i++) {
+        const opt = this.modelOptions[i]!;
+        const selected = i === this.modelIndex;
+        const prefix = selected ? t.fg("accent", "❯ ") : "  ";
+        const text = selected ? t.bold(opt.label) : opt.label;
+        lines.push(`${prefix}${text}`);
+      }
     } else {
-      const n = this.thinkingOptions.length;
-      if (n === 0) return;
-      this.thinkingIndex = (this.thinkingIndex + delta + n) % n;
+      lines.push(t.bold(t.fg("accent", `repo-model · ${this.repoName}`)));
+      lines.push(
+        t.fg(
+          "muted",
+          `Step 2 of 2: thinking level for ${this.picked?.label ?? ""} (Enter save · Esc cancel)`,
+        ),
+      );
+      lines.push("");
+
+      for (let i = 0; i < this.thinkingOptions.length; i++) {
+        const selected = i === this.thinkingIndex;
+        const prefix = selected ? t.fg("accent", "❯ ") : "  ";
+        const text = selected
+          ? t.bold(this.thinkingOptions[i]!)
+          : this.thinkingOptions[i]!;
+        lines.push(`${prefix}${text}`);
+      }
     }
-    this.updateList();
+
+    this.children = [new Text(lines.join("\n"), 0, 0), new Spacer(1)];
   }
 
-  private confirm(): void {
+  handleInput(data: string): boolean {
+    if (this.keybindings.matches(data, "cancel") || data === "\x1b") {
+      this.done(undefined);
+      return true;
+    }
+
     if (this.stage === "model") {
-      this.picked = this.modelOptions[this.modelIndex];
+      if (this.keybindings.matches(data, "up") || data === "\x1b[A") {
+        this.modelIndex = (this.modelIndex - 1 + this.modelOptions.length) % this.modelOptions.length;
+        this.rebuildUI();
+        return true;
+      }
+      if (this.keybindings.matches(data, "down") || data === "\x1b[B") {
+        this.modelIndex = (this.modelIndex + 1) % this.modelOptions.length;
+        this.rebuildUI();
+        return true;
+      }
+      if (this.keybindings.matches(data, "select") || data === "\r" || data === "\n") {
+        this.picked = this.modelOptions[this.modelIndex];
+        if (!this.picked) return true;
+
+        const supported = thinkingLevelsForModel(this.picked.model);
+        this.thinkingOptions = [NO_OVERRIDE, ...supported];
+        this.thinkingValues = [undefined, ...supported];
+        this.thinkingIndex = 0;
+
+        if (this.picked.patternThinking && supported.includes(this.picked.patternThinking)) {
+          const matchIdx = this.thinkingValues.indexOf(this.picked.patternThinking);
+          if (matchIdx !== -1) this.thinkingIndex = matchIdx;
+        }
+
+        this.stage = "thinking";
+        this.rebuildUI();
+        return true;
+      }
+      return false;
+    }
+
+    // stage === "thinking"
+    if (this.keybindings.matches(data, "up") || data === "\x1b[A") {
+      this.thinkingIndex =
+        (this.thinkingIndex - 1 + this.thinkingOptions.length) % this.thinkingOptions.length;
+      this.rebuildUI();
+      return true;
+    }
+    if (this.keybindings.matches(data, "down") || data === "\x1b[B") {
+      this.thinkingIndex = (this.thinkingIndex + 1) % this.thinkingOptions.length;
+      this.rebuildUI();
+      return true;
+    }
+    if (this.keybindings.matches(data, "select") || data === "\r" || data === "\n") {
       if (!this.picked) {
         this.done(undefined);
-        return;
+        return true;
       }
-      const levels = thinkingLevelsForModel(this.picked.model);
-      this.thinkingValues = [undefined, ...levels];
-      this.thinkingOptions = [NO_OVERRIDE, ...levels];
-      this.thinkingIndex = 0;
-      this.stage = "thinking";
-      this.refreshChrome();
-      this.updateList();
-      return;
+      const thinking = this.thinkingValues[this.thinkingIndex];
+      this.done({ model: this.picked, thinking });
+      return true;
     }
-    this.done({ model: this.picked!, thinking: this.thinkingValues[this.thinkingIndex] });
-  }
 
-  private cancel(): void {
-    // From the thinking stage, esc goes back to the model list (so a mis-pick is
-    // cheap to fix). From the model stage, esc cancels the whole flow.
-    if (this.stage === "thinking") {
-      this.stage = "model";
-      this.refreshChrome();
-      this.updateList();
-      return;
-    }
-    this.done(undefined);
+    return false;
   }
 }
 
-async function interactiveSet(pi: ExtensionAPI, ctx: ExtensionContext): Promise<ActionResult> {
-  const meta = getRepoMeta(ctx.cwd);
+async function interactiveSet(
+  pi: ExtensionAPI,
+  ctx: ExtensionContext,
+  runtime: RepoModelRuntimeInstance,
+): Promise<ActionResult> {
+  const service = runtime.runSync(RepoModelRuntime);
+  const meta = await runRepoModel(runtime, service.getRepoMeta(ctx.cwd));
   const options = await getScopedModelOptions(ctx);
   if (options.length === 0) {
     return {
-      message: "No models available. Configure enabledModels in settings.json or add models in models.json.",
+      message: "No models available. Check enabledModels or sign in with /login.",
       level: "error",
     };
   }
 
-  const currentKey = ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined;
-  // Current model first (handy default), then alphabetical.
-  const ordered = [...options].sort((a, b) => {
-    if (a.key === currentKey) return -1;
-    if (b.key === currentKey) return 1;
-    return a.label.localeCompare(b.label);
-  });
-  const defaultModelIndex = Math.max(
-    0,
-    ordered.findIndex((o) => o.key === currentKey),
-  );
+  const currentEntry = await runRepoModel(runtime, service.getRepoModel(ctx.cwd));
+  const currentKey = currentEntry ? `${currentEntry.provider}/${currentEntry.model}` : undefined;
+
+  let defaultModelIndex = 0;
+  if (currentKey) {
+    const idx = options.findIndex((o) => o.key === currentKey);
+    if (idx !== -1) defaultModelIndex = idx;
+  } else if (ctx.model) {
+    const activeKey = `${ctx.model.provider}/${ctx.model.id}`;
+    const idx = options.findIndex((o) => o.key === activeKey);
+    if (idx !== -1) defaultModelIndex = idx;
+  }
+
+  const ordered = [...options];
+  if (currentKey && defaultModelIndex > 0) {
+    const [current] = ordered.splice(defaultModelIndex, 1);
+    if (current) {
+      ordered.unshift(current);
+      defaultModelIndex = 0;
+    }
+  }
 
   const custom = (ctx.ui as { custom?: Function }).custom;
   if (typeof custom !== "function") {
-    // Fallback (older runtime, no custom()): skip the thinking picker to avoid
-    // the back-to-back select race; just pick a model with no thinking override.
-    const label = await ctx.ui.select(`repo-model · pick a model for ${meta.name}`, ordered.map((o) => o.label));
+    const label = await ctx.ui.select(
+      `repo-model · pick a model for ${meta.name}`,
+      ordered.map((o) => o.label),
+    );
     if (!label) return { message: "cancelled", level: "info" };
     const picked = ordered.find((o) => o.label === label);
     if (!picked) return { message: "invalid model selection", level: "error" };
-    return commitEntry(pi, ctx, meta, picked, undefined);
+    return commitEntry(pi, ctx, meta, picked, undefined, runtime);
   }
 
   const result = await custom.call(
     ctx.ui,
-    (_tui: unknown, theme: PickerTheme, keybindings: PickerKeybindings, done: (r: PickerResult | undefined) => void) =>
-      new RepoModelPicker({ repoName: meta.name, modelOptions: ordered, defaultModelIndex, theme, keybindings, done }),
+    (
+      _tui: unknown,
+      theme: PickerTheme,
+      keybindings: PickerKeybindings,
+      done: (r: PickerResult | undefined) => void,
+    ) =>
+      new RepoModelPicker({
+        repoName: meta.name,
+        modelOptions: ordered,
+        defaultModelIndex,
+        theme,
+        keybindings,
+        done,
+      }),
   );
   if (!result) return { message: "cancelled", level: "info" };
 
-  return commitEntry(pi, ctx, meta, result.model, result.thinking);
+  return commitEntry(pi, ctx, meta, result.model, result.thinking, runtime);
 }
 
 async function commitEntry(
@@ -464,48 +443,45 @@ async function commitEntry(
   meta: RepoMeta,
   picked: ScopedModelOption,
   thinking: ThinkingLevel | undefined,
+  runtime: RepoModelRuntimeInstance,
 ): Promise<ActionResult> {
+  const service = runtime.runSync(RepoModelRuntime);
   const entry: RepoModelEntry = {
     name: meta.name,
     provider: picked.provider,
     model: picked.id,
     thinkingLevel: thinking,
-    updatedAt: new Date().toISOString(),
   };
-  const config = loadConfig();
-  config.repos ??= {};
-  config.repos[meta.key] = entry;
-  saveConfig(config);
+  await runRepoModel(runtime, service.setRepoModel(ctx.cwd, entry));
 
   const result = await applyEntry(pi, ctx, entry, meta);
   return { message: result.message, level: result.level };
 }
 
-// --- action core (text + get/unset/list, shared with the tool) --------------
-
 async function runAction(
   pi: ExtensionAPI,
   ctx: ExtensionContext,
   action: "get" | "set" | "unset" | "list",
+  runtime: RepoModelRuntimeInstance,
   modelRef?: string,
 ): Promise<ActionResult> {
-  const config = loadConfig();
-  const meta = getRepoMeta(ctx.cwd);
+  const service = runtime.runSync(RepoModelRuntime);
+  const meta = await runRepoModel(runtime, service.getRepoMeta(ctx.cwd));
 
   if (action === "list") {
-    const entries = Object.entries(config.repos ?? {});
+    const entries = await runRepoModel(runtime, service.listRepos);
     if (entries.length === 0) {
       return { message: "No repos configured. Use /repo-model to pick one.", level: "info" };
     }
-    const lines = entries.map(([key, e]) => {
-      const mark = key === meta.key ? " (current)" : "";
-      return `${e.name ?? path.basename(key)}  ->  ${describeEntry(e)}${mark}`;
+    const lines = entries.map((e) => {
+      const mark = e.path === meta.key ? " (current)" : "";
+      return `${e.name}  ->  ${describeEntry(e.entry)}${mark}`;
     });
     return { message: `repo-model (${entries.length}):\n${lines.join("\n")}`, level: "info" };
   }
 
   if (action === "get") {
-    const entry = config.repos?.[meta.key];
+    const entry = await runRepoModel(runtime, service.getRepoModel(ctx.cwd));
     if (!entry) {
       return { message: `${meta.name}: no default set. Run /repo-model to pick one.`, level: "info" };
     }
@@ -513,9 +489,8 @@ async function runAction(
   }
 
   if (action === "unset") {
-    if (!config.repos?.[meta.key]) return { message: `${meta.name}: nothing to unset`, level: "info" };
-    delete config.repos![meta.key];
-    saveConfig(config);
+    const res = await runRepoModel(runtime, service.unsetRepoModel(ctx.cwd));
+    if (!res.removed) return { message: `${meta.name}: nothing to unset`, level: "info" };
     return { message: `${meta.name}: cleared repo default`, level: "info" };
   }
 
@@ -534,11 +509,8 @@ async function runAction(
     provider: parsed.provider,
     model: parsed.model,
     thinkingLevel: parsed.thinkingLevel,
-    updatedAt: new Date().toISOString(),
   };
-  config.repos ??= {};
-  config.repos[meta.key] = entry;
-  saveConfig(config);
+  await runRepoModel(runtime, service.setRepoModel(ctx.cwd, entry));
 
   const result = await applyEntry(pi, ctx, entry, meta);
   return { message: result.message, level: result.level };
@@ -558,21 +530,18 @@ function notify(ctx: ExtensionContext, result: ActionResult): void {
 // --- extension --------------------------------------------------------------
 
 export default function repoModelExtension(pi: ExtensionAPI): void {
-  // Auto-apply the stored repo default when a session starts under a configured
-  // repo. Only the configured triggers fire (default: fresh start + new session),
-  // so resumed/forked/reloaded sessions keep whatever model they already have.
+  const runtime = createRepoModelRuntime();
+  const service = runtime.runSync(RepoModelRuntime);
+
   pi.on("session_start", async (event, ctx) => {
-    // A command-line model takes precedence over the stored repo default for
-    // the initial session. The `new` trigger still applies the repo default to
-    // sessions created later in the same pi process.
     if (event.reason === "startup" && hasExplicitCliModel()) return;
 
-    const config = loadConfig();
+    const config = await runRepoModel(runtime, service.loadConfig);
     const triggers = config.triggers ?? DEFAULT_TRIGGERS;
     if (!triggers.includes(event.reason)) return;
 
-    const meta = getRepoMeta(ctx.cwd);
-    const entry = config.repos?.[meta.key];
+    const meta = await runRepoModel(runtime, service.getRepoMeta(ctx.cwd));
+    const entry = await runRepoModel(runtime, service.getRepoModel(ctx.cwd));
     if (!entry) return;
 
     const result = await applyEntry(pi, ctx, entry, meta, { silentIfNoChange: true });
@@ -581,34 +550,42 @@ export default function repoModelExtension(pi: ExtensionAPI): void {
     }
   });
 
+  pi.on("session_shutdown", async () => {
+    try {
+      await runtime.dispose();
+    } catch {
+      // Disposed gracefully
+    }
+  });
+
   pi.registerCommand("repo-model", {
-    description: "Pick the repo default model + thinking level (dropdowns), or set via provider/model[:thinking]",
+    description:
+      "Pick the repo default model + thinking level (dropdowns), or set via provider/model[:thinking]",
     handler: async (args, ctx) => {
       const trimmed = args.trim();
       if (trimmed) {
-        notify(ctx, await runAction(pi, ctx, "set", trimmed));
+        notify(ctx, await runAction(pi, ctx, "set", runtime, trimmed));
         return;
       }
       if (ctx.hasUI) {
-        notify(ctx, await interactiveSet(pi, ctx));
+        notify(ctx, await interactiveSet(pi, ctx, runtime));
         return;
       }
-      // No UI (print/json mode): just show the current setting.
-      notify(ctx, await runAction(pi, ctx, "get"));
+      notify(ctx, await runAction(pi, ctx, "get", runtime));
     },
   });
 
   pi.registerCommand("repo-model-unset", {
     description: "Remove the default model override for the current repo",
     handler: async (_args, ctx) => {
-      notify(ctx, await runAction(pi, ctx, "unset"));
+      notify(ctx, await runAction(pi, ctx, "unset", runtime));
     },
   });
 
   pi.registerCommand("repo-model-list", {
     description: "List all configured repo default models",
     handler: async (_args, ctx) => {
-      notify(ctx, await runAction(pi, ctx, "list"));
+      notify(ctx, await runAction(pi, ctx, "list", runtime));
     },
   });
 }
