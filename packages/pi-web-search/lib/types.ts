@@ -10,11 +10,18 @@ export interface SearchOptions {
   signal?: AbortSignal;
 }
 
+export interface ProviderFallback {
+  provider: string;
+  reason: string;
+}
+
 export interface SearchResponse {
   query: string;
   results: SearchResult[];
   answer?: string;
   provider: SearchProviderName;
+  /** Providers that were tried before this response and failed */
+  fallbacks?: ProviderFallback[];
 }
 
 export interface FetchOptions {
@@ -29,6 +36,8 @@ export interface FetchResponse {
   text: string;
   provider: FetchProviderName;
   contentType?: string;
+  /** Providers that were tried before this response and failed */
+  fallbacks?: ProviderFallback[];
 }
 
 export type SearchProviderName = "openai" | "exa" | "firecrawl" | "ollama";

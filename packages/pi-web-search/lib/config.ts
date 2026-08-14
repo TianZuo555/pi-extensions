@@ -363,26 +363,79 @@ export function resolveSearchProvider(
     ctx?: ExtensionContext,
     requested?: SearchProviderName,
 ): SearchProviderName {
-    const config = loadStoredConfig();
-    if (requested) return requested;
-    if (config.searchProvider) return config.searchProvider;
-
-    // Auto-detect order of preference: OpenAI -> Exa -> Firecrawl -> Ollama
-    if (resolveOpenAIConfig(ctx, config)) return "openai";
-    if (resolveExaConfig(config)) return "exa";
-    if (resolveFirecrawlConfig(config)) return "firecrawl";
-    return "ollama";
+    return resolveSearchChain(requested)[0];
 }
 
 export function resolveFetchProvider(
     requested?: FetchProviderName,
 ): FetchProviderName {
-    const config = loadStoredConfig();
-    if (requested) return requested;
-    if (config.fetchProvider) return config.fetchProvider;
+    return resolveFetchChain(requested)[0];
+}
 
-    // Auto-detect order of preference: Firecrawl -> Exa -> Ollama -> Direct
-    if (resolveFirecrawlConfig(config)) return "firecrawl";
-    if (resolveExaConfig(config)) return "exa";
-    return "direct";
+/** Canonical fallback order for search providers. */
+export const SEARCH_PROVIDER_ORDER: readonly SearchProviderName[] = [
+    "openai",
+    "exa",
+    "firecrawl",
+    "ollama",
+];
+
+/** Canonical fallback order for fetch providers. */
+export const FETCH_PROVIDER_ORDER: readonly FetchProviderName[] = [
+    "firecrawl",
+    "exa",
+    "ollama",
+    "direct",
+];
+
+/** Search providers that currently have resolvable credentials, in preference order. */
+export function availableSearchProviders(
+    config = loadStoredConfig(),
+): SearchProviderName[] {
+    const list: SearchProviderName[] = [];
+    if (resolveOpenAIConfig(undefined, config)) list.push("openai");
+    if (resolveExaConfig(config)) list.push("exa");
+    if (resolveFirecrawlConfig(config)) list.push("firecrawl");
+    list.push("ollama");
+    return list;
+}
+
+/** Fetch providers that currently have resolvable credentials, in preference order. */
+export function availableFetchProviders(
+    config = loadStoredConfig(),
+): FetchProviderName[] {
+    const list: FetchProviderName[] = [];
+    if (resolveFirecrawlConfig(config)) list.push("firecrawl");
+    if (resolveExaConfig(config)) list.push("exa");
+    if (config.ollama || process.env.OLLAMA_HOST?.trim()) list.push("ollama");
+    list.push("direct");
+    return list;
+}
+
+function dedupe<T>(items: readonly T[]): T[] {
+    return [...new Set(items)];
+}
+
+/**
+ * Ordered fallback chain for search: the requested/configured provider first,
+ * then every other available provider in canonical order. A call walks this
+ * list until one provider succeeds.
+ */
+export function resolveSearchChain(
+    requested?: SearchProviderName,
+    config = loadStoredConfig(),
+): SearchProviderName[] {
+    const available = availableSearchProviders(config);
+    const preferred = requested ?? config.searchProvider ?? available[0];
+    return dedupe([preferred, ...available]);
+}
+
+/** Ordered fallback chain for fetch (see resolveSearchChain). */
+export function resolveFetchChain(
+    requested?: FetchProviderName,
+    config = loadStoredConfig(),
+): FetchProviderName[] {
+    const available = availableFetchProviders(config);
+    const preferred = requested ?? config.fetchProvider ?? available[0];
+    return dedupe([preferred, ...available]);
 }

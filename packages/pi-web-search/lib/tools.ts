@@ -51,6 +51,7 @@ export interface WebSearchDetails {
   resultsCount: number;
   hasAnswer: boolean;
   results: Array<{ title: string; url: string }>;
+  fallbackFrom?: string[];
 }
 
 export const WebFetchParams = Type.Object({
@@ -76,6 +77,7 @@ export interface WebFetchDetails {
   provider: FetchProviderName;
   title?: string;
   bytes: number;
+  fallbackFrom?: string[];
 }
 
 export async function executeSearch(
@@ -127,6 +129,9 @@ export async function executeSearch(
     resultsCount: response.results.length,
     hasAnswer: !!response.answer,
     results: response.results.map((r) => ({ title: r.title, url: r.url })),
+    fallbackFrom: response.fallbacks?.length
+      ? response.fallbacks.map((f) => f.provider)
+      : undefined,
   };
 
   return { text, details };
@@ -162,6 +167,9 @@ export async function executeFetch(
     provider: response.provider,
     title: response.title,
     bytes: Buffer.byteLength(text, "utf-8"),
+    fallbackFrom: response.fallbacks?.length
+      ? response.fallbacks.map((f) => f.provider)
+      : undefined,
   };
 
   return { text, details };
@@ -207,6 +215,12 @@ export function registerTools(
         return new Text(theme.fg("success", "✓ Search completed"), 0, 0);
       }
 
+      const fallbackStr = details.fallbackFrom?.length
+        ? theme.fg(
+            "warning",
+            ` (fallback from ${details.fallbackFrom.join(" → ")})`,
+          )
+        : "";
       const summary =
         theme.fg("success", "✓ ") +
         theme.fg(
@@ -214,7 +228,8 @@ export function registerTools(
           `${details.resultsCount} result${details.resultsCount === 1 ? "" : "s"} via ${details.provider}${
             details.hasAnswer ? " (with summary)" : ""
           }`,
-        );
+        ) +
+        fallbackStr;
 
       if (!expanded || details.results.length === 0) {
         return new Text(summary, 0, 0);
@@ -264,9 +279,16 @@ export function registerTools(
 
       const kb = (details.bytes / 1024).toFixed(1);
       const titleStr = details.title ? ` (${details.title})` : "";
+      const fallbackStr = details.fallbackFrom?.length
+        ? theme.fg(
+            "warning",
+            ` (fallback from ${details.fallbackFrom.join(" → ")})`,
+          )
+        : "";
       const summary =
         theme.fg("success", "✓ ") +
-        theme.fg("muted", `${kb} KB via ${details.provider}${titleStr}`);
+        theme.fg("muted", `${kb} KB via ${details.provider}${titleStr}`) +
+        fallbackStr;
 
       if (!expanded) {
         return new Text(summary, 0, 0);

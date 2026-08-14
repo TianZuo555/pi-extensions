@@ -7,8 +7,16 @@ import {
   saveStoredConfig,
 } from "./config.ts";
 import type { FetchProviderName, SearchProviderName } from "./types.ts";
+import {
+  runWebSearch,
+  WebSearchRuntime,
+  type WebSearchRuntimeInstance,
+} from "../src/runtime.ts";
 
-export function registerWebSearchCommand(pi: ExtensionAPI): void {
+export function registerWebSearchCommand(
+  pi: ExtensionAPI,
+  runtime?: WebSearchRuntimeInstance,
+): void {
   const handler = async (args: string | undefined, ctx: ExtensionContext) => {
     const raw = args?.trim() || "";
     const [subcommand, ...rest] = raw.split(/\s+/);
@@ -95,6 +103,21 @@ export function registerWebSearchCommand(pi: ExtensionAPI): void {
     const activeSearch = resolveSearchProvider(ctx);
     const activeFetch = resolveFetchProvider();
 
+    let healthLines: string[] = [];
+    if (runtime) {
+      const health = await runWebSearch(
+        runtime,
+        runtime.runSync(WebSearchRuntime).providerHealth,
+      );
+      healthLines = health.map((h) => {
+        const scope =
+          h.msLeft === null
+            ? "skipped for this session"
+            : `skipped for ${Math.ceil(h.msLeft / 1000)}s more`;
+        return `  ⚠ ${h.provider}: ${scope} — ${h.reason.slice(0, 80)}`;
+      });
+    }
+
     const lines = [
       "Web Search & Fetch Status:",
       `• Active Search: ${activeSearch.toUpperCase()}`,
@@ -106,6 +129,9 @@ export function registerWebSearchCommand(pi: ExtensionAPI): void {
         const extra = [s.source, s.model, s.baseUrl].filter(Boolean).join(", ");
         return `  ${check} ${s.label}: ${s.configured ? "ready" : "not configured"}${extra ? ` (${extra})` : ""}`;
       }),
+      ...(healthLines.length > 0
+        ? ["", "Session fallbacks (failed providers are skipped):", ...healthLines]
+        : []),
       "",
       "Commands:",
       "  /web-search set search <openai|exa|firecrawl|ollama>",

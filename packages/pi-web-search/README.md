@@ -15,6 +15,7 @@ Supports **OpenAI Responses** (with simple, concise system instructions and auto
   - Native scrapers for **Firecrawl** (`/v1/scrape`), **Exa** (`/contents`), and **Ollama** (`/api/web_fetch`).
   - **Direct Fetch Fallback**: High-performance HTML-to-Markdown extraction when no scraping key is provided.
 - **`/web-search` (alias `/web-tools`) Command**: View provider statuses and switch active search/fetch backends interactively.
+- **Session Fallback Chains**: Every call walks an ordered fallback chain — search: `openai → exa → firecrawl → ollama`; fetch: `firecrawl → exa → ollama → direct`. When a provider runs out of usage (402/403, out of credits, usage limits) it is skipped **for the rest of the session**, so the next search/fetch goes straight to the next healthy provider. Plain rate limits (429) only apply a short cooldown. Successful responses report which providers they fell back from, and `/web-search` lists currently skipped providers.
 
 ## Installation
 

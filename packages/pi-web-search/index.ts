@@ -7,7 +7,7 @@ export default function webSearchExtension(pi: ExtensionAPI): void {
   const runtime = createWebSearchRuntime();
 
   registerTools(pi, runtime);
-  registerWebSearchCommand(pi);
+  registerWebSearchCommand(pi, runtime);
 
   pi.on("session_shutdown", async () => {
     try {
