@@ -37,7 +37,7 @@
       "extensions/subagents.ts",
       "extensions/compact-output.ts",
       "extensions/goal.ts",
-      "extensions/vscode-review.ts"
+      "extensions/vscode-bridge.ts"
     ]
   },
   "scripts": {

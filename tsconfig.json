@@ -24,6 +24,8 @@
     "extensions/subagents.ts",
     "packages/pi-subagents/**/*.ts",
     "extensions/image-cache.ts",
-    "packages/pi-image-cache/**/*.ts"
+    "packages/pi-image-cache/**/*.ts",
+    "extensions/vscode-bridge.ts",
+    "packages/pi-vscode-bridge/**/*.ts"
   ]
 }

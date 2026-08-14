@@ -61,6 +61,9 @@ jobs:
       - name: Typecheck image-cache extension
         run: npm run check -w pi-tian-image-cache
 
+      - name: Typecheck vscode-bridge extension
+        run: npm run check -w pi-tian-vscode-bridge
+
       - name: Test usage providers (repo-level)
         run: npm run test:usage
 
@@ -90,6 +93,9 @@ jobs:
 
       - name: Test image-cache extension
         run: npm test -w pi-tian-image-cache
+
+      - name: Test vscode-bridge extension
+        run: npm test -w pi-tian-vscode-bridge
 
       - name: Publish changed packages
         env:
