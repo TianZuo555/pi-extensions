@@ -22,6 +22,13 @@ import {
 import { openAgentsDashboard } from "./lib/ui/agents-command.ts";
 import { formatRunSummary, formatUsageCost, type SubagentSupervisor } from "./lib/supervisor.ts";
 import {
+  SUBAGENT_APPLY_TOOL_DESCRIPTION,
+  SUBAGENT_CANCEL_TOOL_DESCRIPTION,
+  SUBAGENT_PARAMETER_DESCRIPTIONS,
+  SUBAGENT_STATUS_TOOL_DESCRIPTION,
+  SUBAGENT_TOOL_DESCRIPTION,
+} from "./lib/prompt.ts";
+import {
   createSubagentRuntime,
   getSupervisor,
   runSubagent,
@@ -35,55 +42,45 @@ const WIDGET_KEY = "pi-tian-subagents";
 const SubagentParams = Type.Object({
   profile: Type.String({
     minLength: 1,
-    description: "Profile short name or qualified id (e.g. scout, builtin/reviewer, project/my-agent).",
+    description: SUBAGENT_PARAMETER_DESCRIPTIONS.profile,
   }),
   task: Type.String({
     minLength: 1,
     maxLength: TASK_MAX_LENGTH,
-    description: "Objective plus expected deliverable.",
+    description: SUBAGENT_PARAMETER_DESCRIPTIONS.task,
   }),
   context: Type.Optional(
     Type.String({
       maxLength: CONTEXT_MAX_LENGTH,
-      description: "Facts the child cannot cheaply rediscover — not parent transcript history.",
+      description: SUBAGENT_PARAMETER_DESCRIPTIONS.context,
     }),
   ),
   mode: Type.Optional(
     Type.Union([Type.Literal("foreground"), Type.Literal("background")], {
-      description: "foreground (default) blocks until complete; background returns a run id immediately.",
+      description: SUBAGENT_PARAMETER_DESCRIPTIONS.mode,
     }),
   ),
 });
 
 const SubagentStatusParams = Type.Object({
-  run_id: Type.String({ minLength: 1, description: "Subagent run id (e.g. sa-a13f9c2b)." }),
+  run_id: Type.String({ minLength: 1, description: SUBAGENT_PARAMETER_DESCRIPTIONS.runId }),
 });
 
 const SubagentCancelParams = Type.Object({
-  run_id: Type.String({ minLength: 1 }),
-  reason: Type.Optional(Type.String({ maxLength: 500 })),
+  run_id: Type.String({ minLength: 1, description: SUBAGENT_PARAMETER_DESCRIPTIONS.cancelRunId }),
+  reason: Type.Optional(
+    Type.String({ maxLength: 500, description: SUBAGENT_PARAMETER_DESCRIPTIONS.cancelReason }),
+  ),
 });
 
 const SubagentApplyParams = Type.Object({
-  run_id: Type.String({ minLength: 1, description: "Completed worker run id with a patch artifact." }),
+  run_id: Type.String({ minLength: 1, description: SUBAGENT_PARAMETER_DESCRIPTIONS.applyRunId }),
 });
 
 type SubagentInput = Static<typeof SubagentParams>;
 type SubagentStatusInput = Static<typeof SubagentStatusParams>;
 type SubagentCancelInput = Static<typeof SubagentCancelParams>;
 type SubagentApplyInput = Static<typeof SubagentApplyParams>;
-
-const TOOL_DESCRIPTION = `Delegate a bounded task to a subagent in an isolated Pi RPC child process.
-
-Built-in profiles: scout, planner, reviewer, oracle (read-only), worker (git worktree + writes).
-
-Parallel work: call this tool multiple times in one turn (sibling calls run concurrently).
-
-Capabilities (model, tools, workspace) come from the profile — not from tool arguments.
-
-Use mode=background to continue without blocking; completion arrives as a follow-up notification.
-
-Children finish with report_result when possible. Worker runs keep a durable branch and private patch artifact under ~/.pi/agent/subagents/runs/<runId>/; apply with subagent_apply after explicit confirmation.`;
 
 interface SessionState {
   subagentRuntime?: SubagentRuntimeInstance;
@@ -251,7 +248,7 @@ export default function subagentsExtension(pi: ExtensionAPI) {
   pi.registerTool({
     name: "subagent",
     label: "subagent",
-    description: TOOL_DESCRIPTION,
+    description: SUBAGENT_TOOL_DESCRIPTION,
     parameters: SubagentParams,
     async execute(
       _toolCallId,
@@ -354,7 +351,7 @@ export default function subagentsExtension(pi: ExtensionAPI) {
   pi.registerTool({
     name: "subagent_status",
     label: "subagent status",
-    description: "Check a background subagent run by run_id.",
+    description: SUBAGENT_STATUS_TOOL_DESCRIPTION,
     parameters: SubagentStatusParams,
     async execute(_id, params: SubagentStatusInput) {
       const sv = requireSupervisor();
@@ -398,7 +395,7 @@ export default function subagentsExtension(pi: ExtensionAPI) {
   pi.registerTool({
     name: "subagent_cancel",
     label: "subagent cancel",
-    description: "Cancel a running subagent by run_id.",
+    description: SUBAGENT_CANCEL_TOOL_DESCRIPTION,
     parameters: SubagentCancelParams,
     async execute(_id, params: SubagentCancelInput, _signal, _onUpdate, ctx) {
       const ok = await runSubagent(runtime(), service().cancelRun(params.run_id, params.reason));
@@ -425,8 +422,7 @@ export default function subagentsExtension(pi: ExtensionAPI) {
   pi.registerTool({
     name: "subagent_apply",
     label: "subagent apply",
-    description:
-      "Apply the verified patch artifact from a completed worker run to the current checkout. Requires interactive confirmation; never runs automatically.",
+    description: SUBAGENT_APPLY_TOOL_DESCRIPTION,
     parameters: SubagentApplyParams,
     async execute(_id, params: SubagentApplyInput, _signal, _onUpdate, ctx) {
       const sv = requireSupervisor();

@@ -68,6 +68,9 @@ import {
   buildTerminalResultMessage,
   deriveCommandTitle,
   describeTerminal,
+  TERMINAL_LOG_READ_PARAMETER_DESCRIPTIONS,
+  TERMINAL_LOG_READ_PROMPT_SNIPPET,
+  TERMINAL_LOG_READ_TOOL_DESCRIPTION,
 } from "./src/prompt.ts";
 import { createDeferredResultDelivery } from "./src/result-delivery.ts";
 import {
@@ -725,24 +728,23 @@ export function createBackgroundTerminalsExtension(
   pi.registerTool({
     name: "terminal_log_read",
     label: "terminal_log_read",
-    description:
-      "Read one bounded page from a background terminal's archived stdout or stderr using the opaque ref emitted by bash. This is read-only and never polls, kills, or reports status. Maximum 64 KiB per page; use next_offset to page through a settled archive.",
-    promptSnippet: "Read one bounded page of a background terminal's archived output",
+    description: TERMINAL_LOG_READ_TOOL_DESCRIPTION,
+    promptSnippet: TERMINAL_LOG_READ_PROMPT_SNIPPET,
     parameters: Type.Object({
       ref: Type.String({
-        description: "Opaque archive ref from bash, for example bt-3:stdout.",
+        description: TERMINAL_LOG_READ_PARAMETER_DESCRIPTIONS.ref,
       }),
       offset: Type.Optional(
         Type.Integer({
           minimum: 0,
-          description: "Byte offset to begin reading (default 0).",
+          description: TERMINAL_LOG_READ_PARAMETER_DESCRIPTIONS.offset,
         }),
       ),
       limit: Type.Optional(
         Type.Integer({
           minimum: 1,
           maximum: MAX_TERMINAL_LOG_READ_BYTES,
-          description: `Maximum bytes to return (default ${MAX_TERMINAL_LOG_READ_BYTES}).`,
+          description: TERMINAL_LOG_READ_PARAMETER_DESCRIPTIONS.limit,
         }),
       ),
     }),

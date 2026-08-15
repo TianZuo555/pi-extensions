@@ -73,7 +73,7 @@ test("resolveSearchProvider falls back to ollama if no keys present", () => {
     delete process.env.FIRECRAWL_API_KEY;
 
     // With explicit request override
-    assert.equal(resolveSearchProvider(undefined, "exa"), "exa");
+    assert.equal(resolveSearchProvider(undefined, "exa", {}), "exa");
   } finally {
     if (originalOpenAI !== undefined) process.env.OPENAI_API_KEY = originalOpenAI;
     if (originalExa !== undefined) process.env.EXA_API_KEY = originalExa;
@@ -89,8 +89,8 @@ test("resolveFetchProvider defaults to direct if no scrapers configured", () => 
     delete process.env.FIRECRAWL_API_KEY;
     delete process.env.EXA_API_KEY;
 
-    assert.equal(resolveFetchProvider(), "direct");
-    assert.equal(resolveFetchProvider("firecrawl"), "firecrawl");
+    assert.equal(resolveFetchProvider(undefined, {}), "direct");
+    assert.equal(resolveFetchProvider("firecrawl", {}), "firecrawl");
   } finally {
     if (originalFc !== undefined) process.env.FIRECRAWL_API_KEY = originalFc;
     if (originalExa !== undefined) process.env.EXA_API_KEY = originalExa;

@@ -40,6 +40,20 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function waitFor(
+  predicate: () => boolean,
+  timeoutMs = 3000,
+  intervalMs = 25,
+): Promise<void> {
+  const start = Date.now();
+  while (!predicate()) {
+    if (Date.now() - start >= timeoutMs) {
+      throw new Error(`Timed out waiting for condition after ${timeoutMs}ms`);
+    }
+    await sleep(intervalMs);
+  }
+}
+
 describe("createDeferredResultDelivery", () => {
   it("delivers at most once across immediate and drain paths", () => {
     const delivery = createDeferredResultDelivery<{ runId: string; value: number }>();
@@ -101,7 +115,7 @@ describe("SubagentSupervisor lifecycle", () => {
     });
     assert.equal(started.status, "running");
 
-    await sleep(400);
+    await waitFor(() => deliveries === 1);
     assert.equal(deliveries, 1);
     sv.drainPendingResults();
     assert.equal(deliveries, 1);
@@ -128,7 +142,7 @@ describe("SubagentSupervisor lifecycle", () => {
       spawnOverride: { command: process.execPath, args: [FIXTURE, "--mode=settle"] },
     });
 
-    await sleep(400);
+    await waitFor(() => deliveries === 1);
     assert.equal(deliveries, 1);
     sv.drainPendingResults();
     assert.equal(deliveries, 2);
@@ -150,7 +164,7 @@ describe("SubagentSupervisor lifecycle", () => {
       spawnOverride: { command: process.execPath, args: [FIXTURE, "--mode=settle"] },
     });
 
-    await sleep(400);
+    await waitFor(() => sv.pendingBackgroundRunIds().length === 1);
     assert.deepEqual(sv.pendingBackgroundRunIds().length, 1);
 
     let deliveries = 0;
@@ -181,7 +195,7 @@ describe("SubagentSupervisor lifecycle", () => {
     });
 
     assert.ok(sv.cancelRun(started.runId, "user stopped"));
-    await sleep(800);
+    await waitFor(() => Boolean(sv.getRun(started.runId)?.result?.error));
 
     const record = sv.getRun(started.runId);
     assert.ok(record);

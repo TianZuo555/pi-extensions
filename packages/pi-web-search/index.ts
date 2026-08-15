@@ -1,5 +1,4 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { registerWebSearchCommand } from "./lib/command.ts";
 import { registerTools } from "./lib/tools.ts";
 import { createWebSearchRuntime } from "./src/runtime.ts";
 
@@ -7,7 +6,6 @@ export default function webSearchExtension(pi: ExtensionAPI): void {
   const runtime = createWebSearchRuntime();
 
   registerTools(pi, runtime);
-  registerWebSearchCommand(pi, runtime);
 
   pi.on("session_shutdown", async () => {
     try {

@@ -14,8 +14,7 @@ Supports **OpenAI Responses** (with simple, concise system instructions and auto
 - **`web_fetch` Tool**: Reads web pages and documentation as clean Markdown.
   - Native scrapers for **Firecrawl** (`/v1/scrape`), **Exa** (`/contents`), and **Ollama** (`/api/web_fetch`).
   - **Direct Fetch Fallback**: High-performance HTML-to-Markdown extraction when no scraping key is provided.
-- **`/web-search` (alias `/web-tools`) Command**: View provider statuses and switch active search/fetch backends interactively.
-- **Session Fallback Chains**: Every call walks an ordered fallback chain — search: `openai → exa → firecrawl → ollama`; fetch: `firecrawl → exa → ollama → direct`. When a provider runs out of usage (402/403, out of credits, usage limits) it is skipped **for the rest of the session**, so the next search/fetch goes straight to the next healthy provider. Plain rate limits (429) only apply a short cooldown. Successful responses report which providers they fell back from, and `/web-search` lists currently skipped providers.
+- **Session Fallback Chains**: Every call walks an ordered fallback chain — search: `openai → exa → firecrawl → ollama`; fetch: `firecrawl → exa → ollama → direct`. When a provider runs out of usage (402/403, out of credits, usage limits) it is skipped **for the rest of the session**, so the next search/fetch goes straight to the next healthy provider. Plain rate limits (429) only apply a short cooldown. Successful responses report which providers they fell back from.
 
 ## Installation
 
@@ -45,14 +44,6 @@ Precedence: **Environment Variables** > **`~/.config/pi-tian-web-search/config.j
 | `FIRECRAWL_BASE_URL` | Custom Firecrawl API URL | `https://api.firecrawl.dev/v1` |
 | `OLLAMA_HOST` | Ollama host URL | `http://localhost:11434` |
 | `OLLAMA_API_KEY` | Ollama API key (for cloud endpoints) | - |
-
-### Slash Commands
-
-- `/web-search` — View active providers and configuration status.
-- `/web-search set search <openai|exa|firecrawl|ollama>` — Set active search provider.
-- `/web-search set fetch <firecrawl|exa|ollama|direct>` — Set active fetch provider.
-- `/web-search key <openai|exa|firecrawl> <key>` — Save API key in config.
-- `/web-search ollama <url>` — Save custom Ollama host.
 
 ## License
 

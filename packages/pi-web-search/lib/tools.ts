@@ -1,4 +1,3 @@
-import { StringEnum } from "@earendil-works/pi-ai";
 import type {
   AgentToolResult,
   ExtensionAPI,
@@ -13,6 +12,16 @@ import {
   WebSearchRuntime,
   type WebSearchRuntimeInstance,
 } from "../src/runtime.ts";
+import {
+  WEB_FETCH_PARAMETER_DESCRIPTIONS,
+  WEB_FETCH_PROMPT_GUIDELINES,
+  WEB_FETCH_PROMPT_SNIPPET,
+  WEB_FETCH_TOOL_DESCRIPTION,
+  WEB_SEARCH_PARAMETER_DESCRIPTIONS,
+  WEB_SEARCH_PROMPT_GUIDELINES,
+  WEB_SEARCH_PROMPT_SNIPPET,
+  WEB_SEARCH_TOOL_DESCRIPTION,
+} from "./prompt.ts";
 import type {
   FetchProviderName,
   FetchResponse,
@@ -23,22 +32,11 @@ import type {
 
 export const WebSearchParams = Type.Object({
   query: Type.String({
-    description: "Search query to look up on the live web",
+    description: WEB_SEARCH_PARAMETER_DESCRIPTIONS.query,
   }),
   numResults: Type.Optional(
     Type.Number({
-      description: "Maximum number of search results to return (default: 8)",
-    }),
-  ),
-  provider: Type.Optional(
-    StringEnum(["openai", "exa", "firecrawl", "ollama"] as const, {
-      description: "Search provider override: openai, exa, firecrawl, or ollama",
-    }),
-  ),
-  domainFilter: Type.Optional(
-    Type.Array(Type.String(), {
-      description:
-        "Filter results by domain. Prefix with '-' to block (e.g. ['docs.rs', '-reddit.com'])",
+      description: WEB_SEARCH_PARAMETER_DESCRIPTIONS.numResults,
     }),
   ),
 });
@@ -56,16 +54,11 @@ export interface WebSearchDetails {
 
 export const WebFetchParams = Type.Object({
   url: Type.String({
-    description: "The HTTP or HTTPS URL of the web page or document to fetch",
+    description: WEB_FETCH_PARAMETER_DESCRIPTIONS.url,
   }),
-  provider: Type.Optional(
-    StringEnum(["firecrawl", "exa", "ollama", "direct"] as const, {
-      description: "Fetch provider override: firecrawl, exa, ollama, or direct",
-    }),
-  ),
   raw: Type.Optional(
     Type.Boolean({
-      description: "Return raw HTML or unmodified text instead of clean Markdown (default: false)",
+      description: WEB_FETCH_PARAMETER_DESCRIPTIONS.raw,
     }),
   ),
 });
@@ -91,7 +84,6 @@ export async function executeSearch(
 
   const searchOptions: SearchOptions = {
     numResults: params.numResults,
-    domainFilter: params.domainFilter,
     signal,
   };
 
@@ -100,7 +92,7 @@ export async function executeSearch(
     searchService.search(
       params.query,
       searchOptions,
-      params.provider as SearchProviderName | undefined,
+      undefined,
       ctx,
     ),
     { signal },
@@ -150,7 +142,7 @@ export async function executeFetch(
     searchService.fetch(
       params.url,
       { signal, raw: params.raw },
-      params.provider as FetchProviderName | undefined,
+      undefined,
     ),
     { signal },
   );
@@ -182,13 +174,9 @@ export function registerTools(
   pi.registerTool({
     name: "web_search",
     label: "Web Search",
-    description:
-      "Search the live web for current information, documentation, news, or technical references using OpenAI, Exa, Firecrawl, or Ollama.",
-    promptSnippet: "Search the live web for up-to-date information and documentation.",
-    promptGuidelines: [
-      "Use web_search when questions require recent info, library docs, or facts beyond training data.",
-      "Prefer specific keyword queries over conversational sentences.",
-    ],
+    description: WEB_SEARCH_TOOL_DESCRIPTION,
+    promptSnippet: WEB_SEARCH_PROMPT_SNIPPET,
+    promptGuidelines: WEB_SEARCH_PROMPT_GUIDELINES,
     parameters: WebSearchParams,
 
     async execute(_toolCallId, params: WebSearchInput, signal, _onUpdate, ctx) {
@@ -201,11 +189,9 @@ export function registerTools(
 
     renderCall(args: WebSearchInput, theme: Theme) {
       const queryStr = `"${args.query}"`;
-      const providerStr = args.provider ? ` (${args.provider})` : "";
       const line =
         theme.fg("toolTitle", theme.bold("web_search ")) +
-        theme.fg("accent", queryStr) +
-        theme.fg("muted", providerStr);
+        theme.fg("accent", queryStr);
       return new Text(line, 0, 0);
     },
 
@@ -246,12 +232,9 @@ export function registerTools(
   pi.registerTool({
     name: "web_fetch",
     label: "Web Fetch",
-    description:
-      "Fetch and convert an HTTP/HTTPS webpage or documentation URL into readable clean Markdown or text.",
-    promptSnippet: "Fetch the content of a specific web URL.",
-    promptGuidelines: [
-      "Use web_fetch to inspect specific webpage links, API documentation pages, or articles found via web_search.",
-    ],
+    description: WEB_FETCH_TOOL_DESCRIPTION,
+    promptSnippet: WEB_FETCH_PROMPT_SNIPPET,
+    promptGuidelines: WEB_FETCH_PROMPT_GUIDELINES,
     parameters: WebFetchParams,
 
     async execute(_toolCallId, params: WebFetchInput, signal) {
@@ -263,11 +246,9 @@ export function registerTools(
     },
 
     renderCall(args: WebFetchInput, theme: Theme) {
-      const providerStr = args.provider ? ` (${args.provider})` : "";
       const line =
         theme.fg("toolTitle", theme.bold("web_fetch ")) +
-        theme.fg("accent", args.url) +
-        theme.fg("muted", providerStr);
+        theme.fg("accent", args.url);
       return new Text(line, 0, 0);
     },
 

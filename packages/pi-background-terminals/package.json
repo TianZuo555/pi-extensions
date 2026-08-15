@@ -1,6 +1,6 @@
 {
   "name": "pi-tian-background-terminals",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Replace Pi's built-in Bash with automatic background yielding, exactly-once completion notifications, and a /ps viewer.",
   "type": "module",
   "keywords": [

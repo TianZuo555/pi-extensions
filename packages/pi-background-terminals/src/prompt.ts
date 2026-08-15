@@ -17,6 +17,7 @@ import {
   DEFAULT_YIELD_TIME_MS,
   MAX_RUNNING,
   MAX_RUNTIME_TIMEOUT_SECONDS,
+  MAX_TERMINAL_LOG_READ_BYTES,
   MAX_YIELD_TIME_MS,
   MIN_YIELD_TIME_MS,
 } from "./manager.ts";
@@ -76,6 +77,18 @@ export const BASH_PARAMETER_DESCRIPTIONS = {
     `How long to wait for completion before returning a background terminal id (default ${DEFAULT_YIELD_TIME_MS} ms; values are clamped to ${MIN_YIELD_TIME_MS}-${MAX_YIELD_TIME_MS} ms).`,
   timeout:
     `Optional hard total runtime timeout in seconds (no default, maximum ${MAX_RUNTIME_TIMEOUT_SECONDS}). Unlike yield_time_ms, this terminates the process tree.`,
+};
+
+export const TERMINAL_LOG_READ_TOOL_DESCRIPTION =
+  "Read one bounded page from a background terminal's archived stdout or stderr using the opaque ref emitted by bash. This is read-only and never polls, kills, or reports status. Maximum 64 KiB per page; use next_offset to page through a settled archive.";
+
+export const TERMINAL_LOG_READ_PROMPT_SNIPPET =
+  "Read one bounded page of a background terminal's archived output";
+
+export const TERMINAL_LOG_READ_PARAMETER_DESCRIPTIONS = {
+  ref: "Opaque archive ref from bash, for example bt-3:stdout.",
+  offset: "Byte offset to begin reading (default 0).",
+  limit: `Maximum bytes to return (default ${MAX_TERMINAL_LOG_READ_BYTES}).`,
 };
 
 const LEADING_SETUP =

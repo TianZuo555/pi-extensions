@@ -8,6 +8,9 @@ import type {
     SearchProviderName,
     WebSearchConfig,
 } from "./types.ts";
+import { DEFAULT_OPENAI_SYSTEM_PROMPT } from "./prompt.ts";
+
+export { DEFAULT_OPENAI_SYSTEM_PROMPT } from "./prompt.ts";
 
 const PRIMARY_CONFIG_PATH = path.join(
     os.homedir(),
@@ -17,9 +20,6 @@ const PRIMARY_CONFIG_PATH = path.join(
 );
 const LEGACY_CONFIG_PATH = path.join(os.homedir(), ".pi", "web-search.json");
 const PI_AUTH_FILE = path.join(os.homedir(), ".pi", "agent", "auth.json");
-
-export const DEFAULT_OPENAI_SYSTEM_PROMPT =
-    "Search the web and provide a concise, accurate answer grounded in the web sources. Cite sources with markdown links where appropriate.";
 
 export const DEFAULT_OPENAI_MODEL = "gpt-5.6-luna";
 export const DEFAULT_OLLAMA_HOST = "http://localhost:11434";
@@ -362,14 +362,16 @@ export function getProviderStatuses(ctx?: ExtensionContext): ProviderStatus[] {
 export function resolveSearchProvider(
     ctx?: ExtensionContext,
     requested?: SearchProviderName,
+    config = loadStoredConfig(),
 ): SearchProviderName {
-    return resolveSearchChain(requested)[0];
+    return resolveSearchChain(requested, config)[0];
 }
 
 export function resolveFetchProvider(
     requested?: FetchProviderName,
+    config = loadStoredConfig(),
 ): FetchProviderName {
-    return resolveFetchChain(requested)[0];
+    return resolveFetchChain(requested, config)[0];
 }
 
 /** Canonical fallback order for search providers. */
