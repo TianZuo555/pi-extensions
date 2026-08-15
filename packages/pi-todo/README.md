@@ -71,5 +71,5 @@ the switch survive.
 ## Tests
 
 ```bash
-npm test -w pi-tian-todo
+pnpm --filter pi-tian-todo test
 ```

@@ -376,7 +376,7 @@ Install both sides:
 
 ```bash
 pi install npm:pi-tian-vscode-bridge
-npm run package:vscode -w pi-tian-vscode-bridge
+pnpm --filter pi-tian-vscode-bridge run package:vscode
 code --install-extension packages/pi-vscode-bridge/pi-tian-vscode-bridge-0.1.0.vsix
 ```
 
@@ -400,7 +400,7 @@ Use `/goal pause`, `/goal resume`, `/goal clear`, or `/goal --budget 50000
 <objective>` to manage it. See [packages/pi-goal](packages/pi-goal/README.md)
 for the full lifecycle and Codex design mapping.
 
-The repository is an npm workspace with one publishable package per extension:
+The repository is a pnpm workspace with one publishable package per extension:
 
 | Workspace | npm package |
 |-----------|-------------|
@@ -422,16 +422,16 @@ Install dependencies, typecheck every workspace, run the commit and
 managed-terminal suites, and inspect publishable tarballs:
 
 ```bash
-npm install
-npm run typecheck
-npm run check -w pi-tian-background-terminals
-npm test -w pi-tian-background-terminals
-npm test -w pi-tian-commit
-npm test -w pi-tian-edit-safe
-npm test -w pi-tian-subagents
-npm test -w pi-tian-compact-output
-npm test -w pi-tian-goal
-npm run pack:check
+pnpm install
+pnpm run typecheck
+pnpm --filter pi-tian-background-terminals run check
+pnpm --filter pi-tian-background-terminals test
+pnpm --filter pi-tian-commit test
+pnpm --filter pi-tian-edit-safe test
+pnpm --filter pi-tian-subagents test
+pnpm --filter pi-tian-compact-output test
+pnpm --filter pi-tian-goal test
+pnpm run pack:check
 ```
 
 Test a workspace directly:
@@ -463,27 +463,27 @@ published with [npm provenance](https://docs.npmjs.com/generating-provenance-sta
 
 Requirements:
 
-- Add an `NPM_TOKEN` repository secret (an npm **Automation** access token with
-  publish rights) under *Settings → Secrets and variables → Actions*.
+- Publishing uses [OIDC trusted publishing](https://docs.npmjs.com/trusted-publishers/) —
+  configure a trusted publisher for each package pointing at this repository and
+  the `publish.yml` workflow; no npm token secret is needed.
 - The workflow can also be triggered manually via *Actions → Publish → Run
   workflow*, with an optional **dry-run** toggle that runs `npm publish
   --dry-run` without releasing.
 
 ### Manual
 
-After logging in to npm, publish each workspace independently:
+After logging in to npm, publish each workspace independently with pnpm:
 
 ```bash
-npm publish --workspace packages/pi-repo-model
-npm publish --workspace packages/pi-repo-skills
-npm publish --workspace packages/pi-commit
-npm publish --workspace packages/pi-token-speed
-npm publish --workspace packages/pi-image-cache
-npm publish --workspace packages/pi-ask-user
-npm publish --workspace packages/pi-usage
-npm publish --workspace packages/pi-background-terminals
-npm publish --workspace packages/pi-goal
-npm publish --workspace packages/pi-vscode-bridge
+pnpm --filter pi-tian-repo-model publish --access public --no-git-checks
+pnpm --filter pi-tian-repo-skills publish --access public --no-git-checks
+pnpm --filter pi-tian-commit publish --access public --no-git-checks
+pnpm --filter pi-tian-token-speed publish --access public --no-git-checks
+pnpm --filter pi-tian-image-cache publish --access public --no-git-checks
+pnpm --filter pi-tian-ask-user publish --access public --no-git-checks
+pnpm --filter pi-tian-usage publish --access public --no-git-checks
+pnpm --filter pi-tian-background-terminals publish --access public --no-git-checks
+pnpm --filter pi-tian-goal publish --access public --no-git-checks
 ```
 
 Version and publish only the package that changed, or bump them all together for

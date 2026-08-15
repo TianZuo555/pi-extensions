@@ -93,6 +93,6 @@ pi -e ./packages/pi-commit
 From the repository root:
 
 ```bash
-npm run typecheck
-npm test -w pi-tian-commit
+pnpm run typecheck
+pnpm --filter pi-tian-commit test
 ```

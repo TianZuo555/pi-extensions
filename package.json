@@ -3,9 +3,7 @@
   "version": "0.1.0",
   "description": "A collection of extensions for the pi coding agent: per-repository defaults, skill toggles, commits, token speed, and more.",
   "type": "module",
-  "workspaces": [
-    "packages/*"
-  ],
+  "packageManager": "pnpm@11.21.0",
   "keywords": [
     "pi",
     "pi-package",
@@ -44,24 +42,24 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "check": "npm run check --workspaces --if-present",
-    "test": "npm run test:usage && npm test --workspaces --if-present",
+    "check": "pnpm -r run check",
+    "test": "pnpm run test:usage && pnpm -r test",
     "test:usage": "node --test tests/pi-usage-providers.test.mjs",
-    "test:ask-user": "npm test -w pi-tian-ask-user",
-    "test:commit": "npm test -w pi-tian-commit",
-    "test:edit-safe": "npm test -w pi-tian-edit-safe",
-    "test:repo-model": "npm test -w pi-tian-repo-model",
-    "test:repo-skills": "npm test -w pi-tian-repo-skills",
-    "test:todo": "npm test -w pi-tian-todo",
-    "test:token-speed": "npm test -w pi-tian-token-speed",
-    "test:subagents": "npm test -w pi-tian-subagents",
-    "test:compact-output": "npm test -w pi-tian-compact-output",
-    "test:goal": "npm test -w pi-tian-goal",
-    "test:image-cache": "npm test -w pi-tian-image-cache",
-    "test:background-terminals": "npm test -w pi-tian-background-terminals",
-    "test:vscode-bridge": "npm test -w pi-tian-vscode-bridge",
-    "test:web-search": "npm test -w pi-tian-web-search",
-    "pack:check": "npm pack --dry-run --workspaces"
+    "test:ask-user": "pnpm --filter pi-tian-ask-user test",
+    "test:commit": "pnpm --filter pi-tian-commit test",
+    "test:edit-safe": "pnpm --filter pi-tian-edit-safe test",
+    "test:repo-model": "pnpm --filter pi-tian-repo-model test",
+    "test:repo-skills": "pnpm --filter pi-tian-repo-skills test",
+    "test:todo": "pnpm --filter pi-tian-todo test",
+    "test:token-speed": "pnpm --filter pi-tian-token-speed test",
+    "test:subagents": "pnpm --filter pi-tian-subagents test",
+    "test:compact-output": "pnpm --filter pi-tian-compact-output test",
+    "test:goal": "pnpm --filter pi-tian-goal test",
+    "test:image-cache": "pnpm --filter pi-tian-image-cache test",
+    "test:background-terminals": "pnpm --filter pi-tian-background-terminals test",
+    "test:vscode-bridge": "pnpm --filter pi-tian-vscode-bridge test",
+    "test:web-search": "pnpm --filter pi-tian-web-search test",
+    "pack:check": "pnpm -r pack --dry-run"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
@@ -74,9 +72,7 @@
     "@earendil-works/pi-coding-agent": "^0.83.0",
     "@earendil-works/pi-tui": "^0.83.0",
     "@types/node": "^26.0.0",
+    "typebox": "^1.3.7",
     "typescript": "^7.0.0"
-  },
-  "overrides": {
-    "brace-expansion": "^5.0.8"
   }
 }

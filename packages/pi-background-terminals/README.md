@@ -161,10 +161,10 @@ This workspace pins Effect `4.0.0-beta.101` and uses TypeScript 7 (`tsgo`), so
 it is checked in isolation:
 
 ```bash
-npm install -w pi-tian-background-terminals
+pnpm install --filter pi-tian-background-terminals
 cd packages/pi-background-terminals
-npm run check
-npm test
+pnpm run check
+pnpm test
 ```
 
 ## Credits

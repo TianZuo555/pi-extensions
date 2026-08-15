@@ -355,10 +355,10 @@ Update these existing files surgically:
 
 - Root `package.json`
   - Add `extensions/compact-output.ts` to the aggregate Pi extension list.
-  - Add the new npm workspace automatically through the existing `packages/*` pattern.
+  - The new pnpm workspace is discovered automatically through the existing `packages/*` pattern in `pnpm-workspace.yaml`.
   - Add `test:compact-output` if root scripts expose per-package tests.
   - Update the Pi development dependency from 0.80 to `^0.83.0` so tests use the supported runtime shape.
-- `package-lock.json`
+- `pnpm-lock.yaml`
   - Synchronize the new workspace and dependency version.
 - `.github/workflows/publish.yml`
   - Add a `pi-tian-compact-output` test step before publishing.
@@ -380,16 +380,16 @@ Update these existing files surgically:
 Run the full relevant checks:
 
 ```bash
-npm install
-npm run typecheck
-npm run check -w pi-tian-background-terminals
-npm test -w pi-tian-compact-output
-npm test -w pi-tian-background-terminals
-npm test -w pi-tian-ask-user
-npm test -w pi-tian-commit
-npm test -w pi-tian-edit-safe
-npm test -w pi-tian-subagents
-npm run pack:check
+pnpm install
+pnpm run typecheck
+pnpm --filter pi-tian-background-terminals run check
+pnpm --filter pi-tian-compact-output test
+pnpm --filter pi-tian-background-terminals test
+pnpm --filter pi-tian-ask-user test
+pnpm --filter pi-tian-commit test
+pnpm --filter pi-tian-edit-safe test
+pnpm --filter pi-tian-subagents test
+pnpm run pack:check
 ```
 
 Then smoke-test the extension without installing it:

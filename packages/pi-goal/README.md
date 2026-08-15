@@ -131,14 +131,14 @@ as `pi-background-terminals`) for its internal orchestration:
 - Synchronous TUI renderers and prompt builders stay outside the runtime.
 
 Effect-aware tooling matches the established repository pattern: package-local
-`tsconfig.json` with the `@effect/language-service` plugin, `npm run check -w
-pi-tian-goal` (`tsc --noEmit -p .`), and root typecheck exclusions. The shared
+`tsconfig.json` with the `@effect/language-service` plugin, `pnpm --filter
+pi-tian-goal run check` (`tsc --noEmit -p .`), and root typecheck exclusions. The shared
 `effect-tsgo patch` prepare step remains single-owned by
 `pi-background-terminals`; duplicating it across workspaces races on the same
-TypeScript binary during `npm install`.
+TypeScript binary during `pnpm install`.
 
 ## Tests
 
 ```bash
-npm test -w pi-tian-goal
+pnpm --filter pi-tian-goal test
 ```

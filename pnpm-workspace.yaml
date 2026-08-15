@@ -1,0 +1,12 @@
+packages:
+  - "packages/*"
+
+overrides:
+  brace-expansion: ^5.0.8
+
+# Dependencies of the pi runtime whose install scripts npm ran automatically;
+# pnpm 11 denies dependency build scripts unless explicitly allowed here.
+allowBuilds:
+  "@google/genai": true
+  msgpackr-extract: true
+  protobufjs: true

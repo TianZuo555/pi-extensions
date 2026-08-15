@@ -8,7 +8,7 @@ Install the pi extension and the VS Code companion, then attach once per session
 
 ```bash
 pi install npm:pi-tian-vscode-bridge
-npm run package:vscode -w pi-tian-vscode-bridge
+pnpm --filter pi-tian-vscode-bridge run package:vscode
 code --install-extension packages/pi-vscode-bridge/pi-tian-vscode-bridge-0.1.0.vsix
 ```
 

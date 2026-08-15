@@ -156,8 +156,8 @@ Patch artifacts are written with `0600` files inside `0700` directories. Each pa
 From the monorepo:
 
 ```bash
-npm run check -w pi-tian-subagents
-npm test -w pi-tian-subagents
+pnpm --filter pi-tian-subagents run check
+pnpm --filter pi-tian-subagents test
 pi -e ./packages/pi-subagents
 ```
 

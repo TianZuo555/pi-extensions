@@ -98,8 +98,8 @@ PI_EDIT_SAFE_DISABLE=1 pi   # falls back to the built-in edit
 ## Tests and A/B bench
 
 ```bash
-npm test -w pi-tian-edit-safe    # 45 unit tests (Node's built-in runner)
-npm run bench -w pi-tian-edit-safe
+pnpm --filter pi-tian-edit-safe test    # 45 unit tests (Node's built-in runner)
+pnpm --filter pi-tian-edit-safe run bench
 ```
 
 The bench imports pi's **actual shipped** `edit-diff.js` functions and composes
