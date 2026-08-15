@@ -46,11 +46,14 @@ test("searchOpenAI parses JSON Responses API output with citations", async () =>
       ],
     };
 
-    globalThis.fetch = async () =>
-      new Response(JSON.stringify(mockOutput), {
+    globalThis.fetch = async (_input, init) => {
+      const body = JSON.parse(String(init?.body)) as { store?: unknown };
+      assert.equal(body.store, false);
+      return new Response(JSON.stringify(mockOutput), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       });
+    };
 
     const res = await searchOpenAI("node 26 release");
     assert.equal(res.provider, "openai");

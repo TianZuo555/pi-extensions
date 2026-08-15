@@ -227,6 +227,7 @@ export async function searchOpenAI(
 
   const body: Record<string, unknown> = {
     model: auth.model,
+    store: false,
     instructions: auth.systemPrompt,
     input: [
       {
