@@ -28,7 +28,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@v6
 
       - name: Setup Node
         uses: actions/setup-node@v7
@@ -63,7 +63,7 @@ jobs:
 
             name=$(node -p "require('./$dir/package.json').name")
             version=$(node -p "require('./$dir/package.json').version")
-            private=$(node -p "require('./$dir/package.json').private === true")
+            private=$(node -p "Boolean(require('./$dir/package.json').private)")
 
             if [ "$private" = "true" ]; then
               echo "⏭  $name is private, skipping"
