@@ -37,12 +37,15 @@
       "extensions/subagents.ts",
       "extensions/compact-output.ts",
       "extensions/goal.ts",
+      "extensions/todo.ts",
       "extensions/vscode-bridge.ts",
       "extensions/web-search.ts"
     ]
   },
   "scripts": {
     "typecheck": "tsc --noEmit",
+    "check": "npm run check --workspaces --if-present",
+    "test": "npm run test:usage && npm test --workspaces --if-present",
     "test:usage": "node --test tests/pi-usage-providers.test.mjs",
     "test:ask-user": "npm test -w pi-tian-ask-user",
     "test:commit": "npm test -w pi-tian-commit",
@@ -54,6 +57,9 @@
     "test:subagents": "npm test -w pi-tian-subagents",
     "test:compact-output": "npm test -w pi-tian-compact-output",
     "test:goal": "npm test -w pi-tian-goal",
+    "test:image-cache": "npm test -w pi-tian-image-cache",
+    "test:background-terminals": "npm test -w pi-tian-background-terminals",
+    "test:vscode-bridge": "npm test -w pi-tian-vscode-bridge",
     "test:web-search": "npm test -w pi-tian-web-search",
     "pack:check": "npm pack --dry-run --workspaces"
   },

@@ -40,92 +40,14 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Typecheck
+      - name: Typecheck monorepo
         run: npm run typecheck
 
-      - name: Typecheck background terminals
-        run: npm run check -w pi-tian-background-terminals
+      - name: Typecheck Effect packages
+        run: npm run check
 
-      - name: Typecheck commit extension
-        run: npm run check -w pi-tian-commit
-
-      - name: Typecheck goal extension
-        run: npm run check -w pi-tian-goal
-
-      - name: Typecheck image-cache extension
-        run: npm run check -w pi-tian-image-cache
-
-      - name: Typecheck repo-model extension
-        run: npm run check -w pi-tian-repo-model
-
-      - name: Typecheck repo-skills extension
-        run: npm run check -w pi-tian-repo-skills
-
-      - name: Typecheck subagents extension
-        run: npm run check -w pi-tian-subagents
-
-      - name: Typecheck todo extension
-        run: npm run check -w pi-tian-todo
-
-      - name: Typecheck token-speed extension
-        run: npm run check -w pi-tian-token-speed
-
-      - name: Typecheck usage extension
-        run: npm run check -w pi-tian-usage
-
-      - name: Typecheck vscode-bridge extension
-        run: npm run check -w pi-tian-vscode-bridge
-
-      - name: Typecheck web-search extension
-        run: npm run check -w pi-tian-web-search
-
-      - name: Test usage providers (repo-level)
-        run: npm run test:usage
-
-      - name: Test usage extension
-        run: npm test -w pi-tian-usage
-
-      - name: Test background terminals
-        run: npm test -w pi-tian-background-terminals
-
-      - name: Test ask-user extension
-        run: npm test -w pi-tian-ask-user
-
-      - name: Test commit extension
-        run: npm test -w pi-tian-commit
-
-      - name: Test edit-safe extension
-        run: npm test -w pi-tian-edit-safe
-
-      - name: Test repo-model extension
-        run: npm test -w pi-tian-repo-model
-
-      - name: Test repo-skills extension
-        run: npm test -w pi-tian-repo-skills
-
-      - name: Test subagents extension
-        run: npm test -w pi-tian-subagents
-
-      - name: Test compact-output extension
-        run: npm test -w pi-tian-compact-output
-
-      - name: Test goal extension
-        run: npm test -w pi-tian-goal
-
-      - name: Test image-cache extension
-        run: npm test -w pi-tian-image-cache
-
-      - name: Test todo extension
-        run: npm test -w pi-tian-todo
-
-      - name: Test token-speed extension
-        run: npm test -w pi-tian-token-speed
-
-      - name: Test vscode-bridge extension
-        run: npm test -w pi-tian-vscode-bridge
-
-      - name: Test web-search extension
-        run: npm test -w pi-tian-web-search
+      - name: Run tests
+        run: npm test
 
       - name: Publish changed packages
         env:
