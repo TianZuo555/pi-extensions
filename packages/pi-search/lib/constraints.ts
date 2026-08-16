@@ -12,22 +12,28 @@
  *   glob               `*.ts`, `src/**\/*.cc`, `{src,lib}/**`
  *
  * A bare filename must become `**\/main.rs`, because a rooted `main.rs` glob
- * only matches at the top level and would silently drop nested hits.
+ * only matches at the top level and would silently drop nested hits. A token
+ * whose last segment has no dot (`Dockerfile`, `src/LICENSE`) is ambiguous
+ * between an extensionless file and a directory; it carries both readings so
+ * neither can silently match nothing. External absolute or ~/ roots are the
+ * one place a stat is allowed: they name a concrete location, and the wrong
+ * guess would make rg fail to start at all.
  */
 
+import { statSync } from "node:fs";
 import * as nodePath from "node:path";
 
 /** Characters that make a token a glob rather than a literal path. */
 const GLOB_CHARS = /[*?[\]{}]/;
 
-export type ConstraintKind = "directory" | "filename" | "glob";
+export type ConstraintKind = "directory" | "filename" | "glob" | "ambiguous";
 
 export interface ParsedConstraint {
   readonly kind: ConstraintKind;
   /** The token as written by the model, trimmed. */
   readonly raw: string;
-  /** Glob suitable for `rg --glob` / `fd --glob`, without negation. */
-  readonly glob: string;
+  /** Globs suitable for `rg --glob` / `fd --glob`, without negation. */
+  readonly globs: readonly string[];
 }
 
 /**
@@ -83,26 +89,31 @@ export function parseConstraint(token: string): ParsedConstraint | undefined {
   if (raw.length === 0) return undefined;
 
   if (GLOB_CHARS.test(raw)) {
-    return { kind: "glob", raw, glob: raw };
+    return { kind: "glob", raw, globs: [raw] };
   }
 
   if (raw.endsWith("/")) {
     const dir = raw.replace(/\/+$/, "");
     // Both the directory itself and its contents; rg matches files only, but
     // fd also lists directories and would otherwise keep the bare dir entry.
-    return { kind: "directory", raw, glob: `${dir}/**` };
+    return { kind: "directory", raw, globs: [`${dir}/**`] };
   }
 
-  // A dot in the last segment means a filename; anything else is a directory
-  // the model wrote without a trailing slash (`src`, `packages/pi-search`).
+  // A dot in the last segment means a filename.
   const lastSegment = raw.slice(raw.lastIndexOf("/") + 1);
   if (lastSegment.includes(".")) {
     // Rooted when the model gave a path, any-depth when it gave a bare name.
     const glob = raw.includes("/") ? raw : `**/${raw}`;
-    return { kind: "filename", raw, glob };
+    return { kind: "filename", raw, globs: [glob] };
   }
 
-  return { kind: "directory", raw, glob: `${raw}/**` };
+  // No dot in the last segment: `Dockerfile`, `LICENSE`, `Makefile` are
+  // files, while `src`, `packages/pi-search` are directories written without
+  // a trailing slash. Without touching the filesystem both readings are
+  // plausible, so emit both — a directory-only glob would silently return
+  // nothing for every extensionless file.
+  const fileGlob = raw.includes("/") ? raw : `**/${raw}`;
+  return { kind: "ambiguous", raw, globs: [fileGlob, `${raw}/**`] };
 }
 
 export interface ConstraintPlan {
@@ -135,6 +146,24 @@ function rootBeforeSeparator(raw: string, separator: number): string {
 }
 
 /** Turn one absolute or ~/ file/glob into a search root plus relative glob. */
+function expandHome(raw: string): string {
+  if (!raw.startsWith("~")) return raw;
+  return nodePath.join(process.env.HOME ?? "", raw.slice(1));
+}
+
+/**
+ * True when an external constraint is known to be a file. Only a stat can
+ * settle `~/notes` or `/etc/hosts`; anything unresolvable keeps the directory
+ * reading, so rg reports the bad root instead of silently matching nothing.
+ */
+function isExternalFile(raw: string): boolean {
+  try {
+    return !statSync(expandHome(raw)).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 function planExternalConstraint(
   constraint: ParsedConstraint,
 ): { searchRoot: string; include: readonly string[] } {
@@ -144,7 +173,12 @@ function planExternalConstraint(
     return { searchRoot: trimmed.length > 0 ? trimmed : raw, include: [] };
   }
 
-  if (constraint.kind === "filename") {
+  if (constraint.kind === "filename" || constraint.kind === "ambiguous") {
+    // An ambiguous external token is a file only when the filesystem says so;
+    // otherwise it keeps the directory reading (root = the path itself).
+    if (constraint.kind === "ambiguous" && !isExternalFile(raw)) {
+      return { searchRoot: raw, include: [] };
+    }
     const separator = lastSeparatorIndex(raw);
     return {
       searchRoot: rootBeforeSeparator(raw, separator),
@@ -181,7 +215,9 @@ export function planConstraints(
     .map(parseConstraint)
     .filter((c): c is ParsedConstraint => c !== undefined);
 
-  const excludeGlobs = excluded.map((c) => `!${c.glob}`);
+  const excludeGlobs = excluded.flatMap((c) =>
+    c.globs.map((glob) => `!${glob}`)
+  );
   const external = included.filter((constraint) =>
     isExternalPath(constraint.raw)
   );
@@ -203,7 +239,7 @@ export function planConstraints(
   }
 
   return {
-    include: included.map((c) => c.glob),
+    include: included.flatMap((c) => c.globs),
     exclude: excludeGlobs,
   };
 }

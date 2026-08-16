@@ -236,6 +236,82 @@ test("grep returns absolute paths for external constraints", { skip: !hasRg }, a
   }
 });
 
+test("grep matches extensionless filenames at any depth", {
+  skip: !hasRg,
+}, async () => {
+  const tree = mkdtempSync(path.join(tmpdir(), "pi-search-ext-"));
+  try {
+    writeFileSync(path.join(tree, "Dockerfile"), "FROM node\n");
+    mkdirSync(path.join(tree, "sub"), { recursive: true });
+    writeFileSync(path.join(tree, "sub", "LICENSE"), "MIT license\n");
+    const docker = await grep({ cwd: tree, path: "Dockerfile", patterns: ["FROM"] });
+    assert.deepEqual(matchedPaths(docker.matches), ["Dockerfile"]);
+    const license = await grep({ cwd: tree, path: "LICENSE", patterns: ["MIT"] });
+    assert.deepEqual(matchedPaths(license.matches), ["sub/LICENSE"]);
+  } finally {
+    rmSync(tree, { recursive: true, force: true });
+  }
+});
+
+test("grep still searches an extensionless directory by its contents", {
+  skip: !hasRg,
+}, async () => {
+  const tree = mkdtempSync(path.join(tmpdir(), "pi-search-extdir-"));
+  try {
+    mkdirSync(path.join(tree, "vendor"));
+    writeFileSync(path.join(tree, "vendor", "x.ts"), "needle vendor\n");
+    const outcome = await grep({ cwd: tree, path: "vendor" });
+    assert.deepEqual(matchedPaths(outcome.matches), ["vendor/x.ts"]);
+  } finally {
+    rmSync(tree, { recursive: true, force: true });
+  }
+});
+
+test("grep can exclude an extensionless file", { skip: !hasRg }, async () => {
+  const tree = mkdtempSync(path.join(tmpdir(), "pi-search-extexcl-"));
+  try {
+    writeFileSync(path.join(tree, "Dockerfile"), "FROM node\n");
+    writeFileSync(path.join(tree, "app.ts"), "FROM elsewhere\n");
+    const outcome = await grep({
+      cwd: tree,
+      patterns: ["FROM"],
+      exclude: "Dockerfile",
+    });
+    assert.deepEqual(matchedPaths(outcome.matches), ["app.ts"]);
+  } finally {
+    rmSync(tree, { recursive: true, force: true });
+  }
+});
+
+test("grep treats an external extensionless file as a file", {
+  skip: !hasRg,
+}, async () => {
+  const external = mkdtempSync(path.join(tmpdir(), "pi-search-extfile-"));
+  try {
+    const license = path.join(external, "LICENSE");
+    writeFileSync(license, "needle license\n");
+    const outcome = await grep({ path: license });
+    assert.equal(outcome.matches[0]?.path, license);
+  } finally {
+    rmSync(external, { recursive: true, force: true });
+  }
+});
+
+test("find matches extensionless filenames", { skip: !hasFd }, async () => {
+  const tree = mkdtempSync(path.join(tmpdir(), "pi-search-extfind-"));
+  try {
+    writeFileSync(path.join(tree, "Dockerfile"), "x\n");
+    mkdirSync(path.join(tree, "sub"), { recursive: true });
+    writeFileSync(path.join(tree, "sub", "LICENSE"), "x\n");
+    const docker = await find({ cwd: tree, path: "Dockerfile", pattern: "" });
+    assert.deepEqual(docker.files, ["Dockerfile"]);
+    const license = await find({ cwd: tree, path: "LICENSE", pattern: "" });
+    assert.deepEqual(license.files, ["sub/LICENSE"]);
+  } finally {
+    rmSync(tree, { recursive: true, force: true });
+  }
+});
+
 test("grep accepts path strings containing spaces", { skip: !hasRg }, async () => {
   const spaced = mkdtempSync(path.join(tmpdir(), "pi-search-space-"));
   try {

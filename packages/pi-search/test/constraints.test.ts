@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import * as path from "node:path";
 import { test } from "node:test";
 import {
   parseConstraint,
@@ -32,11 +35,38 @@ test("parseConstraint classifies directory prefixes", () => {
   assert.deepEqual(parseConstraint("src/"), {
     kind: "directory",
     raw: "src/",
-    glob: "src/**",
+    globs: ["src/**"],
   });
-  // No trailing slash and no dot: still a directory.
-  assert.equal(parseConstraint("src")?.kind, "directory");
-  assert.equal(parseConstraint("packages/pi-search")?.kind, "directory");
+});
+
+test("a dotless token is ambiguous between file and directory", () => {
+  // `Dockerfile` and `LICENSE` are files without an extension; a
+  // directory-only glob would silently return nothing for them.
+  assert.deepEqual(parseConstraint("Dockerfile"), {
+    kind: "ambiguous",
+    raw: "Dockerfile",
+    globs: ["**/Dockerfile", "Dockerfile/**"],
+  });
+  assert.equal(parseConstraint("src")?.kind, "ambiguous");
+  assert.equal(parseConstraint("packages/pi-search")?.kind, "ambiguous");
+});
+
+test("a nested dotless token stays rooted for the file reading", () => {
+  assert.deepEqual(parseConstraint("src/LICENSE"), {
+    kind: "ambiguous",
+    raw: "src/LICENSE",
+    globs: ["src/LICENSE", "src/LICENSE/**"],
+  });
+});
+
+test("ambiguous tokens emit both readings in the plan", () => {
+  const plan = planConstraints("Dockerfile", undefined);
+  assert.deepEqual(plan.include, ["**/Dockerfile", "Dockerfile/**"]);
+});
+
+test("extensionless excludes negate both readings", () => {
+  const plan = planConstraints(undefined, "Dockerfile");
+  assert.deepEqual(plan.exclude, ["!**/Dockerfile", "!Dockerfile/**"]);
 });
 
 test("parseConstraint makes a bare filename match at any depth", () => {
@@ -44,7 +74,7 @@ test("parseConstraint makes a bare filename match at any depth", () => {
   assert.deepEqual(parseConstraint("main.rs"), {
     kind: "filename",
     raw: "main.rs",
-    glob: "**/main.rs",
+    globs: ["**/main.rs"],
   });
 });
 
@@ -52,20 +82,20 @@ test("parseConstraint keeps an explicit path rooted", () => {
   assert.deepEqual(parseConstraint("src/main.rs"), {
     kind: "filename",
     raw: "src/main.rs",
-    glob: "src/main.rs",
+    globs: ["src/main.rs"],
   });
 });
 
 test("parseConstraint passes globs through untouched", () => {
-  assert.equal(parseConstraint("*.ts")?.glob, "*.ts");
-  assert.equal(parseConstraint("src/**/*.cc")?.glob, "src/**/*.cc");
-  assert.equal(parseConstraint("{src,lib}/**")?.glob, "{src,lib}/**");
+  assert.deepEqual(parseConstraint("*.ts")?.globs, ["*.ts"]);
+  assert.deepEqual(parseConstraint("src/**/*.cc")?.globs, ["src/**/*.cc"]);
+  assert.deepEqual(parseConstraint("{src,lib}/**")?.globs, ["{src,lib}/**"]);
 });
 
 test("parseConstraint tolerates model path prefixes", () => {
-  assert.equal(parseConstraint("!test/")?.glob, "test/**");
-  assert.equal(parseConstraint("! *.min.js")?.glob, "*.min.js");
-  assert.equal(parseConstraint("@src/")?.glob, "src/**");
+  assert.deepEqual(parseConstraint("!test/")?.globs, ["test/**"]);
+  assert.deepEqual(parseConstraint("! *.min.js")?.globs, ["*.min.js"]);
+  assert.deepEqual(parseConstraint("@src/")?.globs, ["src/**"]);
 });
 
 test("parseConstraint rejects empty tokens", () => {
@@ -103,6 +133,36 @@ test("a home-relative glob becomes a root plus relative glob", () => {
   const plan = planConstraints("~/project/src/*.ts", undefined);
   assert.equal(plan.searchRoot, "~/project/src");
   assert.deepEqual(plan.include, ["*.ts"]);
+});
+
+test("an external extensionless file splits into root plus filename", () => {
+  const external = mkdtempSync(path.join(tmpdir(), "pi-search-constraints-"));
+  try {
+    const file = path.join(external, "LICENSE");
+    writeFileSync(file, "MIT\n");
+    const plan = planConstraints(file, undefined);
+    assert.equal(plan.searchRoot, external);
+    assert.deepEqual(plan.include, ["LICENSE"]);
+  } finally {
+    rmSync(external, { recursive: true, force: true });
+  }
+});
+
+test("an external dotless directory keeps the whole path as root", () => {
+  const external = mkdtempSync(path.join(tmpdir(), "pi-search-constraints-"));
+  try {
+    const plan = planConstraints(path.join(external, "notes"), undefined);
+    assert.equal(plan.searchRoot, path.join(external, "notes"));
+    assert.deepEqual(plan.include, []);
+  } finally {
+    rmSync(external, { recursive: true, force: true });
+  }
+});
+
+test("an unresolvable external dotless path defaults to the directory reading", () => {
+  const plan = planConstraints("/definitely/not/here", undefined);
+  assert.equal(plan.searchRoot, "/definitely/not/here");
+  assert.deepEqual(plan.include, []);
 });
 
 test("mixed external roots are rejected by the runtime plan", () => {
