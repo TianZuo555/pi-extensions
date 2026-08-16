@@ -17,7 +17,7 @@ export const MAX_FIND_LIMIT = 1_000;
 export const MAX_CONTEXT_LINES = 20;
 
 const PATH_DSL_DESCRIPTION =
-  "Path constraint. Directory prefix ('src/' or 'src/foo/'), bare filename with extension ('main.rs', matched at any depth), or glob ('*.ts', 'src/**/*.cc', '{src,lib}/**'). Applied to the full repo-relative path. Absolute and ~/ paths outside the workspace also work.";
+  "Path constraint. Directory prefix ('src/' or 'src/foo/'), bare filename ('main.rs' or an extensionless 'Dockerfile', matched at any depth), or glob ('*.ts', 'src/**/*.cc', '{src,lib}/**'). Applied to the full repo-relative path. Absolute and ~/ paths outside the workspace also work.";
 
 const EXCLUDE_DSL_DESCRIPTION =
   "Exclude paths (comma-separated, or an array). Same syntax as path: directory prefix ('test/'), filename ('config.json'), or glob ('*.min.js', '**/*.{rs,go}'). Array elements stay verbatim for paths containing commas. A leading '!' is optional and ignored — both 'test/' and '!test/' work. Example: 'test/,*.min.js'.";
@@ -49,7 +49,7 @@ export const GREP_PARAMETER_DESCRIPTIONS = {
   limit:
     `Maximum matches to return (default ${DEFAULT_GREP_LIMIT}, maximum ${MAX_GREP_LIMIT}).`,
   cursor:
-    "Pagination cursor from a previous grep result. Repeat the same required pattern value with the cursor.",
+    "Pagination cursor from a previous grep result. Send it with the same pattern; a cursor sent with a different query is rejected.",
 };
 
 // --- find --------------------------------------------------------------------
@@ -75,7 +75,7 @@ export const FIND_PARAMETER_DESCRIPTIONS = {
   limit:
     `Maximum files to return (default ${DEFAULT_FIND_LIMIT}, maximum ${MAX_FIND_LIMIT}).`,
   cursor:
-    "Pagination cursor from a previous find result. Repeat the same required pattern value with the cursor.",
+    "Pagination cursor from a previous find result. Send it with the same pattern; a cursor sent with a different query is rejected.",
 };
 
 // --- multi_grep --------------------------------------------------------------
@@ -104,7 +104,7 @@ export const MULTI_GREP_PARAMETER_DESCRIPTIONS = {
   limit:
     `Maximum matches to return (default ${DEFAULT_GREP_LIMIT}, maximum ${MAX_GREP_LIMIT}).`,
   cursor:
-    "Pagination cursor from a previous multi_grep result. Repeat the same required patterns value with the cursor.",
+    "Pagination cursor from a previous multi_grep result. Send it with the same patterns (any order); a cursor sent with a different query is rejected.",
 };
 
 // --- result framing ----------------------------------------------------------
@@ -113,6 +113,10 @@ export const NO_GREP_MATCHES = "No matches found.";
 export const NO_FILES_FOUND = "No files found.";
 export const CURSOR_EXPIRED =
   "That cursor is no longer available (cursors last for the session and are consumed once). Run the search again.";
+
+/** The cursor exists but was sent with a different query than produced it. */
+export const CURSOR_QUERY_MISMATCH =
+  "That cursor belongs to a different query. Send it with its original query to page those results, or drop it to run the new search.";
 
 /**
  * Refuse a wildcard-only pattern. The model reaches for `grep '.*'` to read a

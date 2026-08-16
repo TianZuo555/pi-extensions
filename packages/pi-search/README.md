@@ -74,6 +74,7 @@ so the same parser works for excludes and for paths outside the workspace:
 | `src/`, `src/foo/`, `src` | everything beneath that directory |
 | `main.rs` | that filename **at any depth** (`**/main.rs`) |
 | `src/main.rs` | exactly that path |
+| `Dockerfile`, `src/LICENSE` | a dotless last segment is ambiguous between an extensionless file and a directory, so it matches **either** — the file at any depth or the directory's contents |
 | `*.ts`, `src/**/*.cc`, `{src,lib}/**` | glob |
 
 A leading `!` is optional and ignored, so `exclude: "test/"` and `exclude: "!test/"` behave
@@ -84,8 +85,9 @@ Relative constraints remain rooted at the session cwd, so every returned path ca
 directly to `read`/`edit`, fuzzy matching sees the whole repo-relative path, and excludes use
 the same namespace. A single absolute or `~/` filename/glob outside the workspace is split
 into an external root and a relative include glob; its results are returned as absolute paths.
-Mixing different external roots is rejected with an actionable error, so run one search per
-external root.
+Extensionless external paths are settled with a stat (a file contributes its directory as the
+root, anything else is used as the root itself). Mixing different external roots is rejected
+with an actionable error, so run one search per external root.
 
 ## Binaries
 
@@ -111,7 +113,8 @@ first filesystem entries it encounters. Beyond that:
 - each tool result stays below pi's 50KB ceiling; a page that overflows stores its remainder
   under a cursor, and the follow-up serves the *original* results rather than re-running it
 - cursors are session-scoped, consumed once, bounded to 32, and cannot be replayed across
-  tools
+  tools or against a different query; a mismatched attempt leaves the cursor usable by the
+  original query
 - `.git/` is always excluded (packed objects match almost any pattern by chance)
 - fuzzy `find` caps its candidate walk at 20 000 files and reports when it did
 
@@ -119,7 +122,7 @@ first filesystem entries it encounters. Beyond that:
 
 ```bash
 pnpm --filter pi-tian-search run check   # typecheck
-pnpm --filter pi-tian-search test        # 88 tests
+pnpm --filter pi-tian-search test        # 104 tests
 pi -e ./packages/pi-search               # try it live
 ```
 

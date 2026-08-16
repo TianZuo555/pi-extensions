@@ -18,6 +18,7 @@ import { type Static, Type } from "typebox";
 import {
   candidateCapNotice,
   CURSOR_EXPIRED,
+  CURSOR_QUERY_MISMATCH,
   DEFAULT_FIND_LIMIT,
   DEFAULT_GREP_LIMIT,
   emptyResultHint,
@@ -145,7 +146,7 @@ export interface SearchDetails {
   readonly resultCount: number;
   readonly fileCount: number;
   readonly truncated: boolean;
-  readonly cursorStatus?: "continued" | "expired";
+  readonly cursorStatus?: "continued" | "expired" | "mismatch";
 }
 
 /**
@@ -189,6 +190,7 @@ const PAGE_BODY_MAX_BYTES = DEFAULT_MAX_BYTES - 8 * 1024;
 function paginate(
   runtime: SearchRuntimeInstance,
   tool: string,
+  query: string,
   lines: readonly string[],
   pageSize: number,
 ): PageResult {
@@ -224,7 +226,7 @@ function paginate(
 
   const service = runtime.runSync(SearchRuntime);
   const rest = lines.slice(consumed);
-  const cursorId = service.cursors.save(tool, rest);
+  const cursorId = service.cursors.save(tool, query, rest);
   return {
     text: [
       ...page,
@@ -235,17 +237,54 @@ function paginate(
   };
 }
 
-/** Serve a stored page, or report that the cursor is no longer valid. */
+type CursorResume =
+  | { readonly status: "page"; readonly text: string; readonly hasMore: boolean }
+  | { readonly status: "mismatch" };
+
+/** Serve a stored page, or report why the cursor cannot serve this call. */
 function resumeCursor(
   runtime: SearchRuntimeInstance,
   tool: string,
+  query: string,
   cursorId: string,
   pageSize: number,
-): PageResult | undefined {
+): CursorResume | undefined {
   const service = runtime.runSync(SearchRuntime);
-  const page = service.cursors.take(tool, cursorId);
+  const page = service.cursors.take(tool, query, cursorId);
   if (page === undefined) return undefined;
-  return paginate(runtime, tool, page.lines, pageSize);
+  if (page.status === "query-mismatch") {
+    return { status: "mismatch" };
+  }
+  const served = paginate(runtime, tool, query, page.lines, pageSize);
+  return { status: "page", text: served.text, hasMore: served.hasMore };
+}
+
+/** Frame a cursor follow-up: the served page, or why it was not served. */
+function cursorResult(
+  kind: SearchDetails["kind"],
+  query: string,
+  resumed: CursorResume | undefined,
+) {
+  const text = resumed === undefined
+    ? CURSOR_EXPIRED
+    : resumed.status === "mismatch"
+    ? CURSOR_QUERY_MISMATCH
+    : resumed.text;
+  return {
+    content: [{ type: "text" as const, text }],
+    details: {
+      kind,
+      query,
+      resultCount: 0,
+      fileCount: 0,
+      truncated: resumed?.status === "page" ? resumed.hasMore : false,
+      cursorStatus: resumed === undefined
+        ? "expired"
+        : resumed.status === "mismatch"
+        ? "mismatch"
+        : "continued",
+    } satisfies SearchDetails,
+  };
 }
 
 /** Line budget per page; byte bounding above remains authoritative. */
@@ -270,24 +309,21 @@ export function registerTools(
     signal: AbortSignal | undefined,
     cwd: string,
   ) => {
+    const query = patterns.join(", ");
+    // JSON preserves pattern boundaries, while sorting makes multi_grep order-insensitive.
+    const queryKey = JSON.stringify(
+      tool === "multi_grep" ? [...patterns].sort() : patterns,
+    );
+
     if (params.cursor !== undefined) {
-      const resumed = resumeCursor(runtime, tool, params.cursor, GREP_PAGE_LINES);
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: resumed?.text ?? CURSOR_EXPIRED,
-          },
-        ],
-        details: {
-          kind: tool,
-          query: patterns.join(", "),
-          resultCount: 0,
-          fileCount: 0,
-          truncated: resumed?.hasMore ?? false,
-          cursorStatus: resumed === undefined ? "expired" : "continued",
-        } satisfies SearchDetails,
-      };
+      const resumed = resumeCursor(
+        runtime,
+        tool,
+        queryKey,
+        params.cursor,
+        GREP_PAGE_LINES,
+      );
+      return cursorResult(tool, query, resumed);
     }
 
     const service = runtime.runSync(SearchRuntime);
@@ -322,7 +358,7 @@ export function registerTools(
         ],
         details: {
           kind: tool,
-          query: patterns.join(", "),
+          query,
           resultCount: 0,
           fileCount: 0,
           truncated: false,
@@ -331,7 +367,7 @@ export function registerTools(
     }
 
     const rendered = renderGrepLines(outcome);
-    const body = paginate(runtime, tool, rendered, GREP_PAGE_LINES);
+    const body = paginate(runtime, tool, queryKey, rendered, GREP_PAGE_LINES);
     const fileCount = countFiles(outcome);
     const header = grepResultHeader(matchCount, fileCount);
     const notices = outcome.truncated
@@ -344,7 +380,7 @@ export function registerTools(
       content: [{ type: "text" as const, text }],
       details: {
         kind: tool,
-        query: patterns.join(", "),
+        query,
         resultCount: matchCount,
         fileCount,
         truncated: outcome.truncated || body.hasMore,
@@ -426,25 +462,11 @@ export function registerTools(
         const resumed = resumeCursor(
           runtime,
           "find",
+          params.pattern,
           params.cursor,
           FIND_PAGE_LINES,
         );
-        return {
-          content: [
-            {
-              type: "text" as const,
-              text: resumed?.text ?? CURSOR_EXPIRED,
-            },
-          ],
-          details: {
-            kind: "find",
-            query: params.pattern,
-            resultCount: 0,
-            fileCount: 0,
-            truncated: resumed?.hasMore ?? false,
-            cursorStatus: resumed === undefined ? "expired" : "continued",
-          } satisfies SearchDetails,
-        };
+        return cursorResult("find", params.pattern, resumed);
       }
 
       const service = runtime.runSync(SearchRuntime);
@@ -491,6 +513,7 @@ export function registerTools(
       const body = paginate(
         runtime,
         "find",
+        params.pattern,
         outcome.files,
         FIND_PAGE_LINES,
       );
@@ -596,6 +619,14 @@ function renderSearchResult(
   if (details?.cursorStatus === "expired") {
     return expandedResult(
       theme.fg("warning", "cursor expired"),
+      output,
+      options.expanded,
+      theme,
+    );
+  }
+  if (details?.cursorStatus === "mismatch") {
+    return expandedResult(
+      theme.fg("warning", "cursor belongs to a different query"),
       output,
       options.expanded,
       theme,

@@ -113,6 +113,140 @@ test("find tells the model when the file limit hides results", {
   }
 });
 
+test("grep matches extensionless filenames through the tool", {
+  skip: !hasRg,
+}, async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "pi-search-tool-extless-"));
+  const { runtime, tools } = captureTools();
+  try {
+    writeFileSync(path.join(root, "Dockerfile"), "FROM node:26\n");
+    const grep = tools.get("grep")!;
+    const result = await grep.execute(
+      "grep-extless",
+      { pattern: "FROM", path: "Dockerfile" },
+      undefined,
+      undefined,
+      { cwd: root },
+    );
+    const output = result.content[0];
+    assert.equal(output?.type, "text");
+    assert.match(output?.type === "text" ? output.text : "", /Dockerfile/);
+    assert.equal(result.details?.resultCount, 1);
+  } finally {
+    await runtime.dispose();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a cursor sent with a different query is rejected but not consumed", {
+  skip: !hasRg,
+}, async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "pi-search-tool-mismatch-"));
+  const { runtime, tools } = captureTools();
+  try {
+    // More matches than one grep page holds, so the result issues a cursor.
+    writeFileSync(
+      path.join(root, "many.ts"),
+      Array.from({ length: 200 }, (_, index) => `needle ${index}`).join("\n"),
+    );
+    const grep = tools.get("grep")!;
+    const first = await grep.execute(
+      "grep-mismatch-1",
+      { pattern: "needle", limit: 200 },
+      undefined,
+      undefined,
+      { cwd: root },
+    );
+    const firstText = first.content[0]?.type === "text" ? first.content[0].text : "";
+    const cursor = /cursor="([^"]+)"/.exec(firstText)?.[1];
+    assert.ok(cursor, "expected the overflow notice to issue a cursor");
+
+    const wrong = await grep.execute(
+      "grep-mismatch-2",
+      { pattern: "other", cursor },
+      undefined,
+      undefined,
+      { cwd: root },
+    );
+    const wrongOutput = wrong.content[0];
+    assert.equal(wrongOutput?.type, "text");
+    assert.match(
+      wrongOutput?.type === "text" ? wrongOutput.text : "",
+      /different query/,
+    );
+    assert.doesNotMatch(
+      wrongOutput?.type === "text" ? wrongOutput.text : "",
+      /needle/,
+    );
+    assert.equal(wrong.details?.cursorStatus, "mismatch");
+
+    // The mismatch did not consume the cursor: the original query still pages.
+    const right = await grep.execute(
+      "grep-mismatch-3",
+      { pattern: "needle", cursor },
+      undefined,
+      undefined,
+      { cwd: root },
+    );
+    assert.equal(right.details?.cursorStatus, "continued");
+    const rightOutput = right.content[0];
+    assert.match(
+      rightOutput?.type === "text" ? rightOutput.text : "",
+      /needle 1[2-9][0-9]/,
+    );
+  } finally {
+    await runtime.dispose();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("multi_grep cursor keys preserve pattern boundaries", {
+  skip: !hasRg,
+}, async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "pi-search-tool-query-key-"));
+  const { runtime, tools } = captureTools();
+  try {
+    writeFileSync(
+      path.join(root, "many.ts"),
+      Array.from({ length: 200 }, (_, index) => `a, b ${index}`).join("\n"),
+    );
+    const multiGrep = tools.get("multi_grep")!;
+    const first = await multiGrep.execute(
+      "multi-grep-key-1",
+      { patterns: ["a, b"], limit: 200 },
+      undefined,
+      undefined,
+      { cwd: root },
+    );
+    const firstText = first.content[0]?.type === "text" ? first.content[0].text : "";
+    const cursor = /cursor="([^"]+)"/.exec(firstText)?.[1];
+    assert.ok(cursor, "expected the overflow notice to issue a cursor");
+
+    // Joining with a comma would make these distinct pattern arrays collide.
+    const wrong = await multiGrep.execute(
+      "multi-grep-key-2",
+      { patterns: ["a", "b"], cursor },
+      undefined,
+      undefined,
+      { cwd: root },
+    );
+    assert.equal(wrong.details?.cursorStatus, "mismatch");
+
+    // A mismatch must leave the cursor available to its actual owner.
+    const right = await multiGrep.execute(
+      "multi-grep-key-3",
+      { patterns: ["a, b"], cursor },
+      undefined,
+      undefined,
+      { cwd: root },
+    );
+    assert.equal(right.details?.cursorStatus, "continued");
+  } finally {
+    await runtime.dispose();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("grep pages by bytes and expanded cursor output remains inspectable", {
   skip: !hasRg,
 }, async () => {
