@@ -13,6 +13,7 @@ A small collection of [pi coding agent](https://pi.dev) extensions.
 | **usage** | `/usage` | Codex and Copilot account usage in a menu, plus a footer meter. |
 | **background-terminals** | `/ps`, overrides tool `bash` | One no-stdin bash path: long commands yield to background and notify once. |
 | **edit-safe** | overrides tool `edit` | Stricter `edit`: verbatim splice, ambiguity throws, one `edits[]` shape. |
+| **search** | overrides tools `grep`/`find`, adds `multi_grep` | Bounded ripgrep/fd search with fuzzy paths, glob filters, exclusions, and cursors. |
 | **subagents** | tool `subagent`, `/agents` | Isolated RPC child processes with profiles, background runs, and worktrees. |
 | **compact-output** | (TUI only) | Shows bordered tool status blocks with up to three preview lines; Ctrl+O restores full output; reasoning stays compact. |
 | **goal** | `/goal`, tools `get_goal`/`create_goal`/`update_goal` | Codex-style persistent, evidence-checked objective with bounded automatic continuation. |
@@ -41,6 +42,7 @@ pi install npm:pi-tian-ask-user
 pi install npm:pi-tian-usage
 pi install npm:pi-tian-background-terminals
 pi install npm:pi-tian-edit-safe
+pi install npm:pi-tian-search
 pi install npm:pi-tian-subagents
 pi install npm:pi-tian-compact-output
 pi install npm:pi-tian-goal
@@ -62,6 +64,7 @@ The commands above add these entries to `~/.pi/agent/settings.json`:
     "npm:pi-tian-usage",
     "npm:pi-tian-background-terminals",
     "npm:pi-tian-edit-safe",
+    "npm:pi-tian-search",
     "npm:pi-tian-subagents",
     "npm:pi-tian-compact-output",
     "npm:pi-tian-goal"
@@ -82,6 +85,7 @@ The commands above add these entries to `~/.pi/agent/settings.json`:
 | [pi-tian-usage](https://www.npmjs.com/package/pi-tian-usage) | `pi install npm:pi-tian-usage` |
 | [pi-tian-background-terminals](https://www.npmjs.com/package/pi-tian-background-terminals) | `pi install npm:pi-tian-background-terminals` |
 | [pi-tian-edit-safe](https://www.npmjs.com/package/pi-tian-edit-safe) | `pi install npm:pi-tian-edit-safe` |
+| [pi-tian-search](https://www.npmjs.com/package/pi-tian-search) | `pi install npm:pi-tian-search` |
 | [pi-tian-subagents](https://www.npmjs.com/package/pi-tian-subagents) | `pi install npm:pi-tian-subagents` |
 | [pi-tian-compact-output](https://www.npmjs.com/package/pi-tian-compact-output) | `pi install npm:pi-tian-compact-output` |
 | [pi-tian-goal](https://www.npmjs.com/package/pi-tian-goal) | `pi install npm:pi-tian-goal` |
@@ -349,6 +353,16 @@ Disable without uninstalling: `PI_EDIT_SAFE_DISABLE=1 pi`.
 See [packages/pi-edit-safe](packages/pi-edit-safe/README.md) for the full
 matching order and the A/B bench against pi's real built-in edit.
 
+### search
+
+Overrides pi's built-in `grep` and `find` tools and adds `multi_grep`. Searches
+use ripgrep and fd with smart-case content matching, fuzzy whole-path ranking,
+include/exclude globs, hard output bounds, and session cursors. Install it
+instead of enabling another grep/find override such as FFF.
+
+See [packages/pi-search](packages/pi-search/README.md) for the path DSL and
+search behavior.
+
 ### compact-output
 
 TUI-only presentation extension for Pi **0.83.x**. It does not register or
@@ -357,7 +371,7 @@ override any tools.
 - Consecutive collapsed tool calls share one padded, background-filled area;
   each row starts with `🔧` and the newest row appears first.
 - Press **Ctrl+O** (`app.tools.expand`) to toggle tool rows and assistant reasoning
-  between compact and each original renderer in execution order — FFF search output,
+  between compact and each original renderer in execution order — search output,
   read buffers, edit diffs, background-terminal views, images, errors, and full
   reasoning text return unchanged.
 - While working, the animated loader shows `Thinking: <one-line reasoning preview>`;
@@ -413,6 +427,7 @@ The repository is a pnpm workspace with one publishable package per extension:
 | `packages/pi-usage` | `pi-tian-usage` |
 | `packages/pi-background-terminals` | `pi-tian-background-terminals` |
 | `packages/pi-edit-safe` | `pi-tian-edit-safe` |
+| `packages/pi-search` | `pi-tian-search` |
 | `packages/pi-subagents` | `pi-tian-subagents` |
 | `packages/pi-compact-output` | `pi-tian-compact-output` |
 | `packages/pi-goal` | `pi-tian-goal` |
@@ -428,6 +443,7 @@ pnpm --filter pi-tian-background-terminals run check
 pnpm --filter pi-tian-background-terminals test
 pnpm --filter pi-tian-commit test
 pnpm --filter pi-tian-edit-safe test
+pnpm --filter pi-tian-search test
 pnpm --filter pi-tian-subagents test
 pnpm --filter pi-tian-compact-output test
 pnpm --filter pi-tian-goal test
@@ -483,6 +499,7 @@ pnpm --filter pi-tian-image-cache publish --access public --no-git-checks
 pnpm --filter pi-tian-ask-user publish --access public --no-git-checks
 pnpm --filter pi-tian-usage publish --access public --no-git-checks
 pnpm --filter pi-tian-background-terminals publish --access public --no-git-checks
+pnpm --filter pi-tian-search publish --access public --no-git-checks
 pnpm --filter pi-tian-goal publish --access public --no-git-checks
 ```
 
