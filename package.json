@@ -37,7 +37,8 @@
       "extensions/goal.ts",
       "extensions/todo.ts",
       "extensions/vscode-bridge.ts",
-      "extensions/web-search.ts"
+      "extensions/web-search.ts",
+      "extensions/search.ts"
     ]
   },
   "scripts": {
@@ -59,6 +60,7 @@
     "test:background-terminals": "pnpm --filter pi-tian-background-terminals test",
     "test:vscode-bridge": "pnpm --filter pi-tian-vscode-bridge test",
     "test:web-search": "pnpm --filter pi-tian-web-search test",
+    "test:search": "pnpm --filter pi-tian-search test",
     "pack:check": "pnpm -r pack --dry-run"
   },
   "peerDependencies": {
