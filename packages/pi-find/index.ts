@@ -10,12 +10,19 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { registerTools } from "./lib/tools.ts";
+import { promptAndInstallMissingBinaries } from "./src/installer.ts";
 import { createSearchRuntime } from "./src/runtime.ts";
 
 export default function searchExtension(pi: ExtensionAPI): void {
   const runtime = createSearchRuntime();
 
   registerTools(pi, runtime);
+
+  pi.on("session_start", async (_event, ctx) => {
+    if (ctx.hasUI) {
+      await promptAndInstallMissingBinaries(ctx);
+    }
+  });
 
   pi.on("session_shutdown", async () => {
     try {

@@ -98,8 +98,11 @@ Resolution order per binary, cached for the session:
    case needs no install
 2. anything on `PATH` (`fd` or Debian/Ubuntu's `fdfind`)
 
-If neither has it, the tool fails with the install command for that binary rather than a
-spawn error.
+On session startup in interactive mode, `pi-find` automatically checks for missing binaries
+and prompts the user via `ctx.ui.confirm` with the detected platform install command (Homebrew,
+APT, Pacman, DNF, Zypper, APK, Winget, Chocolatey, or Scoop) to install them seamlessly. If
+neither binary is installed and the prompt is skipped, the tool will fail with the install
+command for that binary rather than a raw spawn error.
 
 ## Bounded by design
 

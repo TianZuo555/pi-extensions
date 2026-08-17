@@ -1,6 +1,6 @@
 {
   "name": "pi-tian-find",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "ripgrep/fd-backed grep, find, and multi_grep tools for the pi coding agent, with a path-constraint DSL, exclude filters, whole-path pattern matching, and cursor pagination.",
   "type": "module",
   "keywords": [
