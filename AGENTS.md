@@ -22,7 +22,7 @@ A collection of extensions for the [pi coding agent](https://pi.dev): per-repo m
 - `tsconfig.json` — root typecheck config covering all extensions and workspace packages.
 - `mise.toml` — tooling pins (Node, pnpm).
 
-Workspace → npm package map: `pi-repo-model`→`pi-tian-repo-model`, `pi-repo-skills`→`pi-tian-repo-skills`, `pi-commit`→`pi-tian-commit`, `pi-token-speed`→`pi-tian-token-speed`, `pi-image-cache`→`pi-tian-image-cache`, `pi-ask-user`→`pi-tian-ask-user`, `pi-usage`→`pi-tian-usage`, `pi-background-terminals`→`pi-tian-background-terminals`, `pi-edit-safe`→`pi-tian-edit-safe`, `pi-search`→`pi-tian-search`, `pi-todo`→`pi-tian-todo`, `pi-subagents`→`pi-tian-subagents`, `pi-compact-output`→`pi-tian-compact-output`, `pi-goal`→`pi-tian-goal`, `pi-vscode-bridge`→`pi-tian-vscode-bridge`, `pi-web-search`→`pi-tian-web-search`.
+Workspace → npm package map: `pi-repo-model`→`pi-tian-repo-model`, `pi-repo-skills`→`pi-tian-repo-skills`, `pi-commit`→`pi-tian-commit`, `pi-token-speed`→`pi-tian-token-speed`, `pi-image-cache`→`pi-tian-image-cache`, `pi-ask-user`→`pi-tian-ask-user`, `pi-usage`→`pi-tian-usage`, `pi-background-terminals`→`pi-tian-background-terminals`, `pi-edit-safe`→`pi-tian-edit-safe`, `pi-find`→`pi-tian-find`, `pi-todo`→`pi-tian-todo`, `pi-subagents`→`pi-tian-subagents`, `pi-compact-output`→`pi-tian-compact-output`, `pi-goal`→`pi-tian-goal`, `pi-vscode-bridge`→`pi-tian-vscode-bridge`, `pi-web-search`→`pi-tian-web-search`.
 
 ## Common tasks
 
@@ -36,7 +36,7 @@ Workspace → npm package map: `pi-repo-model`→`pi-tian-repo-model`, `pi-repo-
     - `pnpm --filter pi-tian-image-cache run check`
     - `pnpm --filter pi-tian-repo-model run check`
     - `pnpm --filter pi-tian-repo-skills run check`
-    - `pnpm --filter pi-tian-search run check`
+    - `pnpm --filter pi-tian-find run check`
     - `pnpm --filter pi-tian-subagents run check`
     - `pnpm --filter pi-tian-todo run check`
     - `pnpm --filter pi-tian-token-speed run check`
@@ -61,14 +61,14 @@ Workspace → npm package map: `pi-repo-model`→`pi-tian-repo-model`, `pi-repo-
     - Test `pi-image-cache`: `pnpm --filter pi-tian-image-cache test`
     - Test `pi-vscode-bridge`: `pnpm --filter pi-tian-vscode-bridge test`; compile its VS Code host with `pnpm --filter pi-tian-vscode-bridge run compile:vscode`
     - Test `pi-web-search`: `pnpm --filter pi-tian-web-search test`
-    - Test `pi-search`: `pnpm --filter pi-tian-search test` (88 cases; the rg/fd integration cases skip when a binary is missing)
+    - Test `pi-find`: `pnpm --filter pi-tian-find test` (108 cases; the rg/fd integration cases skip when a binary is missing)
 - Inspect publishable tarballs: `pnpm run pack:check`
 - Try an extension in a live pi session without installing: `pi -e ./packages/pi-repo-model`
 - Publish one workspace manually (after `npm login`): `pnpm --filter pi-tian-repo-model publish --access public --no-git-checks`
 
 ## Conventions
 
-- When developing extensions, use **Effect v4** for non-trivial async orchestration, mutable session state, subprocess/file lifecycle, or concurrent cleanup — prefer `Effect`/`@effect/*` idioms (typed effects, `Effect.gen`, dependency injection via `Context`, `ManagedRuntime`, `SynchronizedRef`) over raw async/throw patterns. Follow `pi-background-terminals`, `pi-commit`, `pi-goal`, `pi-image-cache`, `pi-repo-model`, `pi-repo-skills`, `pi-search`, `pi-subagents`, `pi-todo`, `pi-token-speed`, `pi-usage`, `pi-vscode-bridge`, and `pi-web-search` as reference implementations.
+- When developing extensions, use **Effect v4** for non-trivial async orchestration, mutable session state, subprocess/file lifecycle, or concurrent cleanup — prefer `Effect`/`@effect/*` idioms (typed effects, `Effect.gen`, dependency injection via `Context`, `ManagedRuntime`, `SynchronizedRef`) over raw async/throw patterns. Follow `pi-background-terminals`, `pi-commit`, `pi-goal`, `pi-image-cache`, `pi-repo-model`, `pi-repo-skills`, `pi-find`, `pi-subagents`, `pi-todo`, `pi-token-speed`, `pi-usage`, `pi-vscode-bridge`, and `pi-web-search` as reference implementations.
 - **TUI width safety:** every custom `Component.render(width)`, `ctx.ui.setWidget` renderer, custom footer/editor, tool renderer, and message renderer must return lines whose ANSI-aware `visibleWidth()` is no greater than `width`. Use `truncateToWidth(line, width, "")` (or width-aware wrapping) after composing prefixes, content, and suffixes; never return fixed-width strings. Exercise renderers at narrow widths such as 42 columns.
 - **Prompt & schema description separation:** Keep all model-facing text (tool `description`, `promptSnippet`, `promptGuidelines`, parameter/schema `description`s, system prompts, continuation prompts, and result formatters) in a dedicated `prompt.ts` module (under `lib/prompt.ts` or `src/prompt.ts`). Do not inline prompt strings or schema descriptions directly into runtime orchestration, tool definitions, or schema definitions in `index.ts` or implementation files. This enables tuning model-facing phrasing, token budgets, and behavioral policies cleanly without touching execution logic or UI rendering.
 - **Intentional non-Effect packages** (linear/sync UI or trivial I/O only): `pi-ask-user`, `pi-compact-output`, `pi-edit-safe`.
