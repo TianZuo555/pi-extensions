@@ -19,7 +19,7 @@ Both commands let you review the generated message(s) in multiline editors, then
 
 - `/commit` reviews and creates one commit.
 - `/commit-all` asks the model for a logical commit plan, grouping whole files into separate commits for independent features or logic changes. Every generated message is reviewed in one editor; use **←/→** at the start or end of a message to move between commits, and **Enter** to advance or finish.
-- **Commit and push** creates all planned commits, then pushes the current branch once. Separate loading indicators remain visible while commits and the push are running. If the branch has no upstream, the push sets it (`--set-upstream`) on the default remote — `origin`, or the only configured remote when `origin` is absent.
+- **Commit and push** creates all planned commits, then pushes the current branch once. Separate loading indicators remain visible while commits and the push are running. Press **Esc** while pushing to stop the push; the local commit(s) are kept. If the branch has no upstream, the push sets it (`--set-upstream`) on the default remote — `origin`, or the only configured remote when `origin` is absent.
 - **Commit only** creates all planned commits with loading indicators and stops there.
 - **Cancel** (or dismissing any prompt) leaves everything staged; for `/commit-all` the staged files stay staged.
 

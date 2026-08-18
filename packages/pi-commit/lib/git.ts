@@ -116,8 +116,9 @@ async function runGit(
   repository: GitRepository,
   args: string[],
   timeout = READ_TIMEOUT_MS,
+  signal?: AbortSignal,
 ): Promise<ExecResult> {
-  return repository.exec("git", args, { cwd: repository.root, timeout });
+  return repository.exec("git", args, { cwd: repository.root, timeout, signal });
 }
 
 async function runGitOrThrow(
@@ -125,8 +126,9 @@ async function runGitOrThrow(
   args: string[],
   action: string,
   timeout = READ_TIMEOUT_MS,
+  signal?: AbortSignal,
 ): Promise<string> {
-  const result = await runGit(repository, args, timeout);
+  const result = await runGit(repository, args, timeout, signal);
   if (result.code !== 0) throw new Error(describeGitFailure(action, result));
   return result.stdout.trimEnd();
 }
@@ -337,8 +339,11 @@ export async function readLatestCommitSummary(repository: GitRepository): Promis
 }
 
 /** Read the configured default remote, preferring "origin". Falls back to "origin". */
-export async function readDefaultRemote(repository: GitRepository): Promise<string> {
-  const result = await runGit(repository, ["remote"]);
+export async function readDefaultRemote(
+  repository: GitRepository,
+  signal?: AbortSignal,
+): Promise<string> {
+  const result = await runGit(repository, ["remote"], READ_TIMEOUT_MS, signal);
   if (result.code === 0) {
     const remotes = result.stdout
       .split("\n")
@@ -350,13 +355,21 @@ export async function readDefaultRemote(repository: GitRepository): Promise<stri
   return "origin";
 }
 
-async function currentBranchHasUpstream(repository: GitRepository): Promise<boolean> {
-  const result = await runGit(repository, [
-    "rev-parse",
-    "--verify",
-    "--quiet",
-    "@{upstream}",
-  ]);
+async function currentBranchHasUpstream(
+  repository: GitRepository,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  const result = await runGit(
+    repository,
+    [
+      "rev-parse",
+      "--verify",
+      "--quiet",
+      "@{upstream}",
+    ],
+    READ_TIMEOUT_MS,
+    signal,
+  );
   return result.code === 0 && result.stdout.trim().length > 0;
 }
 
@@ -367,14 +380,18 @@ async function currentBranchHasUpstream(repository: GitRepository): Promise<bool
  * upstream is configured, pushes with `--set-upstream` to the default remote
  * (origin, or the only configured remote) so the first push establishes tracking.
  */
-export async function pushCurrentBranch(repository: GitRepository): Promise<ExecResult> {
-  if (await currentBranchHasUpstream(repository)) {
-    return runGit(repository, ["push"], MUTATION_TIMEOUT_MS);
+export async function pushCurrentBranch(
+  repository: GitRepository,
+  signal?: AbortSignal,
+): Promise<ExecResult> {
+  if (await currentBranchHasUpstream(repository, signal)) {
+    return runGit(repository, ["push"], MUTATION_TIMEOUT_MS, signal);
   }
-  const remote = await readDefaultRemote(repository);
+  const remote = await readDefaultRemote(repository, signal);
   return runGit(
     repository,
     ["push", "--set-upstream", remote, "HEAD"],
     MUTATION_TIMEOUT_MS,
+    signal,
   );
 }

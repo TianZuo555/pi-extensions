@@ -198,6 +198,30 @@ test("readDefaultRemote prefers origin over other remotes", async (t) => {
   assert.equal(await readDefaultRemote(repository), "origin");
 });
 
+test("pushCurrentBranch forwards its abort signal to Git commands", async (t) => {
+  const directory = await createRepository(t);
+  const controller = new AbortController();
+  const signals: (AbortSignal | undefined)[] = [];
+  const repository = {
+    root: directory,
+    exec: (command: string, args: string[], options?: { signal?: AbortSignal }) => {
+      assert.equal(command, "git");
+      signals.push(options?.signal);
+      if (args[0] === "rev-parse") {
+        return Promise.resolve({ stdout: "refs/remotes/origin/main\n", stderr: "", code: 0, killed: false });
+      }
+      return Promise.resolve({ stdout: "", stderr: "", code: 0, killed: false });
+    },
+  } satisfies { root: string; exec: ExecFunction };
+
+  const result = await pushCurrentBranch(repository, controller.signal);
+
+  assert.equal(result.code, 0);
+  assert.equal(signals.length, 2);
+  assert.equal(signals[0], controller.signal);
+  assert.equal(signals[1], controller.signal);
+});
+
 test("pushCurrentBranch sets upstream on the first push and pushes afterwards", async (t) => {
   const directory = await createRepository(t);
   git(directory, ["branch", "-M", "main"]);

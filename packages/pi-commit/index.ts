@@ -69,6 +69,7 @@ type PlannedCommitRun =
 
 type OperationOutcome<T> =
   | { status: "success"; value: T }
+  | { status: "cancelled" }
   | { status: "error"; error: Error };
 
 function asError(error: unknown): Error {
@@ -87,31 +88,61 @@ function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";
 }
 
-async function runWithLoader<T>(
+async function runLoaderOperation<T>(
   ctx: ExtensionCommandContext,
   message: string,
-  operation: () => Promise<T>,
-): Promise<T> {
+  operation: (signal?: AbortSignal) => Promise<T>,
+  options: { cancellable?: boolean } = { cancellable: false },
+): Promise<OperationOutcome<T>> {
+  const run = async (signal?: AbortSignal): Promise<OperationOutcome<T>> => {
+    try {
+      const value = await operation(signal);
+      return signal?.aborted ? { status: "cancelled" } : { status: "success", value };
+    } catch (error) {
+      if (signal?.aborted || isAbortError(error)) return { status: "cancelled" };
+      return { status: "error", error: asError(error) };
+    }
+  };
+
   if (ctx.mode !== "tui") {
     ctx.ui.setStatus("pi-commit", message);
     try {
-      return await operation();
+      return await run();
     } finally {
       ctx.ui.setStatus("pi-commit", undefined);
     }
   }
 
-  const outcome = await ctx.ui.custom<OperationOutcome<T>>((tui, theme, _keybindings, done) => {
-    const loader = new BorderedLoader(tui, theme, message, { cancellable: false });
-    void operation().then(
-      (value) => done({ status: "success", value }),
-      (error) => done({ status: "error", error: asError(error) }),
-    );
+  return ctx.ui.custom<OperationOutcome<T>>((tui, theme, _keybindings, done) => {
+    const loader = new BorderedLoader(tui, theme, message, options);
+    void run(loader.signal).then(done);
     return loader;
   });
+}
 
-  if (outcome.status === "error") throw outcome.error;
-  return outcome.value;
+async function runWithLoader<T>(
+  ctx: ExtensionCommandContext,
+  message: string,
+  operation: (signal?: AbortSignal) => Promise<T>,
+): Promise<T> {
+  const outcome = await runLoaderOperation(ctx, message, operation);
+  if (outcome.status === "success") return outcome.value;
+  if (outcome.status === "cancelled") throw operationAbortError();
+  throw outcome.error;
+}
+
+async function runCancellableWithLoader<T>(
+  ctx: ExtensionCommandContext,
+  message: string,
+  operation: (signal?: AbortSignal) => Promise<T>,
+): Promise<OperationOutcome<T>> {
+  return runLoaderOperation(ctx, message, operation, { cancellable: true });
+}
+
+function operationAbortError(): Error {
+  const error = new Error("Commit operation was aborted");
+  error.name = "AbortError";
+  return error;
 }
 
 async function generateWithLoader<T>(
@@ -426,12 +457,24 @@ async function runCommitWorkflow(
       }
 
       if (choice === CHOICE_PUSH) {
-        const pushResult = await runWithLoader(ctx, `Pushing ${snapshot.branch}…`, () =>
-          runCommit(runtime, pushCurrentBranchEffect(repository)),
+        const pushOutcome = await runCancellableWithLoader(
+          ctx,
+          `Pushing ${snapshot.branch}…`,
+          (signal) =>
+            runCommit(
+              runtime,
+              pushCurrentBranchEffect(repository, signal),
+              { signal },
+            ),
         );
-        if (pushResult.code !== 0) {
+        if (pushOutcome.status === "cancelled") {
+          ctx.ui.notify(`Push cancelled. Commit ${summary} was created locally.`, "info");
+          return;
+        }
+        if (pushOutcome.status === "error") throw pushOutcome.error;
+        if (pushOutcome.value.code !== 0) {
           ctx.ui.notify(
-            `${describeGitFailure("Pushing commit", pushResult)}\nCommit ${summary} was created locally.`,
+            `${describeGitFailure("Pushing commit", pushOutcome.value)}\nCommit ${summary} was created locally.`,
             "error",
           );
           return;
@@ -485,12 +528,24 @@ async function runCommitWorkflow(
 
     const summaries = plannedRun.summaries.join("; ");
     if (choice === CHOICE_PUSH) {
-      const pushResult = await runWithLoader(ctx, `Pushing ${snapshot.branch}…`, () =>
-          runCommit(runtime, pushCurrentBranchEffect(repository)),
-        );
-      if (pushResult.code !== 0) {
+      const pushOutcome = await runCancellableWithLoader(
+        ctx,
+        `Pushing ${snapshot.branch}…`,
+        (signal) =>
+          runCommit(
+            runtime,
+            pushCurrentBranchEffect(repository, signal),
+            { signal },
+          ),
+      );
+      if (pushOutcome.status === "cancelled") {
+        ctx.ui.notify(`Push cancelled. Commits ${summaries} were created locally.`, "info");
+        return;
+      }
+      if (pushOutcome.status === "error") throw pushOutcome.error;
+      if (pushOutcome.value.code !== 0) {
         ctx.ui.notify(
-          `${describeGitFailure("Pushing commits", pushResult)}\nCommits ${summaries} were created locally.`,
+          `${describeGitFailure("Pushing commits", pushOutcome.value)}\nCommits ${summaries} were created locally.`,
           "error",
         );
         return;

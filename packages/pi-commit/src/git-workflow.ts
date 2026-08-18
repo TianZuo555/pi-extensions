@@ -113,8 +113,9 @@ export function readLatestCommitSummaryEffect(
 
 export function pushCurrentBranchEffect(
   repository: GitRepository,
+  signal?: AbortSignal,
 ): Effect.Effect<ExecResult, GitWorkflowError> {
-  return tryGit("Pushing commit", () => pushCurrentBranch(repository));
+  return tryGit("Pushing commit", () => pushCurrentBranch(repository, signal));
 }
 
 export function restageAfterPlanFailureEffect(
