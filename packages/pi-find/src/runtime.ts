@@ -1,27 +1,23 @@
 /**
- * SearchRuntime — Effect v4 service backing grep, find, and multi_grep.
+ * SearchRuntime — Effect v4 service backing grep and find.
  *
  * Responsibilities: turn a validated tool call into rg/fd arguments, stream the
- * result under a hard match/file cap, and render bounded output. Pagination
- * cursors are held here for the session, so a follow-up page shows the results
- * of the original search rather than re-running it against a tree that may have
- * changed in between.
+ * result under a hard match/file cap, and render bounded output.
  */
 
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import * as path from "node:path";
 import { Cause, Context, Effect, Exit, Layer, ManagedRuntime, Result } from "effect";
 import { minimatch } from "minimatch";
 import {
   planConstraints,
-  toGlobArgs,
   type ConstraintPlan,
 } from "../lib/constraints.ts";
-import { createCursorStore, type CursorStore } from "../lib/cursor.ts";
 import { classifyPattern, isSmartCaseInsensitive } from "../lib/pattern.ts";
 import {
+  EMPTY_PATTERN_ERROR,
   FIND_WILDCARD_ONLY_ERROR,
-  MIXED_EXTERNAL_ROOTS_ERROR,
+  MIXED_EXTERNAL_PATH_ERROR,
   WILDCARD_ONLY_ERROR,
 } from "../lib/prompt.ts";
 import { decodeRgEvent, type RgLine } from "../lib/rg-json.ts";
@@ -69,8 +65,6 @@ export interface FindRequest {
 
 export interface FindOutcome {
   readonly files: readonly string[];
-  /** Matches observed while probing one past the requested limit. */
-  readonly totalMatched: number;
   /** True when more query matches existed than the requested limit. */
   readonly limitReached: boolean;
   readonly searchRoot: string;
@@ -80,7 +74,6 @@ export interface FindOutcome {
 export interface SearchRuntimeShape {
   readonly grep: (request: GrepRequest) => Effect.Effect<GrepOutcome, SearchError>;
   readonly find: (request: FindRequest) => Effect.Effect<FindOutcome, SearchError>;
-  readonly cursors: CursorStore;
 }
 
 export class SearchRuntime extends Context.Service<
@@ -88,18 +81,37 @@ export class SearchRuntime extends Context.Service<
   SearchRuntimeShape
 >()("pi-tian-find/SearchRuntime") {}
 
-/** Resolve the search root, honouring ~ and absolute paths. */
+/** Resolve the already-normalized search root against the request cwd. */
 function resolveRoot(cwd: string, plan: ConstraintPlan): string {
   if (plan.searchRoot === undefined) return cwd;
-  const raw = plan.searchRoot;
-  const expanded = raw.startsWith("~")
-    ? path.join(process.env.HOME ?? "", raw.slice(1))
-    : raw;
-  return path.isAbsolute(expanded) ? expanded : path.resolve(cwd, expanded);
+  return path.isAbsolute(plan.searchRoot)
+    ? plan.searchRoot
+    : path.resolve(cwd, plan.searchRoot);
 }
 
 function normalizePath(filePath: string): string {
   return filePath.replaceAll("\\", "/").replace(/^\.\//, "");
+}
+
+const RG_INCLUDE_TYPE = "pifind";
+const SIMPLE_EXTENSION_GLOB = /^\*\.[A-Za-z0-9_+-][A-Za-z0-9_.+-]*$/;
+
+/**
+ * Ripgrep file types preserve ignore rules, unlike positive --glob filters.
+ * Use them only when every include alternative is a simple extension glob;
+ * the combined type is a file-selection hint and client-side matchers remain
+ * authoritative for exact semantics.
+ */
+export function rgTypeGlobs(
+  includeGlobs: readonly string[],
+): readonly string[] | undefined {
+  if (
+    includeGlobs.length === 0 ||
+    !includeGlobs.every((glob) => SIMPLE_EXTENSION_GLOB.test(glob))
+  ) {
+    return undefined;
+  }
+  return [...new Set(includeGlobs)];
 }
 
 function isWithin(base: string, candidate: string): boolean {
@@ -132,10 +144,18 @@ function createSearchScope(cwd: string, plan: ConstraintPlan): SearchScope {
       ? plan.include
       : plan.include.length === 0
       ? [`${prefix}/**`]
-      : plan.include.map((glob) => `${prefix}/${normalizePath(glob)}`);
+      : plan.include.map((glob) => {
+          if (glob.startsWith("/")) {
+            return `/${prefix}/${normalizePath(glob.slice(1))}`;
+          }
+          return `${prefix}/${normalizePath(glob)}`;
+        });
+    const searchDirs = prefix.length === 0
+      ? plan.searchDirs
+      : [prefix];
     return {
       root: cwd,
-      plan: { include, exclude: plan.exclude },
+      plan: { include, exclude: plan.exclude, searchDirs },
       formatPath: normalizePath,
     };
   }
@@ -164,18 +184,21 @@ function normalizeRgPath(filePath: string): string {
 
 function buildRgArgs(
   request: GrepRequest,
-  plan: ConstraintPlan,
   literal: boolean,
+  root: string,
+  searchDirs: readonly string[] | undefined,
+  includeGlobs: readonly string[],
 ): string[] {
   const args = [
     "--json",
     "--line-number",
     "--color=never",
     "--hidden",
-    // .git holds packed objects that match almost any pattern by chance.
-    "--glob",
-    "!.git/",
   ];
+
+  // Like fd, rg normally ignores .gitignore files outside a Git repository.
+  // Preserve the tool's advertised ignore semantics for external/temp trees.
+  if (!isInsideGitRepository(root)) args.push("--no-require-git");
 
   if (request.caseSensitive === true) args.push("--case-sensitive");
   else args.push("--smart-case");
@@ -184,17 +207,27 @@ function buildRgArgs(
     args.push("--context", String(request.context));
   }
 
-  args.push(...toGlobArgs(plan));
+  const typeGlobs = rgTypeGlobs(includeGlobs);
+  for (const glob of typeGlobs ?? []) {
+    args.push("--type-add", `${RG_INCLUDE_TYPE}:${glob}`);
+  }
+  if (typeGlobs !== undefined) args.push("--type", RG_INCLUDE_TYPE);
 
-  // Literal mode covers multi_grep (always literal) and single patterns whose
-  // regex syntax does not compile.
+  // Literal mode covers pattern arrays and single patterns whose regex syntax
+  // does not compile.
   if (literal) args.push("--fixed-strings");
 
   for (const pattern of request.patterns) args.push("--regexp", pattern);
 
-  // `--` then the root: without the separator a pattern starting with `-`
-  // would be read as a flag.
-  args.push("--", ".");
+  // Client-side include matching remains authoritative because positive rg
+  // globs override .gitignore. The custom type above is only a file-selection
+  // hint for simple extension globs. Keep .git as a final engine-level
+  // exclusion because packed objects are both large and likely to match.
+  args.push("--glob", "!.git/");
+
+  // Explicit directory constraints become positional paths. This preserves
+  // ignore-file behavior and lets rg prune traversal like fd does.
+  args.push("--", ...(searchDirs ?? ["."]));
   return args;
 }
 
@@ -207,7 +240,38 @@ function isInsideGitRepository(root: string): boolean {
   }
 }
 
-function buildFdArgs(plan: ConstraintPlan, root: string): string[] {
+function resolveSearchDirs(
+  plan: ConstraintPlan,
+  root: string,
+): readonly string[] | undefined {
+  if (
+    plan.searchDirs.length === 0 ||
+    plan.searchDirs.includes(".") ||
+    plan.searchDirs.includes("")
+  ) {
+    return undefined;
+  }
+
+  const existing: string[] = [];
+  for (const dir of plan.searchDirs) {
+    try {
+      if (statSync(path.resolve(root, dir)).isDirectory()) existing.push(dir);
+    } catch (error) {
+      const code = error instanceof Error && "code" in error
+        ? String((error as NodeJS.ErrnoException).code)
+        : undefined;
+      // Missing paths are valid empty constraints. For permission and other
+      // failures, let the search engine inspect the path and surface its error.
+      if (code !== "ENOENT" && code !== "ENOTDIR") existing.push(dir);
+    }
+  }
+  return existing;
+}
+
+function buildFdArgs(
+  root: string,
+  searchDirs: readonly string[] | undefined,
+): string[] {
   const args = [
     "--type",
     "f",
@@ -223,25 +287,34 @@ function buildFdArgs(plan: ConstraintPlan, root: string): string[] {
   // repository ignore boundaries.
   if (!isInsideGitRepository(root)) args.push("--no-require-git");
 
-  // fd takes globs as --glob plus a pattern, but we need several include globs
-  // at once, so includes are expressed as its --glob pattern list via --and is
-  // unavailable; instead we let fd list candidates and filter includes here.
-  for (const glob of plan.exclude) {
-    // Strip the rg-style leading '!' that fd does not use.
-    args.push("--exclude", glob.replace(/^!/, ""));
+  // User excludes are enforced against root-relative candidate paths after fd
+  // emits them. Forwarding an anchored exclude here is incorrect because fd
+  // rebases --exclude separately under each --search-path.
+
+  // Relative search paths are resolved by fd against --base-directory. Missing
+  // paths were removed above so a typo cannot degrade into a full-root walk.
+  for (const dir of searchDirs ?? []) {
+    args.push("--search-path", dir);
   }
 
   return args;
 }
 
 /**
- * fd cannot apply several positive include globs in one invocation, so use a
- * maintained glob implementation against the normalized relative paths it
- * streams back. A slashless glob such as `*.ts` has basename semantics, just
- * like rg/fd, and therefore matches at any depth.
+ * Directory constraints prune traversal through rg positional paths or fd's
+ * `--search-path`. All include and exclude globs are applied to root-relative
+ * candidate paths here so both engines retain ignore-file behavior and exactly
+ * the same anchoring. A slashless glob such as `*.ts` has basename semantics
+ * and therefore matches at any depth.
  */
 function createGlobMatcher(glob: string): (candidate: string) => boolean {
   const normalizedGlob = glob.replaceAll("\\", "/");
+  if (normalizedGlob.startsWith("/")) {
+    return (candidate) =>
+      minimatch(`/${candidate.replaceAll("\\", "/")}`, normalizedGlob, {
+        dot: true,
+      });
+  }
   const matchBase = !normalizedGlob.includes("/");
   return (candidate) =>
     minimatch(candidate.replaceAll("\\", "/"), normalizedGlob, {
@@ -275,22 +348,30 @@ function createTermMatcher(term: string): (candidate: string) => boolean {
 }
 
 const makeSearchRuntime = Effect.gen(function* () {
-  const cursors = createCursorStore();
-
   const grep = (request: GrepRequest): Effect.Effect<GrepOutcome, SearchError> =>
     Effect.suspend((): Effect.Effect<GrepOutcome, SearchError> => {
-      const plan = planConstraints(request.path, request.exclude);
-      if (plan.hasMixedExternalRoots === true) {
+      if (
+        request.patterns.length === 0 ||
+        request.patterns.some((p) => p.length === 0)
+      ) {
         return Effect.fail(
-          new SearchInputError({ message: MIXED_EXTERNAL_ROOTS_ERROR }),
+          new SearchInputError({ message: EMPTY_PATTERN_ERROR }),
         );
       }
+
+      const planning = planConstraints(request.path, request.exclude, request.cwd);
+      if (planning.kind === "invalid") {
+        return Effect.fail(
+          new SearchInputError({ message: MIXED_EXTERNAL_PATH_ERROR }),
+        );
+      }
+      const plan = planning.plan;
       const scope = createSearchScope(request.cwd, plan);
       const root = scope.root;
       const hasConstraints = plan.include.length + plan.exclude.length > 0 ||
         plan.searchRoot !== undefined;
 
-      // Only single-pattern grep classifies; multi_grep declares literalOnly.
+      // Only single-pattern grep classifies; multi-pattern declares literalOnly.
       // Patterns with regex syntax are tried as regex first. If rg's own
       // parser rejects one, the stream below retries it literally.
       let literal = request.literalOnly;
@@ -304,8 +385,21 @@ const makeSearchRuntime = Effect.gen(function* () {
         literal = classified.mode === "literal";
       }
 
+      const searchDirs = resolveSearchDirs(scope.plan, root);
+      if (searchDirs !== undefined && searchDirs.length === 0) {
+        return Effect.succeed({
+          matches: [],
+          truncated: false,
+          searchRoot: root,
+          hasConstraints,
+        } satisfies GrepOutcome);
+      }
+
+      const includeMatchers = scope.plan.include.map(createGlobMatcher);
+      const excludeMatchers = scope.plan.exclude.map(createGlobMatcher);
       const matches: GrepMatch[] = [];
       const pendingContext: GrepMatch[] = [];
+      const seenEvents = new Set<string>();
       let matchCount = 0;
       let lastAcceptedMatch: GrepMatch | undefined;
 
@@ -313,8 +407,26 @@ const makeSearchRuntime = Effect.gen(function* () {
         const event: RgLine | undefined = decodeRgEvent(line);
         if (event === undefined) return true;
 
+        const relativePath = normalizeRgPath(event.path);
+        if (
+          includeMatchers.length > 0 &&
+          !includeMatchers.some((matcher) => matcher(relativePath))
+        ) {
+          return true;
+        }
+        if (
+          excludeMatchers.length > 0 &&
+          excludeMatchers.some((matcher) => matcher(relativePath))
+        ) {
+          return true;
+        }
+
+        const eventKey = `${relativePath}\0${event.lineNumber}\0${event.kind}`;
+        if (seenEvents.has(eventKey)) return true;
+        seenEvents.add(eventKey);
+
         const decoded: GrepMatch = {
-          path: scope.formatPath(normalizeRgPath(event.path)),
+          path: scope.formatPath(relativePath),
           lineNumber: event.lineNumber,
           text: clipLine(event.text),
           isMatch: event.kind === "match",
@@ -354,7 +466,13 @@ const makeSearchRuntime = Effect.gen(function* () {
       const runRg = (fixedStrings: boolean) =>
         streamLines({
           binary: "rg",
-          args: buildRgArgs(request, scope.plan, fixedStrings),
+          args: buildRgArgs(
+            request,
+            fixedStrings,
+            root,
+            searchDirs,
+            scope.plan.include,
+          ),
           cwd: root,
           onLine,
           signal: request.signal,
@@ -368,6 +486,7 @@ const makeSearchRuntime = Effect.gen(function* () {
           ) {
             matches.length = 0;
             pendingContext.length = 0;
+            seenEvents.clear();
             matchCount = 0;
             lastAcceptedMatch = undefined;
             return runRg(true);
@@ -391,12 +510,13 @@ const makeSearchRuntime = Effect.gen(function* () {
 
   const find = (request: FindRequest): Effect.Effect<FindOutcome, SearchError> =>
     Effect.suspend((): Effect.Effect<FindOutcome, SearchError> => {
-      const plan = planConstraints(request.path, request.exclude);
-      if (plan.hasMixedExternalRoots === true) {
+      const planning = planConstraints(request.path, request.exclude, request.cwd);
+      if (planning.kind === "invalid") {
         return Effect.fail(
-          new SearchInputError({ message: MIXED_EXTERNAL_ROOTS_ERROR }),
+          new SearchInputError({ message: MIXED_EXTERNAL_PATH_ERROR }),
         );
       }
+      const plan = planning.plan;
       const query = request.pattern.trim();
       if (classifyPattern(query).wildcardOnly) {
         return Effect.fail(
@@ -407,16 +527,30 @@ const makeSearchRuntime = Effect.gen(function* () {
       const root = scope.root;
       const hasConstraints = plan.include.length + plan.exclude.length > 0 ||
         plan.searchRoot !== undefined;
+      const fdSearchDirs = resolveSearchDirs(scope.plan, root);
+      if (fdSearchDirs !== undefined && fdSearchDirs.length === 0) {
+        return Effect.succeed({
+          files: [],
+          limitReached: false,
+          searchRoot: root,
+          hasConstraints,
+        } satisfies FindOutcome);
+      }
+
       const includeMatchers = scope.plan.include.map(createGlobMatcher);
+      const excludeMatchers = scope.plan.exclude.map(createGlobMatcher);
       const termMatchers = query
         .split(/\s+/)
         .filter((term) => term.length > 0)
         .map(createTermMatcher);
 
       const files: string[] = [];
+      const seen = new Set<string>();
 
       const onLine = (line: string): boolean => {
-        const relative = line.trim();
+        // readline already removes LF. Preserve legitimate leading/trailing
+        // spaces in filenames while tolerating a CRLF-producing fd wrapper.
+        const relative = line.endsWith("\r") ? line.slice(0, -1) : line;
         if (relative.length === 0) return true;
         if (
           includeMatchers.length > 0 &&
@@ -424,8 +558,16 @@ const makeSearchRuntime = Effect.gen(function* () {
         ) {
           return true;
         }
+        if (
+          excludeMatchers.length > 0 &&
+          excludeMatchers.some((matcher) => matcher(relative))
+        ) {
+          return true;
+        }
         const formatted = scope.formatPath(relative);
         if (!termMatchers.every((matcher) => matcher(formatted))) return true;
+        if (seen.has(formatted)) return true;
+        seen.add(formatted);
         files.push(formatted);
         // Probe one past the requested limit so the result can tell the
         // model that its view is incomplete without walking the rest of
@@ -435,14 +577,13 @@ const makeSearchRuntime = Effect.gen(function* () {
 
       return streamLines({
         binary: "fd",
-        args: buildFdArgs(scope.plan, root),
+        args: buildFdArgs(root, fdSearchDirs),
         cwd: request.cwd,
         onLine,
         signal: request.signal,
       }).pipe(
         Effect.map(() => ({
           files: files.slice(0, request.limit),
-          totalMatched: files.length,
           limitReached: files.length > request.limit,
           searchRoot: root,
           hasConstraints,
@@ -450,7 +591,7 @@ const makeSearchRuntime = Effect.gen(function* () {
       );
     });
 
-  return SearchRuntime.of({ grep, find, cursors });
+  return SearchRuntime.of({ grep, find });
 });
 
 export const SearchRuntimeLive: Layer.Layer<SearchRuntime> = Layer.effect(

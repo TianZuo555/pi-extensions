@@ -3,13 +3,11 @@ import { test } from "node:test";
 import {
   FindParams,
   GrepParams,
-  MultiGrepParams,
   renderGrepLines,
 } from "../lib/tools.ts";
 import {
   FIND_PROMPT_GUIDELINES,
   GREP_PROMPT_GUIDELINES,
-  MULTI_GREP_PROMPT_GUIDELINES,
   tooManyResultsNotice,
 } from "../lib/prompt.ts";
 import type { GrepOutcome } from "../src/runtime.ts";
@@ -75,19 +73,21 @@ test("renders an empty outcome as no lines", () => {
   assert.deepEqual(renderGrepLines(outcome([])), []);
 });
 
-test("the overflow notice names the cursor and the remaining count", () => {
-  const notice = tooManyResultsNotice(20, 57, "grep_c1");
+test("the overflow notice shows shown, total, and remaining count", () => {
+  const notice = tooManyResultsNotice(20, 57, "grep");
   assert.match(notice, /Showing 20 of 57/);
-  assert.match(notice, /37 more lines/);
-  assert.match(notice, /cursor="grep_c1"/);
-  assert.match(notice, /same required query field/);
+  assert.match(notice, /37 more lines omitted/);
+  assert.match(notice, /Narrow the search with path\/exclude/);
+  assert.match(notice, /reduce context/);
+  assert.match(notice, /raising limit does not reveal omitted lines/);
 });
 
 test("the overflow notice uses a singular for one remaining line", () => {
-  assert.match(tooManyResultsNotice(20, 21, "grep_c2"), /1 more line available/);
+  assert.match(tooManyResultsNotice(20, 21, "find"), /1 more line omitted/);
+  assert.doesNotMatch(tooManyResultsNotice(20, 21, "find"), /reduce context/);
 });
 
-test("grep exposes path, exclude, and pagination parameters", () => {
+test("grep exposes pattern (string or array), path, exclude, and limit parameters", () => {
   const keys = Object.keys(GrepParams.properties);
   for (const key of [
     "pattern",
@@ -96,15 +96,23 @@ test("grep exposes path, exclude, and pagination parameters", () => {
     "caseSensitive",
     "context",
     "limit",
-    "cursor",
   ]) {
     assert.ok(keys.includes(key), `grep is missing ${key}`);
   }
+  assert.ok(!keys.includes("cursor"), "grep should not have cursor");
+});
+
+test("grep pattern accepts a string or an array of non-empty strings with bounds", () => {
+  const property = GrepParams.properties.pattern;
+  assert.ok(property, "missing pattern");
+  const json = JSON.stringify(property);
+  assert.equal(json.includes("anyOf"), true, "pattern should accept a union");
+  assert.match(json, /"minLength":\s*1/);
+  assert.match(json, /"maxItems":\s*64/);
 });
 
 test("path and exclude accept a string or an array", () => {
-  // The model writes either shape; rejecting one would be a silent failure.
-  for (const schema of [GrepParams, FindParams, MultiGrepParams]) {
+  for (const schema of [GrepParams, FindParams]) {
     for (const field of ["path", "exclude"] as const) {
       const property = schema.properties[field];
       assert.ok(property, `missing ${field}`);
@@ -117,14 +125,8 @@ test("path and exclude accept a string or an array", () => {
   }
 });
 
-test("multi_grep requires at least one pattern", () => {
-  // minItems lives in the emitted schema rather than the static TypeBox type.
-  const patterns = JSON.stringify(MultiGrepParams.properties.patterns);
-  assert.match(patterns, /"minItems":\s*1/);
-});
-
 test("every parameter carries a description", () => {
-  for (const schema of [GrepParams, FindParams, MultiGrepParams]) {
+  for (const schema of [GrepParams, FindParams]) {
     for (const [name, property] of Object.entries(schema.properties)) {
       const described = JSON.stringify(property).includes("description");
       assert.ok(described, `${name} has no description`);
@@ -133,18 +135,14 @@ test("every parameter carries a description", () => {
 });
 
 test("each tool contributes prompt guidelines", () => {
-  // pi ships its built-in grep/find with none; these are the whole point.
   for (const guidelines of [
     GREP_PROMPT_GUIDELINES,
     FIND_PROMPT_GUIDELINES,
-    MULTI_GREP_PROMPT_GUIDELINES,
   ]) {
     assert.ok(guidelines.length >= 3);
     for (const line of guidelines) {
       assert.ok(line.length > 0);
-      // Guidelines are merged flat into the system prompt, so each has to name
-      // the tool it constrains.
-      assert.match(line, /^(grep|find|multi_grep):/);
+      assert.match(line, /^(grep|find):/);
     }
   }
 });

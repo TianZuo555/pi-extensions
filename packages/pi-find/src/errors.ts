@@ -15,7 +15,7 @@ export class SearchProcessError extends Data.TaggedError("SearchProcessError")<{
   readonly exitCode?: number;
 }> {}
 
-/** The call itself is malformed — a wildcard-only pattern, an unusable cursor. */
+/** The call itself is malformed, such as an empty or wildcard-only pattern. */
 export class SearchInputError extends Data.TaggedError("SearchInputError")<{
   readonly message: string;
 }> {}

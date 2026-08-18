@@ -26,6 +26,10 @@ interface CapturedTool {
     onUpdate: undefined,
     context: { cwd: string },
   ) => Promise<AgentToolResult<SearchDetails>>;
+  readonly renderCall?: (
+    args: any,
+    theme: Theme,
+  ) => Component;
   readonly renderResult?: (
     result: AgentToolResult<unknown>,
     options: { expanded: boolean; isPartial: boolean },
@@ -138,116 +142,33 @@ test("grep matches extensionless filenames through the tool", {
   }
 });
 
-test("a cursor sent with a different query is rejected but not consumed", {
+test("grep supports an array of patterns in one call", {
   skip: !hasRg,
 }, async () => {
-  const root = mkdtempSync(path.join(tmpdir(), "pi-find-tool-mismatch-"));
+  const root = mkdtempSync(path.join(tmpdir(), "pi-find-tool-array-"));
   const { runtime, tools } = captureTools();
   try {
-    // More matches than one grep page holds, so the result issues a cursor.
-    writeFileSync(
-      path.join(root, "many.ts"),
-      Array.from({ length: 200 }, (_, index) => `needle ${index}`).join("\n"),
-    );
+    writeFileSync(path.join(root, "code.ts"), "const user_id = 1;\nconst userId = 2;\n");
     const grep = tools.get("grep")!;
-    const first = await grep.execute(
-      "grep-mismatch-1",
-      { pattern: "needle", limit: 200 },
+    const result = await grep.execute(
+      "grep-array",
+      { pattern: ["user_id", "userId"] },
       undefined,
       undefined,
       { cwd: root },
     );
-    const firstText = first.content[0]?.type === "text" ? first.content[0].text : "";
-    const cursor = /cursor="([^"]+)"/.exec(firstText)?.[1];
-    assert.ok(cursor, "expected the overflow notice to issue a cursor");
-
-    const wrong = await grep.execute(
-      "grep-mismatch-2",
-      { pattern: "other", cursor },
-      undefined,
-      undefined,
-      { cwd: root },
-    );
-    const wrongOutput = wrong.content[0];
-    assert.equal(wrongOutput?.type, "text");
-    assert.match(
-      wrongOutput?.type === "text" ? wrongOutput.text : "",
-      /different query/,
-    );
-    assert.doesNotMatch(
-      wrongOutput?.type === "text" ? wrongOutput.text : "",
-      /needle/,
-    );
-    assert.equal(wrong.details?.cursorStatus, "mismatch");
-
-    // The mismatch did not consume the cursor: the original query still pages.
-    const right = await grep.execute(
-      "grep-mismatch-3",
-      { pattern: "needle", cursor },
-      undefined,
-      undefined,
-      { cwd: root },
-    );
-    assert.equal(right.details?.cursorStatus, "continued");
-    const rightOutput = right.content[0];
-    assert.match(
-      rightOutput?.type === "text" ? rightOutput.text : "",
-      /needle 1[2-9][0-9]/,
-    );
+    const output = result.content[0];
+    assert.equal(output?.type, "text");
+    assert.match(output?.type === "text" ? output.text : "", /user_id/);
+    assert.match(output?.type === "text" ? output.text : "", /userId/);
+    assert.equal(result.details?.resultCount, 2);
   } finally {
     await runtime.dispose();
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test("multi_grep cursor keys preserve pattern boundaries", {
-  skip: !hasRg,
-}, async () => {
-  const root = mkdtempSync(path.join(tmpdir(), "pi-find-tool-query-key-"));
-  const { runtime, tools } = captureTools();
-  try {
-    writeFileSync(
-      path.join(root, "many.ts"),
-      Array.from({ length: 200 }, (_, index) => `a, b ${index}`).join("\n"),
-    );
-    const multiGrep = tools.get("multi_grep")!;
-    const first = await multiGrep.execute(
-      "multi-grep-key-1",
-      { patterns: ["a, b"], limit: 200 },
-      undefined,
-      undefined,
-      { cwd: root },
-    );
-    const firstText = first.content[0]?.type === "text" ? first.content[0].text : "";
-    const cursor = /cursor="([^"]+)"/.exec(firstText)?.[1];
-    assert.ok(cursor, "expected the overflow notice to issue a cursor");
-
-    // Joining with a comma would make these distinct pattern arrays collide.
-    const wrong = await multiGrep.execute(
-      "multi-grep-key-2",
-      { patterns: ["a", "b"], cursor },
-      undefined,
-      undefined,
-      { cwd: root },
-    );
-    assert.equal(wrong.details?.cursorStatus, "mismatch");
-
-    // A mismatch must leave the cursor available to its actual owner.
-    const right = await multiGrep.execute(
-      "multi-grep-key-3",
-      { patterns: ["a, b"], cursor },
-      undefined,
-      undefined,
-      { cwd: root },
-    );
-    assert.equal(right.details?.cursorStatus, "continued");
-  } finally {
-    await runtime.dispose();
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test("grep pages by bytes and expanded cursor output remains inspectable", {
+test("grep pages by bytes and outputs plain truncation notice without cursor", {
   skip: !hasRg,
 }, async () => {
   const root = mkdtempSync(path.join(tmpdir(), "pi-find-tool-page-"));
@@ -259,57 +180,135 @@ test("grep pages by bytes and expanded cursor output remains inspectable", {
       Array.from({ length: 100 }, (_, index) => `needle ${index} ${longSuffix}`).join("\n"),
     );
     const grep = tools.get("grep")!;
-    const first = await grep.execute(
+    const result = await grep.execute(
       "grep-page-1",
       { pattern: "needle", limit: 200 },
       undefined,
       undefined,
       { cwd: root },
     );
-    const firstOutput = first.content[0]?.type === "text" ? first.content[0].text : "";
-    assert.ok(Buffer.byteLength(firstOutput, "utf8") <= DEFAULT_MAX_BYTES);
-    const cursor = /cursor="([^"]+)"/.exec(firstOutput)?.[1];
-    assert.ok(cursor, "expected byte pagination to issue a cursor");
-
-    const second = await grep.execute(
-      "grep-page-2",
-      { pattern: "needle", cursor },
-      undefined,
-      undefined,
-      { cwd: root },
-    );
-    assert.equal(second.details?.cursorStatus, "continued");
-    const renderer = grep.renderResult!;
-    const expanded = renderer(
-      second,
-      { expanded: true, isPartial: false },
-      theme,
-      { isError: false },
-    ).render(42);
-    assert.match(expanded.join("\n"), /continued results/);
-    assert.match(expanded.join("\n"), /needle/);
-    for (const line of expanded) assert.ok(visibleWidth(line) <= 42, line);
+    const output = result.content[0]?.type === "text" ? result.content[0].text : "";
+    assert.ok(Buffer.byteLength(output, "utf8") <= DEFAULT_MAX_BYTES);
+    assert.match(output, /Showing \d+ of \d+ output lines \(\d+ more lines omitted\)/);
+    assert.doesNotMatch(output, /cursor=/);
+    assert.equal(result.details?.truncated, true);
   } finally {
     await runtime.dispose();
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test("the custom renderer presents failures as failures", async () => {
+test("single-element array pattern searches literally without regex or wildcard errors", {
+  skip: !hasRg,
+}, async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "pi-find-tool-single-arr-"));
+  const { runtime, tools } = captureTools();
+  try {
+    writeFileSync(path.join(root, "meta.ts"), "const dotStar = '.*';\nconst call = 'needle(arg';\n");
+    const grep = tools.get("grep")!;
+
+    const dotStarResult = await grep.execute(
+      "grep-dotstar",
+      { pattern: [".*"] },
+      undefined,
+      undefined,
+      { cwd: root },
+    );
+    assert.equal(dotStarResult.details?.resultCount, 1);
+    assert.match(dotStarResult.content[0]?.type === "text" ? dotStarResult.content[0].text : "", /\.\*/);
+
+    const callResult = await grep.execute(
+      "grep-call",
+      { pattern: ["needle(arg"] },
+      undefined,
+      undefined,
+      { cwd: root },
+    );
+    assert.equal(callResult.details?.resultCount, 1);
+    assert.match(callResult.content[0]?.type === "text" ? callResult.content[0].text : "", /needle\(arg/);
+  } finally {
+    await runtime.dispose();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("the custom renderer satisfies TUI width safety at 42 columns", async () => {
   const { runtime, tools } = captureTools();
   try {
     const grep = tools.get("grep")!;
-    const rendered = grep.renderResult!(
+
+    // 1. Failure rendering
+    const failureRendered = grep.renderResult!(
       {
-        content: [{ type: "text", text: "rg failed: bad pattern" }],
+        content: [{ type: "text", text: "rg failed: very long error message that exceeds narrow terminal column width easily" }],
         details: undefined,
+      },
+      { expanded: true, isPartial: false },
+      theme,
+      { isError: true },
+    ).render(42);
+    for (const line of failureRendered) {
+      assert.ok(visibleWidth(line) <= 42, `line exceeds 42 cols: "${line}"`);
+    }
+
+    // 2. Success result rendering
+    const successRendered = grep.renderResult!(
+      {
+        content: [{ type: "text", text: "1 match in 1 file\n\nsrc/file.ts\n   1: const x = 1;" }],
+        details: { kind: "grep", query: "x", resultCount: 1, fileCount: 1, truncated: false },
+      },
+      { expanded: true, isPartial: false },
+      theme,
+      { isError: false },
+    ).render(42);
+    for (const line of successRendered) {
+      assert.ok(visibleWidth(line) <= 42, `line exceeds 42 cols: "${line}"`);
+    }
+
+    // 3. Truncated result rendering
+    const truncatedRendered = grep.renderResult!(
+      {
+        content: [{ type: "text", text: "100 matches in 50 files\n\n[Showing 20 of 100 output lines (80 more lines omitted)]" }],
+        details: { kind: "grep", query: "x", resultCount: 100, fileCount: 50, truncated: true },
       },
       { expanded: false, isPartial: false },
       theme,
-      { isError: true },
-    ).render(42).join("\n");
-    assert.match(rendered, /✗ rg failed: bad pattern/);
-    assert.doesNotMatch(rendered, /completed/);
+      { isError: false },
+    ).render(42);
+    for (const line of truncatedRendered) {
+      assert.ok(visibleWidth(line) <= 42, `line exceeds 42 cols: "${line}"`);
+    }
+
+    // 4. renderCall for grep and find
+    const grepCallRendered = grep.renderCall!(
+      { pattern: ["a", "b", "c", "d", "e"], path: "packages/pi-find/src/" },
+      theme,
+    ).render(42);
+    for (const line of grepCallRendered) {
+      assert.ok(visibleWidth(line) <= 42, `line exceeds 42 cols: "${line}"`);
+    }
+
+    // 5. partial / streaming renderCall with empty or undefined arguments
+    const emptyGrepRendered = grep.renderCall!({}, theme).render(42);
+    for (const line of emptyGrepRendered) {
+      assert.ok(visibleWidth(line) <= 42, `line exceeds 42 cols: "${line}"`);
+    }
+
+    const undefinedGrepRendered = grep.renderCall!({ pattern: undefined, path: undefined }, theme).render(42);
+    for (const line of undefinedGrepRendered) {
+      assert.ok(visibleWidth(line) <= 42, `line exceeds 42 cols: "${line}"`);
+    }
+
+    const find = tools.get("find")!;
+    const emptyFindRendered = find.renderCall!({}, theme).render(42);
+    for (const line of emptyFindRendered) {
+      assert.ok(visibleWidth(line) <= 42, `line exceeds 42 cols: "${line}"`);
+    }
+
+    const undefinedFindRendered = find.renderCall!({ pattern: undefined, path: undefined }, theme).render(42);
+    for (const line of undefinedFindRendered) {
+      assert.ok(visibleWidth(line) <= 42, `line exceeds 42 cols: "${line}"`);
+    }
   } finally {
     await runtime.dispose();
   }

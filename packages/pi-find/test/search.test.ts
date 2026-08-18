@@ -12,6 +12,7 @@ import { after, before, test } from "node:test";
 import { resolveBinary } from "../src/binaries.ts";
 import {
   createSearchRuntime,
+  rgTypeGlobs,
   runSearch,
   SearchRuntime,
   type SearchRuntimeInstance,
@@ -80,6 +81,17 @@ function find(request: Record<string, unknown>) {
 function matchedPaths(matches: readonly { path: string; isMatch: boolean }[]) {
   return [...new Set(matches.filter((m) => m.isMatch).map((m) => m.path))].sort();
 }
+
+test("rg type hints require an entirely simple extension include set", () => {
+  assert.deepEqual(rgTypeGlobs(["*.ts"]), ["*.ts"]);
+  assert.deepEqual(rgTypeGlobs(["*.ts", "*.tsx", "*.ts"]), ["*.ts", "*.tsx"]);
+  assert.deepEqual(rgTypeGlobs(["*.d.ts"]), ["*.d.ts"]);
+  assert.equal(rgTypeGlobs([]), undefined);
+  assert.equal(rgTypeGlobs(["profile.h"]), undefined);
+  assert.equal(rgTypeGlobs(["src/**/*.ts"]), undefined);
+  assert.equal(rgTypeGlobs(["*.ts", "src/**"]), undefined);
+  assert.equal(rgTypeGlobs(["*.{ts,tsx}"]), undefined);
+});
 
 test("grep finds matches across the tree", { skip: !hasRg }, async () => {
   const outcome = await grep({});
@@ -199,6 +211,18 @@ test("grep refuses a wildcard-only pattern", { skip: !hasRg }, async () => {
   await assert.rejects(
     () => grep({ patterns: [".*"] }),
     /wildcard-only pattern/,
+  );
+});
+
+test("mixed external path errors describe the sole-constraint rule", async () => {
+  const expected = /must be the call's sole path constraint/;
+  await assert.rejects(
+    () => grep({ path: ["/tmp/a", "*.ts"] }),
+    expected,
+  );
+  await assert.rejects(
+    () => find({ path: ["/tmp/a", "*.ts"] }),
+    expected,
   );
 });
 
@@ -324,7 +348,7 @@ test("grep accepts path strings containing spaces", { skip: !hasRg }, async () =
   }
 });
 
-test("multi_grep finds any of several literal patterns", {
+test("grep with multiple patterns finds any of several literal patterns", {
   skip: !hasRg,
 }, async () => {
   const outcome = await grep({
@@ -338,10 +362,17 @@ test("multi_grep finds any of several literal patterns", {
   ]);
 });
 
-test("find keeps directory-constrained paths cwd-relative", { skip: !hasFd }, async () => {
+test("find keeps directory-constrained paths cwd-relative and prunes traversal", { skip: !hasFd }, async () => {
   const outcome = await find({ path: "src/" });
   assert.deepEqual([...outcome.files].sort(), [
     "src/a.ts",
+    "src/deep/b.ts",
+    "src/deep/c.min.js",
+    "src/deep/main.rs",
+  ]);
+
+  const deepOutcome = await find({ path: "src/deep/" });
+  assert.deepEqual([...deepOutcome.files].sort(), [
     "src/deep/b.ts",
     "src/deep/c.min.js",
     "src/deep/main.rs",
@@ -466,6 +497,30 @@ test("find gives slashless globs basename semantics at any depth", {
   assert.ok(outcome.files.includes("test/d.ts"));
 });
 
+test("grep unions extension type hints without bypassing ignores", {
+  skip: !hasRg,
+}, async () => {
+  const tree = mkdtempSync(path.join(tmpdir(), "pi-find-rg-type-hints-"));
+  try {
+    mkdirSync(path.join(tree, ".git"));
+    mkdirSync(path.join(tree, "src"));
+    writeFileSync(path.join(tree, ".gitignore"), "src/ignored.tsx\n");
+    writeFileSync(path.join(tree, "src", "a.ts"), "needle ts\n");
+    writeFileSync(path.join(tree, "src", "b.tsx"), "needle tsx\n");
+    writeFileSync(path.join(tree, "src", "ignored.tsx"), "needle ignored\n");
+    writeFileSync(path.join(tree, "src", "c.js"), "needle js\n");
+
+    const outcome = await grep({
+      cwd: tree,
+      path: ["*.ts", "*.tsx"],
+      patterns: ["needle"],
+    });
+    assert.deepEqual(matchedPaths(outcome.matches), ["src/a.ts", "src/b.tsx"]);
+  } finally {
+    rmSync(tree, { recursive: true, force: true });
+  }
+});
+
 test("find accepts an absolute glob constraint", { skip: !hasFd }, async () => {
   const outcome = await find({ path: path.join(root, "src", "**", "*.ts") });
   assert.deepEqual([...outcome.files].sort(), ["src/a.ts", "src/deep/b.ts"]);
@@ -510,11 +565,642 @@ test("find respects .gitignore outside a Git repository", {
   }
 });
 
+test("grep respects .gitignore outside a Git repository", {
+  skip: !hasRg,
+}, async () => {
+  const outside = mkdtempSync(path.join(tmpdir(), "pi-grep-ignore-"));
+  try {
+    writeFileSync(path.join(outside, ".gitignore"), "ignored.ts\n");
+    writeFileSync(path.join(outside, "ignored.ts"), "needle ignored\n");
+    writeFileSync(path.join(outside, "kept.ts"), "needle kept\n");
+    const outcome = await grep({ cwd: outside });
+    assert.deepEqual(matchedPaths(outcome.matches), ["kept.ts"]);
+  } finally {
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("find preserves leading and trailing spaces in filenames", {
+  skip: !hasFd,
+}, async () => {
+  const outside = mkdtempSync(path.join(tmpdir(), "pi-find-whitespace-"));
+  try {
+    writeFileSync(path.join(outside, " leading.ts"), "x\n");
+    writeFileSync(path.join(outside, "trailing.ts "), "x\n");
+    const outcome = await find({ cwd: outside });
+    assert.deepEqual([...outcome.files].sort(), [" leading.ts", "trailing.ts "]);
+  } finally {
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
 test("find reports nothing for an unmatchable query", {
   skip: !hasFd,
 }, async () => {
   const outcome = await find({ pattern: "zzzznotapath" });
   assert.deepEqual(outcome.files, []);
+});
+
+test("find when path points to a file returns the file without error", {
+  skip: !hasFd,
+}, async () => {
+  const tree = mkdtempSync(path.join(tmpdir(), "pi-find-file-path-"));
+  try {
+    mkdirSync(path.join(tree, "pkg"), { recursive: true });
+    writeFileSync(path.join(tree, "pkg", "LICENSE"), "MIT\n");
+    writeFileSync(path.join(tree, "pkg", "normal.ts"), "export const a = 1;\n");
+
+    const extless = await find({ cwd: tree, path: "pkg/LICENSE" });
+    assert.deepEqual(extless.files, ["pkg/LICENSE"]);
+
+    const normal = await find({ cwd: tree, path: "pkg/normal.ts" });
+    assert.deepEqual(normal.files, ["pkg/normal.ts"]);
+  } finally {
+    rmSync(tree, { recursive: true, force: true });
+  }
+});
+
+test("find when path contains a typo or nonexistent directory returns empty list", {
+  skip: !hasFd,
+}, async () => {
+  const withoutSlash = await find({ path: "nonexistent_dir" });
+  assert.deepEqual(withoutSlash.files, []);
+
+  const withSlash = await find({ path: "a/nonexistent_dir/" });
+  assert.deepEqual(withSlash.files, []);
+});
+
+test("find with multiple search directories and single dir exclude does not exclude sibling directories", {
+  skip: !hasFd,
+}, async () => {
+  const tree = mkdtempSync(path.join(tmpdir(), "pi-find-sibling-exclude-"));
+  try {
+    mkdirSync(path.join(tree, "src", "deep"), { recursive: true });
+    mkdirSync(path.join(tree, "test", "deep"), { recursive: true });
+    writeFileSync(path.join(tree, "src", "a.ts"), "a\n");
+    writeFileSync(path.join(tree, "src", "deep", "dropme.ts"), "drop\n");
+    writeFileSync(path.join(tree, "test", "c.ts"), "c\n");
+    writeFileSync(path.join(tree, "test", "deep", "keepme.ts"), "keep\n");
+
+    const outcome = await find({
+      cwd: tree,
+      path: ["src/", "test/"],
+      exclude: "src/deep/",
+    });
+
+    assert.deepEqual([...outcome.files].sort(), [
+      "src/a.ts",
+      "test/c.ts",
+      "test/deep/keepme.ts",
+    ]);
+  } finally {
+    rmSync(tree, { recursive: true, force: true });
+  }
+});
+
+test("grep and find behave consistently on identical path constraints", {
+  skip: !hasRg || !hasFd,
+}, async () => {
+  const tree = mkdtempSync(path.join(tmpdir(), "pi-find-consistency-"));
+  try {
+    mkdirSync(path.join(tree, "pkg"), { recursive: true });
+    writeFileSync(path.join(tree, "pkg", "LICENSE"), "needle\n");
+
+    const findOutcome = await find({ cwd: tree, path: "pkg/LICENSE" });
+    assert.deepEqual(findOutcome.files, ["pkg/LICENSE"]);
+
+    const grepOutcome = await grep({ cwd: tree, path: "pkg/LICENSE", patterns: ["needle"] });
+    assert.deepEqual(matchedPaths(grepOutcome.matches), ["pkg/LICENSE"]);
+  } finally {
+    rmSync(tree, { recursive: true, force: true });
+  }
+});
+
+test("grep refuses empty patterns but accepts whitespace literals", {
+  skip: !hasRg,
+}, async () => {
+  await assert.rejects(
+    () => grep({ patterns: [""] }),
+    (error: Error) => {
+      assert.match(error.message, /Search pattern cannot be empty/);
+      return true;
+    },
+  );
+
+  const tree = mkdtempSync(path.join(tmpdir(), "pi-find-whitespace-pattern-"));
+  try {
+    writeFileSync(path.join(tree, "spaced.ts"), "if (x)  {\n\treturn true;\n}\n");
+
+    const spaces = await grep({ cwd: tree, patterns: ["  "] });
+    assert.deepEqual(matchedPaths(spaces.matches), ["spaced.ts"]);
+
+    const tab = await grep({ cwd: tree, patterns: ["\t"] });
+    assert.deepEqual(matchedPaths(tab.matches), ["spaced.ts"]);
+  } finally {
+    rmSync(tree, { recursive: true, force: true });
+  }
+});
+
+test("grep and find normalize ./ and . paths identically", {
+  skip: !hasRg || !hasFd,
+}, async () => {
+  const findDot = await find({ path: "." });
+  assert.ok(findDot.files.includes("src/a.ts"));
+  assert.ok(findDot.files.includes("main.rs"));
+
+  const grepDot = await grep({ path: ".", patterns: ["needle"] });
+  assert.ok(matchedPaths(grepDot.matches).includes("src/a.ts"));
+  assert.ok(matchedPaths(grepDot.matches).includes("main.rs"));
+
+  const findDotSlash = await find({ path: "./src/" });
+  assert.ok(findDotSlash.files.includes("src/a.ts"));
+  assert.ok(!findDotSlash.files.includes("main.rs"));
+
+  const grepDotSlash = await grep({ path: "./src/", patterns: ["needle"] });
+  assert.ok(matchedPaths(grepDotSlash.matches).includes("src/a.ts"));
+  assert.ok(!matchedPaths(grepDotSlash.matches).includes("main.rs"));
+});
+
+test("find deduplicates results and handles overlapping search paths without duplicate hits", {
+  skip: !hasFd,
+}, async () => {
+  const outcome = await find({ path: ["src/", "src/deep/"] });
+  const counts = new Map<string, number>();
+  for (const f of outcome.files) {
+    counts.set(f, (counts.get(f) ?? 0) + 1);
+  }
+  for (const [file, count] of counts.entries()) {
+    assert.equal(count, 1, `file "${file}" appeared ${count} times`);
+  }
+  assert.ok(outcome.files.includes("src/deep/b.ts"));
+  assert.ok(outcome.files.includes("src/a.ts"));
+});
+
+test("path [., src/] and exclude . behave correctly", {
+  skip: !hasRg || !hasFd,
+}, async () => {
+  const combined = await find({ path: [".", "src/"] });
+  assert.ok(combined.files.includes("main.rs"));
+  assert.ok(combined.files.includes("src/a.ts"));
+
+  const excludedFind = await find({ exclude: "." });
+  assert.deepEqual(excludedFind.files, []);
+
+  const excludedGrep = await grep({ patterns: ["needle"], exclude: "." });
+  assert.deepEqual(excludedGrep.matches, []);
+});
+
+test("glob paths with ./ and a/../ prefixes normalize and match consistently", {
+  skip: !hasRg || !hasFd,
+}, async () => {
+  const findGlob = await find({ path: "./src/*.ts" });
+  assert.deepEqual(findGlob.files, ["src/a.ts"]);
+
+  const grepGlob = await grep({ path: "./src/*.ts", patterns: ["needle"] });
+  assert.deepEqual(matchedPaths(grepGlob.matches), ["src/a.ts"]);
+
+  const findNormalized = await find({ path: "src/../*.rs" });
+  assert.deepEqual([...findNormalized.files].sort(), ["main.rs", "src/deep/main.rs"].sort());
+
+  const grepNormalized = await grep({ path: "src/../*.rs", patterns: ["needle"] });
+  assert.deepEqual([...matchedPaths(grepNormalized.matches)].sort(), ["main.rs", "src/deep/main.rs"].sort());
+});
+
+test("grep and find support parent ../ and bare .. paths with exact equivalence", {
+  skip: !hasRg || !hasFd,
+}, async () => {
+  const baseDir = mkdtempSync(path.join(tmpdir(), "pi-find-parent-bare-test-"));
+  try {
+    const workspace = path.join(baseDir, "workspace");
+    const sibling = path.join(baseDir, "sibling");
+    mkdirSync(workspace, { recursive: true });
+    mkdirSync(sibling, { recursive: true });
+    writeFileSync(path.join(sibling, "sibling_file.ts"), "const needle = 'found_in_sibling';\n");
+    writeFileSync(path.join(baseDir, "LICENSE"), "MIT License\nneedle\n");
+
+    // 1. Bare ".." and "../" equivalence in find
+    const findBareDotDot = await find({ cwd: workspace, path: ".." });
+    const findSlashDotDot = await find({ cwd: workspace, path: "../" });
+    assert.ok(findBareDotDot.files.length > 0);
+    assert.deepEqual([...findBareDotDot.files].sort(), [...findSlashDotDot.files].sort());
+
+    // 2. Bare ".." in grep
+    const grepBareDotDot = await grep({
+      cwd: workspace,
+      path: "..",
+      patterns: ["found_in_sibling"],
+    });
+    assert.equal(grepBareDotDot.matches.length, 1);
+    assert.equal(grepBareDotDot.matches[0]?.path, path.join(sibling, "sibling_file.ts"));
+
+    // 3. Parent extensionless file "../LICENSE"
+    const findLicense = await find({ cwd: workspace, path: "../LICENSE" });
+    assert.deepEqual(findLicense.files, [path.join(baseDir, "LICENSE")]);
+
+    const grepLicense = await grep({
+      cwd: workspace,
+      path: "../LICENSE",
+      patterns: ["needle"],
+    });
+    assert.deepEqual(matchedPaths(grepLicense.matches), [path.join(baseDir, "LICENSE")]);
+  } finally {
+    rmSync(baseDir, { recursive: true, force: true });
+  }
+});
+
+test("grep and find honour external absolute excludes under an external search root", {
+  skip: !hasRg || !hasFd,
+}, async () => {
+  const outsideDir = mkdtempSync(path.join(tmpdir(), "pi-find-outside-exclude-test-"));
+  try {
+    const subtest = path.join(outsideDir, "test");
+    const subsrc = path.join(outsideDir, "src");
+    mkdirSync(subtest, { recursive: true });
+    mkdirSync(subsrc, { recursive: true });
+    writeFileSync(path.join(subtest, "drop.ts"), "const needle = 'drop';\n");
+    writeFileSync(path.join(subsrc, "keep.ts"), "const needle = 'keep';\n");
+
+    // 1. find with absolute path + absolute exclude
+    const findOutcome = await find({
+      path: `${outsideDir}/`,
+      exclude: `${subtest}/`,
+    });
+    assert.equal(findOutcome.files.length, 1);
+    assert.equal(findOutcome.files[0], path.join(subsrc, "keep.ts"));
+
+    // 2. grep with absolute path + absolute exclude
+    const grepOutcome = await grep({
+      path: `${outsideDir}/`,
+      exclude: `${subtest}/`,
+      patterns: ["needle"],
+    });
+    assert.equal(grepOutcome.matches.length, 1);
+    assert.equal(grepOutcome.matches[0]?.path, path.join(subsrc, "keep.ts"));
+  } finally {
+    rmSync(outsideDir, { recursive: true, force: true });
+  }
+});
+
+test("grep and find honour absolute excludes under default cwd and relative paths", {
+  skip: !hasRg || !hasFd,
+}, async () => {
+  // 1. Default cwd + absolute exclude
+  const findCwd = await find({ exclude: path.join(root, "test") + "/" });
+  assert.equal(findCwd.files.includes("test/d.ts"), false);
+  assert.equal(findCwd.files.includes("src/a.ts"), true);
+
+  const grepCwd = await grep({ exclude: path.join(root, "test") + "/" });
+  assert.equal(matchedPaths(grepCwd.matches).includes("test/d.ts"), false);
+  assert.equal(matchedPaths(grepCwd.matches).includes("src/a.ts"), true);
+
+  // 2. Relative path + absolute exclude
+  const findRel = await find({
+    path: "src/",
+    exclude: path.join(root, "src", "deep") + "/",
+  });
+  assert.deepEqual(findRel.files, ["src/a.ts"]);
+
+  const grepRel = await grep({
+    path: "src/",
+    exclude: path.join(root, "src", "deep") + "/",
+  });
+  assert.deepEqual(matchedPaths(grepRel.matches), ["src/a.ts"]);
+});
+
+test("grep and find honour relative and nested excludes under external search roots", {
+  skip: !hasRg || !hasFd,
+}, async () => {
+  const outsideDir = mkdtempSync(path.join(tmpdir(), "pi-find-outside-rel-exclude-"));
+  try {
+    const subtest = path.join(outsideDir, "test");
+    const subsrc = path.join(outsideDir, "src", "deep");
+    mkdirSync(subtest, { recursive: true });
+    mkdirSync(subsrc, { recursive: true });
+    writeFileSync(path.join(subtest, "drop.ts"), "const needle = 'drop';\n");
+    writeFileSync(path.join(subsrc, "keep.ts"), "const needle = 'keep';\n");
+    writeFileSync(path.join(subsrc, "drop_file.ts"), "const needle = 'drop_file';\n");
+
+    // 1. External root + relative directory exclude "test/"
+    const findRelDir = await find({
+      path: `${outsideDir}/`,
+      exclude: "test/",
+    });
+    assert.deepEqual([...findRelDir.files].sort(), [
+      path.join(subsrc, "drop_file.ts"),
+      path.join(subsrc, "keep.ts"),
+    ]);
+
+    const grepRelDir = await grep({
+      path: `${outsideDir}/`,
+      exclude: "test/",
+      patterns: ["needle"],
+    });
+    assert.deepEqual(matchedPaths(grepRelDir.matches), [
+      path.join(subsrc, "drop_file.ts"),
+      path.join(subsrc, "keep.ts"),
+    ]);
+
+    // 2. External root + nested relative filename exclude "src/deep/drop_file.ts"
+    const findRelFile = await find({
+      path: `${outsideDir}/`,
+      exclude: ["test/", "src/deep/drop_file.ts"],
+    });
+    assert.deepEqual(findRelFile.files, [path.join(subsrc, "keep.ts")]);
+
+    const grepRelFile = await grep({
+      path: `${outsideDir}/`,
+      exclude: ["test/", "src/deep/drop_file.ts"],
+      patterns: ["needle"],
+    });
+    assert.deepEqual(matchedPaths(grepRelFile.matches), [path.join(subsrc, "keep.ts")]);
+  } finally {
+    rmSync(outsideDir, { recursive: true, force: true });
+  }
+});
+
+test("grep and find behave identically on in-workspace absolute path + absolute exclude", {
+  skip: !hasRg || !hasFd,
+}, async () => {
+  const absPath = path.join(root, "src") + "/";
+  const absExclude = path.join(root, "src", "deep") + "/";
+
+  const findOutcome = await find({ path: absPath, exclude: absExclude });
+  assert.deepEqual(findOutcome.files, ["src/a.ts"]);
+
+  const grepOutcome = await grep({ path: absPath, exclude: absExclude });
+  assert.deepEqual(matchedPaths(grepOutcome.matches), ["src/a.ts"]);
+});
+
+test("grep and find return empty when exclude is an ancestor of search root", {
+  skip: !hasRg || !hasFd,
+}, async () => {
+  // 1. In-workspace search where exclude is ancestor
+  const findAncestor = await find({
+    path: path.join(root, "src", "deep") + "/",
+    exclude: path.join(root, "src") + "/",
+  });
+  assert.deepEqual(findAncestor.files, []);
+
+  const grepAncestor = await grep({
+    path: path.join(root, "src", "deep") + "/",
+    exclude: path.join(root, "src") + "/",
+  });
+  assert.deepEqual(grepAncestor.matches, []);
+
+  // 2. External search where exclude is ancestor
+  const outsideDir = mkdtempSync(path.join(tmpdir(), "pi-find-outside-ancestor-"));
+  try {
+    const sub = path.join(outsideDir, "project", "sub");
+    mkdirSync(sub, { recursive: true });
+    writeFileSync(path.join(sub, "file.ts"), "const needle = 1;\n");
+
+    const findExtAncestor = await find({
+      path: `${sub}/`,
+      exclude: `${path.join(outsideDir, "project")}/`,
+    });
+    assert.deepEqual(findExtAncestor.files, []);
+
+    const grepExtAncestor = await grep({
+      path: `${sub}/`,
+      exclude: `${path.join(outsideDir, "project")}/`,
+      patterns: ["needle"],
+    });
+    assert.deepEqual(grepExtAncestor.matches, []);
+  } finally {
+    rmSync(outsideDir, { recursive: true, force: true });
+  }
+});
+
+test("grep and find preserve exact file and root-level glob anchoring", {
+  skip: !hasRg || !hasFd,
+}, async () => {
+  const tree = mkdtempSync(path.join(tmpdir(), "pi-find-anchor-include-"));
+  try {
+    mkdirSync(path.join(tree, "sub", "deep"), { recursive: true });
+    writeFileSync(path.join(tree, "main.ts"), "const needle = 'root';\n");
+    writeFileSync(path.join(tree, "sub", "main.ts"), "const needle = 'nested';\n");
+    writeFileSync(path.join(tree, "top.ts"), "const needle = 'top';\n");
+    writeFileSync(path.join(tree, "sub", "deep", "nested.ts"), "const needle = 'deep';\n");
+
+    // 1. Exact absolute file path matches only the root file, not the nested one
+    const findExact = await find({
+      cwd: tree,
+      path: path.join(tree, "main.ts"),
+    });
+    assert.deepEqual(findExact.files, ["main.ts"]);
+
+    const grepExact = await grep({
+      cwd: tree,
+      path: path.join(tree, "main.ts"),
+      patterns: ["needle"],
+    });
+    assert.deepEqual(matchedPaths(grepExact.matches), ["main.ts"]);
+
+    // 2. Root-level absolute glob matches only root files, not subdirectories
+    const findGlob = await find({
+      cwd: tree,
+      path: path.join(tree, "*.ts"),
+    });
+    assert.deepEqual([...findGlob.files].sort(), ["main.ts", "top.ts"]);
+
+    const grepGlob = await grep({
+      cwd: tree,
+      path: path.join(tree, "*.ts"),
+      patterns: ["needle"],
+    });
+    assert.deepEqual([...matchedPaths(grepGlob.matches)].sort(), ["main.ts", "top.ts"]);
+  } finally {
+    rmSync(tree, { recursive: true, force: true });
+  }
+});
+
+test("grep and find preserve exact file and root-level glob exclude anchoring", {
+  skip: !hasRg || !hasFd,
+}, async () => {
+  const tree = mkdtempSync(path.join(tmpdir(), "pi-find-anchor-exclude-"));
+  try {
+    mkdirSync(path.join(tree, "sub"), { recursive: true });
+    writeFileSync(path.join(tree, "main.ts"), "const needle = 'root';\n");
+    writeFileSync(path.join(tree, "sub", "main.ts"), "const needle = 'nested';\n");
+    writeFileSync(path.join(tree, "top.ts"), "const needle = 'top';\n");
+    writeFileSync(path.join(tree, "sub", "deep.ts"), "const needle = 'deep';\n");
+
+    // 1. Exact absolute file exclude excludes only root main.ts, keeps sub/main.ts
+    const findFileExcl = await find({
+      cwd: tree,
+      exclude: path.join(tree, "main.ts"),
+    });
+    assert.deepEqual([...findFileExcl.files].sort(), [
+      "sub/deep.ts",
+      "sub/main.ts",
+      "top.ts",
+    ]);
+
+    const grepFileExcl = await grep({
+      cwd: tree,
+      exclude: path.join(tree, "main.ts"),
+      patterns: ["needle"],
+    });
+    assert.deepEqual([...matchedPaths(grepFileExcl.matches)].sort(), [
+      "sub/deep.ts",
+      "sub/main.ts",
+      "top.ts",
+    ]);
+
+    // 2. Root-level absolute glob exclude excludes top-level *.ts, keeps sub/*.ts
+    const findGlobExcl = await find({
+      cwd: tree,
+      exclude: path.join(tree, "*.ts"),
+    });
+    assert.deepEqual([...findGlobExcl.files].sort(), [
+      "sub/deep.ts",
+      "sub/main.ts",
+    ]);
+
+    const grepGlobExcl = await grep({
+      cwd: tree,
+      exclude: path.join(tree, "*.ts"),
+      patterns: ["needle"],
+    });
+    assert.deepEqual([...matchedPaths(grepGlobExcl.matches)].sort(), [
+      "sub/deep.ts",
+      "sub/main.ts",
+    ]);
+  } finally {
+    rmSync(tree, { recursive: true, force: true });
+  }
+});
+
+test("grep and find rebase excludes correctly when a parent path resolves inside cwd", {
+  skip: !hasRg || !hasFd,
+}, async () => {
+  const base = mkdtempSync(path.join(tmpdir(), "pi-find-parent-rebase-"));
+  const cwd = path.join(base, "workspace");
+  try {
+    mkdirSync(path.join(cwd, "src", "test"), { recursive: true });
+    writeFileSync(path.join(cwd, "src", "keep.ts"), "needle keep\n");
+    writeFileSync(path.join(cwd, "src", "test", "drop.ts"), "needle drop\n");
+
+    const searchPath = "../workspace/src/";
+    const exclude = path.join(cwd, "src", "test", "drop.ts");
+    const findOutcome = await find({ cwd, path: searchPath, exclude });
+    assert.deepEqual(findOutcome.files, ["src/keep.ts"]);
+
+    const grepOutcome = await grep({ cwd, path: searchPath, exclude });
+    assert.deepEqual(matchedPaths(grepOutcome.matches), ["src/keep.ts"]);
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+test("grep and find preserve cwd-relative semantics when path is in-workspace absolute and exclude is relative", {
+  skip: !hasRg || !hasFd,
+}, async () => {
+  const absSrc = path.join(root, "src") + "/";
+  const findOutcome = await find({
+    path: absSrc,
+    exclude: "src/deep/",
+  });
+  assert.deepEqual(findOutcome.files, ["src/a.ts"]);
+
+  const grepOutcome = await grep({
+    path: absSrc,
+    exclude: "src/deep/",
+    patterns: ["needle"],
+  });
+  assert.deepEqual(matchedPaths(grepOutcome.matches), ["src/a.ts"]);
+});
+
+test("grep and find support ancestor glob excludes", {
+  skip: !hasRg || !hasFd,
+}, async () => {
+  const outsideDir = mkdtempSync(path.join(tmpdir(), "pi-find-ancestor-glob-"));
+  try {
+    const projectDir = path.join(outsideDir, "project");
+    mkdirSync(path.join(projectDir, "sub"), { recursive: true });
+    writeFileSync(path.join(projectDir, "x.ts"), "const needle = 'root';\n");
+    writeFileSync(path.join(projectDir, "sub", "deep.ts"), "const needle = 'deep';\n");
+
+    const findOutcome = await find({
+      path: `${projectDir}/`,
+      exclude: `${path.join(outsideDir, "*", "*.ts")}`,
+    });
+    assert.deepEqual(findOutcome.files, [path.join(projectDir, "sub", "deep.ts")]);
+
+    const grepOutcome = await grep({
+      path: `${projectDir}/`,
+      exclude: `${path.join(outsideDir, "*", "*.ts")}`,
+      patterns: ["needle"],
+    });
+    assert.deepEqual(matchedPaths(grepOutcome.matches), [
+      path.join(projectDir, "sub", "deep.ts"),
+    ]);
+  } finally {
+    rmSync(outsideDir, { recursive: true, force: true });
+  }
+});
+
+test("grep path filters preserve .gitignore and always exclude .git", {
+  skip: !hasRg,
+}, async () => {
+  const tree = mkdtempSync(path.join(tmpdir(), "pi-find-grep-ignore-path-"));
+  try {
+    mkdirSync(path.join(tree, ".git", "objects"), { recursive: true });
+    mkdirSync(path.join(tree, "node_modules", "dep"), { recursive: true });
+    mkdirSync(path.join(tree, "src"), { recursive: true });
+    writeFileSync(path.join(tree, ".gitignore"), "node_modules/\nsrc/ignored.ts\n");
+    writeFileSync(path.join(tree, ".git", "objects", "pack.idx"), "needle git\n");
+    writeFileSync(path.join(tree, "node_modules", "dep", "index.ts"), "needle dependency\n");
+    writeFileSync(path.join(tree, "src", "ignored.ts"), "needle ignored\n");
+    writeFileSync(path.join(tree, "src", "a.ts"), "needle kept\n");
+
+    for (const constraint of [undefined, ".", "./", "**", "*", "src/**", "*.ts"]) {
+      const outcome = await grep({
+        cwd: tree,
+        path: constraint,
+        patterns: ["needle"],
+      });
+      assert.deepEqual(
+        matchedPaths(outcome.matches),
+        ["src/a.ts"],
+        `path=${String(constraint)}`,
+      );
+    }
+  } finally {
+    rmSync(tree, { recursive: true, force: true });
+  }
+});
+
+test("grep and find keep excludes rooted when directory traversal is pruned", {
+  skip: !hasRg || !hasFd,
+}, async () => {
+  const tree = mkdtempSync(path.join(tmpdir(), "pi-find-search-path-exclude-"));
+  try {
+    mkdirSync(path.join(tree, "src", "deep", "skip"), { recursive: true });
+    mkdirSync(path.join(tree, "deep"), { recursive: true });
+    writeFileSync(path.join(tree, "src", "deep", "a.ts"), "needle a\n");
+    writeFileSync(path.join(tree, "src", "deep", "skip", "b.ts"), "needle b\n");
+    writeFileSync(path.join(tree, "src", "top.ts"), "needle top\n");
+    writeFileSync(path.join(tree, "deep", "root.ts"), "needle root\n");
+
+    const findSrc = await find({ cwd: tree, path: "src/", exclude: "deep/" });
+    const grepSrc = await grep({ cwd: tree, path: "src/", exclude: "deep/" });
+    const expectedSrc = [
+      "src/deep/a.ts",
+      "src/deep/skip/b.ts",
+      "src/top.ts",
+    ];
+    assert.deepEqual([...findSrc.files].sort(), expectedSrc);
+    assert.deepEqual(matchedPaths(grepSrc.matches), expectedSrc);
+
+    const findDeep = await find({ cwd: tree, path: "src/deep/", exclude: "skip/" });
+    const grepDeep = await grep({ cwd: tree, path: "src/deep/", exclude: "skip/" });
+    const expectedDeep = ["src/deep/a.ts", "src/deep/skip/b.ts"];
+    assert.deepEqual([...findDeep.files].sort(), expectedDeep);
+    assert.deepEqual(matchedPaths(grepDeep.matches), expectedDeep);
+  } finally {
+    rmSync(tree, { recursive: true, force: true });
+  }
 });
 
 test("a search is abortable", { skip: !hasRg }, async () => {

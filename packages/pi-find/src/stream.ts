@@ -97,6 +97,7 @@ export function streamLines(
     const cleanup = () => {
       reader.close();
       outerSignal?.removeEventListener("abort", onAbort);
+      effectSignal.removeEventListener("abort", onAbort);
     };
 
     const settle = (

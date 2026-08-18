@@ -1,9 +1,9 @@
 /**
- * Tool registration for grep, find, and multi_grep.
+ * Tool registration for grep and find.
  *
  * These deliberately reuse pi's built-in tool names so they override them: the
  * model keeps one obvious way to search and the system prompt does not carry
- * two competing search surfaces.
+ * competing search surfaces.
  */
 
 import {
@@ -16,8 +16,6 @@ import {
 import { Text } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
 import {
-  CURSOR_EXPIRED,
-  CURSOR_QUERY_MISMATCH,
   DEFAULT_FIND_LIMIT,
   DEFAULT_GREP_LIMIT,
   emptyResultHint,
@@ -34,10 +32,6 @@ import {
   MAX_CONTEXT_LINES,
   MAX_FIND_LIMIT,
   MAX_GREP_LIMIT,
-  MULTI_GREP_PARAMETER_DESCRIPTIONS,
-  MULTI_GREP_PROMPT_GUIDELINES,
-  MULTI_GREP_PROMPT_SNIPPET,
-  MULTI_GREP_TOOL_DESCRIPTION,
   NO_FILES_FOUND,
   NO_GREP_MATCHES,
   resultLimitNotice,
@@ -60,7 +54,20 @@ const pathConstraint = (description: string) =>
   );
 
 export const GrepParams = Type.Object({
-  pattern: Type.String({ description: GREP_PARAMETER_DESCRIPTIONS.pattern }),
+  pattern: Type.Union(
+    [
+      Type.String({
+        minLength: 1,
+        description: GREP_PARAMETER_DESCRIPTIONS.pattern,
+      }),
+      Type.Array(Type.String({ minLength: 1 }), {
+        minItems: 1,
+        maxItems: 64,
+        description: GREP_PARAMETER_DESCRIPTIONS.pattern,
+      }),
+    ],
+    { description: GREP_PARAMETER_DESCRIPTIONS.pattern },
+  ),
   path: pathConstraint(GREP_PARAMETER_DESCRIPTIONS.path),
   exclude: pathConstraint(GREP_PARAMETER_DESCRIPTIONS.exclude),
   caseSensitive: Type.Optional(
@@ -80,45 +87,9 @@ export const GrepParams = Type.Object({
       description: GREP_PARAMETER_DESCRIPTIONS.limit,
     }),
   ),
-  cursor: Type.Optional(
-    Type.String({ description: GREP_PARAMETER_DESCRIPTIONS.cursor }),
-  ),
 });
 
 export type GrepInput = Static<typeof GrepParams>;
-
-export const MultiGrepParams = Type.Object({
-  patterns: Type.Array(Type.String(), {
-    minItems: 1,
-    description: MULTI_GREP_PARAMETER_DESCRIPTIONS.patterns,
-  }),
-  path: pathConstraint(MULTI_GREP_PARAMETER_DESCRIPTIONS.path),
-  exclude: pathConstraint(MULTI_GREP_PARAMETER_DESCRIPTIONS.exclude),
-  caseSensitive: Type.Optional(
-    Type.Boolean({
-      description: MULTI_GREP_PARAMETER_DESCRIPTIONS.caseSensitive,
-    }),
-  ),
-  context: Type.Optional(
-    Type.Integer({
-      minimum: 0,
-      maximum: MAX_CONTEXT_LINES,
-      description: MULTI_GREP_PARAMETER_DESCRIPTIONS.context,
-    }),
-  ),
-  limit: Type.Optional(
-    Type.Integer({
-      minimum: 1,
-      maximum: MAX_GREP_LIMIT,
-      description: MULTI_GREP_PARAMETER_DESCRIPTIONS.limit,
-    }),
-  ),
-  cursor: Type.Optional(
-    Type.String({ description: MULTI_GREP_PARAMETER_DESCRIPTIONS.cursor }),
-  ),
-});
-
-export type MultiGrepInput = Static<typeof MultiGrepParams>;
 
 export const FindParams = Type.Object({
   pattern: Type.String({ description: FIND_PARAMETER_DESCRIPTIONS.pattern }),
@@ -131,20 +102,16 @@ export const FindParams = Type.Object({
       description: FIND_PARAMETER_DESCRIPTIONS.limit,
     }),
   ),
-  cursor: Type.Optional(
-    Type.String({ description: FIND_PARAMETER_DESCRIPTIONS.cursor }),
-  ),
 });
 
 export type FindInput = Static<typeof FindParams>;
 
 export interface SearchDetails {
-  readonly kind: "grep" | "find" | "multi_grep";
+  readonly kind: "grep" | "find";
   readonly query: string;
   readonly resultCount: number;
   readonly fileCount: number;
   readonly truncated: boolean;
-  readonly cursorStatus?: "continued" | "expired" | "mismatch";
 }
 
 /**
@@ -184,13 +151,11 @@ interface PageResult {
 // tool result always remains below pi's 50KB tool-output ceiling.
 const PAGE_BODY_MAX_BYTES = DEFAULT_MAX_BYTES - 8 * 1024;
 
-/** Emit one byte- and line-bounded page, storing the remainder in a cursor. */
+/** Emit one byte- and line-bounded page. */
 function paginate(
-  runtime: SearchRuntimeInstance,
-  tool: string,
-  query: string,
   lines: readonly string[],
   pageSize: number,
+  kind: "grep" | "find",
 ): PageResult {
   const page: string[] = [];
   let bytes = 0;
@@ -222,66 +187,13 @@ function paginate(
     return { text: page.join("\n"), hasMore: false };
   }
 
-  const service = runtime.runSync(SearchRuntime);
-  const rest = lines.slice(consumed);
-  const cursorId = service.cursors.save(tool, query, rest);
   return {
     text: [
       ...page,
       "",
-      tooManyResultsNotice(page.length, lines.length, cursorId),
+      tooManyResultsNotice(page.length, lines.length, kind),
     ].join("\n"),
     hasMore: true,
-  };
-}
-
-type CursorResume =
-  | { readonly status: "page"; readonly text: string; readonly hasMore: boolean }
-  | { readonly status: "mismatch" };
-
-/** Serve a stored page, or report why the cursor cannot serve this call. */
-function resumeCursor(
-  runtime: SearchRuntimeInstance,
-  tool: string,
-  query: string,
-  cursorId: string,
-  pageSize: number,
-): CursorResume | undefined {
-  const service = runtime.runSync(SearchRuntime);
-  const page = service.cursors.take(tool, query, cursorId);
-  if (page === undefined) return undefined;
-  if (page.status === "query-mismatch") {
-    return { status: "mismatch" };
-  }
-  const served = paginate(runtime, tool, query, page.lines, pageSize);
-  return { status: "page", text: served.text, hasMore: served.hasMore };
-}
-
-/** Frame a cursor follow-up: the served page, or why it was not served. */
-function cursorResult(
-  kind: SearchDetails["kind"],
-  query: string,
-  resumed: CursorResume | undefined,
-) {
-  const text = resumed === undefined
-    ? CURSOR_EXPIRED
-    : resumed.status === "mismatch"
-    ? CURSOR_QUERY_MISMATCH
-    : resumed.text;
-  return {
-    content: [{ type: "text" as const, text }],
-    details: {
-      kind,
-      query,
-      resultCount: 0,
-      fileCount: 0,
-      truncated: resumed?.status === "page" ? resumed.hasMore : false,
-      cursorStatus: resumed === undefined
-        ? "expired"
-        : resumed.status === "mismatch"
-        ? "mismatch"
-        : "continued",
-    } satisfies SearchDetails,
   };
 }
 
@@ -293,99 +205,6 @@ export function registerTools(
   pi: ExtensionAPI,
   runtime: SearchRuntimeInstance,
 ): void {
-  const grepExecute = async (
-    tool: "grep" | "multi_grep",
-    patterns: readonly string[],
-    params: {
-      path?: string | string[];
-      exclude?: string | string[];
-      caseSensitive?: boolean;
-      context?: number;
-      limit?: number;
-      cursor?: string;
-    },
-    signal: AbortSignal | undefined,
-    cwd: string,
-  ) => {
-    const query = patterns.join(", ");
-    // JSON preserves pattern boundaries, while sorting makes multi_grep order-insensitive.
-    const queryKey = JSON.stringify(
-      tool === "multi_grep" ? [...patterns].sort() : patterns,
-    );
-
-    if (params.cursor !== undefined) {
-      const resumed = resumeCursor(
-        runtime,
-        tool,
-        queryKey,
-        params.cursor,
-        GREP_PAGE_LINES,
-      );
-      return cursorResult(tool, query, resumed);
-    }
-
-    const service = runtime.runSync(SearchRuntime);
-    const effectiveLimit = Math.min(
-      MAX_GREP_LIMIT,
-      Math.max(1, params.limit ?? DEFAULT_GREP_LIMIT),
-    );
-    const outcome = await runSearch(
-      runtime,
-      service.grep({
-        patterns,
-        literalOnly: tool === "multi_grep",
-        path: params.path,
-        exclude: params.exclude,
-        caseSensitive: params.caseSensitive,
-        context: params.context,
-        limit: effectiveLimit,
-        cwd,
-        signal,
-      }),
-      { signal },
-    );
-
-    const matchCount = outcome.matches.filter((m) => m.isMatch).length;
-    if (matchCount === 0) {
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: NO_GREP_MATCHES + emptyResultHint(outcome.hasConstraints),
-          },
-        ],
-        details: {
-          kind: tool,
-          query,
-          resultCount: 0,
-          fileCount: 0,
-          truncated: false,
-        } satisfies SearchDetails,
-      };
-    }
-
-    const rendered = renderGrepLines(outcome);
-    const body = paginate(runtime, tool, queryKey, rendered, GREP_PAGE_LINES);
-    const fileCount = countFiles(outcome);
-    const header = grepResultHeader(matchCount, fileCount);
-    const notices = outcome.truncated
-      ? [resultLimitNotice("matches", effectiveLimit, MAX_GREP_LIMIT)]
-      : [];
-    const text = [header, "", body.text, ...notices.flatMap((notice) => ["", notice])]
-      .join("\n");
-
-    return {
-      content: [{ type: "text" as const, text }],
-      details: {
-        kind: tool,
-        query,
-        resultCount: matchCount,
-        fileCount,
-        truncated: outcome.truncated || body.hasMore,
-      } satisfies SearchDetails,
-    };
-  };
-
   pi.registerTool({
     name: "grep",
     label: "grep",
@@ -395,48 +214,96 @@ export function registerTools(
     parameters: GrepParams,
 
     async execute(_toolCallId, params: GrepInput, signal, _onUpdate, ctx) {
-      return grepExecute("grep", [params.pattern], params, signal, ctx.cwd);
-    },
+      const patterns = Array.isArray(params.pattern)
+        ? params.pattern
+        : [params.pattern];
+      const query = patterns.join(", ");
+      const literalOnly = Array.isArray(params.pattern);
 
-    renderCall(args: GrepInput, theme: Theme) {
-      const scope = args.path === undefined
-        ? ""
-        : theme.fg("muted", ` in ${formatConstraint(args.path)}`);
-      return new Text(
-        theme.fg("toolTitle", theme.bold("grep ")) +
-          theme.fg("accent", `"${args.pattern}"`) +
-          scope,
-        0,
-        0,
+      const service = runtime.runSync(SearchRuntime);
+      const effectiveLimit = Math.min(
+        MAX_GREP_LIMIT,
+        Math.max(1, params.limit ?? DEFAULT_GREP_LIMIT),
       );
+      const outcome = await runSearch(
+        runtime,
+        service.grep({
+          patterns,
+          literalOnly,
+          path: params.path,
+          exclude: params.exclude,
+          caseSensitive: params.caseSensitive,
+          context: params.context,
+          limit: effectiveLimit,
+          cwd: ctx.cwd,
+          signal,
+        }),
+        { signal },
+      );
+
+      const matchCount = outcome.matches.filter((m) => m.isMatch).length;
+      if (matchCount === 0) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: NO_GREP_MATCHES + emptyResultHint(outcome.hasConstraints),
+            },
+          ],
+          details: {
+            kind: "grep",
+            query,
+            resultCount: 0,
+            fileCount: 0,
+            truncated: false,
+          } satisfies SearchDetails,
+        };
+      }
+
+      const rendered = renderGrepLines(outcome);
+      const body = paginate(rendered, GREP_PAGE_LINES, "grep");
+      const fileCount = countFiles(outcome);
+      const header = grepResultHeader(matchCount, fileCount);
+      const notices = outcome.truncated
+        ? [resultLimitNotice("matches", effectiveLimit, MAX_GREP_LIMIT)]
+        : [];
+      const text = [header, "", body.text, ...notices.flatMap((notice) => ["", notice])]
+        .join("\n");
+
+      return {
+        content: [{ type: "text" as const, text }],
+        details: {
+          kind: "grep",
+          query,
+          resultCount: matchCount,
+          fileCount,
+          truncated: outcome.truncated || body.hasMore,
+        } satisfies SearchDetails,
+      };
     },
 
-    renderResult(result, options, theme, context) {
-      return renderSearchResult(result, options, theme, context.isError);
-    },
-  });
-
-  pi.registerTool({
-    name: "multi_grep",
-    label: "multi_grep",
-    description: MULTI_GREP_TOOL_DESCRIPTION,
-    promptSnippet: MULTI_GREP_PROMPT_SNIPPET,
-    promptGuidelines: MULTI_GREP_PROMPT_GUIDELINES,
-    parameters: MultiGrepParams,
-
-    async execute(_toolCallId, params: MultiGrepInput, signal, _onUpdate, ctx) {
-      return grepExecute("multi_grep", params.patterns, params, signal, ctx.cwd);
-    },
-
-    renderCall(args: MultiGrepInput, theme: Theme) {
-      const shown = args.patterns.slice(0, 3).join(", ");
-      const more = args.patterns.length > 3
-        ? theme.fg("muted", ` +${args.patterns.length - 3} more`)
+    renderCall(args: Partial<GrepInput> | undefined, theme: Theme) {
+      const pathConstraint = args?.path;
+      const scope = pathConstraint === undefined
+        ? ""
+        : theme.fg("muted", ` in ${formatConstraint(pathConstraint)}`);
+      const rawPattern = args?.pattern;
+      const patterns = Array.isArray(rawPattern)
+        ? rawPattern.filter((p): p is string => typeof p === "string" && p.length > 0)
+        : typeof rawPattern === "string" && rawPattern.length > 0
+        ? [rawPattern]
+        : [];
+      const shown = patterns.length > 0
+        ? patterns.slice(0, 3).map((p) => `"${p}"`).join(", ")
+        : theme.fg("muted", "…");
+      const more = patterns.length > 3
+        ? theme.fg("muted", ` +${patterns.length - 3} more`)
         : "";
       return new Text(
-        theme.fg("toolTitle", theme.bold("multi_grep ")) +
-          theme.fg("accent", shown) +
-          more,
+        theme.fg("toolTitle", theme.bold("grep ")) +
+          (patterns.length > 0 ? theme.fg("accent", shown) : shown) +
+          more +
+          scope,
         0,
         0,
       );
@@ -456,17 +323,6 @@ export function registerTools(
     parameters: FindParams,
 
     async execute(_toolCallId, params: FindInput, signal, _onUpdate, ctx) {
-      if (params.cursor !== undefined) {
-        const resumed = resumeCursor(
-          runtime,
-          "find",
-          params.pattern,
-          params.cursor,
-          FIND_PAGE_LINES,
-        );
-        return cursorResult("find", params.pattern, resumed);
-      }
-
       const service = runtime.runSync(SearchRuntime);
       const effectiveLimit = Math.min(
         MAX_FIND_LIMIT,
@@ -503,13 +359,7 @@ export function registerTools(
         };
       }
 
-      const body = paginate(
-        runtime,
-        "find",
-        params.pattern,
-        outcome.files,
-        FIND_PAGE_LINES,
-      );
+      const body = paginate(outcome.files, FIND_PAGE_LINES, "find");
       const count = outcome.files.length;
       const header = findResultHeader(count);
       const notices = outcome.limitReached
@@ -530,13 +380,15 @@ export function registerTools(
       };
     },
 
-    renderCall(args: FindInput, theme: Theme) {
-      const scope = args.path === undefined
+    renderCall(args: Partial<FindInput> | undefined, theme: Theme) {
+      const pathConstraint = args?.path;
+      const scope = pathConstraint === undefined
         ? ""
-        : theme.fg("muted", ` in ${formatConstraint(args.path)}`);
-      const query = args.pattern.trim().length === 0
+        : theme.fg("muted", ` in ${formatConstraint(pathConstraint)}`);
+      const rawPattern = typeof args?.pattern === "string" ? args.pattern.trim() : "";
+      const query = rawPattern.length === 0
         ? theme.fg("muted", "(all files)")
-        : theme.fg("accent", args.pattern);
+        : theme.fg("accent", rawPattern);
       return new Text(
         theme.fg("toolTitle", theme.bold("find ")) + query + scope,
         0,
@@ -604,31 +456,6 @@ function renderSearchResult(
   }
 
   const details = result.details as SearchDetails | undefined;
-  if (details?.cursorStatus === "expired") {
-    return expandedResult(
-      theme.fg("warning", "cursor expired"),
-      output,
-      options.expanded,
-      theme,
-    );
-  }
-  if (details?.cursorStatus === "mismatch") {
-    return expandedResult(
-      theme.fg("warning", "cursor belongs to a different query"),
-      output,
-      options.expanded,
-      theme,
-    );
-  }
-  if (details?.cursorStatus === "continued") {
-    const more = details.truncated ? theme.fg("warning", " (more available)") : "";
-    return expandedResult(
-      theme.fg("success", "✓ continued results") + more,
-      output,
-      options.expanded,
-      theme,
-    );
-  }
   if (details === undefined) {
     return expandedResult(
       theme.fg("success", "✓ search completed"),

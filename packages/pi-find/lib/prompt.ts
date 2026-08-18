@@ -24,13 +24,14 @@ const EXCLUDE_DSL_DESCRIPTION =
 // --- grep --------------------------------------------------------------------
 
 export const GREP_TOOL_DESCRIPTION =
-    "Search file contents across the workspace. Respects .gitignore and searches hidden files.";
+    "Search file contents across the workspace. Respects .gitignore and searches hidden files. Supports a single string/regex or an array of literal strings to search for multiple patterns in one pass.";
 
 export const GREP_PROMPT_SNIPPET =
-    "Search file contents (path/exclude filters, smart-case, context)";
+    "Search file contents (single pattern or pattern array, path/exclude filters, smart-case, context)";
 
 export const GREP_PROMPT_GUIDELINES = [
-    "grep: prefer bare identifiers as patterns — a literal search is faster and cannot fail to compile. Regex is auto-detected; you never need to declare it.",
+    "grep: pattern accepts a single string or an array of strings (e.g. ['user_id', 'userId']) to search for any of multiple literal patterns at once.",
+    "grep: prefer bare identifiers as patterns — a literal search is faster. Regex is auto-detected for single string patterns; invalid regex automatically falls back to literal search.",
     "grep: narrow with path ('src/', '*.ts') and cut noise with exclude ('test/,*.min.js') instead of raising limit.",
     "grep: pass caseSensitive: true only to force exact case; the default already matches case when your pattern contains uppercase.",
     "grep: after 1-2 searches, read the best match instead of grepping again — a third variation of the same query rarely finds what the first two missed.",
@@ -38,14 +39,13 @@ export const GREP_PROMPT_GUIDELINES = [
 
 export const GREP_PARAMETER_DESCRIPTIONS = {
     pattern:
-        "Text to search for. Literal by default; treated as a regex when it contains regex syntax. Invalid regex syntax automatically falls back to literal search.",
+        "Text or patterns to search for. Pass a single string (literal or regex) or an array of literal strings to search for ANY of several patterns in one pass (e.g. naming-convention variants). Single patterns automatically detect regex and fall back to literal on syntax error.",
     path: PATH_DSL_DESCRIPTION,
     exclude: EXCLUDE_DSL_DESCRIPTION,
     caseSensitive:
         "Force case-sensitive matching. Default is smart-case: case-insensitive when the pattern is all lowercase, case-sensitive otherwise.",
     context: `Lines of context to show before and after each match (default 0, maximum ${MAX_CONTEXT_LINES}).`,
     limit: `Maximum matches to return (default ${DEFAULT_GREP_LIMIT}, maximum ${MAX_GREP_LIMIT}).`,
-    cursor: "Pagination cursor from a previous grep result. Send it with the same pattern; a cursor sent with a different query is rejected.",
 };
 
 // --- find --------------------------------------------------------------------
@@ -59,7 +59,7 @@ export const FIND_PROMPT_SNIPPET =
 export const FIND_PROMPT_GUIDELINES = [
     "find: matches the WHOLE repo-relative path, not just the filename — 'profile' also hits 'chrome/browser/profiles/x.cc'.",
     "find: use it as the first step whenever the user names a concept, feature, or symbol; two or three words narrow it (AND, any order), so 'search prompt' beats guessing a filename.",
-    "find: for an exact filename or a known layout, pass a glob in path ('**/profile.h', 'src/**/*.test.ts') — that is a precise filter, while pattern is a substring/regex match.",
+    "find: for an exact filename, use path: 'profile.h' (basename match at any depth); reserve rooted globs such as 'src/**/*.test.ts' for known layouts. pattern is a substring/regex match.",
     "find: it locates paths, never contents. Use grep for contents, and read to open what find returned.",
 ];
 
@@ -69,45 +69,12 @@ export const FIND_PARAMETER_DESCRIPTIONS = {
     path: PATH_DSL_DESCRIPTION,
     exclude: EXCLUDE_DSL_DESCRIPTION,
     limit: `Maximum files to return (default ${DEFAULT_FIND_LIMIT}, maximum ${MAX_FIND_LIMIT}).`,
-    cursor: "Pagination cursor from a previous find result. Send it with the same pattern; a cursor sent with a different query is rejected.",
-};
-
-// --- multi_grep --------------------------------------------------------------
-
-export const MULTI_GREP_TOOL_DESCRIPTION =
-    "Search file contents for ANY of several literal patterns in one pass (faster than regex alternation or repeated greps).";
-
-export const MULTI_GREP_PROMPT_SNIPPET =
-    "Search for any of several literal patterns at once";
-
-export const MULTI_GREP_PROMPT_GUIDELINES = [
-    "multi_grep: use it when looking for several identifiers at once — one call beats several greps and shows which pattern each hit came from.",
-    "multi_grep: include every naming-convention variant of a concept (snake_case, camelCase, PascalCase, SCREAMING_CASE) as separate patterns.",
-    "multi_grep: patterns are literal, never regex. Use grep when you need a real pattern.",
-];
-
-export const MULTI_GREP_PARAMETER_DESCRIPTIONS = {
-    patterns:
-        "Literal strings to search for. A line matching any of them is returned. Include naming convention variants (e.g. snake_case, camelCase, PascalCase).",
-    path: PATH_DSL_DESCRIPTION,
-    exclude: EXCLUDE_DSL_DESCRIPTION,
-    caseSensitive:
-        "Force case-sensitive matching. Default is smart-case across all patterns.",
-    context: `Lines of context to show before and after each match (default 0, maximum ${MAX_CONTEXT_LINES}).`,
-    limit: `Maximum matches to return (default ${DEFAULT_GREP_LIMIT}, maximum ${MAX_GREP_LIMIT}).`,
-    cursor: "Pagination cursor from a previous multi_grep result. Send it with the same patterns (any order); a cursor sent with a different query is rejected.",
 };
 
 // --- result framing ----------------------------------------------------------
 
 export const NO_GREP_MATCHES = "No matches found.";
 export const NO_FILES_FOUND = "No files found.";
-export const CURSOR_EXPIRED =
-    "That cursor is no longer available (cursors last for the session and are consumed once). Run the search again.";
-
-/** The cursor exists but was sent with a different query than produced it. */
-export const CURSOR_QUERY_MISMATCH =
-    "That cursor belongs to a different query. Send it with its original query to page those results, or drop it to run the new search.";
 
 /**
  * Refuse a wildcard-only pattern. The model reaches for `grep '.*'` to read a
@@ -116,15 +83,18 @@ export const CURSOR_QUERY_MISMATCH =
 export const WILDCARD_ONLY_ERROR =
     "A wildcard-only pattern matches every line, which is never a useful search. Use read to open a specific file, find to locate files, or grep with a real pattern.";
 
-export const MIXED_EXTERNAL_ROOTS_ERROR =
-    "A search can use only one absolute or ~/ path root at a time. Run separate searches for different external roots.";
+export const MIXED_EXTERNAL_PATH_ERROR =
+    "An absolute, ~/, or ../ path must be the call's sole path constraint. Run separate searches for additional paths or globs.";
+
+export const EMPTY_PATTERN_ERROR =
+    "Search pattern cannot be empty. Pass a non-empty pattern to search for, or use find to locate files by path.";
 
 /**
  * Refuse a wildcard-only find pattern: matching every path is what an empty
  * pattern or a path glob already expresses precisely.
  */
 export const FIND_WILDCARD_ONLY_ERROR =
-    "A wildcard-only pattern matches every path, which is the same as listing files. Drop pattern (or pass an empty string) to list everything under path, or use a glob in path for a precise filter.";
+    "A wildcard-only pattern matches every path, which is the same as listing files. Pass an empty pattern to list everything under path, or use a glob in path for a precise filter.";
 
 export function grepResultHeader(
     matchCount: number,
@@ -142,12 +112,17 @@ export function findResultHeader(fileCount: number): string {
 export function tooManyResultsNotice(
     shown: number,
     total: number,
-    cursorId: string,
+    kind: "grep" | "find",
 ): string {
     const remaining = total - shown;
-    return `[Showing ${shown} of ${total} output lines. ${remaining} more line${
+    // Output pages are capped by lines/bytes, so a higher limit cannot reveal
+    // what was omitted — only a narrower search (or less context) can.
+    const narrow = kind === "grep"
+        ? "Narrow the search with path/exclude or reduce context"
+        : "Narrow the search with path/exclude";
+    return `[Showing ${shown} of ${total} output lines (${remaining} more line${
         remaining === 1 ? "" : "s"
-    } available — pass cursor="${cursorId}" together with the same required query field(s), or narrow the search with path/exclude.]`;
+    } omitted). ${narrow}; raising limit does not reveal omitted lines.]`;
 }
 
 export function resultLimitNotice(
@@ -158,7 +133,7 @@ export function resultLimitNotice(
     const nextLimit = Math.min(maximum, limit * 2);
     const continuation =
         nextLimit > limit
-            ? `pass limit=${nextLimit} to continue farther, or `
+            ? `rerun with limit=${nextLimit} to show more results, or `
             : "";
     return `[Result limit reached at ${limit} ${kind}; ${continuation}narrow the search with path/exclude.]`;
 }
