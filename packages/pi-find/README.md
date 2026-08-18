@@ -1,6 +1,6 @@
 # pi-find
 
-ripgrep/fd-backed `grep`, `find`, and `multi_grep` for the [pi coding agent](https://pi.dev).
+ripgrep/fd-backed `grep` and `find` for the [pi coding agent](https://pi.dev).
 
 Install: `npm:pi-tian-find` · npm package `pi-tian-find` · workspace `packages/pi-find`
 
@@ -13,15 +13,14 @@ better interface.
 
 | | pi built-in | **pi-find** |
 |---|---|---|
-| `grep` guidelines | none | 4 |
+| `grep` guidelines | none | 5 |
 | `find` guidelines | none | 4 |
-| `multi_grep` | — | yes, 3 guidelines |
+| multi-pattern search | — | yes, array of patterns in `grep` |
 | exclude filter | — | `exclude: "test/,*.min.js"` |
 | case handling | `ignoreCase` flag | smart-case by default, `caseSensitive` to force |
 | regex vs literal | `literal` flag | auto-detected, falls back to literal when uncompilable |
 | `find` matching | glob only | substring/regex on the whole path **or** glob |
-| path filter | `glob` string | directory / filename / glob DSL |
-| pagination | truncates | cursor to continue |
+| path filter | `glob` string | directory / filename / glob DSL with rg/fd directory pruning |
 | context lines | re-reads the file | ripgrep's own context events |
 
 ## Tools
@@ -29,18 +28,23 @@ better interface.
 ### `grep`
 
 Content search. Smart-case: an all-lowercase pattern matches case-insensitively, any
-uppercase makes it exact. Regex is detected automatically, and **ripgrep's own parser** is the
+uppercase makes it exact. Regex is detected automatically for single patterns, and **ripgrep's own parser** is the
 validator — a pattern it rejects is retried as a literal instead of surfacing a parse error.
-That covers both unbalanced syntax (`needle(arg`, which models emit when grepping a call
-site) and JavaScript-only constructs ripgrep does not support, such as lookaheads
-(`needle(?=\s)`) and backreferences (`(a)\1`).
+
+Pass an array of strings in `pattern` to search for **any** of several literal patterns in one pass (Aho-Corasick with SIMD Teddy prefilter):
 
 ```jsonc
-{ "pattern": "registerTool", "path": "src/", "exclude": "test/,*.min.js", "context": 2 }
+{ "pattern": ["user_id", "userId", "UserId", "USER_ID"] }
 ```
 
-Wildcard-only patterns (`.*`, `.`, `^.*$`) are refused with a pointer to `read`, because they
-match every line and are never a useful search.
+Wildcard-only single patterns (`.*`, `.`, `^.*$`) are refused with a pointer to `read`, because
+they match every line and are never a useful regex search. Pattern arrays are always literal, so
+`[".*"]` searches for those two characters.
+
+When every path include is a simple extension glob such as `*.ts` or `*.d.ts`, grep also supplies
+a temporary ripgrep file type as an engine-side file-selection hint. This retains `.gitignore`
+semantics and limits content search and JSON output to the combined extension set; root-relative
+client matchers remain authoritative.
 
 ### `find`
 
@@ -48,20 +52,11 @@ Path search. `pattern` is matched against the **whole repo-relative path** as a 
 substring (`"profile"` also hits `chrome/browser/profiles/x.cc`), or as a regex when it
 contains regex syntax (`"\.tsx$"`, `"^src"` — a regex that does not compile is retried as a
 literal). Multiple whitespace-separated words must all appear, in any order, so `"deep b"`
-and `"b deep"` both find `src/deep/b.ts`. For an exact filename or a known layout, put a glob
-in `path` (`"**/profile.h"`) — that is a precise filter.
+and `"b deep"` both find `src/deep/b.ts`. Directory constraints in `path` (e.g. `"src/"`) are
+pushed down directly to rg/fd for directory-level pruning. Other include and exclude shapes
+are filtered against root-relative paths without overriding `.gitignore`.
 
 Pass an empty `pattern` to list everything matching `path` alone.
-
-### `multi_grep`
-
-One pass for several **literal** patterns. ripgrep matches them together (Aho-Corasick with
-SIMD Teddy prefilter), which beats a regex alternation and beats repeated greps. Built for
-naming-convention sweeps:
-
-```jsonc
-{ "patterns": ["user_id", "userId", "UserId", "USER_ID"] }
-```
 
 ## The path DSL
 
@@ -73,9 +68,9 @@ so the same parser works for excludes and for paths outside the workspace:
 | Written | Means |
 |---|---|
 | `src/`, `src/foo/`, `src` | everything beneath that directory |
-| `main.rs` | that filename **at any depth** (`**/main.rs`) |
+| `main.rs` | that filename **at any depth** (slashless glob with basename matching) |
 | `src/main.rs` | exactly that path |
-| `Dockerfile`, `src/LICENSE` | a dotless last segment is ambiguous between an extensionless file and a directory, so it matches **either** — the file at any depth or the directory's contents |
+| `Dockerfile`, `src/LICENSE` | a dotless last segment is ambiguous between an extensionless file and a directory: slashless names match at any depth; names with directories match as workspace-relative paths |
 | `*.ts`, `src/**/*.cc`, `{src,lib}/**` | glob |
 
 A leading `!` is optional and ignored, so `exclude: "test/"` and `exclude: "!test/"` behave
@@ -84,48 +79,47 @@ token.
 
 Relative constraints remain rooted at the session cwd, so every returned path can be passed
 directly to `read`/`edit`, pattern matching sees the whole repo-relative path, and excludes use
-the same namespace. A single absolute or `~/` filename/glob outside the workspace is split
+the same namespace. A single absolute, `~/`, or `../` path outside the workspace is resolved
 into an external root and a relative include glob; its results are returned as absolute paths.
 Extensionless external paths are settled with a stat (a file contributes its directory as the
-root, anything else is used as the root itself). Mixing different external roots is rejected
-with an actionable error, so run one search per external root.
+root, anything else is used as the root itself). An external path must be the call's sole `path`
+constraint; run separate searches instead of mixing it with additional roots or globs.
 
 ## Binaries
 
-Resolution order per binary, cached for the session:
+Resolution order per binary (successful resolutions are cached and revalidated):
 
 1. `~/.pi/agent/bin/{rg,fd}` — pi downloads these itself for its built-ins, so the common
    case needs no install
 2. anything on `PATH` (`fd` or Debian/Ubuntu's `fdfind`)
 
-On session startup in interactive mode, `pi-find` automatically checks for missing binaries
-and prompts the user via `ctx.ui.confirm` with the detected platform install command (Homebrew,
-APT, Pacman, DNF, Zypper, APK, Winget, Chocolatey, or Scoop) to install them seamlessly. If
-neither binary is installed and the prompt is skipped, the tool will fail with the install
-command for that binary rather than a raw spawn error.
+Required versions are ripgrep >= 12.0 and fd >= 8.7.0; these provide `--no-require-git`, which
+keeps `.gitignore` behavior consistent outside Git repositories. Older binaries are rejected
+during discovery and routed through the same actionable install/upgrade flow as missing ones.
+
+On session startup with UI support, `pi-find` checks for missing binaries and detects Homebrew,
+APT, Pacman, DNF, Zypper, APK, Winget, Chocolatey, Scoop, or MacPorts. Non-privileged installers
+can run after confirmation. Commands requiring `sudo` or root are shown as a copyable terminal
+command instead, because extension subprocesses cannot answer password prompts. If installation
+is skipped, the tool reports an install command rather than a raw spawn error.
 
 ## Bounded by design
 
-Output is consumed incrementally. Grep stops after probing one match past `limit`; find
-stops after probing one file past `limit`, so neither ever reads more of a tree than the
-result can show. Beyond that:
+Output is consumed incrementally. Grep stops early once `limit` matches have been observed; find
+stops early once `limit` files have been matched. Beyond that:
 
 - `limit` counts **matches**, not lines — `context: 3` does not eat your budget
 - grep/find limits are capped at 1 000 and context is capped at 20 lines
 - hitting a result limit is reported in model-visible output with an actionable larger limit
 - lines longer than 400 chars are clipped, so one minified file cannot flood a result
-- each tool result stays below pi's 50KB ceiling; a page that overflows stores its remainder
-  under a cursor, and the follow-up serves the *original* results rather than re-running it
-- cursors are session-scoped, consumed once, bounded to 32, and cannot be replayed across
-  tools or against a different query; a mismatched attempt leaves the cursor usable by the
-  original query
+- each tool result stays below pi's 50KB ceiling with clean text truncation notices
 - `.git/` is always excluded (packed objects match almost any pattern by chance)
 
 ## Development
 
 ```bash
 pnpm --filter pi-tian-find run check   # typecheck
-pnpm --filter pi-tian-find test        # 108 tests
+pnpm --filter pi-tian-find test        # 152 tests
 pi -e ./packages/pi-find               # try it live
 ```
 

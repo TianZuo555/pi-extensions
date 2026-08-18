@@ -13,7 +13,7 @@ A small collection of [pi coding agent](https://pi.dev) extensions.
 | **usage** | `/usage` | Codex and Copilot account usage in a menu, plus a footer meter. |
 | **background-terminals** | `/ps`, overrides tool `bash` | One no-stdin bash path: long commands yield to background and notify once. |
 | **edit-safe** | overrides tool `edit` | Stricter `edit`: verbatim splice, ambiguity throws, one `edits[]` shape. |
-| **find** | overrides tools `grep`/`find`, adds `multi_grep` | Bounded ripgrep/fd search with whole-path matching, glob filters, exclusions, and cursors. |
+| **find** | overrides tools `grep`/`find` | Bounded ripgrep/fd search with whole-path matching, multi-pattern grep, glob filters, and exclusions. |
 | **subagents** | tool `subagent`, `/agents` | Isolated RPC child processes with profiles, background runs, and worktrees. |
 | **compact-output** | (TUI only) | Shows bordered tool status blocks with up to three preview lines; Ctrl+O restores full output; reasoning stays compact. |
 | **goal** | `/goal`, tools `get_goal`/`create_goal`/`update_goal` | Codex-style persistent, evidence-checked objective with bounded automatic continuation. |
@@ -353,12 +353,12 @@ Disable without uninstalling: `PI_EDIT_SAFE_DISABLE=1 pi`.
 See [packages/pi-edit-safe](packages/pi-edit-safe/README.md) for the full
 matching order and the A/B bench against pi's real built-in edit.
 
-### search
+### find
 
-Overrides pi's built-in `grep` and `find` tools and adds `multi_grep`. Searches
-use ripgrep and fd with smart-case content matching, whole-path pattern
-matching (substring, regex, or multi-word AND), include/exclude globs, hard
-output bounds, and session cursors. Install it
+Overrides pi's built-in `grep` and `find` tools. Searches use ripgrep and fd
+with smart-case content matching, multi-pattern grep in one pass, whole-path
+pattern matching (substring, regex, or multi-word AND), include/exclude globs,
+directory pruning, and hard output bounds. Install it
 instead of enabling another grep/find override such as FFF.
 
 See [packages/pi-find](packages/pi-find/README.md) for the path DSL and
