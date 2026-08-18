@@ -44,7 +44,7 @@
     "@earendil-works/pi-tui": "*"
   },
   "devDependencies": {
-    "@effect/language-service": "^0.87.0",
+    "@effect/language-service": "^0.87.2",
     "typescript": "^7.0.2"
   },
   "publishConfig": {

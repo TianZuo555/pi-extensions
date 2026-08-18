@@ -11,6 +11,7 @@ import type {
   AssistantMessage,
   Context,
   Model,
+  ProviderHeaders,
   SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
 import { completeSimple } from "@earendil-works/pi-ai/compat";
@@ -39,7 +40,8 @@ import {
 
 export interface ResolvedAuth {
   apiKey?: string;
-  headers?: Record<string, string>;
+  headers?: ProviderHeaders;
+  baseUrl?: string;
   env?: Record<string, string>;
 }
 

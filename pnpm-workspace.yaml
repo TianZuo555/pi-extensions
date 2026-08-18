@@ -3,6 +3,10 @@ packages:
 
 overrides:
   brace-expansion: ^5.0.8
+  "@earendil-works/pi-ai": ^0.84.2
+  "@earendil-works/pi-coding-agent": ^0.84.2
+  "@earendil-works/pi-tui": ^0.84.2
+  "@earendil-works/pi-agent-core": ^0.84.2
 
 # Dependencies of the pi runtime whose install scripts npm ran automatically;
 # pnpm 11 denies dependency build scripts unless explicitly allowed here.

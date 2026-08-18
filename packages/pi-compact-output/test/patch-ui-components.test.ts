@@ -509,7 +509,7 @@ test("length, aborted, and error stop reasons remain visible", () => {
     component.updateContent(message);
     const rendered = component.render(120).join("\n");
     if (message.stopReason === "length") {
-      assert.match(rendered, /maximum output token limit/i);
+      assert.match(rendered, /Response was truncated before completion|maximum output token limit/i);
     } else if (message.stopReason === "aborted") {
       assert.match(rendered, /aborted/i);
     } else {
@@ -588,8 +588,11 @@ test("restoration restores the exact saved methods", () => {
 });
 
 test("unsupported Pi versions leave original rendering active", () => {
-  assert.equal(isSupportedPiVersion(VERSION), VERSION.startsWith("0.83."));
-  if (VERSION.startsWith("0.83.")) {
+  assert.equal(
+    isSupportedPiVersion(VERSION),
+    VERSION.startsWith("0.83.") || VERSION.startsWith("0.84."),
+  );
+  if (VERSION.startsWith("0.83.") || VERSION.startsWith("0.84.")) {
     return;
   }
 

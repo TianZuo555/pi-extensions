@@ -113,7 +113,9 @@ function setPatchState(state: PatchState | undefined): void {
 export function isSupportedPiVersion(version: string): boolean {
   const match = /^(\d+)\.(\d+)(?:\.(\d+))?/.exec(version);
   if (!match) return false;
-  return Number(match[1]) === 0 && Number(match[2]) === 83;
+  const major = Number(match[1]);
+  const minor = Number(match[2]);
+  return major === 0 && (minor === 83 || minor === 84);
 }
 
 function createPatchState(): PatchState {
@@ -600,7 +602,7 @@ export function installUiPatches(): PatchInstallResult {
   state.refCount = 1;
 
   if (!isSupportedPiVersion(VERSION)) {
-    state.unsupportedReason = `pi-tian-compact-output requires Pi 0.83.x (found ${VERSION})`;
+    state.unsupportedReason = `pi-tian-compact-output requires Pi 0.83.x or 0.84.x (found ${VERSION})`;
     setPatchState(state);
     return { installed: false, reason: state.unsupportedReason };
   }

@@ -110,14 +110,14 @@
     "effect": "4.0.0-beta.101"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "*"
   },
   "devDependencies": {
-    "@effect/language-service": "^0.87.0",
-    "@types/node": "^26.0.0",
-    "@types/vscode": "^1.90.0",
+    "@effect/language-service": "^0.87.2",
+    "@types/node": "^26.2.0",
+    "@types/vscode": "^1.125.0",
     "typescript": "^7.0.2"
   },
   "publishConfig": {

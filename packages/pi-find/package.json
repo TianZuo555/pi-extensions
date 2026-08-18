@@ -42,7 +42,7 @@
   },
   "dependencies": {
     "effect": "4.0.0-beta.101",
-    "minimatch": "^10.2.5"
+    "minimatch": "^10.2.6"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
@@ -50,7 +50,7 @@
     "typebox": "*"
   },
   "devDependencies": {
-    "@effect/language-service": "^0.87.0",
+    "@effect/language-service": "^0.87.2",
     "typescript": "^7.0.2"
   },
   "publishConfig": {
