@@ -3,7 +3,20 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { test } from "node:test";
-import { pathCandidates } from "../src/binaries.ts";
+import {
+  isSupportedVersion,
+  pathCandidates,
+} from "../src/binaries.ts";
+
+test("binary version guards enforce features used by the runtime", () => {
+  assert.equal(isSupportedVersion("rg", "ripgrep 11.0.2"), false);
+  assert.equal(isSupportedVersion("rg", "ripgrep 12.0.0"), true);
+  assert.equal(isSupportedVersion("rg", "ripgrep 15.1.0 (rev abc)"), true);
+  assert.equal(isSupportedVersion("fd", "fdfind 8.6.0"), false);
+  assert.equal(isSupportedVersion("fd", "fd 8.7.0"), true);
+  assert.equal(isSupportedVersion("fd", "fd 10.3.0"), true);
+  assert.equal(isSupportedVersion("fd", "unknown"), false);
+});
 
 test("fd resolution accepts Debian's fdfind alias", {
   skip: process.platform === "win32",

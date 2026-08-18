@@ -2,11 +2,51 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import {
+  canInstallNoninteractively,
+  commandNames,
   detectInstallCommand,
   formatMissingNames,
   promptAndInstallMissingBinaries,
   resetPromptedState,
 } from "../src/installer.ts";
+
+test("privileged installers are not run through noninteractive pipes", () => {
+  assert.equal(
+    canInstallNoninteractively({
+      manager: "Homebrew",
+      command: "brew install fd",
+      requiresPrivilege: false,
+    }),
+    true,
+  );
+  assert.equal(
+    canInstallNoninteractively({
+      manager: "APT",
+      command: "sudo apt-get install -y fd-find",
+      requiresPrivilege: true,
+    }),
+    false,
+  );
+  // Privilege is explicit instead of inferred from command or manager strings.
+  assert.equal(
+    canInstallNoninteractively({
+      manager: "custom",
+      command: "opaque installer command",
+      requiresPrivilege: true,
+    }),
+    false,
+  );
+});
+
+test("Windows command lookup follows PATHEXT", () => {
+  assert.deepEqual(commandNames("scoop", "win32", ".EXE;.CMD;.PS1"), [
+    "scoop",
+    "scoop.EXE",
+    "scoop.CMD",
+    "scoop.PS1",
+  ]);
+  assert.deepEqual(commandNames("brew", "darwin"), ["brew"]);
+});
 
 test("formatMissingNames formats single and multiple tools", () => {
   assert.equal(formatMissingNames([]), "");
@@ -23,18 +63,22 @@ test("detectInstallCommand on macOS uses Homebrew or MacPorts", () => {
   assert.deepEqual(detectInstallCommand(["rg", "fd"], "darwin", brewOnly), {
     manager: "Homebrew",
     command: "brew install ripgrep fd",
+    requiresPrivilege: false,
   });
   assert.deepEqual(detectInstallCommand(["rg"], "darwin", brewOnly), {
     manager: "Homebrew",
     command: "brew install ripgrep",
+    requiresPrivilege: false,
   });
   assert.deepEqual(detectInstallCommand(["fd"], "darwin", brewOnly), {
     manager: "Homebrew",
     command: "brew install fd",
+    requiresPrivilege: false,
   });
   assert.deepEqual(detectInstallCommand(["rg", "fd"], "darwin", portOnly), {
     manager: "MacPorts",
     command: "sudo port install ripgrep fd",
+    requiresPrivilege: true,
   });
   assert.equal(detectInstallCommand(["rg", "fd"], "darwin", none), undefined);
 });
@@ -47,22 +91,27 @@ test("detectInstallCommand on Windows uses winget, choco, or scoop", () => {
   assert.deepEqual(detectInstallCommand(["rg", "fd"], "win32", wingetOnly), {
     manager: "winget",
     command: "winget install BurntSushi.ripgrep.MSVC sharkdp.fd",
+    requiresPrivilege: false,
   });
   assert.deepEqual(detectInstallCommand(["rg"], "win32", wingetOnly), {
     manager: "winget",
     command: "winget install BurntSushi.ripgrep.MSVC",
+    requiresPrivilege: false,
   });
   assert.deepEqual(detectInstallCommand(["fd"], "win32", wingetOnly), {
     manager: "winget",
     command: "winget install sharkdp.fd",
+    requiresPrivilege: false,
   });
   assert.deepEqual(detectInstallCommand(["rg", "fd"], "win32", chocoOnly), {
     manager: "Chocolatey",
     command: "choco install -y ripgrep fd",
+    requiresPrivilege: true,
   });
   assert.deepEqual(detectInstallCommand(["rg", "fd"], "win32", scoopOnly), {
     manager: "Scoop",
     command: "scoop install ripgrep fd",
+    requiresPrivilege: false,
   });
 });
 
@@ -72,6 +121,7 @@ test("detectInstallCommand on Linux selects the right package manager", () => {
     {
       manager: "APT",
       command: "sudo apt-get update && sudo apt-get install -y ripgrep fd-find",
+      requiresPrivilege: true,
     },
   );
   assert.deepEqual(
@@ -79,6 +129,7 @@ test("detectInstallCommand on Linux selects the right package manager", () => {
     {
       manager: "Pacman",
       command: "sudo pacman -S --noconfirm ripgrep fd",
+      requiresPrivilege: true,
     },
   );
   assert.deepEqual(
@@ -86,6 +137,7 @@ test("detectInstallCommand on Linux selects the right package manager", () => {
     {
       manager: "DNF",
       command: "sudo dnf install -y ripgrep fd-find",
+      requiresPrivilege: true,
     },
   );
   assert.deepEqual(
@@ -93,6 +145,7 @@ test("detectInstallCommand on Linux selects the right package manager", () => {
     {
       manager: "Zypper",
       command: "sudo zypper install -y ripgrep fd",
+      requiresPrivilege: true,
     },
   );
   assert.deepEqual(
@@ -100,6 +153,7 @@ test("detectInstallCommand on Linux selects the right package manager", () => {
     {
       manager: "APK",
       command: "apk add ripgrep fd",
+      requiresPrivilege: true,
     },
   );
 });
