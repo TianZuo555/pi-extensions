@@ -1056,7 +1056,8 @@ const makeManager = Effect.gen(function* () {
               });
             }
             return new TerminalLogUnavailableError({
-              message: `Archive ${request.id}:${request.stream} is unavailable.`,
+              message:
+                `Archive ${request.id}:${request.stream} is unavailable; its output was small enough that the terminal result already contains all of it.`,
             });
           }
           return new UnknownTerminalError({

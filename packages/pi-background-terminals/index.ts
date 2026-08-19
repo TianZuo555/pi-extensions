@@ -556,8 +556,8 @@ export function createBackgroundTerminalsExtension(
         }
         const reasonText = reason instanceof Error ? reason.message : String(reason);
         const warning =
-          `[Managed bash unavailable before spawn; using Pi's foreground bash fallback. ` +
-          `Automatic yielding and /ps tracking are unavailable for this call. Reason: ${reasonText.slice(0, 500)}]`;
+          `[Managed bash unavailable before spawn; using Pi's foreground bash fallback — ` +
+          `no auto-yield or /ps tracking for this call. Reason: ${reasonText.slice(0, 500)}]`;
         if (ctx.hasUI) ctx.ui.notify(warning, "warning");
 
         const fallback = makeForegroundBash(cwd, {
@@ -800,7 +800,8 @@ export function createBackgroundTerminalsExtension(
       }
       if (terminalLogReadBytes + limit > TERMINAL_LOG_READ_RUN_BUDGET) {
         throw new Error(
-          `terminal_log_read budget exhausted for this agent run (maximum ${TERMINAL_LOG_READ_RUN_BUDGET} bytes).`,
+          `terminal_log_read budget exhausted for this agent run (maximum ${TERMINAL_LOG_READ_RUN_BUDGET} bytes). ` +
+            "Work with the output you already have; the user can inspect the full log with /ps.",
         );
       }
       terminalLogReadCalls++;
