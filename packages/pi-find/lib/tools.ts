@@ -29,12 +29,14 @@ import {
   GREP_PROMPT_SNIPPET,
   grepResultHeader,
   GREP_TOOL_DESCRIPTION,
+  looksLikeStringifiedArray,
   MAX_CONTEXT_LINES,
   MAX_FIND_LIMIT,
   MAX_GREP_LIMIT,
   NO_FILES_FOUND,
   NO_GREP_MATCHES,
   resultLimitNotice,
+  STRINGIFIED_ARRAY_HINT,
   tooManyResultsNotice,
 } from "./prompt.ts";
 import {
@@ -217,8 +219,8 @@ export function registerTools(
       const patterns = Array.isArray(params.pattern)
         ? params.pattern
         : [params.pattern];
-      const query = patterns.join(", ");
       const literalOnly = Array.isArray(params.pattern);
+      const query = patterns.join(", ");
 
       const service = runtime.runSync(SearchRuntime);
       const effectiveLimit = Math.min(
@@ -241,13 +243,27 @@ export function registerTools(
         { signal },
       );
 
+      // A stringified pattern array parses as a permissive character class
+      // that matches nearly every line, so the telltale noise appears on the
+      // match path, not the empty path. The schema stays strict — the pattern
+      // runs as written — and this notice rides along with whatever comes
+      // back so the model can resend a real array on its next call.
+      const stringifiedNotice =
+        !Array.isArray(params.pattern) &&
+        patterns.length === 1 &&
+        looksLikeStringifiedArray(patterns[0]!)
+          ? STRINGIFIED_ARRAY_HINT
+          : "";
+
       const matchCount = outcome.matches.filter((m) => m.isMatch).length;
       if (matchCount === 0) {
         return {
           content: [
             {
               type: "text" as const,
-              text: NO_GREP_MATCHES + emptyResultHint(outcome.hasConstraints),
+              text: NO_GREP_MATCHES +
+                emptyResultHint(outcome.hasConstraints) +
+                stringifiedNotice,
             },
           ],
           details: {
@@ -267,6 +283,7 @@ export function registerTools(
       const notices = outcome.truncated
         ? [resultLimitNotice("matches", effectiveLimit, MAX_GREP_LIMIT)]
         : [];
+      if (stringifiedNotice !== "") notices.push(stringifiedNotice);
       const text = [header, "", body.text, ...notices.flatMap((notice) => ["", notice])]
         .join("\n");
 
@@ -283,10 +300,10 @@ export function registerTools(
     },
 
     renderCall(args: Partial<GrepInput> | undefined, theme: Theme) {
-      const pathConstraint = args?.path;
-      const scope = pathConstraint === undefined
+      const pathArg = args?.path;
+      const scope = pathArg === undefined
         ? ""
-        : theme.fg("muted", ` in ${formatConstraint(pathConstraint)}`);
+        : theme.fg("muted", ` in ${formatConstraint(pathArg)}`);
       const rawPattern = args?.pattern;
       const patterns = Array.isArray(rawPattern)
         ? rawPattern.filter((p): p is string => typeof p === "string" && p.length > 0)
@@ -381,10 +398,10 @@ export function registerTools(
     },
 
     renderCall(args: Partial<FindInput> | undefined, theme: Theme) {
-      const pathConstraint = args?.path;
-      const scope = pathConstraint === undefined
+      const pathArg = args?.path;
+      const scope = pathArg === undefined
         ? ""
-        : theme.fg("muted", ` in ${formatConstraint(pathConstraint)}`);
+        : theme.fg("muted", ` in ${formatConstraint(pathArg)}`);
       const rawPattern = typeof args?.pattern === "string" ? args.pattern.trim() : "";
       const query = rawPattern.length === 0
         ? theme.fg("muted", "(all files)")

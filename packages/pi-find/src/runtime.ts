@@ -182,12 +182,33 @@ function normalizeRgPath(filePath: string): string {
   return normalizePath(filePath);
 }
 
-function buildRgArgs(
+/**
+ * Exclude globs whose engine-level meaning provably coincides with the
+ * client-side matcher, in the engine's own spelling (leading '/' stripped).
+ *
+ * Engine excludes apply to directories as well as files: a slashless glob
+ * like '*.min.js' prunes a directory named cache.min.js entirely, taking
+ * keep.ts inside with it, and 'vendor' prunes nested src/vendor — both
+ * over-exclude relative to the file-path matchers, which stay authoritative.
+ * Only globs with directory-closure semantics are pushed: '**' and anything
+ * ending in '/**'. For those, any directory the engine prunes for matching
+ * the glob has every file beneath it matching the same glob client-side, so
+ * results cannot diverge. Everything else (basename globs, exact files,
+ * anchored single segments) is filtered client-side only.
+ */
+function pushableExcludeGlob(glob: string): string | undefined {
+  const stripped = glob.startsWith("/") ? glob.slice(1) : glob;
+  if (stripped === "**") return stripped;
+  return stripped.endsWith("/**") ? stripped : undefined;
+}
+
+export function buildRgArgs(
   request: GrepRequest,
   literal: boolean,
   root: string,
   searchDirs: readonly string[] | undefined,
   includeGlobs: readonly string[],
+  excludeGlobs: readonly string[],
 ): string[] {
   const args = [
     "--json",
@@ -221,8 +242,20 @@ function buildRgArgs(
 
   // Client-side include matching remains authoritative because positive rg
   // globs override .gitignore. The custom type above is only a file-selection
-  // hint for simple extension globs. Keep .git as a final engine-level
-  // exclusion because packed objects are both large and likely to match.
+  // hint for simple extension globs.
+  //
+  // Excludes are pushed down for traversal pruning: a negative --glob only
+  // removes candidates — unlike positive globs it never re-includes
+  // gitignored files — and rg keeps anchored globs anchored even alongside
+  // positional search paths (verified empirically). Only directory-closure
+  // globs ('**' and '/**'-suffixed) are forwarded, so pruning a directory
+  // never removes files the client-side matchers would keep. Keep .git as a
+  // final engine-level exclusion because packed objects are both large and
+  // likely to match.
+  for (const glob of excludeGlobs) {
+    const pushable = pushableExcludeGlob(glob);
+    if (pushable !== undefined) args.push("--glob", `!${pushable}`);
+  }
   args.push("--glob", "!.git/");
 
   // Explicit directory constraints become positional paths. This preserves
@@ -268,9 +301,10 @@ function resolveSearchDirs(
   return existing;
 }
 
-function buildFdArgs(
+export function buildFdArgs(
   root: string,
   searchDirs: readonly string[] | undefined,
+  excludeGlobs: readonly string[],
 ): string[] {
   const args = [
     "--type",
@@ -287,9 +321,20 @@ function buildFdArgs(
   // repository ignore boundaries.
   if (!isInsideGitRepository(root)) args.push("--no-require-git");
 
-  // User excludes are enforced against root-relative candidate paths after fd
-  // emits them. Forwarding an anchored exclude here is incorrect because fd
-  // rebases --exclude separately under each --search-path.
+  // Excludes are pushed down for traversal pruning only when the walk covers
+  // the whole root: with --search-path, fd re-anchors --exclude per search
+  // path (verified: 'sub/**' excluded src/sub but left keep/sub standing),
+  // which does not share this tool's root-relative namespace. Anchoring and
+  // skip decisions live in pushableExcludeGlob; the client-side matchers
+  // above stay authoritative in every case.
+  // (The '.git' literal above is fd's own default-exclude spelling, not a
+  // pushed user glob.)
+  if (searchDirs === undefined || searchDirs.length === 0) {
+    for (const glob of excludeGlobs) {
+      const pushable = pushableExcludeGlob(glob);
+      if (pushable !== undefined) args.push("--exclude", pushable);
+    }
+  }
 
   // Relative search paths are resolved by fd against --base-directory. Missing
   // paths were removed above so a typo cannot degrade into a full-root walk.
@@ -472,6 +517,7 @@ const makeSearchRuntime = Effect.gen(function* () {
             root,
             searchDirs,
             scope.plan.include,
+            scope.plan.exclude,
           ),
           cwd: root,
           onLine,
@@ -577,7 +623,7 @@ const makeSearchRuntime = Effect.gen(function* () {
 
       return streamLines({
         binary: "fd",
-        args: buildFdArgs(root, fdSearchDirs),
+        args: buildFdArgs(root, fdSearchDirs, scope.plan.exclude),
         cwd: request.cwd,
         onLine,
         signal: request.signal,

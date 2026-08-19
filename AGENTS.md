@@ -61,7 +61,7 @@ Workspace → npm package map: `pi-repo-model`→`pi-tian-repo-model`, `pi-repo-
     - Test `pi-image-cache`: `pnpm --filter pi-tian-image-cache test`
     - Test `pi-vscode-bridge`: `pnpm --filter pi-tian-vscode-bridge test`; compile its VS Code host with `pnpm --filter pi-tian-vscode-bridge run compile:vscode`
     - Test `pi-web-search`: `pnpm --filter pi-tian-web-search test`
-    - Test `pi-find`: `pnpm --filter pi-tian-find test` (152 cases; the rg/fd integration cases skip when a binary is missing)
+    - Test `pi-find`: `pnpm --filter pi-tian-find test` (158 cases; the rg/fd integration cases skip when a binary is missing)
 - Inspect publishable tarballs: `pnpm run pack:check`
 - Try an extension in a live pi session without installing: `pi -e ./packages/pi-repo-model`
 - Publish one workspace manually (after `npm login`): `pnpm --filter pi-tian-repo-model publish --access public --no-git-checks`

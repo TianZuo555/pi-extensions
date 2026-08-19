@@ -232,6 +232,44 @@ test("single-element array pattern searches literally without regex or wildcard 
   }
 });
 
+test("a stringified-array pattern runs as written but carries the resend notice", {
+  skip: !hasRg,
+}, async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "pi-find-tool-stringified-"));
+  const { runtime, tools } = captureTools();
+  try {
+    // The character class ["a", "b"] matches almost any code line, so the
+    // notice must ride along on the noisy match path, not only on no-match.
+    writeFileSync(path.join(root, "code.ts"), "const answer = 42;\n");
+    const grep = tools.get("grep")!;
+
+    const noisy = await grep.execute(
+      "grep-stringified",
+      { pattern: '["a", "b"]' },
+      undefined,
+      undefined,
+      { cwd: root },
+    );
+    const noisyText = noisy.content[0]?.type === "text" ? noisy.content[0].text : "";
+    assert.match(noisyText, /JSON array sent as a string/);
+    assert.match(noisyText, /real array/);
+
+    // A legitimate regex character class that is not JSON stays notice-free.
+    const clean = await grep.execute(
+      "grep-class",
+      { pattern: "[abc]" },
+      undefined,
+      undefined,
+      { cwd: root },
+    );
+    const cleanText = clean.content[0]?.type === "text" ? clean.content[0].text : "";
+    assert.doesNotMatch(cleanText, /JSON array sent as a string/);
+  } finally {
+    await runtime.dispose();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("the custom renderer satisfies TUI width safety at 42 columns", async () => {
   const { runtime, tools } = captureTools();
   try {

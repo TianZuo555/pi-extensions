@@ -11,6 +11,8 @@ import * as path from "node:path";
 import { after, before, test } from "node:test";
 import { resolveBinary } from "../src/binaries.ts";
 import {
+  buildFdArgs,
+  buildRgArgs,
   createSearchRuntime,
   rgTypeGlobs,
   runSearch,
@@ -91,6 +93,56 @@ test("rg type hints require an entirely simple extension include set", () => {
   assert.equal(rgTypeGlobs(["src/**/*.ts"]), undefined);
   assert.equal(rgTypeGlobs(["*.ts", "src/**"]), undefined);
   assert.equal(rgTypeGlobs(["*.{ts,tsx}"]), undefined);
+});
+
+test("rg args push only directory-closure excludes down", () => {
+  const args = buildRgArgs(
+    { patterns: ["x"], literalOnly: false, limit: 5, cwd: "/w" },
+    false,
+    "/w",
+    undefined,
+    [],
+    ["test/**", "*.min.js", "/rel/*.ts", "**", "src/**/generated/**"],
+  );
+  const globs = args.filter((_, index) => args[index - 1] === "--glob");
+  // Basename globs and anchored single segments stay client-side: engines
+  // apply excludes to directories too, so '*.min.js' would prune a directory
+  // named cache.min.js and everything inside it.
+  assert.deepEqual(globs, ["!test/**", "!**", "!src/**/generated/**", "!.git/"]);
+});
+
+test("rg args skip anchored slashless excludes the engine would over-match", () => {
+  // '/main.ts' is root-anchored on our side, but rg would strip the slash and
+  // exclude every main.ts by basename — over-exclusion. It must not be pushed.
+  const args = buildRgArgs(
+    { patterns: ["x"], literalOnly: false, limit: 5, cwd: "/w" },
+    false,
+    "/w",
+    undefined,
+    [],
+    ["/main.ts"],
+  );
+  const globs = args.filter((_, index) => args[index - 1] === "--glob");
+  assert.deepEqual(globs, ["!.git/"]);
+});
+
+test("fd args push excludes down only for full-root walks", () => {
+  const excludesOf = (args: readonly string[]) =>
+    args.filter((_, index) => args[index - 1] === "--exclude");
+
+  // Full-root walk: only directory-closure globs ride along; '*.min.js' and
+  // '/main.ts' would let fd prune like-named directories, so they stay
+  // client-side.
+  assert.deepEqual(
+    excludesOf(buildFdArgs("/w", undefined, ["src/gen/**", "*.min.js", "/main.ts"])),
+    [".git", "src/gen/**"],
+  );
+  // Directory-pruned walk: fd re-anchors --exclude under --search-path, so
+  // user excludes must not be forwarded.
+  assert.deepEqual(
+    excludesOf(buildFdArgs("/w", ["src"], ["src/gen/**"])),
+    [".git"],
+  );
 });
 
 test("grep finds matches across the tree", { skip: !hasRg }, async () => {
@@ -1166,6 +1218,56 @@ test("grep path filters preserve .gitignore and always exclude .git", {
         `path=${String(constraint)}`,
       );
     }
+  } finally {
+    rmSync(tree, { recursive: true, force: true });
+  }
+});
+
+test("excludes never remove directories whose name matches the glob", {
+  skip: !hasRg || !hasFd,
+}, async () => {
+  // Engine excludes apply to directories as well as files. A pushed
+  // '*.min.js' would prune src/cache.min.js/ entirely — keep.ts inside does
+  // not match the glob and must survive. Likewise 'vendor' (ambiguous:
+  // files named vendor anywhere plus root vendor/**) must not prune the
+  // nested src/vendor/ tree.
+  const tree = mkdtempSync(path.join(tmpdir(), "pi-find-dir-name-exclude-"));
+  try {
+    mkdirSync(path.join(tree, "src", "cache.min.js"), { recursive: true });
+    mkdirSync(path.join(tree, "src", "vendor"), { recursive: true });
+    mkdirSync(path.join(tree, "vendor"), { recursive: true });
+    writeFileSync(path.join(tree, "src", "cache.min.js", "keep.ts"), "needle keep\n");
+    writeFileSync(path.join(tree, "src", "vendor", "a.ts"), "needle nested\n");
+    writeFileSync(path.join(tree, "vendor", "b.ts"), "needle root\n");
+    writeFileSync(path.join(tree, "src", "real.min.js"), "var needle=1;\n");
+
+    const grepMin = await grep({ cwd: tree, exclude: "*.min.js" });
+    assert.deepEqual(matchedPaths(grepMin.matches).sort(), [
+      "src/cache.min.js/keep.ts",
+      "src/vendor/a.ts",
+      "vendor/b.ts",
+    ]);
+    const findMin = await find({ cwd: tree, exclude: "*.min.js" });
+    assert.deepEqual([...findMin.files].sort(), [
+      "src/cache.min.js/keep.ts",
+      "src/vendor/a.ts",
+      "vendor/b.ts",
+    ]);
+
+    // 'vendor' excludes the root vendor/ tree and files named vendor, while
+    // the nested src/vendor/ survives.
+    const grepVendor = await grep({ cwd: tree, exclude: "vendor" });
+    assert.deepEqual(matchedPaths(grepVendor.matches).sort(), [
+      "src/cache.min.js/keep.ts",
+      "src/real.min.js",
+      "src/vendor/a.ts",
+    ]);
+    const findVendor = await find({ cwd: tree, exclude: "vendor" });
+    assert.deepEqual([...findVendor.files].sort(), [
+      "src/cache.min.js/keep.ts",
+      "src/real.min.js",
+      "src/vendor/a.ts",
+    ]);
   } finally {
     rmSync(tree, { recursive: true, force: true });
   }

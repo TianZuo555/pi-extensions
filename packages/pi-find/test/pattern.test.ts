@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { classifyPattern, isSmartCaseInsensitive } from "../lib/pattern.ts";
+import {
+  classifyPattern,
+  isSmartCaseInsensitive,
+} from "../lib/pattern.ts";
+import { looksLikeStringifiedArray } from "../lib/prompt.ts";
 
 test("a bare identifier is a literal search", () => {
   const result = classifyPattern("registerTool");
@@ -50,4 +54,16 @@ test("smart-case is insensitive only for all-lowercase patterns", () => {
   assert.equal(isSmartCaseInsensitive("REGISTER"), false);
   // Non-letters do not make a pattern case-sensitive.
   assert.equal(isSmartCaseInsensitive("foo_bar-1"), true);
+});
+
+test("stringified-array detection only flags JSON-array-shaped strings", () => {
+  // The schema stays strict: such a pattern runs as written (a character
+  // class), and detection only decides whether the no-match hint nudges the
+  // model to resend a real array.
+  assert.equal(looksLikeStringifiedArray('["user_id", "userId"]'), true);
+  assert.equal(looksLikeStringifiedArray(' ["a"] '), true);
+  assert.equal(looksLikeStringifiedArray('["a", ""]'), true); // still flagged
+  assert.equal(looksLikeStringifiedArray("user_id"), false);
+  assert.equal(looksLikeStringifiedArray("[a,b]"), false);
+  assert.equal(looksLikeStringifiedArray('["a", '), false);
 });

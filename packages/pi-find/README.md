@@ -23,6 +23,32 @@ better interface.
 | path filter | `glob` string | directory / filename / glob DSL with rg/fd directory pruning |
 | context lines | re-reads the file | ripgrep's own context events |
 
+## Measured
+
+A headless A/B benchmark (deterministic 189-file fixture with planted needles, a
+1.6 MB single-line minified bundle, gitignored build output, and same-basename
+decoys; 6 tasks × 2 repeats per arm) compared three arms — pi's built-in
+grep/find, this extension, and `bash` with both search tools disabled so the
+model had to shell out to rg/fd directly — across three models: DeepSeek
+V4 Flash, GLM 5.3, and GPT 5.6 Luna (144 runs, all 100% correct). Harness:
+`pi -p --mode json`, measuring search actions, tokens, and errors from the
+JSON transcript.
+
+| observation | result |
+|---|---|
+| model's free choice (tools + bash both available) | **0/36 runs used bash to search** — every model picked the structured tools |
+| built-in tools vs bash (forced comparison) | 0/36 runs used the built-in grep/find — models preferred writing `rg` by hand |
+| output tokens, this extension vs bash | −26% (DeepSeek), −35% (GLM 5.3), −10% (GPT Luna) |
+| minified-bundle trap task | bash worst case spiralled to 9 calls / 1558 tokens; the bounded tool did it in 1 call / 83 |
+| model mistakes (e.g. a stringified pattern array) | flagged in the result with a resend notice; the same mistake under bash returns a wall of noise |
+
+Two takeaways. First, the model votes with its actions: given bash and these
+tools side by side it always searches through the tools, but given pi's
+built-ins it always writes shell instead — the interface, not tool availability,
+drives the choice. Second, the wins concentrate exactly where an agent is
+weakest unaided: bounded output on hostile files and built-in recovery from
+its own serialization slips.
+
 ## Tools
 
 ### `grep`
@@ -77,6 +103,15 @@ A leading `!` is optional and ignored, so `exclude: "test/"` and `exclude: "!tes
 the same. Brace alternations are protected from comma splitting: `{src,lib}/**` stays one
 token.
 
+Excludes are not just a post-filter: directory-shaped ones (`dist/**`, `**`) are pushed down to
+ripgrep (and to fd on full-root walks) as engine-level negative globs, so an untracked `dist/`
+with tens of thousands of files is pruned during traversal instead of being read and then
+discarded — measured 1.15s → 0.007s on a 50k-file tree. Only globs with directory-closure
+semantics are pushed: engines apply excludes to directories as well as files, so `*.min.js`
+would prune a directory named `cache.min.js` whole, taking files the client-side matcher keeps.
+Basename globs, exact filenames, fd under `--search-path`, and `/name` anchors therefore stay
+client-side, and results are identical either way.
+
 Relative constraints remain rooted at the session cwd, so every returned path can be passed
 directly to `read`/`edit`, pattern matching sees the whole repo-relative path, and excludes use
 the same namespace. A single absolute, `~/`, or `../` path outside the workspace is resolved
@@ -119,7 +154,7 @@ stops early once `limit` files have been matched. Beyond that:
 
 ```bash
 pnpm --filter pi-tian-find run check   # typecheck
-pnpm --filter pi-tian-find test        # 152 tests
+pnpm --filter pi-tian-find test        # 158 tests
 pi -e ./packages/pi-find               # try it live
 ```
 

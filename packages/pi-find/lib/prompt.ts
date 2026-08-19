@@ -144,3 +144,24 @@ export function emptyResultHint(hasConstraints: boolean): string {
         ? " The path/exclude filters may be excluding it — try again without them to confirm the pattern itself matches."
         : "";
 }
+
+/**
+ * Detect a pattern that looks like a stringified JSON array. Unwrapping it
+ * automatically was rejected: '["ab"]' is a legal character-class regex whose
+ * meaning silent recovery would change, and recovery could not be made both
+ * safe and complete. Instead the schema stays strict and the model gets this
+ * visible nudge to re-send the parameter as a real array.
+ */
+export function looksLikeStringifiedArray(pattern: string): boolean {
+    const trimmed = pattern.trim();
+    if (!trimmed.startsWith("[") || !trimmed.endsWith("]")) return false;
+    try {
+        const parsed: unknown = JSON.parse(trimmed);
+        return Array.isArray(parsed);
+    } catch {
+        return false;
+    }
+}
+
+export const STRINGIFIED_ARRAY_HINT =
+    ' The pattern looks like a JSON array sent as a string. If you meant to search for multiple patterns, pass a real array: {"pattern": ["a", "b"]} — a single string starting with "[" is otherwise interpreted as a regex character class.';
