@@ -12,8 +12,7 @@ export const WEB_SEARCH_PROMPT_SNIPPET =
   "Search the live web for up-to-date information and documentation.";
 
 export const WEB_SEARCH_PROMPT_GUIDELINES = [
-  "Use web_search when questions require recent info, library docs, or facts beyond training data.",
-  "Prefer specific keyword queries over conversational sentences.",
+  "Use web_search when answers need current info.",
 ];
 
 export const WEB_SEARCH_PARAMETER_DESCRIPTIONS = {
@@ -27,7 +26,7 @@ export const WEB_FETCH_TOOL_DESCRIPTION =
 export const WEB_FETCH_PROMPT_SNIPPET = "Fetch the content of a specific web URL.";
 
 export const WEB_FETCH_PROMPT_GUIDELINES = [
-  "Use web_fetch to inspect specific webpage links, API documentation pages, or articles found via web_search.",
+  "Use web_fetch to inspect specific webpage links.",
 ];
 
 export const WEB_FETCH_PARAMETER_DESCRIPTIONS = {
