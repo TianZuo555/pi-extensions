@@ -6,7 +6,9 @@ import {
   renderGrepLines,
 } from "../lib/tools.ts";
 import {
+  FIND_PARAMETER_DESCRIPTIONS,
   FIND_PROMPT_GUIDELINES,
+  GREP_PARAMETER_DESCRIPTIONS,
   GREP_PROMPT_GUIDELINES,
   tooManyResultsNotice,
 } from "../lib/prompt.ts";
@@ -134,15 +136,31 @@ test("every parameter carries a description", () => {
   }
 });
 
-test("each tool contributes prompt guidelines", () => {
+test("prompt guidelines stay within their system-prompt budget", () => {
+  // Guidelines are merged flat into every request's system prompt, so the
+  // property worth defending is that they stay few and short, not that they
+  // exist: pi's built-in grep/find ship with none at all.
   for (const guidelines of [
     GREP_PROMPT_GUIDELINES,
     FIND_PROMPT_GUIDELINES,
   ]) {
-    assert.ok(guidelines.length >= 3);
+    assert.ok(guidelines.length <= 2, "too many guideline lines");
+    const budget = guidelines.reduce((total, line) => total + line.length, 0);
+    assert.ok(budget <= 260, `guideline budget exceeded: ${budget} chars`);
     for (const line of guidelines) {
       assert.ok(line.length > 0);
       assert.match(line, /^(grep|find):/);
+    }
+  }
+});
+
+test("descriptions do not restate bounds the schema already carries", () => {
+  for (const descriptions of [
+    GREP_PARAMETER_DESCRIPTIONS,
+    FIND_PARAMETER_DESCRIPTIONS,
+  ]) {
+    for (const [name, text] of Object.entries(descriptions)) {
+      assert.doesNotMatch(text, /maximum \d/i, `${name} restates a schema bound`);
     }
   }
 });

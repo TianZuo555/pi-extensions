@@ -267,7 +267,7 @@ test("grep refuses a wildcard-only pattern", { skip: !hasRg }, async () => {
 });
 
 test("mixed external path errors describe the sole-constraint rule", async () => {
-  const expected = /must be the call's sole path constraint/;
+  const expected = /must be the only path constraint/;
   await assert.rejects(
     () => grep({ path: ["/tmp/a", "*.ts"] }),
     expected,
