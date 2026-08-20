@@ -7,49 +7,46 @@ import type { OutputView, TerminalSnapshot } from "./src/domain.ts";
 import {
   BASH_PARAMETER_DESCRIPTIONS,
   BASH_PROMPT_GUIDELINES,
+  BASH_PROMPT_SNIPPET,
   BASH_TOOL_DESCRIPTION,
   buildBashProgress,
   buildBashResult,
   buildTerminalResultMessage,
   deriveCommandTitle,
+  TERMINAL_LOG_READ_PROMPT_SNIPPET,
+  TERMINAL_LOG_READ_TOOL_DESCRIPTION,
 } from "./src/prompt.ts";
 
-test("bash descriptions identify managed yielding, timeout, and no-stdin contracts", () => {
-  // Assert the contract, not the phrasing: these check that each fact is
-  // present somewhere in the sentence, so the wording stays tunable.
+test("bash metadata states the managed-shell contract concisely", () => {
   assert.match(BASH_TOOL_DESCRIPTION, /background terminal/);
-  assert.match(BASH_TOOL_DESCRIPTION, /returns an id/);
-  assert.match(BASH_TOOL_DESCRIPTION, /fresh, non-persistent shell/);
+  assert.match(BASH_TOOL_DESCRIPTION, /returns .*id/);
+  assert.match(BASH_TOOL_DESCRIPTION, /fresh shell/);
   assert.match(BASH_TOOL_DESCRIPTION, /no interactive stdin/);
   assert.match(BASH_TOOL_DESCRIPTION, /working_dir/);
   // yield_time_ms waits, timeout kills: the pair models most often confuse.
-  assert.match(BASH_TOOL_DESCRIPTION, /yield_time_ms only waits/);
+  assert.match(BASH_TOOL_DESCRIPTION, /yield_time_ms sets the wait/);
   assert.match(BASH_TOOL_DESCRIPTION, /timeout kills the process tree/);
   assert.match(BASH_TOOL_DESCRIPTION, /do not poll/i);
   // The exploration budget is stated once, in the guidelines; the runtime
   // warning carries the remediation. It must not creep back into the
   // description.
   assert.doesNotMatch(BASH_TOOL_DESCRIPTION, /blocks after/);
-  assert.match(BASH_PARAMETER_DESCRIPTIONS.command, /no interactive stdin/);
-  assert.match(BASH_PARAMETER_DESCRIPTIONS.yieldTimeMs, /clamped to 250-30000 ms/);
-  assert.match(BASH_PARAMETER_DESCRIPTIONS.timeout, /No default/);
+  assert.match(BASH_PARAMETER_DESCRIPTIONS.command, /script/);
+  assert.match(
+    BASH_PARAMETER_DESCRIPTIONS.yieldTimeMs,
+    /default 10000, clamped to 250-30000/,
+  );
+  assert.match(BASH_PARAMETER_DESCRIPTIONS.timeout, /no default/i);
   assert.match(BASH_PARAMETER_DESCRIPTIONS.workingDir, /session cwd/);
   // The schema carries exclusiveMinimum/maximum for timeout, so prose must not
   // spend tokens repeating them.
   assert.doesNotMatch(BASH_PARAMETER_DESCRIPTIONS.timeout, /maximum/i);
-  // Shell freshness lives in the description, in working_dir, and in the hard
-  // stateOnlyCommandError() guard; a guideline would be a fourth channel.
-  assert.ok(
-    !BASH_PROMPT_GUIDELINES.some((guideline) => /fresh shell/.test(guideline)),
-  );
-  assert.ok(
-    BASH_PROMPT_GUIDELINES.some((guideline) => /terminal id/.test(guideline)),
-  );
-  assert.ok(
-    BASH_PROMPT_GUIDELINES.some((guideline) => /blocks after 8/.test(guideline)),
-  );
-  // These bullets are paid for in every request; keep the list small.
-  assert.ok(BASH_PROMPT_GUIDELINES.length <= 2);
+  assert.equal(BASH_PROMPT_GUIDELINES.length, 1);
+  assert.match(BASH_PROMPT_GUIDELINES[0]!, /blocks after 8/);
+  assert.ok(BASH_TOOL_DESCRIPTION.length <= 320);
+  assert.ok(BASH_PROMPT_SNIPPET.length <= 50);
+  assert.ok(TERMINAL_LOG_READ_TOOL_DESCRIPTION.length <= 120);
+  assert.ok(TERMINAL_LOG_READ_PROMPT_SNIPPET.length <= 32);
 });
 
 test("default titles expose work after repeated setup prefixes", () => {

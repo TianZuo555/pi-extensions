@@ -1,4 +1,4 @@
-/** Model-facing strings and bounded output formatting for the bash override. */
+/** Model-facing bash text and bounded result formatting. */
 
 import { existsSync } from "node:fs";
 import {
@@ -13,7 +13,6 @@ import { EXPLORATION_LIMIT } from "./exploration-budget.ts";
 import {
   DEFAULT_YIELD_TIME_MS,
   MAX_RUNNING,
-  MAX_TERMINAL_LOG_READ_BYTES,
   MAX_YIELD_TIME_MS,
   MIN_YIELD_TIME_MS,
 } from "./manager.ts";
@@ -34,54 +33,38 @@ const PROGRESS_STDERR_MAX_LINES = 50;
 const RESULT_STDOUT_MAX_LINES = 40;
 const RESULT_STDERR_MAX_LINES = 20;
 
-// Scope: the CALL CONTRACT lives here, stated exactly once — what the model
-// cannot infer from a plain bash prior (fresh shell, no stdin, yield-to-id
-// return type) plus the caps the schema cannot express. Numeric bounds that
-// the schema already carries (minimum/maximum) are never restated in prose.
-// BASH_PROMPT_GUIDELINES adds only behaviour no contract sentence can state,
-// and parameter descriptions describe the parameter, not the contract. Shell
-// freshness is deliberately NOT repeated as a guideline: the description, the
-// working_dir description, and the hard stateOnlyCommandError() guard already
-// cover it, and a fourth channel is paid for in every request.
+// State the non-standard shell contract once. Parameter descriptions only
+// explain their own values; runtime errors provide detailed recovery on demand.
 export const BASH_TOOL_DESCRIPTION =
-  "Run a Bash command in a fresh, non-persistent shell — no interactive stdin; use working_dir, not a standalone cd. " +
-  `Waits up to ${DEFAULT_YIELD_TIME_MS / 1000} s (yield_time_ms): on completion you get its output; otherwise it becomes a background terminal, returns an id, and reports its result exactly once on exit — do not poll it. ` +
-  `yield_time_ms only waits; timeout kills the process tree. Output is bounded head+tail; max ${MAX_RUNNING} background commands at once.`;
+  "Run Bash in a fresh shell — no interactive stdin; use working_dir, not a standalone cd. " +
+  `Default wait: ${DEFAULT_YIELD_TIME_MS / 1000} s (yield_time_ms); returns output if done; otherwise returns a background terminal id and reports once on exit — do not poll it. ` +
+  `yield_time_ms sets the wait; timeout kills the process tree; max ${MAX_RUNNING} running terminals.`;
 
 export const BASH_PROMPT_SNIPPET =
-  "Run Bash; long commands yield to background terminals and notify on exit";
+  "Run Bash; long commands yield and notify on exit";
 
-// Kept deliberately short: these bullets are merged flat into the system prompt
-// alongside every other tool's guidelines, so each one has to earn its line by
-// describing behaviour that differs from a plain bash tool.
 export const BASH_PROMPT_GUIDELINES = [
-  "A returned terminal id means the command is still running: keep working, its result arrives on exit, and the user manages it with /ps.",
   `bash blocks after ${EXPLORATION_LIMIT} read-only inspection calls per run.`,
 ];
 
 export const BASH_PARAMETER_DESCRIPTIONS = {
-  command:
-    "Bash command for one fresh shell; it receives no interactive stdin (commands that prompt see EOF).",
-  title:
-    "Short name shown in /ps (default: derived from the command).",
+  command: "Shell script to run.",
+  title: "/ps label; default derived from command.",
   workingDir:
-    "Directory for this call, relative to the session cwd or absolute (default: session cwd).",
+    "Call directory, relative to session cwd or absolute; default session cwd.",
   yieldTimeMs:
-    `How long to wait before returning a background terminal id, in ms (default ${DEFAULT_YIELD_TIME_MS}; clamped to ${MIN_YIELD_TIME_MS}-${MAX_YIELD_TIME_MS} ms).`,
-  timeout:
-    "Hard total runtime limit in seconds; kills the process tree. No default: a command runs until it exits.",
+    `Initial wait in ms; default ${DEFAULT_YIELD_TIME_MS}, clamped to ${MIN_YIELD_TIME_MS}-${MAX_YIELD_TIME_MS}.`,
+  timeout: "Hard runtime limit in seconds; no default.",
 };
 
 export const TERMINAL_LOG_READ_TOOL_DESCRIPTION =
-  `Read one bounded page (up to ${formatSize(MAX_TERMINAL_LOG_READ_BYTES)}) of a background terminal's archived output by the ref bash emitted; page with next_offset. Read-only — no status or control.`;
-
-export const TERMINAL_LOG_READ_PROMPT_SNIPPET =
-  "Read one bounded page of a background terminal's archived output";
+  "Read a bounded terminal-log page by bash archive ref; continue with next_offset. Read-only; no status or control.";
+export const TERMINAL_LOG_READ_PROMPT_SNIPPET = "Read a terminal archive page";
 
 export const TERMINAL_LOG_READ_PARAMETER_DESCRIPTIONS = {
-  ref: "Opaque archive ref from bash, for example bt-3:stdout.",
-  offset: "Byte offset to begin reading (default 0).",
-  limit: "Maximum bytes to return (defaults to the maximum).",
+  ref: "Bash archive ref, e.g. bt-3:stdout.",
+  offset: "Start byte; default 0.",
+  limit: "Page bytes; default maximum.",
 };
 
 const LEADING_SETUP =

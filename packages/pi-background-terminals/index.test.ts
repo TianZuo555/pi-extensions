@@ -100,10 +100,47 @@ test("extension overrides bash, adds log reading, and keeps the user /ps command
     assert.deepEqual([...app.tools.keys()], ["bash", "terminal_log_read"]);
     assert.equal(
       app.tools.get("terminal_log_read").promptSnippet,
-      "Read one bounded page of a background terminal's archived output",
+      "Read a terminal archive page",
     );
     assert.equal(app.tools.get("terminal_log_read").promptGuidelines, undefined);
     assert.deepEqual([...app.commands.keys()], ["ps"]);
+  } finally {
+    await app.shutdown();
+  }
+});
+
+test("background tool metadata stays concise", async () => {
+  const app = harness(backgroundTerminals);
+  try {
+    const budgets = new Map([
+      ["bash", 1_050],
+      ["terminal_log_read", 520],
+    ]);
+
+    for (const [name, tool] of app.tools) {
+      for (const [parameter, schema] of Object.entries(
+        tool.parameters.properties,
+      )) {
+        assert.ok(
+          (schema as { description?: string }).description,
+          `${name}.${parameter} has no description`,
+        );
+      }
+      const modelChars = JSON.stringify({
+        name,
+        description: tool.description,
+        parameters: tool.parameters,
+      }).length +
+        (tool.promptSnippet?.length ?? 0) +
+        (tool.promptGuidelines ?? []).reduce(
+          (total: number, guideline: string) => total + guideline.length,
+          0,
+        );
+      assert.ok(
+        modelChars <= budgets.get(name)!,
+        `${name} prompt budget exceeded: ${modelChars} chars`,
+      );
+    }
   } finally {
     await app.shutdown();
   }
