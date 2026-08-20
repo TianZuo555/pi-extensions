@@ -134,7 +134,10 @@ const makeTodoRuntime = Effect.gen(function* () {
               typeof t === "object" &&
               t !== null &&
               typeof (t as { id?: unknown }).id === "number" &&
-              typeof (t as { title?: unknown }).title === "string",
+              typeof (t as { title?: unknown }).title === "string" &&
+              ((t as { status?: unknown }).status === "not-started" ||
+                (t as { status?: unknown }).status === "in-progress" ||
+                (t as { status?: unknown }).status === "completed"),
           )
           .map(({ id, title, status }) => ({
             id,

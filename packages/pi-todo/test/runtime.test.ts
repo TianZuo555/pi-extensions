@@ -98,3 +98,27 @@ test("TodoRuntime reconstructs branch state", async () => {
 
   await runtime.dispose();
 });
+
+test("TodoRuntime ignores saved items with invalid statuses", async () => {
+  const runtime = createTodoRuntime();
+  const service = runtime.runSync(TodoRuntime);
+  const branch = [
+    {
+      type: "message",
+      message: {
+        role: "toolResult",
+        toolName: "todo",
+        details: {
+          todos: [
+            { id: 1, title: "Valid", status: "not-started" },
+            { id: 2, title: "Corrupt", status: "unknown" },
+          ],
+        },
+      },
+    },
+  ];
+
+  const restored = await runTodo(runtime, service.reconstructFromBranch(branch));
+  assert.deepEqual(restored, [{ id: 1, title: "Valid", status: "not-started" }]);
+  await runtime.dispose();
+});
