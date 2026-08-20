@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { access, readdir, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, parse } from "node:path";
 import test from "node:test";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
-import { hashBytes } from "../lib/helpers.ts";
+import { hashBytes, isPathWithin } from "../lib/helpers.ts";
 import {
   createImageCacheRuntime,
   createImageFileWrittenGate,
@@ -28,6 +28,15 @@ async function pathExists(path: string): Promise<boolean> {
     return false;
   }
 }
+
+test("temporary path checks reject sibling directories with the same prefix", () => {
+  const root = join(parse(process.cwd()).root, "tmp");
+  assert.equal(isPathWithin(root, join(root, "pi-clipboard-image.png")), true);
+  assert.equal(
+    isPathWithin(root, join(`${root}-outside`, "pi-clipboard-image.png")),
+    false,
+  );
+});
 
 function isClosedError(error: unknown): boolean {
   return (

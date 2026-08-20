@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { existsSync, realpathSync } from "node:fs";
-import { extname } from "node:path";
+import { extname, isAbsolute, relative, sep } from "node:path";
 import { tmpdir } from "node:os";
 import type { CachedImage } from "./types.ts";
 
@@ -115,10 +115,15 @@ export function isInsideTmpDir(candidate: string): boolean {
   try {
     const root = realpathSync(tmpdir());
     const resolved = realpathSync(candidate);
-    return resolved.startsWith(root);
+    return isPathWithin(root, resolved);
   } catch {
     return false;
   }
+}
+
+export function isPathWithin(root: string, candidate: string): boolean {
+  const rel = relative(root, candidate);
+  return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
 }
 
 export function findPlaceholders(text: string): string[] {
