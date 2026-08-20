@@ -6,15 +6,12 @@ Install: `npm:pi-tian-find` · npm package `pi-tian-find` · workspace `packages
 
 ## Why
 
-pi's built-in `grep` and `find` already shell out to ripgrep and fd, but they expose a thin
-slice of both and ship **zero `promptGuidelines`** — the model gets a tool description and no
-advice on how to search well. This package replaces them with the same engines behind a
-better interface.
+pi's built-in `grep` and `find` already shell out to ripgrep and fd, but expose only a thin
+slice of both. This package keeps the same engines behind a more expressive, bounded
+interface without bloating the model prompt.
 
 | | pi built-in | **pi-find** |
 |---|---|---|
-| `grep` guidelines | none | 5 |
-| `find` guidelines | none | 4 |
 | multi-pattern search | — | yes, array of patterns in `grep` |
 | exclude filter | — | `exclude: "test/,*.min.js"` |
 | case handling | `ignoreCase` flag | smart-case by default, `caseSensitive` to force |
@@ -154,7 +151,7 @@ stops early once `limit` files have been matched. Beyond that:
 
 ```bash
 pnpm --filter pi-tian-find run check   # typecheck
-pnpm --filter pi-tian-find test        # 158 tests
+pnpm --filter pi-tian-find test        # 159 tests
 pi -e ./packages/pi-find               # try it live
 ```
 

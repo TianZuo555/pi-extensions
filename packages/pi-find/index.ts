@@ -3,8 +3,8 @@
 // Registers grep and find under pi's built-in tool names so they
 // replace the built-ins rather than sitting alongside them. What they add over
 // the built-ins: a path-constraint DSL, exclude filters, smart-case, automatic
-// regex/literal detection, multi-pattern support, whole-path pattern matching,
-// and prompt guidelines (pi ships its built-in grep/find with none).
+// regex/literal detection, multi-pattern support, whole-path matching, and
+// bounded output.
 //
 // Quick try:  pi -e ./packages/pi-find
 

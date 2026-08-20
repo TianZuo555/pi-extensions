@@ -7,9 +7,11 @@ import {
 } from "../lib/tools.ts";
 import {
   FIND_PARAMETER_DESCRIPTIONS,
-  FIND_PROMPT_GUIDELINES,
+  FIND_PROMPT_SNIPPET,
+  FIND_TOOL_DESCRIPTION,
   GREP_PARAMETER_DESCRIPTIONS,
-  GREP_PROMPT_GUIDELINES,
+  GREP_PROMPT_SNIPPET,
+  GREP_TOOL_DESCRIPTION,
   tooManyResultsNotice,
 } from "../lib/prompt.ts";
 import type { GrepOutcome } from "../src/runtime.ts";
@@ -136,21 +138,32 @@ test("every parameter carries a description", () => {
   }
 });
 
-test("prompt guidelines stay within their system-prompt budget", () => {
-  // Guidelines are merged flat into every request's system prompt, so the
-  // property worth defending is that they stay few and short, not that they
-  // exist: pi's built-in grep/find ship with none at all.
-  for (const guidelines of [
-    GREP_PROMPT_GUIDELINES,
-    FIND_PROMPT_GUIDELINES,
-  ]) {
-    assert.ok(guidelines.length <= 2, "too many guideline lines");
-    const budget = guidelines.reduce((total, line) => total + line.length, 0);
-    assert.ok(budget <= 260, `guideline budget exceeded: ${budget} chars`);
-    for (const line of guidelines) {
-      assert.ok(line.length > 0);
-      assert.match(line, /^(grep|find):/);
-    }
+test("model-facing search metadata stays concise", () => {
+  const tools = [
+    {
+      name: "grep",
+      schema: GrepParams,
+      description: GREP_TOOL_DESCRIPTION,
+      snippet: GREP_PROMPT_SNIPPET,
+      schemaBudget: 900,
+    },
+    {
+      name: "find",
+      schema: FindParams,
+      description: FIND_TOOL_DESCRIPTION,
+      snippet: FIND_PROMPT_SNIPPET,
+      schemaBudget: 600,
+    },
+  ];
+
+  for (const tool of tools) {
+    const schemaLength = JSON.stringify(tool.schema).length;
+    assert.ok(
+      schemaLength <= tool.schemaBudget,
+      `${tool.name} schema budget exceeded: ${schemaLength} chars`,
+    );
+    assert.ok(tool.description.length <= 80, `${tool.name} description is too long`);
+    assert.ok(tool.snippet.length <= 24, `${tool.name} snippet is too long`);
   }
 });
 

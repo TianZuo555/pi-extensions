@@ -20,12 +20,10 @@ import {
   DEFAULT_GREP_LIMIT,
   emptyResultHint,
   FIND_PARAMETER_DESCRIPTIONS,
-  FIND_PROMPT_GUIDELINES,
   findResultHeader,
   FIND_PROMPT_SNIPPET,
   FIND_TOOL_DESCRIPTION,
   GREP_PARAMETER_DESCRIPTIONS,
-  GREP_PROMPT_GUIDELINES,
   GREP_PROMPT_SNIPPET,
   grepResultHeader,
   GREP_TOOL_DESCRIPTION,
@@ -58,14 +56,10 @@ const pathConstraint = (description: string) =>
 export const GrepParams = Type.Object({
   pattern: Type.Union(
     [
-      Type.String({
-        minLength: 1,
-        description: GREP_PARAMETER_DESCRIPTIONS.pattern,
-      }),
+      Type.String({ minLength: 1 }),
       Type.Array(Type.String({ minLength: 1 }), {
         minItems: 1,
         maxItems: 64,
-        description: GREP_PARAMETER_DESCRIPTIONS.pattern,
       }),
     ],
     { description: GREP_PARAMETER_DESCRIPTIONS.pattern },
@@ -212,7 +206,6 @@ export function registerTools(
     label: "grep",
     description: GREP_TOOL_DESCRIPTION,
     promptSnippet: GREP_PROMPT_SNIPPET,
-    promptGuidelines: GREP_PROMPT_GUIDELINES,
     parameters: GrepParams,
 
     async execute(_toolCallId, params: GrepInput, signal, _onUpdate, ctx) {
@@ -336,7 +329,6 @@ export function registerTools(
     label: "find",
     description: FIND_TOOL_DESCRIPTION,
     promptSnippet: FIND_PROMPT_SNIPPET,
-    promptGuidelines: FIND_PROMPT_GUIDELINES,
     parameters: FindParams,
 
     async execute(_toolCallId, params: FindInput, signal, _onUpdate, ctx) {
