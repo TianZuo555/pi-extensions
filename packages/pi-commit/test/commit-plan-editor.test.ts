@@ -2,12 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
 import type { TUI } from "@earendil-works/pi-tui";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import {
   CommitPlanEditor,
   commitPlanEntryLabel,
-  isCursorAtTextEnd,
-  isCursorAtTextStart,
+  isCursorOnFirstLine,
+  isCursorOnLastLine,
   type CommitPlanEditorEntry,
 } from "../lib/commit-plan-editor.ts";
 import type { CommitPlan } from "../lib/prompt.ts";
@@ -15,6 +15,8 @@ import type { CommitPlan } from "../lib/prompt.ts";
 const ENTER = "\r";
 const LEFT = "\x1b[D";
 const RIGHT = "\x1b[C";
+const UP = "\x1b[A";
+const DOWN = "\x1b[B";
 const BACKSPACE = "\x7f";
 
 function createTheme(): Theme {
@@ -30,6 +32,8 @@ function createKeybindings(): KeybindingsManager {
     "tui.select.cancel": ["\x1b"],
     "tui.editor.cursorLeft": [LEFT],
     "tui.editor.cursorRight": [RIGHT],
+    "tui.editor.cursorUp": [UP],
+    "tui.editor.cursorDown": [DOWN],
   };
   return {
     matches: (data: string, keybinding: string) =>
@@ -68,18 +72,12 @@ function moveCursorToEnd(editor: CommitPlanEditor, length: number): void {
   }
 }
 
-function moveCursorToStart(editor: CommitPlanEditor, length: number): void {
-  for (let index = 0; index < length; index++) {
-    editor.handleInput(LEFT);
-  }
-}
-
 test("commitPlanEntryLabel summarizes single and multi-file commits", () => {
   assert.equal(commitPlanEntryLabel(["src/a.ts"]), "src/a.ts");
   assert.equal(commitPlanEntryLabel(["src/a.ts", "src/b.ts"]), "2 files");
 });
 
-test("left and right at editor boundaries preserve edits across commits", () => {
+test("up and down switch commits and preserve edits", () => {
   const commits: CommitPlanEditorEntry[] = [
     { paths: ["src/a.ts"], message: "feat: first" },
     { paths: ["src/b.ts", "src/c.ts"], message: "feat: second" },
@@ -87,17 +85,32 @@ test("left and right at editor boundaries preserve edits across commits", () => 
   const { editor } = createEditor(commits);
 
   moveCursorToEnd(editor, "feat: first".length);
-  editor.handleInput(RIGHT);
+  editor.handleInput(DOWN);
   editor.handleInput("X");
-  moveCursorToStart(editor, "feat: secondX".length + 1);
+  editor.handleInput(UP);
 
   const rendered = editor.render(80).join("\n");
   assert.match(rendered, /Edit commit message 1\/2 \(src\/a\.ts\)/);
   assert.match(rendered, /feat: first/);
 
+  editor.handleInput(DOWN);
+  assert.match(editor.render(80).join("\n"), /feat: secondX/);
+});
+
+test("left and right stay free for cursor movement inside the message", () => {
+  const commits: CommitPlanEditorEntry[] = [
+    { paths: ["src/a.ts"], message: "feat: first" },
+    { paths: ["src/b.ts"], message: "feat: second" },
+  ];
+  const { editor } = createEditor(commits);
+
   moveCursorToEnd(editor, "feat: first".length);
   editor.handleInput(RIGHT);
-  assert.match(editor.render(80).join("\n"), /feat: secondX/);
+  editor.handleInput(LEFT);
+
+  const rendered = stripTerminalSequences(editor.render(80).join("\n"));
+  assert.match(rendered, /Edit commit message 1\/2 \(src\/a\.ts\)/);
+  assert.match(rendered, /feat: first/);
 });
 
 test("enter finishes a multi-commit plan when the last message is submitted", () => {
@@ -153,17 +166,25 @@ test("long commit labels wrap without exceeding the render width", () => {
   assert.match(lines.join("\n"), /packages\/pi-commit\/lib\/commit-plan-editor/);
 });
 
-test("cursor boundary helpers detect start and end positions", () => {
-  const startEditor = {
-    getCursor: () => ({ line: 0, col: 0 }),
-    getLines: () => ["hello"],
+test("cursor boundary helpers detect first and last lines", () => {
+  const middleEditor = {
+    getCursor: () => ({ line: 1, col: 0 }),
+    getLines: () => ["hello", "middle", "world"],
   };
-  assert.equal(isCursorAtTextStart(startEditor), true);
-  assert.equal(isCursorAtTextEnd(startEditor), false);
+  assert.equal(isCursorOnFirstLine(middleEditor), false);
+  assert.equal(isCursorOnLastLine(middleEditor), false);
 
-  const endEditor = {
-    getCursor: () => ({ line: 0, col: 5 }),
-    getLines: () => ["hello"],
+  const firstLineEditor = {
+    getCursor: () => ({ line: 0, col: 4 }),
+    getLines: () => ["hello", "world"],
   };
-  assert.equal(isCursorAtTextEnd(endEditor), true);
+  assert.equal(isCursorOnFirstLine(firstLineEditor), true);
+  assert.equal(isCursorOnLastLine(firstLineEditor), false);
+
+  const lastLineEditor = {
+    getCursor: () => ({ line: 1, col: 2 }),
+    getLines: () => ["hello", "world"],
+  };
+  assert.equal(isCursorOnFirstLine(lastLineEditor), false);
+  assert.equal(isCursorOnLastLine(lastLineEditor), true);
 });
