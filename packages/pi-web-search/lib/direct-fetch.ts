@@ -6,6 +6,32 @@ const MAX_DIRECT_FETCH_BYTES = 100_000; // 100KB
 const DEFAULT_USER_AGENT =
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
+async function readLimitedText(response: Response, maxBytes: number): Promise<string> {
+  const reader = response.body?.getReader();
+  if (!reader) return "";
+
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (total < maxBytes) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const remaining = maxBytes - total;
+      const chunk = value.subarray(0, remaining);
+      chunks.push(chunk);
+      total += chunk.byteLength;
+      if (value.byteLength > remaining) break;
+    }
+  } finally {
+    if (total >= maxBytes) await reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+  }
+
+  let text = Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)), total).toString("utf8");
+  while (Buffer.byteLength(text, "utf8") > maxBytes) text = text.slice(0, -1);
+  return text;
+}
+
 export function decodeHtmlEntities(html: string): string {
   return html
     .replace(/&quot;/g, '"')
@@ -125,11 +151,7 @@ export async function fetchDirect(
   }
 
   const contentType = res.headers.get("content-type") || "";
-  const rawBody = await res.text();
-
-  if (rawBody.length > MAX_DIRECT_FETCH_BYTES) {
-    // Truncate to size limit
-  }
+  const rawBody = await readLimitedText(res, MAX_DIRECT_FETCH_BYTES);
 
   const isHtml = contentType.includes("html") || /<html/i.test(rawBody.slice(0, 1000));
   const title = isHtml ? extractHtmlTitle(rawBody) : undefined;

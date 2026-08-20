@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   decodeHtmlEntities,
   extractHtmlTitle,
+  fetchDirect,
   htmlToMarkdown,
 } from "../lib/direct-fetch.ts";
 
@@ -61,4 +62,20 @@ test("htmlToMarkdown strips scripts, styles, and extracts readable content", () 
   assert.match(md, /```\s+function test\(\) \{ return true; \}\s+```/);
   assert.doesNotMatch(md, /console\.log/);
   assert.doesNotMatch(md, /body \{ color: red; \}/);
+});
+
+test("fetchDirect enforces its response byte limit", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response("x".repeat(110_000), {
+      status: 200,
+      headers: { "Content-Type": "text/plain" },
+    })) as typeof fetch;
+
+  try {
+    const response = await fetchDirect("https://example.com/large", { raw: true });
+    assert.equal(Buffer.byteLength(response.text, "utf8"), 100_000);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
