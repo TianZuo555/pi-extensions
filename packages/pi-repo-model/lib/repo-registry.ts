@@ -47,8 +47,9 @@ export function getRepoMeta(cwd: string): RepoMeta {
   if (cached) return cached;
 
   const gitRoot = execGit(abs, ["rev-parse", "--show-toplevel"]);
-  const worktreeList = execGit(abs, ["worktree", "list"]);
-  const mainRoot = worktreeList?.split("\n")[0]?.trim().split(/\s+/)[0];
+  const worktreeList = execGit(abs, ["worktree", "list", "--porcelain"]);
+  const worktreeLine = worktreeList?.split("\n").find((line) => line.startsWith("worktree "));
+  const mainRoot = worktreeLine?.slice("worktree ".length);
   const root = mainRoot ?? gitRoot ?? abs;
 
   const meta: RepoMeta = { key: root, name: path.basename(root) };

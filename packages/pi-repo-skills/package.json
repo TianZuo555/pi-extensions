@@ -1,6 +1,6 @@
 {
   "name": "pi-tian-repo-skills",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Per-repository skill enable and disable controls for the pi coding agent.",
   "type": "module",
   "keywords": [

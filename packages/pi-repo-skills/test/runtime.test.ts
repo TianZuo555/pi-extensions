@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -10,6 +11,23 @@ import {
   RepoSkillsRuntime,
   runRepoSkills,
 } from "../src/runtime.ts";
+
+test("RepoSkillsRuntime preserves spaces in Git worktree paths", async () => {
+  const runtime = createRepoSkillsRuntime();
+  const service = runtime.runSync(RepoSkillsRuntime);
+  const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-repo-skills-space-test-"));
+  const repoDir = path.join(tempDir, "repo with spaces");
+
+  try {
+    execFileSync("git", ["init", "--quiet", repoDir]);
+    const meta = await runRepoSkills(runtime, service.getRepoMeta(repoDir));
+    assert.equal(meta.key, fs.realpathSync(repoDir));
+    assert.equal(meta.name, "repo with spaces");
+  } finally {
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    await runtime.dispose();
+  }
+});
 
 test("RepoSkillsRuntime set, get, filter, and reset", async () => {
   const runtime = createRepoSkillsRuntime();
