@@ -9,7 +9,7 @@ A small collection of [pi coding agent](https://pi.dev) extensions.
 | **pi-commit** | `/commit`, `/commit-all` | Git commits written by a separately configured model. |
 | **token-speed** | `/tps` | Live tok/s meter in the footer plus an end-of-message summary. |
 | **image-cache** | `Ctrl+V`, `/images`, `/image-cache-clear` | Caches pasted images as `[Image#NNN]` and re-attaches them on send. |
-| **ask-user** | tool `ask_user` | Lets the model ask 1–5 single- or multi-select questions in one form. |
+| **ask-user** | tool `ask_user` | Lets the model ask 1–5 single-choice questions in one form. |
 | **usage** | `/usage` | Codex and Copilot account usage in a menu, plus a footer meter. |
 | **background-terminals** | `/ps`, overrides tool `bash` | One no-stdin bash path: long commands yield to background and notify once. |
 | **edit-safe** | overrides tool `edit` | Stricter `edit`: verbatim splice, ambiguity throws, one `edits[]` shape. |
@@ -258,12 +258,11 @@ terminals (Ghostty, Kitty, WezTerm) and after a session resume.
 
 Registers an `ask_user` tool the model can call with 1–5 questions and 2–5
 options per question. Full questions and option descriptions word-wrap instead
-of being clipped. Each question supports single selection by default or
-multiple selections with `allow_multiple: true`; a free-form **Other** option is
-always appended.
+of being clipped. Each question accepts one selection, and a free-form
+**Other** option is always appended.
 
 - `←` / `→` switches questions while preserving answers.
-- `↑` / `↓` moves the focused option; `Space` selects or toggles it.
+- `↑` / `↓` moves the focused option; `Space` selects it.
 - `Enter` advances to the next question or submits after all questions are
   answered; `Esc` dismisses.
 - Other opens an inline multi-line editor. RPC mode uses built-in dialogs;

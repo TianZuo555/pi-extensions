@@ -8,16 +8,16 @@ pi install npm:pi-tian-ask-user
 
 Registers an `ask_user` tool. The model can supply 1–5 questions with 2–5
 options each. Questions and option descriptions wrap across as many lines as
-needed instead of being truncated. Every question also gets a free-form
-**Other** option, and questions can allow either one or multiple selections.
-A model-supplied Other-style option is refused rather than shown twice: the
+needed instead of being truncated. Every question accepts one selection and
+also gets a free-form **Other** option. A model-supplied Other-style option is
+refused rather than shown twice: the
 duplicate would otherwise reach the user with nothing reporting it back.
 
 Interactive controls:
 
 - `←` / `→` — switch questions while preserving answers
 - `↑` / `↓` — move between options
-- `Space` — select an option or toggle it in a multi-select question
+- `Space` — select an option
 - `Enter` — move to the next question or submit the completed form
 - `Esc` — go back from the custom-answer editor or dismiss the form
 

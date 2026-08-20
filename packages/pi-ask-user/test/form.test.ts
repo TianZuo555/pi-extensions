@@ -65,7 +65,6 @@ function createForm(questions: AskUserQuestion[]) {
 const longQuestion: AskUserQuestion = {
   question:
     "This is a deliberately long architectural question with enough context to require several wrapped lines while preserving the final QUESTION_END marker.",
-  allowMultiple: false,
   options: [
     {
       label: "Redis (recommended)",
@@ -95,12 +94,10 @@ test("left and right preserve answers while space selects and enter submits", ()
   const questions: AskUserQuestion[] = [
     {
       question: "Choose the deployment target",
-      allowMultiple: false,
       options: [{ label: "Staging" }, { label: "Production" }],
     },
     {
-      question: "Choose the validation suites",
-      allowMultiple: true,
+      question: "Choose the validation suite",
       options: [{ label: "Unit" }, { label: "Integration" }, { label: "End-to-end" }],
     },
   ];
@@ -117,8 +114,7 @@ test("left and right preserve answers while space selects and enter submits", ()
   assert.match(firstQuestionAgain, /Question 1 of 2 · 2 answered/);
 
   form.handleInput("enter"); // next, preserving the second question's cursor/answer
-  form.handleInput("up");
-  form.handleInput(" "); // Unit + Integration
+  assert.match(form.render(80).join("\n"), /\[x\] Integration/);
   form.handleInput("enter"); // submit
 
   assert.deepEqual(getResult(), {
@@ -126,25 +122,21 @@ test("left and right preserve answers while space selects and enter submits", ()
       {
         questionIndex: 1,
         question: "Choose the deployment target",
-        choices: [{ label: "Staging", optionIndex: 1, wasCustom: false }],
+        choice: { label: "Staging", optionIndex: 1, wasCustom: false },
       },
       {
         questionIndex: 2,
-        question: "Choose the validation suites",
-        choices: [
-          { label: "Unit", optionIndex: 1, wasCustom: false },
-          { label: "Integration", optionIndex: 2, wasCustom: false },
-        ],
+        question: "Choose the validation suite",
+        choice: { label: "Integration", optionIndex: 2, wasCustom: false },
       },
     ],
   });
 });
 
-test("single-select space replaces an earlier choice", () => {
+test("selecting another option replaces the earlier choice", () => {
   const { form, getResult } = createForm([
     {
       question: "Choose one",
-      allowMultiple: false,
       options: [{ label: "First" }, { label: "Second" }],
     },
   ]);
@@ -154,20 +146,22 @@ test("single-select space replaces an earlier choice", () => {
   form.handleInput(" ");
   form.handleInput("enter");
 
-  assert.deepEqual(getResult()?.answers[0].choices, [
-    { label: "Second", optionIndex: 2, wasCustom: false },
-  ]);
+  assert.deepEqual(getResult()?.answers[0].choice, {
+    label: "Second",
+    optionIndex: 2,
+    wasCustom: false,
+  });
 });
 
 test("Other accepts an inline custom answer before form submission", () => {
   const { form, getResult } = createForm([
     {
       question: "Choose a cache",
-      allowMultiple: false,
       options: [{ label: "Redis" }, { label: "SQLite" }],
     },
   ]);
 
+  form.handleInput(" "); // Redis
   form.handleInput("down");
   form.handleInput("down");
   form.handleInput(" ");
@@ -178,9 +172,10 @@ test("Other accepts an inline custom answer before form submission", () => {
   assert.match(form.render(80).join("\n"), /\[x\] Other — Use the database directly/);
 
   form.handleInput("enter");
-  assert.deepEqual(getResult()?.answers[0].choices, [
-    { label: "Use the database directly", wasCustom: true },
-  ]);
+  assert.deepEqual(getResult()?.answers[0].choice, {
+    label: "Use the database directly",
+    wasCustom: true,
+  });
 });
 
 test("enter refuses to advance an unanswered question and renders guidance", () => {
@@ -226,12 +221,12 @@ test("result text reports every selected and custom answer", () => {
       {
         questionIndex: 1,
         question: "Cache?",
-        choices: [{ label: "Redis", optionIndex: 1, wasCustom: false }],
+        choice: { label: "Redis", optionIndex: 1, wasCustom: false },
       },
       {
         questionIndex: 2,
         question: "Anything else?",
-        choices: [{ label: "Keep it local", wasCustom: true }],
+        choice: { label: "Keep it local", wasCustom: true },
       },
     ],
   });

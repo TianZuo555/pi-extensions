@@ -1,7 +1,7 @@
 // ask-user — lets the model ask one or more multiple-choice questions.
 //
 // Interactive controls:
-//   ←/→ switch question · ↑/↓ move option · Space select/toggle
+//   ←/→ switch question · ↑/↓ move option · Space select
 //   Enter next/submit · Esc dismiss
 //
 // Questions, labels, and descriptions are word-wrapped instead of truncated.
@@ -32,7 +32,6 @@ const MAX_QUESTIONS = 5;
 const MIN_OPTIONS = 2;
 const MAX_OPTIONS = 5;
 const OTHER_LABEL = "Other — type your own answer";
-const DONE_LABEL = "Done selecting";
 
 const OptionSchema = Type.Object({
   label: Type.String({ description: ASK_USER_PARAMETER_DESCRIPTIONS.optionLabel }),
@@ -48,9 +47,6 @@ const QuestionSchema = Type.Object({
     maxItems: MAX_OPTIONS,
     description: ASK_USER_PARAMETER_DESCRIPTIONS.options,
   }),
-  allow_multiple: Type.Optional(
-    Type.Boolean({ description: ASK_USER_PARAMETER_DESCRIPTIONS.allowMultiple }),
-  ),
 });
 
 const AskUserParams = Type.Object({
@@ -79,7 +75,6 @@ interface AskUserDetails {
   questions: Array<{
     question: string;
     options: string[];
-    allowMultiple: boolean;
   }>;
   answers: AskUserAnswer[];
   cancelled: boolean;
@@ -93,7 +88,6 @@ function normalizeQuestions(params: AskUserInput): AskUserQuestion[] {
   return params.questions.map((question) => ({
     question: question.question,
     options: question.options,
-    allowMultiple: question.allow_multiple === true,
   }));
 }
 
@@ -166,11 +160,9 @@ function showQuestions(
 function optionDialogLabel(
   option: AskUserQuestion["options"][number],
   index: number,
-  selected = false,
 ): string {
-  const checkbox = selected ? "[x]" : "[ ]";
   const description = option.description ? ` — ${option.description}` : "";
-  return `${checkbox} ${index + 1}. ${option.label}${description}`;
+  return `[ ] ${index + 1}. ${option.label}${description}`;
 }
 
 async function askQuestionWithDialogs(
@@ -179,89 +171,33 @@ async function askQuestionWithDialogs(
   questionIndex: number,
   signal: AbortSignal | undefined,
 ): Promise<AskUserAnswer | null> {
-  const title = `${questionIndex + 1}. ${question.question}`;
+  const labels = question.options.map(optionDialogLabel);
+  labels.push(`[ ] ${question.options.length + 1}. ${OTHER_LABEL}`);
 
-  if (!question.allowMultiple) {
-    const labels = question.options.map((option, index) =>
-      optionDialogLabel(option, index),
-    );
-    labels.push(`[ ] ${question.options.length + 1}. ${OTHER_LABEL}`);
+  const selected = await ctx.ui.select(
+    `${questionIndex + 1}. ${question.question}`,
+    labels,
+  );
+  if (selected === undefined || signal?.aborted) return null;
+  const selectedIndex = labels.indexOf(selected);
+  let choice: AskUserChoice;
 
-    const selected = await ctx.ui.select(title, labels);
-    if (selected === undefined || signal?.aborted) return null;
-    const selectedIndex = labels.indexOf(selected);
-    let choice: AskUserChoice;
-
-    if (selectedIndex === question.options.length) {
-      const custom = (await ctx.ui.editor("Write your answer", ""))?.trim();
-      if (!custom || signal?.aborted) return null;
-      choice = { label: custom, wasCustom: true };
-    } else {
-      choice = {
-        label: question.options[selectedIndex].label,
-        optionIndex: selectedIndex + 1,
-        wasCustom: false,
-      };
-    }
-
-    return {
-      questionIndex: questionIndex + 1,
-      question: question.question,
-      choices: [choice],
+  if (selectedIndex === question.options.length) {
+    const custom = (await ctx.ui.editor("Write your answer", ""))?.trim();
+    if (!custom || signal?.aborted) return null;
+    choice = { label: custom, wasCustom: true };
+  } else {
+    choice = {
+      label: question.options[selectedIndex].label,
+      optionIndex: selectedIndex + 1,
+      wasCustom: false,
     };
   }
-
-  const selectedIndices = new Set<number>();
-  let customAnswer: string | undefined;
-
-  for (;;) {
-    if (signal?.aborted) return null;
-    const labels = question.options.map((option, index) =>
-      optionDialogLabel(option, index, selectedIndices.has(index)),
-    );
-    labels.push(`${customAnswer ? "[x]" : "[ ]"} ${question.options.length + 1}. ${OTHER_LABEL}`);
-    labels.push(DONE_LABEL);
-
-    const selected = await ctx.ui.select(`${title} (select one or more)`, labels);
-    if (selected === undefined || signal?.aborted) return null;
-    const selectedIndex = labels.indexOf(selected);
-
-    if (selectedIndex === labels.length - 1) {
-      if (selectedIndices.size === 0 && !customAnswer) {
-        ctx.ui.notify("Select one or more options before continuing", "warning");
-        continue;
-      }
-      break;
-    }
-
-    if (selectedIndex === question.options.length) {
-      if (customAnswer) {
-        customAnswer = undefined;
-        continue;
-      }
-      const custom = (await ctx.ui.editor("Write your answer", ""))?.trim();
-      if (signal?.aborted) return null;
-      if (custom) customAnswer = custom;
-      continue;
-    }
-
-    if (selectedIndices.has(selectedIndex)) selectedIndices.delete(selectedIndex);
-    else selectedIndices.add(selectedIndex);
-  }
-
-  const choices: AskUserChoice[] = [...selectedIndices]
-    .sort((left, right) => left - right)
-    .map((optionIndex) => ({
-      label: question.options[optionIndex].label,
-      optionIndex: optionIndex + 1,
-      wasCustom: false,
-    }));
-  if (customAnswer) choices.push({ label: customAnswer, wasCustom: true });
 
   return {
     questionIndex: questionIndex + 1,
     question: question.question,
-    choices,
+    choice,
   };
 }
 
@@ -301,7 +237,6 @@ export default function askUser(pi: ExtensionAPI): void {
         questions?: unknown;
         question?: unknown;
         options?: unknown;
-        allow_multiple?: unknown;
       };
       if (Array.isArray(input.questions)) return args as AskUserInput;
       if (typeof input.question !== "string" || !Array.isArray(input.options)) {
@@ -314,9 +249,6 @@ export default function askUser(pi: ExtensionAPI): void {
           {
             question: input.question,
             options: input.options,
-            ...(typeof input.allow_multiple === "boolean"
-              ? { allow_multiple: input.allow_multiple }
-              : {}),
           },
         ],
       };
@@ -330,7 +262,6 @@ export default function askUser(pi: ExtensionAPI): void {
         questions: questions.map((question) => ({
           question: question.question,
           options: question.options.map((option) => option.label),
-          allowMultiple: question.allowMultiple,
         })),
         answers: submission?.answers ?? [],
         cancelled: submission === null,
@@ -437,14 +368,11 @@ export default function askUser(pi: ExtensionAPI): void {
         return new Text(theme.fg("warning", "✗ dismissed"), 0, 0);
       }
 
-      const lines = details.answers.map((answer) => {
-        const choices = answer.choices.map(formatChoiceForResult).join(", ");
-        return (
-          theme.fg("success", "✓ ") +
-          theme.fg("accent", `Q${answer.questionIndex}: `) +
-          theme.fg("text", choices)
-        );
-      });
+      const lines = details.answers.map((answer) =>
+        theme.fg("success", "✓ ") +
+        theme.fg("accent", `Q${answer.questionIndex}: `) +
+        theme.fg("text", formatChoiceForResult(answer.choice)),
+      );
       return new Text(lines.join("\n"), 0, 0);
     },
   });

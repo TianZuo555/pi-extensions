@@ -20,19 +20,16 @@ export interface AskUserOption {
 export interface AskUserQuestion {
   question: string;
   options: AskUserOption[];
-  allowMultiple: boolean;
 }
 
-export interface AskUserChoice {
-  label: string;
-  optionIndex?: number;
-  wasCustom: boolean;
-}
+export type AskUserChoice =
+  | { label: string; optionIndex: number; wasCustom: false }
+  | { label: string; wasCustom: true };
 
 export interface AskUserAnswer {
   questionIndex: number;
   question: string;
-  choices: AskUserChoice[];
+  choice: AskUserChoice;
 }
 
 export interface AskUserSubmission {
@@ -40,7 +37,7 @@ export interface AskUserSubmission {
 }
 
 interface MutableAnswer {
-  optionIndices: Set<number>;
+  optionIndex?: number;
   customAnswer?: string;
 }
 
@@ -77,8 +74,8 @@ function appendWrapped(
  * Interactive ask-user form.
  *
  * Navigation deliberately separates focus from selection: arrows only move,
- * Space selects/toggles, and Enter advances or submits. This keeps multi-select
- * questions predictable and lets users review earlier answers with Left/Right.
+ * Space selects, and Enter advances or submits. Left/Right lets users review
+ * earlier answers without changing them.
  */
 export class AskUserForm implements Component, Focusable {
   private tui: TUI;
@@ -91,7 +88,7 @@ export class AskUserForm implements Component, Focusable {
   private editor: Editor;
 
   private questionIndex = 0;
-  private optionIndices: number[];
+  private focusedOptionIndices: number[];
   private answers: MutableAnswer[];
   private editMode = false;
   private warning: string | undefined;
@@ -114,8 +111,8 @@ export class AskUserForm implements Component, Focusable {
     this.questions = questions;
     this.done = done;
     this.signal = signal;
-    this.optionIndices = questions.map(() => 0);
-    this.answers = questions.map(() => ({ optionIndices: new Set<number>() }));
+    this.focusedOptionIndices = questions.map(() => 0);
+    this.answers = questions.map(() => ({}));
 
     const editorTheme: EditorTheme = {
       borderColor: (text) => this.theme.fg("accent", text),
@@ -155,7 +152,7 @@ export class AskUserForm implements Component, Focusable {
   }
 
   private currentOptionIndex(): number {
-    return this.optionIndices[this.questionIndex];
+    return this.focusedOptionIndices[this.questionIndex];
   }
 
   private currentOptionCount(): number {
@@ -164,7 +161,7 @@ export class AskUserForm implements Component, Focusable {
 
   private hasAnswer(index: number): boolean {
     const answer = this.answers[index];
-    return answer.optionIndices.size > 0 || Boolean(answer.customAnswer);
+    return answer.optionIndex !== undefined || Boolean(answer.customAnswer);
   }
 
   private allAnswered(): boolean {
@@ -199,48 +196,27 @@ export class AskUserForm implements Component, Focusable {
       Math.max(0, current + offset),
     );
     if (next === current) return;
-    this.optionIndices[this.questionIndex] = next;
+    this.focusedOptionIndices[this.questionIndex] = next;
     this.warning = undefined;
     this.refresh();
   }
 
-  private toggleCurrentOption(): void {
+  private selectCurrentOption(): void {
     const question = this.currentQuestion();
     const answer = this.currentAnswer();
     const optionIndex = this.currentOptionIndex();
 
     if (optionIndex === question.options.length) {
-      if (answer.customAnswer) {
-        answer.customAnswer = undefined;
-        this.warning = undefined;
-        this.refresh();
-        return;
-      }
       this.editMode = true;
       this.warning = undefined;
-      this.editor.setText("");
+      this.editor.setText(answer.customAnswer ?? "");
       this.editor.focused = this._focused;
       this.refresh();
       return;
     }
 
-    if (question.allowMultiple) {
-      if (answer.optionIndices.has(optionIndex)) {
-        answer.optionIndices.delete(optionIndex);
-      } else {
-        answer.optionIndices.add(optionIndex);
-      }
-    } else if (
-      answer.optionIndices.size === 1 &&
-      answer.optionIndices.has(optionIndex) &&
-      !answer.customAnswer
-    ) {
-      answer.optionIndices.clear();
-    } else {
-      answer.optionIndices.clear();
-      answer.customAnswer = undefined;
-      answer.optionIndices.add(optionIndex);
-    }
+    answer.optionIndex = optionIndex;
+    answer.customAnswer = undefined;
 
     this.warning = undefined;
     this.refresh();
@@ -256,9 +232,8 @@ export class AskUserForm implements Component, Focusable {
       return;
     }
 
-    const question = this.currentQuestion();
     const answer = this.currentAnswer();
-    if (!question.allowMultiple) answer.optionIndices.clear();
+    answer.optionIndex = undefined;
     answer.customAnswer = trimmed;
     this.editMode = false;
     this.editor.setText("");
@@ -277,9 +252,7 @@ export class AskUserForm implements Component, Focusable {
 
   private advanceOrSubmit(): void {
     if (!this.hasAnswer(this.questionIndex)) {
-      this.warning = this.currentQuestion().allowMultiple
-        ? "Select one or more options before continuing."
-        : "Select an option before continuing.";
+      this.warning = "Select an option before continuing.";
       this.refresh();
       return;
     }
@@ -306,20 +279,17 @@ export class AskUserForm implements Component, Focusable {
     return {
       answers: this.questions.map((question, questionIndex) => {
         const answer = this.answers[questionIndex];
-        const choices: AskUserChoice[] = [...answer.optionIndices]
-          .sort((left, right) => left - right)
-          .map((optionIndex) => ({
-            label: question.options[optionIndex].label,
-            optionIndex: optionIndex + 1,
-            wasCustom: false,
-          }));
-        if (answer.customAnswer) {
-          choices.push({ label: answer.customAnswer, wasCustom: true });
-        }
+        const choice: AskUserChoice = answer.customAnswer
+          ? { label: answer.customAnswer, wasCustom: true }
+          : {
+              label: question.options[answer.optionIndex!].label,
+              optionIndex: answer.optionIndex! + 1,
+              wasCustom: false,
+            };
         return {
           questionIndex: questionIndex + 1,
           question: question.question,
-          choices,
+          choice,
         };
       }),
     };
@@ -378,7 +348,7 @@ export class AskUserForm implements Component, Focusable {
       return;
     }
     if (matchesKey(data, Key.space)) {
-      this.toggleCurrentOption();
+      this.selectCurrentOption();
       return;
     }
     if (this.keybindings.matches(data, "tui.select.confirm")) {
@@ -417,7 +387,7 @@ export class AskUserForm implements Component, Focusable {
       lines,
       renderWidth,
       " ",
-      this.theme.fg("dim", question.allowMultiple ? "Select one or more." : "Select one."),
+      this.theme.fg("dim", "Select one."),
     );
     lines.push("");
 
@@ -427,7 +397,7 @@ export class AskUserForm implements Component, Focusable {
       const focused = optionIndex === focusedOption;
       const checked = isOther
         ? Boolean(answer.customAnswer)
-        : answer.optionIndices.has(optionIndex);
+        : answer.optionIndex === optionIndex;
       const cursor = focused ? this.theme.fg("accent", "› ") : "  ";
       const checkbox = checked ? this.theme.fg("success", "[x] ") : this.theme.fg("muted", "[ ] ");
       const prefix = `${cursor}${checkbox}`;
