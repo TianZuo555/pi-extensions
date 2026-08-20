@@ -1,6 +1,6 @@
 {
   "name": "pi-tian-vscode-bridge",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Send file, line, and diff-hunk references from VS Code into a running pi agent's input editor.",
   "type": "module",
   "private": true,

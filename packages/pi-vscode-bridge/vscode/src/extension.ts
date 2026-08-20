@@ -120,7 +120,7 @@ function normalizeUri(uri: vscode.Uri): vscode.Uri {
 function relRefForUri(uri: vscode.Uri): string {
   if (!attached) return uri.fsPath;
   const rel = path.relative(attached.hello.piCwd, uri.fsPath);
-  if (rel.startsWith("..") || path.isAbsolute(rel)) {
+  if (rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel)) {
     return uri.fsPath;
   }
   return rel;

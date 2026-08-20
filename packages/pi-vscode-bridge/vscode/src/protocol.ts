@@ -75,14 +75,20 @@ export function joinRefs(refs: string[]): string {
   return refs.join(" ") + " ";
 }
 
-function normalizeSegments(path: string): string[] {
-  const parts = path.split("/").filter((part) => part !== "" && part !== ".");
+function isWindowsAbsolutePath(path: string): boolean {
+  return /^[A-Za-z]:[\\/]/.test(path) || path.startsWith("\\\\");
+}
+
+function normalizeSegments(path: string, windowsStyle: boolean): string[] {
+  const parts = path
+    .split(windowsStyle ? /[\\/]+/ : /\/+/)
+    .filter((part) => part !== "" && part !== ".");
   const segments: string[] = [];
   for (const part of parts) {
     if (part === "..") {
       if (segments.length > 0) segments.pop();
     } else {
-      segments.push(part);
+      segments.push(windowsStyle ? part.toLowerCase() : part);
     }
   }
   return segments;
@@ -92,13 +98,14 @@ function normalizeSegments(path: string): string[] {
  * True when `child` is the same path as `parent` or lives underneath it.
  * Must NOT be fooled by a shared string prefix: "/a/bc" is NOT inside "/a/b".
  * Implement by comparing normalized segment arrays, not with startsWith on strings.
- * Do not import node:path — write the normalization inline (split on "/", drop ""
- * and ".", pop on "..").
+ * Do not import node:path because this file is also compiled into the VS Code host.
+ * Windows drive and UNC paths compare case-insensitively.
  */
 export function isPathInside(parent: string, child: string): boolean {
   if (typeof parent !== "string" || typeof child !== "string") return false;
-  const parentSegs = normalizeSegments(parent.replace(/\/+$/, ""));
-  const childSegs = normalizeSegments(child.replace(/\/+$/, ""));
+  const windowsStyle = isWindowsAbsolutePath(parent) || isWindowsAbsolutePath(child);
+  const parentSegs = normalizeSegments(parent, windowsStyle);
+  const childSegs = normalizeSegments(child, windowsStyle);
   if (childSegs.length < parentSegs.length) return false;
   for (let i = 0; i < parentSegs.length; i++) {
     if (parentSegs[i] !== childSegs[i]) return false;

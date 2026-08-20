@@ -84,3 +84,12 @@ test("isPathInside compares normalized segments", () => {
   assert.equal(isPathInside("/a/b", "/a"), false);
   assert.equal(isPathInside("/a/", "/a/b/"), true);
 });
+
+test("isPathInside handles case-insensitive Windows paths", () => {
+  assert.equal(isPathInside("C:\\Repo", "c:\\repo\\src\\file.ts"), true);
+  assert.equal(isPathInside("C:\\Repo", "C:\\Repository\\file.ts"), false);
+  assert.equal(
+    isPathInside("\\\\server\\share", "\\\\SERVER\\SHARE\\folder"),
+    true,
+  );
+});
