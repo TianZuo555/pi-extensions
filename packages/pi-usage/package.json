@@ -1,6 +1,6 @@
 {
   "name": "pi-tian-usage",
-  "version": "0.3.2",
+  "version": "0.4.1",
   "description": "Show OpenAI Codex, GitHub Copilot, Z.ai GLM Coding Plan (global and China), and DeepSeek balance usage in the pi coding agent.",
   "type": "module",
   "keywords": [
@@ -18,7 +18,10 @@
     "zhipu",
     "bigmodel",
     "deepseek",
-    "balance"
+    "balance",
+    "tokens",
+    "cost",
+    "history"
   ],
   "author": "Tian Zuo",
   "license": "MIT",
@@ -49,7 +52,8 @@
     "effect": "4.0.0-beta.101"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "*"
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
   },
   "devDependencies": {
     "@effect/language-service": "^0.87.2",

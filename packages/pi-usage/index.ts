@@ -40,6 +40,16 @@ import {
   resolveZaiToken,
 } from "./lib/auth.ts";
 import { formatReports, formatStatusline, type ProviderState } from "./lib/format.ts";
+import { TokensPanel } from "./lib/tokens-panel.ts";
+import {
+  aggregateWindow,
+  buildDayIndex,
+  formatCostCompact,
+  formatTokensCompact,
+  formatTokensFull,
+  WINDOW_LABELS,
+  WINDOW_ORDER,
+} from "./lib/tokens-model.ts";
 import {
   CODEX_PROVIDER_ID,
   COPILOT_PROVIDER_ID,
@@ -58,6 +68,7 @@ import {
   runUsage,
   UsageRuntime,
 } from "./src/runtime.ts";
+import { defaultSessionsDir, scanLocalUsage, type ScanResult } from "./src/local-scan.ts";
 
 const STATUS_KEY = "usage";
 const AZURE_BLUE = "\x1b[38;2;0;127;255m";
@@ -289,9 +300,73 @@ export default function usageExtension(pi: ExtensionAPI): void {
     }
   };
 
+  // --- /tokens: local token/cost history -----------------------------------
+
+  // Both the 30-day rolling window and MTD feed the panel; scan from whichever
+  // starts earlier.
+  const tokensSinceMs = (): number => {
+    const now = new Date();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+    const rolling30 = now.getTime() - 30 * 24 * 60 * 60 * 1000;
+    return Math.min(monthStart, rolling30);
+  };
+
+  const scanTokens = (signal?: AbortSignal): Promise<ScanResult> => {
+    const linked = signal
+      ? AbortSignal.any([sessionAbort.signal, signal])
+      : sessionAbort.signal;
+    return runUsage(
+      usageRuntime,
+      scanLocalUsage({ sinceMs: tokensSinceMs(), sessionsDir: defaultSessionsDir(), signal: linked }),
+      { signal: linked },
+    );
+  };
+
+  const refreshTokens = (): Promise<ScanResult | undefined> =>
+    scanTokens().catch(() => undefined);
+
+  const showTokens = async (ctx: ExtensionCommandContext) => {
+    const controller = new AbortController();
+    try {
+      const snapshot = await runWithLoader(
+        ctx,
+        "Scanning local sessions…",
+        controller.signal,
+        (signal) => scanTokens(signal),
+      );
+      if (!snapshot) return;
+      if (ctx.mode !== "tui") {
+        ctx.ui.notify(plainTokensSummary(snapshot), "info");
+        return;
+      }
+      await ctx.ui.custom<void>((tui, theme, keybindings, done) =>
+        new TokensPanel({
+          tui,
+          theme,
+          keybindings,
+          snapshot,
+          refresh: refreshTokens,
+          done: () => done(void 0),
+        }),
+      );
+    } finally {
+      controller.abort();
+    }
+  };
+
+  pi.registerCommand("tokens", {
+    description: "Show local pi token/cost history for today, 7/30 days, and month-to-date",
+    handler: async (args, ctx) => {
+      if (args.trim()) {
+        ctx.ui.notify("/tokens takes no arguments; use its chart navigation.", "warning");
+        return;
+      }
+      await showTokens(ctx);
+    },
+  });
+
   // Reuse freshly-collected menu data to update the footer for the active model.
-  const publishActiveFrom = (ctx: ExtensionContext, states: ProviderState[]) => {
-    const probe = probeModel(ctx);
+  const publishActiveFrom = (ctx: ExtensionContext, states: ProviderState[]) => {    const probe = probeModel(ctx);
     if (probe.stale) return;
     const provider = PROVIDERS.find((candidate) => candidate.id === probe.provider);
     if (!provider) {
@@ -373,6 +448,18 @@ function compactSummary(states: ProviderState[]): string {
       return `${state.name}: error`;
     })
     .join("  |  ");
+}
+
+/** One line per window for non-interactive modes (print/RPC). */
+function plainTokensSummary(snapshot: ScanResult): string {
+  const now = new Date();
+  const dayIndex = buildDayIndex(snapshot.records);
+  return WINDOW_ORDER.map((key) => {
+    const aggregate = aggregateWindow(key, now, dayIndex);
+    return `${WINDOW_LABELS[key]}: ${formatTokensCompact(aggregate.totalTokens)} tokens · ${formatCostCompact(
+      aggregate.costUSD,
+    )} · ${formatTokensFull(aggregate.requests)} requests`;
+  }).join("\n");
 }
 
 function isAbortError(error: unknown): boolean {

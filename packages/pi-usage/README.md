@@ -2,7 +2,8 @@
 
 Show **OpenAI Codex**, **GitHub Copilot**, **Z.ai (GLM Coding Plan)**,
 **Z.ai Coding Plan (China)**, and **DeepSeek** account usage from inside the
-[pi coding agent](https://pi.dev).
+[pi coding agent](https://pi.dev), plus a `/tokens` dashboard of the token and
+cost history pi records locally.
 
 `/usage` opens a menu with the current usage for every configured provider, and
 a compact meter is shown in the footer whenever the active model belongs to a
@@ -36,6 +37,12 @@ bucket as a `0 / 0` snapshot with 100% remaining; that placeholder is shown as
   the provider endpoints are queried (press `Esc` to cancel). Pick **Refresh**
   to re-query, **Close** to dismiss. In non-interactive modes it prints a
   one-line summary instead.
+- `/tokens` — local token/cost history recorded by pi itself, no provider
+  calls. Shows a bar chart with a `1.2M tokens · $39.82` headline for **Today**
+  (per hour), **Last 7 days**, **Last 30 days**, and **Month to date** (per
+  day). Navigate with `←`/`→` (or `1`-`4`), toggle the chart metric with
+  `Tab` (tokens ⇄ cost), rescan with `r`, close with `Esc`/`q`/`Enter`. In
+  non-interactive modes it prints one summary line per window.
 
 ## Statusline
 
@@ -44,6 +51,18 @@ When the active model provider is Codex, Copilot, Z.ai, Z.ai Coding Plan
 `codex 60% wk`, `copilot 31% credits`, `copilot 49% premium`, `zai 59% 5h`,
 `zai-cn 82% 5h`, or `deepseek ¥27.00`, refreshed at most every five minutes
 (results are cached to avoid hammering the endpoints).
+
+## How /tokens works
+
+pi records every assistant message's usage (input/output/cache tokens, total,
+and list-price cost) in session files under `~/.pi/agent/sessions/` (or
+`$PI_CODING_AGENT_DIR/sessions`). `/tokens` streams those JSONL files,
+filters assistant messages with usage, and deduplicates by message id so
+replayed or resumed copies (`repro.jsonl`, forks) are counted once. Files whose
+name-encoded start date is more than 7 days older than the window are skipped;
+non-standard names are always scanned. Cost is the model's list price recorded
+at request time — subscription plans (Codex, Copilot, GLM Coding Plan) may
+cover it, which the panel notes as *cost at list prices*.
 
 ## How it works
 

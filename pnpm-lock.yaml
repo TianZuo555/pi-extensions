@@ -301,6 +301,9 @@ importers:
       '@earendil-works/pi-coding-agent':
         specifier: ^0.84.2
         version: 0.84.2(ws@8.21.3)(zod@4.4.3)
+      '@earendil-works/pi-tui':
+        specifier: ^0.84.2
+        version: 0.84.2
       effect:
         specifier: 4.0.0-beta.101
         version: 4.0.0-beta.101
