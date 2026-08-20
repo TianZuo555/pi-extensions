@@ -14,11 +14,9 @@ import {
 } from "../src/runtime.ts";
 import {
   WEB_FETCH_PARAMETER_DESCRIPTIONS,
-  WEB_FETCH_PROMPT_GUIDELINES,
   WEB_FETCH_PROMPT_SNIPPET,
   WEB_FETCH_TOOL_DESCRIPTION,
   WEB_SEARCH_PARAMETER_DESCRIPTIONS,
-  WEB_SEARCH_PROMPT_GUIDELINES,
   WEB_SEARCH_PROMPT_SNIPPET,
   WEB_SEARCH_TOOL_DESCRIPTION,
 } from "./prompt.ts";
@@ -35,7 +33,9 @@ export const WebSearchParams = Type.Object({
     description: WEB_SEARCH_PARAMETER_DESCRIPTIONS.query,
   }),
   numResults: Type.Optional(
-    Type.Number({
+    Type.Integer({
+      minimum: 1,
+      maximum: 20,
       description: WEB_SEARCH_PARAMETER_DESCRIPTIONS.numResults,
     }),
   ),
@@ -176,7 +176,6 @@ export function registerTools(
     label: "Web Search",
     description: WEB_SEARCH_TOOL_DESCRIPTION,
     promptSnippet: WEB_SEARCH_PROMPT_SNIPPET,
-    promptGuidelines: WEB_SEARCH_PROMPT_GUIDELINES,
     parameters: WebSearchParams,
 
     async execute(_toolCallId, params: WebSearchInput, signal, _onUpdate, ctx) {
@@ -234,7 +233,6 @@ export function registerTools(
     label: "Web Fetch",
     description: WEB_FETCH_TOOL_DESCRIPTION,
     promptSnippet: WEB_FETCH_PROMPT_SNIPPET,
-    promptGuidelines: WEB_FETCH_PROMPT_GUIDELINES,
     parameters: WebFetchParams,
 
     async execute(_toolCallId, params: WebFetchInput, signal) {
