@@ -22,19 +22,6 @@ export function commitPlanEntryLabel(paths: readonly string[]): string {
   return paths.length === 1 ? paths[0] : `${paths.length} files`;
 }
 
-export function isCursorOnFirstLine(editor: {
-  getCursor(): { line: number };
-}): boolean {
-  return editor.getCursor().line === 0;
-}
-
-export function isCursorOnLastLine(editor: {
-  getCursor(): { line: number };
-  getLines(): string[];
-}): boolean {
-  return editor.getCursor().line === Math.max(0, editor.getLines().length - 1);
-}
-
 function appendWrapped(
   lines: string[],
   width: number,
@@ -64,9 +51,9 @@ function appendWrapped(
 /**
  * Multi-commit message editor for /commit-all review.
  *
- * Up/down switch commits while the cursor sits on the first/last line,
- * preserving edits. Left/right stay free for in-message cursor movement.
- * Enter advances to the next commit or submits on the last one.
+ * Up/down always switch commits while preserving edits. Left/right stay
+ * free for in-message cursor movement. Enter advances to the next commit
+ * or submits on the last one.
  */
 export class CommitPlanEditor implements Component, Focusable {
   private tui: TUI;
@@ -218,19 +205,15 @@ export class CommitPlanEditor implements Component, Focusable {
       matchesKey(data, Key.up) ||
       this.keybindings.matches(data, "tui.editor.cursorUp")
     ) {
-      if (isCursorOnFirstLine(this.editor)) {
-        this.moveCommit(-1);
-        return;
-      }
+      this.moveCommit(-1);
+      return;
     }
     if (
       matchesKey(data, Key.down) ||
       this.keybindings.matches(data, "tui.editor.cursorDown")
     ) {
-      if (isCursorOnLastLine(this.editor)) {
-        this.moveCommit(1);
-        return;
-      }
+      this.moveCommit(1);
+      return;
     }
 
     this.editor.handleInput(data);

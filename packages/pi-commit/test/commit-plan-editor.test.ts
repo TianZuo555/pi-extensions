@@ -6,8 +6,6 @@ import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import {
   CommitPlanEditor,
   commitPlanEntryLabel,
-  isCursorOnFirstLine,
-  isCursorOnLastLine,
   type CommitPlanEditorEntry,
 } from "../lib/commit-plan-editor.ts";
 import type { CommitPlan } from "../lib/prompt.ts";
@@ -77,24 +75,26 @@ test("commitPlanEntryLabel summarizes single and multi-file commits", () => {
   assert.equal(commitPlanEntryLabel(["src/a.ts", "src/b.ts"]), "2 files");
 });
 
-test("up and down switch commits and preserve edits", () => {
+test("up and down always switch commits and preserve edits", () => {
   const commits: CommitPlanEditorEntry[] = [
     { paths: ["src/a.ts"], message: "feat: first" },
     { paths: ["src/b.ts", "src/c.ts"], message: "feat: second" },
   ];
   const { editor } = createEditor(commits);
 
-  moveCursorToEnd(editor, "feat: first".length);
   editor.handleInput(DOWN);
   editor.handleInput("X");
   editor.handleInput(UP);
 
-  const rendered = editor.render(80).join("\n");
+  const rendered = stripTerminalSequences(editor.render(80).join("\n"));
   assert.match(rendered, /Edit commit message 1\/2 \(src\/a\.ts\)/);
   assert.match(rendered, /feat: first/);
 
   editor.handleInput(DOWN);
-  assert.match(editor.render(80).join("\n"), /feat: secondX/);
+  assert.match(
+    stripTerminalSequences(editor.render(80).join("\n")),
+    /feat: secondX/,
+  );
 });
 
 test("left and right stay free for cursor movement inside the message", () => {
@@ -164,27 +164,4 @@ test("long commit labels wrap without exceeding the render width", () => {
 
   assert.ok(lines.every((line) => visibleWidth(line) <= 42));
   assert.match(lines.join("\n"), /packages\/pi-commit\/lib\/commit-plan-editor/);
-});
-
-test("cursor boundary helpers detect first and last lines", () => {
-  const middleEditor = {
-    getCursor: () => ({ line: 1, col: 0 }),
-    getLines: () => ["hello", "middle", "world"],
-  };
-  assert.equal(isCursorOnFirstLine(middleEditor), false);
-  assert.equal(isCursorOnLastLine(middleEditor), false);
-
-  const firstLineEditor = {
-    getCursor: () => ({ line: 0, col: 4 }),
-    getLines: () => ["hello", "world"],
-  };
-  assert.equal(isCursorOnFirstLine(firstLineEditor), true);
-  assert.equal(isCursorOnLastLine(firstLineEditor), false);
-
-  const lastLineEditor = {
-    getCursor: () => ({ line: 1, col: 2 }),
-    getLines: () => ["hello", "world"],
-  };
-  assert.equal(isCursorOnFirstLine(lastLineEditor), false);
-  assert.equal(isCursorOnLastLine(lastLineEditor), true);
 });
