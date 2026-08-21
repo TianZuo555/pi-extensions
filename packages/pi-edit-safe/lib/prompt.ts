@@ -3,7 +3,7 @@
  */
 
 export const EDIT_TOOL_DESCRIPTION =
-	"Replace text in a file: { path, edits: [{ oldText, newText }, ...] } — edits is always an array, even for a single replacement. Edits apply in order; each oldText is matched against the file as already changed by earlier edits in the same call, must occur exactly once at that point, and should be the smallest snippet that is still unique — do not pad with large unchanged regions. newText is spliced in verbatim.";
+	"Replace exact text in a file with ordered, verbatim replacements.";
 
 export const EDIT_PROMPT_SNIPPET =
 	"Make precise file edits with exact text replacement, including multiple ordered edits in one call";
@@ -18,7 +18,7 @@ export const EDIT_PROMPT_GUIDELINES = [
 export const EDIT_PARAMETER_DESCRIPTIONS = {
 	path: "Path to the file to edit (relative or absolute).",
 	edits:
-		"One or more replacements, applied in order, first to last. Use a single-element array for a single change. Each oldText is matched against the file as already changed by the previous edits in this call.",
-	oldText: "Exact text to find. Must be unique in the file at the time this edit applies.",
-	newText: "Replacement text, written verbatim.",
+		"One or more replacements, applied in order, first to last; use a single-element array for a single change. Each oldText is matched against the file as already changed by the previous edits in this call and must occur exactly once at that point.",
+	oldText: "Exact text to find — the smallest snippet that is still unique; do not pad with large unchanged regions.",
+	newText: "Replacement text, spliced in verbatim.",
 };
