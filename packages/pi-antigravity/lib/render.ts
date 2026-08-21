@@ -47,8 +47,31 @@ function asRecord(input: unknown): Record<string, unknown> {
 }
 
 /**
+ * Generic bounded key/value summary for tools without a dedicated shape
+ * (subagent orchestration, scheduling, media, …).
+ */
+function formatGenericArgs(input: Record<string, unknown>, theme: Theme): string {
+  const entries = Object.entries(input).filter(
+    ([, value]) => value !== undefined && value !== null && value !== "",
+  );
+  if (entries.length === 0) return "";
+  const bound = (text: string, max = 48) =>
+    text.length > max ? `${text.slice(0, max - 1)}…` : text;
+  const parts = entries.slice(0, 3).map(([key, value]) => {
+    const rendered =
+      typeof value === "string"
+        ? theme.fg("accent", `"${bound(value)}"`)
+        : theme.fg("accent", bound(JSON.stringify(value) ?? "", 24));
+    return `${theme.fg("toolOutput", key)} ${rendered}`;
+  });
+  let line = parts.join(theme.fg("toolOutput", ", "));
+  if (entries.length > 3) line += theme.fg("muted", " …");
+  return line;
+}
+
+/**
  * One-line call summary, aligned with pi's native tool cards:
- * bold label + accent arguments, no `⏺` prefix, no JSON dump.
+ * bold label + accent arguments, no dot prefix, no JSON dump.
  */
 export function formatAgyCall(tool: string, input: unknown, theme: Theme): string {
   const args = asRecord(input);
@@ -110,15 +133,37 @@ export function formatAgyCall(tool: string, input: unknown, theme: Theme): strin
           : theme.fg("toolOutput", ` in ${shortenPath(searchPath)}`);
       return `${label} ${queryText}${pathText}`;
     }
+    case "ask_question": {
+      const question = pickArg(args, ["question", "Question", "prompt", "Prompt", "text"]);
+      return `${label} ${question === undefined ? invalid : theme.fg("accent", `"${question}"`)}`;
+    }
+    case "generate_image": {
+      const prompt = pickArg(args, ["prompt", "Prompt", "description", "Description"]);
+      return `${label} ${prompt === undefined ? invalid : theme.fg("accent", `"${prompt}"`)}`;
+    }
+    case "invoke_subagent": {
+      const name = pickArg(args, ["name", "Name", "agent", "Agent", "type"]);
+      return `${label} ${name === undefined ? invalid : theme.fg("accent", name)}`;
+    }
+    case "send_message": {
+      const to = pickArg(args, ["to", "To", "subagent", "Subagent", "target"]);
+      const message = pickArg(args, ["message", "Message", "text", "Text"]);
+      if (to === undefined && message === undefined) return `${label} ${invalid}`;
+      const toText = to === undefined ? "" : theme.fg("accent", to);
+      const msgText = message === undefined ? "" : theme.fg("accent", ` "${message}"`);
+      return `${label} ${toText}${msgText}`;
+    }
+    case "manage_task": {
+      const action = pickArg(args, ["action", "Action"]);
+      const task = pickArg(args, ["task_id", "TaskId", "task", "Task", "id"]);
+      if (action === undefined && task === undefined) return `${label} ${invalid}`;
+      const actionText = action === undefined ? "" : theme.fg("accent", action);
+      const taskText = task === undefined ? "" : theme.fg("accent", ` ${task}`);
+      return `${label} ${actionText}${taskText}`;
+    }
     default: {
-      let json: string;
-      try {
-        json = JSON.stringify(input) ?? "";
-      } catch {
-        json = "";
-      }
-      const summary = !json || json === "{}" ? "" : json.length > 96 ? `${json.slice(0, 95)}…` : json;
-      return summary ? `${label} ${theme.fg("dim", summary)}` : label;
+      const generic = formatGenericArgs(args, theme);
+      return generic ? `${label} ${generic}` : label;
     }
   }
 }

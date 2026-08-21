@@ -83,6 +83,8 @@ const makeRuntime = Effect.gen(function* () {
   let turns = 0;
   let closed = false;
   let active: AgyTurnController | undefined;
+  /** Aborts the in-flight agy child process when the runtime closes. */
+  let activeTurnAbort: AbortController | undefined;
 
   const ensureOpen: Effect.Effect<void, AntigravityRuntimeClosedError> = Effect.suspend(() =>
     closed
@@ -121,6 +123,19 @@ const makeRuntime = Effect.gen(function* () {
             model = request.modelId;
             const controller = new AgyTurnController(request.prompt);
             active = controller;
+            // Compose pi's request signal with our own so close() can kill
+            // the agy child even when pi's signal never fires.
+            const turnAbort = new AbortController();
+            activeTurnAbort = turnAbort;
+            if (request.signal) {
+              if (request.signal.aborted) turnAbort.abort();
+              else
+                request.signal.addEventListener(
+                  "abort",
+                  () => turnAbort.abort(),
+                  { once: true },
+                );
+            }
             const spawnRequest: AgyTurnRequest = {
               prompt: request.prompt,
               conversationId,
@@ -128,7 +143,7 @@ const makeRuntime = Effect.gen(function* () {
               effort: request.effort,
               cwd,
               timeoutMs: 600_000,
-              signal: request.signal,
+              signal: turnAbort.signal,
               onActivity: (activity) => controller.push(activity),
             };
             void runAgyTurn(spawnRequest)
@@ -170,6 +185,9 @@ const makeRuntime = Effect.gen(function* () {
           Effect.sync(() => {
             closed = true;
             conversationId = undefined;
+            // Kill any in-flight agy child process immediately.
+            activeTurnAbort?.abort();
+            activeTurnAbort = undefined;
           }),
         ),
       ),

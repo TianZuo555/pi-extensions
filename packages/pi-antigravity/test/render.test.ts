@@ -54,6 +54,34 @@ test("formatAgyCall shortens $HOME paths and bounds unknown-tool JSON", () => {
   assert.ok(long.length < 130, `unexpectedly long: ${long.length}`);
 });
 
+test("formatAgyCall covers orchestration and media tools", () => {
+  assert.equal(
+    formatAgyCall("ask_question", { Question: "Proceed?" }, theme),
+    'ask_question "Proceed?"',
+  );
+  assert.equal(
+    formatAgyCall("generate_image", { prompt: "a logo" }, theme),
+    'generate_image "a logo"',
+  );
+  assert.equal(
+    formatAgyCall("invoke_subagent", { Name: "researcher" }, theme),
+    "invoke_subagent researcher",
+  );
+  assert.equal(
+    formatAgyCall("send_message", { to: "researcher", Message: "status?" }, theme),
+    'send_message researcher "status?"',
+  );
+  assert.equal(
+    formatAgyCall("manage_task", { Action: "list" }, theme),
+    "manage_task list",
+  );
+  // Unknown shapes fall back to a bounded key/value summary, not raw JSON.
+  const generic = formatAgyCall("schedule", { cron: "* * * * *", prompt: "run tests" }, theme);
+  assert.match(generic, /schedule/);
+  assert.match(generic, /cron/);
+  assert.ok(!generic.includes("{"));
+});
+
 test("summarizeAgyResult counts grep matches and find results", () => {
   const grep = summarizeAgyResult("grep_search", './a.ts: one\n./a.ts: two\n./b.ts: three\n');
   assert.deepEqual(grep, { counts: "3 matches in 2 files" });

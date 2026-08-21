@@ -184,6 +184,13 @@ export default async function antigravityExtension(pi: ExtensionAPI): Promise<vo
   });
 
   pi.on("session_shutdown", async () => {
+    // Close first: aborts any in-flight agy child process, then tear down
+    // the Effect runtime.
+    try {
+      await runAntigravity(runtime, service.close);
+    } catch {
+      // Already closed.
+    }
     try {
       await runtime.dispose();
     } catch {
