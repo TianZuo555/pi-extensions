@@ -2,6 +2,12 @@
 
 Use Google Antigravity (`agy`) models inside the [pi coding agent](https://pi.dev) via the agy stream-json RPC. pi stays the UI — model picker, sessions, rendering, compaction — while the Gemini agent loop runs underneath through the `agy` CLI.
 
+**Highlights**
+
+- Native pi tool cards for agy's tools (`grep`, `find`, `search_web`, …) with live text streaming
+- **Background-task management** — agy's long-running commands (dev servers, watchers) show up in a `/ps`-style dashboard with one-keystroke kill (`/agy-tasks`)
+- Reference cost display via pi's native cost calculation, overridable per model
+
 ## How it works
 
 - Registers an `antigravity` model provider (`pi.registerProvider`) whose `streamSimple` spawns one `agy` turn per request:
@@ -60,35 +66,58 @@ Try from a checkout: `pi -e ./packages/pi-antigravity --model antigravity/gemini
 - `/agy` — conversation status (id, model, turns, model source)
 - `/agy reset` — drop the agy conversation; the next turn starts fresh
 - `/agy models` — re-discover models from `agy models` and re-register the provider
+- `/agy-tasks` — open the background-task dashboard (`stop <task-id>|all` for non-interactive use)
 
-## Background tasks: `/agy-tasks`
+## Managing agy background tasks
 
-agy runs long-lived commands as its own background tasks; in headless mode their tool step never completes and the turn ends with "timeout waiting for response" while the spawned process keeps running (see Notes & limits). The `/agy-tasks` command opens a full-screen dashboard in the style of `/ps`:
+When you ask agy to run something long-lived — a dev server, a watcher, a test loop — agy turns it into a **background task**: the process keeps running on your machine while the conversation continues. pi-antigravity tracks these tasks and gives you full control without leaving pi.
+
+### A typical session
+
+You ask: *"start the dev server and tell me when it's up"* — agy starts it in the background and reports back:
 
 ```text
-  agy background tasks                              1 live / 2
-╭─ tasks ────────────────────────────────────────────────────────╮
-│ ❯ ■ (no output) task-1                    pid - · 0B · done   │
-│   ■ [dev] $ npm start task-2              pid 47791 · running │
-╰───────────────────────────────────────────────────────────────╯
-  ↑/↓/jk select · x stop · r rescan · esc close
+⏺ bash npm run dev
+✗ bash: agy started this command as a background task, which headless agy
+  cannot await ("timeout waiting for response"). The process keeps running
+  after the turn — follow up in a later message to have agy check the task's
+  output, or run long-lived processes with pi's own bash instead.
+
+I have started `npm run dev`. The Vite development server is now running in
+the background: http://localhost:3000/
 ```
 
-- `x` terminates the selected task (SIGTERM, process group included) and rescans
-- `r` rescans the conversation's task logs
-- `esc` closes; `/agy-tasks stop <task-id>|all` still works for non-interactive use
-
-While any task is live, a status-bar hint shows above the editor:
+The moment the turn settles, a hint appears above the editor:
 
 ```text
 ■ 1 agy background task • /agy-tasks to view
 ```
 
-It refreshes when turns settle, on session start, and after `/agy-tasks` interactions.
+Open `/agy-tasks` any time to see and manage everything agy left running:
+
+```text
+  agy background tasks                              1 live / 2
+╭─ tasks ────────────────────────────────────────────────────────╮
+│ ❯ ■ [dev] $ npm start task-2             pid 47791 · running │
+│   ■ (no output) task-1                    pid - · 0B · done   │
+╰───────────────────────────────────────────────────────────────╯
+  ↑/↓/jk select · x stop · r rescan · esc close
+```
+
+- **`x`** — stop the selected task (SIGTERM, process group included: `npm start` takes Vite down with it) and rescan
+- **`r`** — rescan the conversation's task logs
+- **`esc`** — close
+
+The hint disappears when the last live task is gone. For scripts and non-interactive runs, `/agy-tasks stop <task-id>` and `/agy-tasks stop all` work without the UI.
+
+### How tracking works
+
+The stream-json RPC does not report background tasks, so the extension reads them from the filesystem: each task writes a log under
+`~/.gemini/antigravity-cli/brain/<conversation-id>/.system_generated/tasks/`, and liveness is detected by who holds that log open (`lsof`) — or, after agy itself has exited, by finding the orphaned process (re-parented to launchd, cwd = session directory, started when the log was created).
 
 ## Notes & limits
 
-- **Background commands:** agy runs long-lived commands (dev servers, watchers) as its own background tasks. In headless print mode such a step never completes — the turn ends with "timeout waiting for response" while the spawned process keeps running. The extension detects this and the card explains it; follow up in a later message to have agy check the task's output, or run long-lived processes with pi's own bash instead.
+- **Background commands:** the turn that starts one ends with "timeout waiting for response" — that is agy's protocol limit, not a bug; the card explains it and the task remains manageable via `/agy-tasks`. Follow up in a later message to have agy check the task's output, or run long-lived processes with pi's own bash instead.
 - Model discovery runs `agy models` at startup (15s timeout, cached 24h in `~/.pi/antigravity/model-list.json`); a bundled fallback snapshot registers when discovery fails. Effort variants are collapsed into base models.
 - **Cost display:** agy is subscription-billed on the Google side, so registered rates are reference Gemini API prices (USD per Mtok; flash tier by default, pro tier for `-pro` ids) that feed pi's native cost calculation. Override any model's rates through pi's own model config — `~/.pi/agent/models.json`:
 
@@ -105,7 +134,7 @@ It refreshes when turns settle, on session start, and after `/agy-tasks` interac
     }
   }
   ```
-- Context/output limits in the pi model list are placeholders (agy does not expose them); costs are zero (subscription-billed on the Google side).
+- Context/output limits in the pi model list are placeholders (agy does not expose them).
 - The print interface is text-only: images in the pi context are replaced by an omission note.
 - pi-side compaction does not compact the agy conversation; agy keeps its own authoritative history.
 - Tool cards are display-only replays: agy's DONE steps carry the duration and (for some tools) output text, never structured result payloads, so collapsed cards preview at most three lines of recorded text.
