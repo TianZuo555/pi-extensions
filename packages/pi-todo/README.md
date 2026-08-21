@@ -19,13 +19,13 @@ The cause is structural: it defines **no `promptSnippet` and no
 that ships inside the tool schema on every turn. It was written for a harness
 that has no such slots; pi has both.
 
-| | Copilot clone | **pi-todo** |
+| Concern | Copilot clone | **pi-todo** |
 |---|---|---|
-| description | ~385 tok | ~55 tok |
-| parameter descriptions | ~180 tok | ~50 tok |
-| promptGuidelines | none | 2 bullets (~35 tok) |
-| per-write nag in the result | ~30 tok | none |
-| **total** | **~565 tok** | **~140 tok** |
+| capability | mixed into 22 policy-heavy lines | one 44-character description |
+| call contract | repeated prose | localized schema descriptions |
+| usage policy | mixed into the schema | two short `promptGuidelines` |
+| per-write nag | ~30 tokens | none |
+| metadata budget | unbounded | under 900 characters, enforced by tests |
 
 It also contradicted itself — the description says "Use this tool VERY
 frequently", then the write handler warns *"Small todo list (<3 items). This

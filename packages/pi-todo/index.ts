@@ -1,9 +1,8 @@
 // pi extension: a small `todo` tool for multi-step work.
 //
 // Replaces tintinweb/pi-manage-todo-list, whose model-facing prompt was a
-// verbatim GitHub Copilot clone (~565 tokens per request) because it put all
-// behavioural policy into `description` — pi has promptSnippet and
-// promptGuidelines slots for exactly that. This one costs ~140.
+// verbatim GitHub Copilot clone because it put all behavioural policy into
+// `description` — pi has promptSnippet and promptGuidelines slots for that.
 //
 // The list renders through pi's own ctx.ui.setWidget above the editor; there is
 // no bespoke widget component to maintain.
@@ -38,14 +37,20 @@ import {
 const WIDGET_KEY = "todo-list";
 
 const TodoItemSchema = Type.Object({
-  id: Type.Number({ description: TODO_PARAMETER_DESCRIPTIONS.id }),
-  title: Type.String({ description: TODO_PARAMETER_DESCRIPTIONS.title }),
+  id: Type.Integer({
+    minimum: 1,
+    description: TODO_PARAMETER_DESCRIPTIONS.id,
+  }),
+  title: Type.String({
+    minLength: 1,
+    description: TODO_PARAMETER_DESCRIPTIONS.title,
+  }),
   status: StringEnum(["not-started", "in-progress", "completed"] as const, {
     description: TODO_PARAMETER_DESCRIPTIONS.status,
   }),
 });
 
-const TodoParams = Type.Object({
+export const TodoParams = Type.Object({
   operation: StringEnum(["write", "read"] as const, {
     description: TODO_PARAMETER_DESCRIPTIONS.operation,
   }),
