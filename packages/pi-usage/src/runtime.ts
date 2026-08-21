@@ -79,7 +79,7 @@ export interface UsageRuntimeShape {
 }
 
 export class UsageRuntime extends Context.Service<UsageRuntime, UsageRuntimeShape>()(
-  "pi-tian-usage/UsageRuntime",
+  "pi-usage/UsageRuntime",
 ) {}
 
 const makeUsageRuntime = Effect.gen(function* () {

@@ -3,9 +3,9 @@ import test from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import goalExtension from "../index.ts";
 
-const CONTINUATION_TYPE = "pi-tian-goal-continuation";
-const BUDGET_TYPE = "pi-tian-goal-budget";
-const COMPLETION_TYPE = "pi-tian-goal-completion";
+const CONTINUATION_TYPE = "pi-goal-continuation";
+const BUDGET_TYPE = "pi-goal-budget";
+const COMPLETION_TYPE = "pi-goal-completion";
 
 interface Captured {
   events: Map<string, Array<(event: any, ctx: any) => unknown>>;
@@ -145,7 +145,7 @@ test("goal command persists state, exposes tools, and queues a continuation", as
   assert.equal(captured.entries.length, 1);
   assert.equal(captured.messages.length, 1);
   assert.match(captured.messages[0].message.content, /Run the checkout benchmark/);
-  assert.match(captured.statuses.get("pi-tian-goal")!, /goal active/);
+  assert.match(captured.statuses.get("pi-goal")!, /goal active/);
   assert.equal(captured.workingMessage, "Pursuing goal: Run the checkout benchmark");
 
   const getResult = await captured.tools.get("get_goal").execute(

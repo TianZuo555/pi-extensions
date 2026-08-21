@@ -1,4 +1,4 @@
-# `pi-tian-compact-output` implementation guide
+# `@tian.zuo/pi-compact-output` implementation guide
 
 ## Goal
 
@@ -19,8 +19,8 @@ Do **not** re-register `grep`, `find`, `bash`, `edit`, or any other tool.
 The current tool owners include:
 
 - `@ff-labs/pi-fff@0.10.1` for `grep` and `find` in override mode.
-- `pi-tian-background-terminals` for `bash`.
-- `pi-tian-edit-safe` for `edit`.
+- `@tian.zuo/pi-background-terminals` for `bash`.
+- `@tian.zuo/pi-edit-safe` for `edit`.
 
 Pi exposes per-tool renderers but no public global tool-renderer decorator. `pi.getAllTools()` returns metadata, not executable definitions or renderers, so it cannot safely proxy third-party tools.
 
@@ -125,7 +125,7 @@ Use this package identity:
 
 ```json
 {
-  "name": "pi-tian-compact-output",
+  "name": "@tian.zuo/pi-compact-output",
   "version": "0.1.0"
 }
 ```
@@ -254,7 +254,7 @@ This intentionally leaves the actual session message unchanged. It also lets the
 
 ### 4. Make patch installation safe
 
-Use `Symbol.for("pi-tian-compact-output.patch-state")` on `globalThis` to hold shared patch state.
+Use `Symbol.for("@tian.zuo/pi-compact-output.patch-state")` on `globalThis` to hold shared patch state.
 
 The state should contain:
 
@@ -361,7 +361,7 @@ Update these existing files surgically:
 - `pnpm-lock.yaml`
   - Synchronize the new workspace and dependency version.
 - `.github/workflows/publish.yml`
-  - Add a `pi-tian-compact-output` test step before publishing.
+  - Add a `@tian.zuo/pi-compact-output` test step before publishing.
 - `README.md`
   - Add the extension table row.
   - Add install commands and npm link.
@@ -382,13 +382,13 @@ Run the full relevant checks:
 ```bash
 pnpm install
 pnpm run typecheck
-pnpm --filter pi-tian-background-terminals run check
-pnpm --filter pi-tian-compact-output test
-pnpm --filter pi-tian-background-terminals test
-pnpm --filter pi-tian-ask-user test
-pnpm --filter pi-tian-commit test
-pnpm --filter pi-tian-edit-safe test
-pnpm --filter pi-tian-subagents test
+pnpm --filter @tian.zuo/pi-background-terminals run check
+pnpm --filter @tian.zuo/pi-compact-output test
+pnpm --filter @tian.zuo/pi-background-terminals test
+pnpm --filter @tian.zuo/pi-ask-user test
+pnpm --filter @tian.zuo/pi-commit test
+pnpm --filter @tian.zuo/pi-edit-safe test
+pnpm --filter @tian.zuo/pi-subagents test
 pnpm run pack:check
 ```
 

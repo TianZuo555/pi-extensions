@@ -130,7 +130,7 @@ export interface WebSearchRuntimeShape {
 export class WebSearchRuntime extends Context.Service<
   WebSearchRuntime,
   WebSearchRuntimeShape
->()("pi-tian-web-search/WebSearchRuntime") {}
+>()("pi-web-search/WebSearchRuntime") {}
 
 const makeWebSearchRuntime = Effect.gen(function* () {
   const healthRef = yield* SynchronizedRef.make(

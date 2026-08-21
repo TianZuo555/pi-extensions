@@ -1,5 +1,5 @@
 /**
- * pi-tian-subagents — isolated Pi RPC subagents with profiles, background runs, and worktrees.
+ * pi-subagents — isolated Pi RPC subagents with profiles, background runs, and worktrees.
  *
  * Architecture: supervisor lifecycle and run orchestration live in an Effect v4
  * `SubagentRuntime` service (see `src/runtime.ts`). This file is the imperative
@@ -37,7 +37,7 @@ import {
   type SubagentRuntimeShape,
 } from "./src/runtime.ts";
 
-const WIDGET_KEY = "pi-tian-subagents";
+const WIDGET_KEY = "pi-subagents";
 
 const SubagentParams = Type.Object({
   profile: Type.String({

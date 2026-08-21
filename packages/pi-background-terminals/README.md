@@ -1,4 +1,4 @@
-# pi-tian-background-terminals
+# @tian.zuo/pi-background-terminals
 
 A managed replacement for Pi's built-in `bash` tool.
 
@@ -150,7 +150,7 @@ invariants.
 ## Install
 
 ```bash
-pi install npm:pi-tian-background-terminals
+pi install npm:@tian.zuo/pi-background-terminals
 ```
 
 Restart Pi or run `/reload` afterwards.
@@ -161,7 +161,7 @@ This workspace pins Effect `4.0.0-beta.101` and uses TypeScript 7 (`tsgo`), so
 it is checked in isolation:
 
 ```bash
-pnpm install --filter pi-tian-background-terminals
+pnpm install --filter @tian.zuo/pi-background-terminals
 cd packages/pi-background-terminals
 pnpm run check
 pnpm test

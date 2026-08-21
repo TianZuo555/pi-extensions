@@ -1,6 +1,6 @@
 {
-  "name": "pi-tian-find",
-  "version": "1.1.1",
+  "name": "@tian.zuo/pi-find",
+  "version": "0.1.0",
   "description": "ripgrep/fd-backed grep and find tools for the pi coding agent, with a path-constraint DSL, directory pruning, multi-pattern support, and whole-path matching.",
   "type": "module",
   "keywords": [
@@ -17,12 +17,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/TianZuo555/pi-tian-extensions.git",
+    "url": "git+https://github.com/TianZuo555/pi-extensions.git",
     "directory": "packages/pi-find"
   },
-  "homepage": "https://github.com/TianZuo555/pi-tian-extensions#pi-find",
+  "homepage": "https://github.com/TianZuo555/pi-extensions#pi-find",
   "bugs": {
-    "url": "https://github.com/TianZuo555/pi-tian-extensions/issues"
+    "url": "https://github.com/TianZuo555/pi-extensions/issues"
   },
   "files": [
     "index.ts",

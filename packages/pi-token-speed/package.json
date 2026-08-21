@@ -1,6 +1,6 @@
 {
-  "name": "pi-tian-token-speed",
-  "version": "0.2.0",
+  "name": "@tian.zuo/pi-token-speed",
+  "version": "0.1.0",
   "description": "Live and final tokens-per-second meter for the pi coding agent.",
   "type": "module",
   "keywords": [
@@ -14,12 +14,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/TianZuo555/pi-tian-extensions.git",
+    "url": "git+https://github.com/TianZuo555/pi-extensions.git",
     "directory": "packages/pi-token-speed"
   },
-  "homepage": "https://github.com/TianZuo555/pi-tian-extensions#token-speed",
+  "homepage": "https://github.com/TianZuo555/pi-extensions#token-speed",
   "bugs": {
-    "url": "https://github.com/TianZuo555/pi-tian-extensions/issues"
+    "url": "https://github.com/TianZuo555/pi-extensions/issues"
   },
   "files": [
     "index.ts",

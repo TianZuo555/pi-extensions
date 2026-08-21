@@ -1,6 +1,6 @@
 {
-  "name": "pi-tian-subagents",
-  "version": "0.4.1",
+  "name": "@tian.zuo/pi-subagents",
+  "version": "0.1.0",
   "description": "Isolated subagent runs via Herdr panes or Pi RPC children — profiles, background runs, and git worktrees.",
   "type": "module",
   "keywords": [
@@ -14,12 +14,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/TianZuo555/pi-tian-extensions.git",
+    "url": "git+https://github.com/TianZuo555/pi-extensions.git",
     "directory": "packages/pi-subagents"
   },
-  "homepage": "https://github.com/TianZuo555/pi-tian-extensions#subagents",
+  "homepage": "https://github.com/TianZuo555/pi-extensions#subagents",
   "bugs": {
-    "url": "https://github.com/TianZuo555/pi-tian-extensions/issues"
+    "url": "https://github.com/TianZuo555/pi-extensions/issues"
   },
   "files": [
     "index.ts",

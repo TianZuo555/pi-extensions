@@ -1,9 +1,9 @@
-# pi-tian-ask-user
+# @tian.zuo/pi-ask-user
 
 Let the model ask you a multiple-choice question from [pi](https://pi.dev).
 
 ```bash
-pi install npm:pi-tian-ask-user
+pi install npm:@tian.zuo/pi-ask-user
 ```
 
 Registers an `ask_user` tool. The model can supply 1–5 questions with 2–5
@@ -55,5 +55,5 @@ one waiting on a human. Emitting is best-effort, balanced active→inactive via
 `try/finally`, and a harmless no-op when nothing listens. No event is emitted in
 non-UI modes.
 
-See the [collection repository](https://github.com/TianZuo555/pi-tian-extensions#ask-user)
+See the [collection repository](https://github.com/TianZuo555/pi-extensions#ask-user)
 for full documentation.

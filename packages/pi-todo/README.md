@@ -4,7 +4,7 @@ A small `todo` tool for the **pi coding agent**. Replaces
 [`tintinweb/pi-manage-todo-list`](https://github.com/tintinweb/pi-manage-todo-list),
 which is a verbatim clone of GitHub Copilot's `manage_todo_list`.
 
-Install: `npm:pi-tian-todo` · npm package `pi-tian-todo` · workspace `packages/pi-todo`
+Install: `npm:@tian.zuo/pi-todo` · npm package `@tian.zuo/pi-todo` · workspace `packages/pi-todo`
 
 ## Why replace it
 
@@ -71,5 +71,5 @@ the switch survive.
 ## Tests
 
 ```bash
-pnpm --filter pi-tian-todo test
+pnpm --filter @tian.zuo/pi-todo test
 ```

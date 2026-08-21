@@ -1,1 +1,73 @@
-{ "type": "commonjs" }
+{
+  "name": "pi-vscode-bridge",
+  "version": "0.1.0",
+  "description": "Send file, line, and diff-hunk references from VS Code into a running pi agent's input editor.",
+  "type": "commonjs",
+  "publisher": "tianzuo",
+  "displayName": "Pi VS Code Bridge",
+  "license": "MIT",
+  "main": "./out/extension.js",
+  "categories": [
+    "Other"
+  ],
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "pi-vscode-bridge.sendFromExplorer",
+        "title": "Send to Pi"
+      },
+      {
+        "command": "pi-vscode-bridge.sendFromEditor",
+        "title": "Send to Pi"
+      },
+      {
+        "command": "pi-vscode-bridge.sendHunk",
+        "title": "Send Hunk to Pi"
+      },
+      {
+        "command": "pi-vscode-bridge.showStatus",
+        "title": "Pi Bridge: Show Attached Agent"
+      }
+    ],
+    "menus": {
+      "explorer/context": [
+        {
+          "command": "pi-vscode-bridge.sendFromExplorer",
+          "group": "pi@1",
+          "when": "resourceScheme == file"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "pi-vscode-bridge.sendFromEditor",
+          "group": "pi@1",
+          "when": "editorTextFocus && !isInDiffEditor"
+        },
+        {
+          "command": "pi-vscode-bridge.sendHunk",
+          "group": "pi@1",
+          "when": "editorTextFocus && isInDiffEditor"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "pi-vscode-bridge.sendFromExplorer",
+          "when": "false"
+        },
+        {
+          "command": "pi-vscode-bridge.sendHunk",
+          "when": "false"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p tsconfig.json"
+  }
+}

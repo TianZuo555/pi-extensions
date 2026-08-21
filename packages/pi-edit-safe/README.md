@@ -13,7 +13,7 @@ that weaker models can actually use.
 > validation, so a stray legacy call is normalized rather than rejected — they
 > are just not advertised.
 
-Install: `npm:pi-tian-edit-safe` · npm package `pi-tian-edit-safe` · workspace `packages/pi-edit-safe`
+Install: `npm:@tian.zuo/pi-edit-safe` · npm package `@tian.zuo/pi-edit-safe` · workspace `packages/pi-edit-safe`
 
 ## Call shape
 
@@ -98,8 +98,8 @@ PI_EDIT_SAFE_DISABLE=1 pi   # falls back to the built-in edit
 ## Tests and A/B bench
 
 ```bash
-pnpm --filter pi-tian-edit-safe test    # 45 unit tests (Node's built-in runner)
-pnpm --filter pi-tian-edit-safe run bench
+pnpm --filter @tian.zuo/pi-edit-safe test    # 45 unit tests (Node's built-in runner)
+pnpm --filter @tian.zuo/pi-edit-safe run bench
 ```
 
 The bench imports pi's **actual shipped** `edit-diff.js` functions and composes

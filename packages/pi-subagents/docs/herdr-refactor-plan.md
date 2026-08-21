@@ -1,4 +1,4 @@
-# pi-tian-subagents → Herdr-backed subagents (refactor plan)
+# @tian.zuo/pi-subagents → Herdr-backed subagents (refactor plan)
 
 Status: approved design, staged implementation.
 Owner: primary agent (plan + review). Implementation delegated to `cursor-agent` via Herdr.
@@ -394,8 +394,8 @@ No test may invoke the real `herdr` binary or spawn real agents.
 
 ## Delivery phases
 
-Each phase ends green on `npm run check -w pi-tian-subagents` **and**
-`npm test -w pi-tian-subagents`.
+Each phase ends green on `npm run check -w @tian.zuo/pi-subagents` **and**
+`npm test -w @tian.zuo/pi-subagents`.
 
 1. **Seam.** `lib/backend.ts`, move RPC into `lib/backend-rpc.ts`, supervisor calls the
    interface, `usageAvailable` plumbed through domain/details. No behavior change.

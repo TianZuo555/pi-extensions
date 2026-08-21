@@ -79,7 +79,7 @@ export interface SearchRuntimeShape {
 export class SearchRuntime extends Context.Service<
   SearchRuntime,
   SearchRuntimeShape
->()("pi-tian-find/SearchRuntime") {}
+>()("pi-find/SearchRuntime") {}
 
 /** Resolve the already-normalized search root against the request cwd. */
 function resolveRoot(cwd: string, plan: ConstraintPlan): string {

@@ -1,6 +1,6 @@
 {
-  "name": "pi-tian-vscode-bridge",
-  "version": "0.1.1",
+  "name": "@tian.zuo/pi-vscode-bridge",
+  "version": "0.1.0",
   "description": "Send file, line, and diff-hunk references from VS Code into a running pi agent's input editor.",
   "type": "module",
   "private": true,
@@ -15,12 +15,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/TianZuo555/pi-tian-extensions.git",
+    "url": "git+https://github.com/TianZuo555/pi-extensions.git",
     "directory": "packages/pi-vscode-bridge"
   },
-  "homepage": "https://github.com/TianZuo555/pi-tian-extensions#pi-vscode-bridge",
+  "homepage": "https://github.com/TianZuo555/pi-extensions#pi-vscode-bridge",
   "bugs": {
-    "url": "https://github.com/TianZuo555/pi-tian-extensions/issues"
+    "url": "https://github.com/TianZuo555/pi-extensions/issues"
   },
   "files": [
     "index.ts",
@@ -34,77 +34,13 @@
       "./index.ts"
     ]
   },
-  "main": "./vscode/out/extension.js",
-  "publisher": "tianzuo",
-  "displayName": "Pi VS Code Bridge",
-  "categories": [
-    "Other"
-  ],
-  "engines": {
-    "vscode": "^1.90.0"
-  },
-  "activationEvents": [
-    "onStartupFinished"
-  ],
-  "contributes": {
-    "commands": [
-      {
-        "command": "pi-vscode-bridge.sendFromExplorer",
-        "title": "Send to Pi"
-      },
-      {
-        "command": "pi-vscode-bridge.sendFromEditor",
-        "title": "Send to Pi"
-      },
-      {
-        "command": "pi-vscode-bridge.sendHunk",
-        "title": "Send Hunk to Pi"
-      },
-      {
-        "command": "pi-vscode-bridge.showStatus",
-        "title": "Pi Bridge: Show Attached Agent"
-      }
-    ],
-    "menus": {
-      "explorer/context": [
-        {
-          "command": "pi-vscode-bridge.sendFromExplorer",
-          "group": "pi@1",
-          "when": "resourceScheme == file"
-        }
-      ],
-      "editor/context": [
-        {
-          "command": "pi-vscode-bridge.sendFromEditor",
-          "group": "pi@1",
-          "when": "editorTextFocus && !isInDiffEditor"
-        },
-        {
-          "command": "pi-vscode-bridge.sendHunk",
-          "group": "pi@1",
-          "when": "editorTextFocus && isInDiffEditor"
-        }
-      ],
-      "commandPalette": [
-        {
-          "command": "pi-vscode-bridge.sendFromExplorer",
-          "when": "false"
-        },
-        {
-          "command": "pi-vscode-bridge.sendHunk",
-          "when": "false"
-        }
-      ]
-    }
-  },
   "scripts": {
     "check": "tsc --noEmit -p .",
     "test": "node --test --experimental-strip-types test/*.test.ts",
     "compile:vscode": "tsc -p vscode/tsconfig.json",
     "watch:vscode": "tsc -watch -p vscode/tsconfig.json",
     "prepack": "pnpm run compile:vscode",
-    "package:vscode": "pnpm dlx @vscode/vsce package --no-dependencies",
-    "vscode:prepublish": "pnpm run compile:vscode"
+    "package:vscode": "pnpm run compile:vscode && cd vscode && pnpm dlx @vscode/vsce package --no-dependencies"
   },
   "dependencies": {
     "effect": "4.0.0-beta.101"

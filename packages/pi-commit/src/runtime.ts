@@ -118,7 +118,7 @@ export interface CommitRuntimeShape {
 }
 
 export class CommitRuntime extends EffectContext.Service<CommitRuntime, CommitRuntimeShape>()(
-  "pi-tian-commit/CommitRuntime",
+  "pi-commit/CommitRuntime",
 ) {}
 
 const makeCommitRuntime = Effect.succeed(

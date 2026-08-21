@@ -1,4 +1,4 @@
-# pi-tian-extensions
+# pi-extensions
 
 A small collection of [pi coding agent](https://pi.dev) extensions.
 
@@ -33,19 +33,19 @@ install all of them or only the ones you need.
 ### Install all
 
 ```bash
-pi install npm:pi-tian-repo-model
-pi install npm:pi-tian-repo-skills
-pi install npm:pi-tian-commit
-pi install npm:pi-tian-token-speed
-pi install npm:pi-tian-image-cache
-pi install npm:pi-tian-ask-user
-pi install npm:pi-tian-usage
-pi install npm:pi-tian-background-terminals
-pi install npm:pi-tian-edit-safe
-pi install npm:pi-tian-find
-pi install npm:pi-tian-subagents
-pi install npm:pi-tian-compact-output
-pi install npm:pi-tian-goal
+pi install npm:@tian.zuo/pi-repo-model
+pi install npm:@tian.zuo/pi-repo-skills
+pi install npm:@tian.zuo/pi-commit
+pi install npm:@tian.zuo/pi-token-speed
+pi install npm:@tian.zuo/pi-image-cache
+pi install npm:@tian.zuo/pi-ask-user
+pi install npm:@tian.zuo/pi-usage
+pi install npm:@tian.zuo/pi-background-terminals
+pi install npm:@tian.zuo/pi-edit-safe
+pi install npm:@tian.zuo/pi-find
+pi install npm:@tian.zuo/pi-subagents
+pi install npm:@tian.zuo/pi-compact-output
+pi install npm:@tian.zuo/pi-goal
 ```
 
 Restart pi or run `/reload` in an existing session after installation.
@@ -55,19 +55,19 @@ The commands above add these entries to `~/.pi/agent/settings.json`:
 ```json
 {
   "packages": [
-    "npm:pi-tian-repo-model",
-    "npm:pi-tian-repo-skills",
-    "npm:pi-tian-commit",
-    "npm:pi-tian-token-speed",
-    "npm:pi-tian-image-cache",
-    "npm:pi-tian-ask-user",
-    "npm:pi-tian-usage",
-    "npm:pi-tian-background-terminals",
-    "npm:pi-tian-edit-safe",
-    "npm:pi-tian-find",
-    "npm:pi-tian-subagents",
-    "npm:pi-tian-compact-output",
-    "npm:pi-tian-goal"
+    "npm:@tian.zuo/pi-repo-model",
+    "npm:@tian.zuo/pi-repo-skills",
+    "npm:@tian.zuo/pi-commit",
+    "npm:@tian.zuo/pi-token-speed",
+    "npm:@tian.zuo/pi-image-cache",
+    "npm:@tian.zuo/pi-ask-user",
+    "npm:@tian.zuo/pi-usage",
+    "npm:@tian.zuo/pi-background-terminals",
+    "npm:@tian.zuo/pi-edit-safe",
+    "npm:@tian.zuo/pi-find",
+    "npm:@tian.zuo/pi-subagents",
+    "npm:@tian.zuo/pi-compact-output",
+    "npm:@tian.zuo/pi-goal"
   ]
 }
 ```
@@ -76,25 +76,25 @@ The commands above add these entries to `~/.pi/agent/settings.json`:
 
 | Extension | Install command |
 |-----------|-----------------|
-| [pi-tian-repo-model](https://www.npmjs.com/package/pi-tian-repo-model) | `pi install npm:pi-tian-repo-model` |
-| [pi-tian-repo-skills](https://www.npmjs.com/package/pi-tian-repo-skills) | `pi install npm:pi-tian-repo-skills` |
-| [pi-tian-commit](https://www.npmjs.com/package/pi-tian-commit) | `pi install npm:pi-tian-commit` |
-| [pi-tian-token-speed](https://www.npmjs.com/package/pi-tian-token-speed) | `pi install npm:pi-tian-token-speed` |
-| [pi-tian-image-cache](https://www.npmjs.com/package/pi-tian-image-cache) | `pi install npm:pi-tian-image-cache` |
-| [pi-tian-ask-user](https://www.npmjs.com/package/pi-tian-ask-user) | `pi install npm:pi-tian-ask-user` |
-| [pi-tian-usage](https://www.npmjs.com/package/pi-tian-usage) | `pi install npm:pi-tian-usage` |
-| [pi-tian-background-terminals](https://www.npmjs.com/package/pi-tian-background-terminals) | `pi install npm:pi-tian-background-terminals` |
-| [pi-tian-edit-safe](https://www.npmjs.com/package/pi-tian-edit-safe) | `pi install npm:pi-tian-edit-safe` |
-| [pi-tian-find](https://www.npmjs.com/package/pi-tian-find) | `pi install npm:pi-tian-find` |
-| [pi-tian-subagents](https://www.npmjs.com/package/pi-tian-subagents) | `pi install npm:pi-tian-subagents` |
-| [pi-tian-compact-output](https://www.npmjs.com/package/pi-tian-compact-output) | `pi install npm:pi-tian-compact-output` |
-| [pi-tian-goal](https://www.npmjs.com/package/pi-tian-goal) | `pi install npm:pi-tian-goal` |
-| [pi-tian-vscode-bridge](https://www.npmjs.com/package/pi-tian-vscode-bridge) | `pi install npm:pi-tian-vscode-bridge` |
+| [@tian.zuo/pi-repo-model](https://www.npmjs.com/package/@tian.zuo/pi-repo-model) | `pi install npm:@tian.zuo/pi-repo-model` |
+| [@tian.zuo/pi-repo-skills](https://www.npmjs.com/package/@tian.zuo/pi-repo-skills) | `pi install npm:@tian.zuo/pi-repo-skills` |
+| [@tian.zuo/pi-commit](https://www.npmjs.com/package/@tian.zuo/pi-commit) | `pi install npm:@tian.zuo/pi-commit` |
+| [@tian.zuo/pi-token-speed](https://www.npmjs.com/package/@tian.zuo/pi-token-speed) | `pi install npm:@tian.zuo/pi-token-speed` |
+| [@tian.zuo/pi-image-cache](https://www.npmjs.com/package/@tian.zuo/pi-image-cache) | `pi install npm:@tian.zuo/pi-image-cache` |
+| [@tian.zuo/pi-ask-user](https://www.npmjs.com/package/@tian.zuo/pi-ask-user) | `pi install npm:@tian.zuo/pi-ask-user` |
+| [@tian.zuo/pi-usage](https://www.npmjs.com/package/@tian.zuo/pi-usage) | `pi install npm:@tian.zuo/pi-usage` |
+| [@tian.zuo/pi-background-terminals](https://www.npmjs.com/package/@tian.zuo/pi-background-terminals) | `pi install npm:@tian.zuo/pi-background-terminals` |
+| [@tian.zuo/pi-edit-safe](https://www.npmjs.com/package/@tian.zuo/pi-edit-safe) | `pi install npm:@tian.zuo/pi-edit-safe` |
+| [@tian.zuo/pi-find](https://www.npmjs.com/package/@tian.zuo/pi-find) | `pi install npm:@tian.zuo/pi-find` |
+| [@tian.zuo/pi-subagents](https://www.npmjs.com/package/@tian.zuo/pi-subagents) | `pi install npm:@tian.zuo/pi-subagents` |
+| [@tian.zuo/pi-compact-output](https://www.npmjs.com/package/@tian.zuo/pi-compact-output) | `pi install npm:@tian.zuo/pi-compact-output` |
+| [@tian.zuo/pi-goal](https://www.npmjs.com/package/@tian.zuo/pi-goal) | `pi install npm:@tian.zuo/pi-goal` |
+| [@tian.zuo/pi-vscode-bridge](https://www.npmjs.com/package/@tian.zuo/pi-vscode-bridge) | `pi install npm:@tian.zuo/pi-vscode-bridge` |
 
 Try an extension temporarily without adding it to settings:
 
 ```bash
-pi -e npm:pi-tian-image-cache
+pi -e npm:@tian.zuo/pi-image-cache
 ```
 
 ### Migrate from a Git install
@@ -111,19 +111,19 @@ want:
 
 ```bash
 # Old aggregate package, if installed:
-pi remove git:github.com/TianZuo555/pi-tian-extensions
+pi remove git:github.com/TianZuo555/pi-extensions
 
 # Old standalone token-speed package, if installed:
 pi remove git:github.com/TianZuo555/pi-token-speed
 
-pi install npm:pi-tian-repo-model
-pi install npm:pi-tian-repo-skills
-pi install npm:pi-tian-commit
-pi install npm:pi-tian-token-speed
-pi install npm:pi-tian-image-cache
-pi install npm:pi-tian-ask-user
-pi install npm:pi-tian-usage
-pi install npm:pi-tian-background-terminals
+pi install npm:@tian.zuo/pi-repo-model
+pi install npm:@tian.zuo/pi-repo-skills
+pi install npm:@tian.zuo/pi-commit
+pi install npm:@tian.zuo/pi-token-speed
+pi install npm:@tian.zuo/pi-image-cache
+pi install npm:@tian.zuo/pi-ask-user
+pi install npm:@tian.zuo/pi-usage
+pi install npm:@tian.zuo/pi-background-terminals
 ```
 
 Your existing extension preferences and caches remain in `~/.pi/`; changing the
@@ -140,13 +140,13 @@ pi update --extensions
 Then restart pi or run `/reload`. To update only one package:
 
 ```bash
-pi update npm:pi-tian-repo-model
+pi update npm:@tian.zuo/pi-repo-model
 ```
 
 Remove an extension independently with, for example:
 
 ```bash
-pi remove npm:pi-tian-token-speed
+pi remove npm:@tian.zuo/pi-token-speed
 ```
 
 ### Legacy aggregate Git install
@@ -154,7 +154,7 @@ pi remove npm:pi-tian-token-speed
 The repository root remains an aggregate package for backward compatibility:
 
 ```bash
-pi install git:github.com/TianZuo555/pi-tian-extensions
+pi install git:github.com/TianZuo555/pi-extensions
 ```
 
 New installations should prefer the individual npm packages above.
@@ -378,7 +378,7 @@ override any tools.
   the transcript also keeps reasoning to one concise line until Ctrl+O expands it.
 
 ```bash
-pi install npm:pi-tian-compact-output
+pi install npm:@tian.zuo/pi-compact-output
 pi -e ./packages/pi-compact-output
 ```
 
@@ -389,9 +389,9 @@ Attaches a VS Code window to a running pi agent so right-click **Send to Pi** pr
 Install both sides:
 
 ```bash
-pi install npm:pi-tian-vscode-bridge
-pnpm --filter pi-tian-vscode-bridge run package:vscode
-code --install-extension packages/pi-vscode-bridge/pi-tian-vscode-bridge-0.1.0.vsix
+pi install npm:@tian.zuo/pi-vscode-bridge
+pnpm --filter @tian.zuo/pi-vscode-bridge run package:vscode
+code --install-extension packages/pi-vscode-bridge/vscode/pi-vscode-bridge-0.1.0.vsix
 ```
 
 Run `/vscode-connect` in Pi. See [packages/pi-vscode-bridge](packages/pi-vscode-bridge/README.md)
@@ -406,7 +406,7 @@ that makes no tool call suppresses the next automatic continuation, so this is
 not an unbounded loop.
 
 ```bash
-pi install npm:pi-tian-goal
+pi install npm:@tian.zuo/pi-goal
 pi -e ./packages/pi-goal
 ```
 
@@ -418,20 +418,20 @@ The repository is a pnpm workspace with one publishable package per extension:
 
 | Workspace | npm package |
 |-----------|-------------|
-| `packages/pi-repo-model` | `pi-tian-repo-model` |
-| `packages/pi-repo-skills` | `pi-tian-repo-skills` |
-| `packages/pi-commit` | `pi-tian-commit` |
-| `packages/pi-token-speed` | `pi-tian-token-speed` |
-| `packages/pi-image-cache` | `pi-tian-image-cache` |
-| `packages/pi-ask-user` | `pi-tian-ask-user` |
-| `packages/pi-usage` | `pi-tian-usage` |
-| `packages/pi-background-terminals` | `pi-tian-background-terminals` |
-| `packages/pi-edit-safe` | `pi-tian-edit-safe` |
-| `packages/pi-find` | `pi-tian-find` |
-| `packages/pi-subagents` | `pi-tian-subagents` |
-| `packages/pi-compact-output` | `pi-tian-compact-output` |
-| `packages/pi-goal` | `pi-tian-goal` |
-| `packages/pi-vscode-bridge` | `pi-tian-vscode-bridge` |
+| `packages/pi-repo-model` | `@tian.zuo/pi-repo-model` |
+| `packages/pi-repo-skills` | `@tian.zuo/pi-repo-skills` |
+| `packages/pi-commit` | `@tian.zuo/pi-commit` |
+| `packages/pi-token-speed` | `@tian.zuo/pi-token-speed` |
+| `packages/pi-image-cache` | `@tian.zuo/pi-image-cache` |
+| `packages/pi-ask-user` | `@tian.zuo/pi-ask-user` |
+| `packages/pi-usage` | `@tian.zuo/pi-usage` |
+| `packages/pi-background-terminals` | `@tian.zuo/pi-background-terminals` |
+| `packages/pi-edit-safe` | `@tian.zuo/pi-edit-safe` |
+| `packages/pi-find` | `@tian.zuo/pi-find` |
+| `packages/pi-subagents` | `@tian.zuo/pi-subagents` |
+| `packages/pi-compact-output` | `@tian.zuo/pi-compact-output` |
+| `packages/pi-goal` | `@tian.zuo/pi-goal` |
+| `packages/pi-vscode-bridge` | `@tian.zuo/pi-vscode-bridge` |
 
 Install dependencies, typecheck every workspace, run the commit and
 managed-terminal suites, and inspect publishable tarballs:
@@ -439,14 +439,14 @@ managed-terminal suites, and inspect publishable tarballs:
 ```bash
 pnpm install
 pnpm run typecheck
-pnpm --filter pi-tian-background-terminals run check
-pnpm --filter pi-tian-background-terminals test
-pnpm --filter pi-tian-commit test
-pnpm --filter pi-tian-edit-safe test
-pnpm --filter pi-tian-find test
-pnpm --filter pi-tian-subagents test
-pnpm --filter pi-tian-compact-output test
-pnpm --filter pi-tian-goal test
+pnpm --filter @tian.zuo/pi-background-terminals run check
+pnpm --filter @tian.zuo/pi-background-terminals test
+pnpm --filter @tian.zuo/pi-commit test
+pnpm --filter @tian.zuo/pi-edit-safe test
+pnpm --filter @tian.zuo/pi-find test
+pnpm --filter @tian.zuo/pi-subagents test
+pnpm --filter @tian.zuo/pi-compact-output test
+pnpm --filter @tian.zuo/pi-goal test
 pnpm run pack:check
 ```
 
@@ -491,16 +491,16 @@ Requirements:
 After logging in to npm, publish each workspace independently with pnpm:
 
 ```bash
-pnpm --filter pi-tian-repo-model publish --access public --no-git-checks
-pnpm --filter pi-tian-repo-skills publish --access public --no-git-checks
-pnpm --filter pi-tian-commit publish --access public --no-git-checks
-pnpm --filter pi-tian-token-speed publish --access public --no-git-checks
-pnpm --filter pi-tian-image-cache publish --access public --no-git-checks
-pnpm --filter pi-tian-ask-user publish --access public --no-git-checks
-pnpm --filter pi-tian-usage publish --access public --no-git-checks
-pnpm --filter pi-tian-background-terminals publish --access public --no-git-checks
-pnpm --filter pi-tian-find publish --access public --no-git-checks
-pnpm --filter pi-tian-goal publish --access public --no-git-checks
+pnpm --filter @tian.zuo/pi-repo-model publish --access public --no-git-checks
+pnpm --filter @tian.zuo/pi-repo-skills publish --access public --no-git-checks
+pnpm --filter @tian.zuo/pi-commit publish --access public --no-git-checks
+pnpm --filter @tian.zuo/pi-token-speed publish --access public --no-git-checks
+pnpm --filter @tian.zuo/pi-image-cache publish --access public --no-git-checks
+pnpm --filter @tian.zuo/pi-ask-user publish --access public --no-git-checks
+pnpm --filter @tian.zuo/pi-usage publish --access public --no-git-checks
+pnpm --filter @tian.zuo/pi-background-terminals publish --access public --no-git-checks
+pnpm --filter @tian.zuo/pi-find publish --access public --no-git-checks
+pnpm --filter @tian.zuo/pi-goal publish --access public --no-git-checks
 ```
 
 Version and publish only the package that changed, or bump them all together for

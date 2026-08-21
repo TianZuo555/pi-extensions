@@ -2,7 +2,7 @@
 
 **Status:** review and recommendation. Companion to `docs/tool-result-pruning-system-design.md`. No implementation started.
 
-**Reviewing:** `docs/tool-result-pruning-system-design.md` (design proposal for `pi-tian-tool-prune`)
+**Reviewing:** `docs/tool-result-pruning-system-design.md` (design proposal for `@tian.zuo/pi-tool-prune`)
 
 **Verified against:** installed Pi **0.83.0** (`dist/core/extensions/runner.js`, `dist/core/agent-session.js`, `docs/compaction.md`, `docs/extensions.md`). The design doc says "verified against 0.80.10" — re-verify before implementing.
 
@@ -205,7 +205,7 @@ A standalone script (not a published package) that reads `~/.pi/agent/sessions/*
 
 ### Phase 1 — minimal extension
 
-`packages/pi-tool-prune/` → `pi-tian-tool-prune`:
+`packages/pi-tool-prune/` → `@tian.zuo/pi-tool-prune`:
 
 - **`context` handler only.** Replace `content` on eligible `toolResult` messages; preserve role, `toolCallId`, `toolName`, `isError`, timestamps, ordering, and the paired assistant tool call.
 - **Read-once eligibility**, as the design doc specifies: at least one later assistant message with stop reason `toolUse` or `stop`; newest completed batch always full.

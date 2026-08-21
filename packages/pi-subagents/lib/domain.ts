@@ -1,4 +1,4 @@
-/** Shared domain types for pi-tian-subagents. */
+/** Shared domain types for pi-subagents. */
 
 import type { ChildSemanticReport } from "./run-report.ts";
 import type { WorktreeDelivery } from "./worktree.ts";

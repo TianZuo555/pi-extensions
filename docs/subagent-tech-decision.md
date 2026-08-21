@@ -1,18 +1,18 @@
 # Subagent system — final technical decision
 
 **Status:** implemented (Phases 0–4 + structured handoff / patch apply)  
-**Package:** `pi-tian-subagents` (`packages/pi-subagents`)  
+**Package:** `@tian.zuo/pi-subagents` (`packages/pi-subagents`)  
 **See also:** [References](#references) — exploratory design docs in `docs/` (superseded by this ADR where they differ).
 
 ## Decision
 
-Ship `pi-tian-subagents` as a Pi extension whose **supervisor** spawns **one child Pi process per run**, communicates over **RPC JSONL**, and returns a **bounded report** with **nested usage**. The **parent model** remains the planner; the framework does not implement chains, swarms, or a second orchestration language.
+Ship `@tian.zuo/pi-subagents` as a Pi extension whose **supervisor** spawns **one child Pi process per run**, communicates over **RPC JSONL**, and returns a **bounded report** with **nested usage**. The **parent model** remains the planner; the framework does not implement chains, swarms, or a second orchestration language.
 
 ## Architecture
 
 ```text
 Parent Pi (planner)
-  └── pi-tian-subagents extension
+  └── @tian.zuo/pi-subagents extension
         └── Supervisor (session-scoped)
               └── RpcChild (one per run)
                     └── child `pi --mode rpc` process

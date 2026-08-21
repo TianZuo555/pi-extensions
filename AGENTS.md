@@ -22,7 +22,7 @@ A collection of extensions for the [pi coding agent](https://pi.dev): per-repo m
 - `tsconfig.json` — root typecheck config covering all extensions and workspace packages.
 - `mise.toml` — tooling pins (Node, pnpm).
 
-Workspace → npm package map: `pi-repo-model`→`pi-tian-repo-model`, `pi-repo-skills`→`pi-tian-repo-skills`, `pi-commit`→`pi-tian-commit`, `pi-token-speed`→`pi-tian-token-speed`, `pi-image-cache`→`pi-tian-image-cache`, `pi-ask-user`→`pi-tian-ask-user`, `pi-usage`→`pi-tian-usage`, `pi-background-terminals`→`pi-tian-background-terminals`, `pi-edit-safe`→`pi-tian-edit-safe`, `pi-find`→`pi-tian-find`, `pi-todo`→`pi-tian-todo`, `pi-subagents`→`pi-tian-subagents`, `pi-compact-output`→`pi-tian-compact-output`, `pi-goal`→`pi-tian-goal`, `pi-vscode-bridge`→`pi-tian-vscode-bridge`, `pi-web-search`→`pi-tian-web-search`.
+Workspace → npm package map: `pi-repo-model`→`@tian.zuo/pi-repo-model`, `pi-repo-skills`→`@tian.zuo/pi-repo-skills`, `pi-commit`→`@tian.zuo/pi-commit`, `pi-token-speed`→`@tian.zuo/pi-token-speed`, `pi-image-cache`→`@tian.zuo/pi-image-cache`, `pi-ask-user`→`@tian.zuo/pi-ask-user`, `pi-usage`→`@tian.zuo/pi-usage`, `pi-background-terminals`→`@tian.zuo/pi-background-terminals`, `pi-edit-safe`→`@tian.zuo/pi-edit-safe`, `pi-find`→`@tian.zuo/pi-find`, `pi-todo`→`@tian.zuo/pi-todo`, `pi-subagents`→`@tian.zuo/pi-subagents`, `pi-compact-output`→`@tian.zuo/pi-compact-output`, `pi-goal`→`@tian.zuo/pi-goal`, `pi-vscode-bridge`→`@tian.zuo/pi-vscode-bridge`, `pi-web-search`→`@tian.zuo/pi-web-search`.
 
 ## Common tasks
 
@@ -30,41 +30,41 @@ Workspace → npm package map: `pi-repo-model`→`pi-tian-repo-model`, `pi-repo-
 - Typecheck the whole monorepo (all extensions and packages): `pnpm run typecheck`
 - Typecheck all Effect packages across workspaces: `pnpm run check`
 - Typecheck individual Effect packages (scoped check):
-    - `pnpm --filter pi-tian-background-terminals run check`
-    - `pnpm --filter pi-tian-commit run check`
-    - `pnpm --filter pi-tian-goal run check`
-    - `pnpm --filter pi-tian-image-cache run check`
-    - `pnpm --filter pi-tian-repo-model run check`
-    - `pnpm --filter pi-tian-repo-skills run check`
-    - `pnpm --filter pi-tian-find run check`
-    - `pnpm --filter pi-tian-subagents run check`
-    - `pnpm --filter pi-tian-todo run check`
-    - `pnpm --filter pi-tian-token-speed run check`
-    - `pnpm --filter pi-tian-usage run check`
-    - `pnpm --filter pi-tian-vscode-bridge run check`
-    - `pnpm --filter pi-tian-web-search run check`
+    - `pnpm --filter @tian.zuo/pi-background-terminals run check`
+    - `pnpm --filter @tian.zuo/pi-commit run check`
+    - `pnpm --filter @tian.zuo/pi-goal run check`
+    - `pnpm --filter @tian.zuo/pi-image-cache run check`
+    - `pnpm --filter @tian.zuo/pi-repo-model run check`
+    - `pnpm --filter @tian.zuo/pi-repo-skills run check`
+    - `pnpm --filter @tian.zuo/pi-find run check`
+    - `pnpm --filter @tian.zuo/pi-subagents run check`
+    - `pnpm --filter @tian.zuo/pi-todo run check`
+    - `pnpm --filter @tian.zuo/pi-token-speed run check`
+    - `pnpm --filter @tian.zuo/pi-usage run check`
+    - `pnpm --filter @tian.zuo/pi-vscode-bridge run check`
+    - `pnpm --filter @tian.zuo/pi-web-search run check`
 - Run all tests (repo-level and all package workspaces): `pnpm test`
 - Test repo-level (usage providers): `pnpm run test:usage`
 - Test individual packages (scoped test):
-    - Test `pi-usage` (fetch/runtime): `pnpm --filter pi-tian-usage test`
-    - Test `pi-ask-user`: `pnpm --filter pi-tian-ask-user test`
-    - Test `pi-commit`: `pnpm --filter pi-tian-commit test`
-    - Test `pi-edit-safe`: `pnpm --filter pi-tian-edit-safe test` (45 cases); A/B vs pi's real built-in edit: `pnpm --filter pi-tian-edit-safe run bench`
-    - Test `pi-repo-model`: `pnpm --filter pi-tian-repo-model test`
-    - Test `pi-repo-skills`: `pnpm --filter pi-tian-repo-skills test`
-    - Test `pi-todo`: `pnpm --filter pi-tian-todo test`
-    - Test `pi-token-speed`: `pnpm --filter pi-tian-token-speed test`
-    - Test `pi-background-terminals`: `pnpm --filter pi-tian-background-terminals test`
-    - Test `pi-subagents`: `pnpm --filter pi-tian-subagents test`
-    - Test `pi-compact-output`: `pnpm --filter pi-tian-compact-output test`
-    - Test `pi-goal`: `pnpm --filter pi-tian-goal test`
-    - Test `pi-image-cache`: `pnpm --filter pi-tian-image-cache test`
-    - Test `pi-vscode-bridge`: `pnpm --filter pi-tian-vscode-bridge test`; compile its VS Code host with `pnpm --filter pi-tian-vscode-bridge run compile:vscode`
-    - Test `pi-web-search`: `pnpm --filter pi-tian-web-search test`
-    - Test `pi-find`: `pnpm --filter pi-tian-find test` (159 cases; the rg/fd integration cases skip when a binary is missing)
+    - Test `pi-usage` (fetch/runtime): `pnpm --filter @tian.zuo/pi-usage test`
+    - Test `pi-ask-user`: `pnpm --filter @tian.zuo/pi-ask-user test`
+    - Test `pi-commit`: `pnpm --filter @tian.zuo/pi-commit test`
+    - Test `pi-edit-safe`: `pnpm --filter @tian.zuo/pi-edit-safe test` (45 cases); A/B vs pi's real built-in edit: `pnpm --filter @tian.zuo/pi-edit-safe run bench`
+    - Test `pi-repo-model`: `pnpm --filter @tian.zuo/pi-repo-model test`
+    - Test `pi-repo-skills`: `pnpm --filter @tian.zuo/pi-repo-skills test`
+    - Test `pi-todo`: `pnpm --filter @tian.zuo/pi-todo test`
+    - Test `pi-token-speed`: `pnpm --filter @tian.zuo/pi-token-speed test`
+    - Test `pi-background-terminals`: `pnpm --filter @tian.zuo/pi-background-terminals test`
+    - Test `pi-subagents`: `pnpm --filter @tian.zuo/pi-subagents test`
+    - Test `pi-compact-output`: `pnpm --filter @tian.zuo/pi-compact-output test`
+    - Test `pi-goal`: `pnpm --filter @tian.zuo/pi-goal test`
+    - Test `pi-image-cache`: `pnpm --filter @tian.zuo/pi-image-cache test`
+    - Test `pi-vscode-bridge`: `pnpm --filter @tian.zuo/pi-vscode-bridge test`; compile its VS Code host with `pnpm --filter @tian.zuo/pi-vscode-bridge run compile:vscode`
+    - Test `pi-web-search`: `pnpm --filter @tian.zuo/pi-web-search test`
+    - Test `pi-find`: `pnpm --filter @tian.zuo/pi-find test` (159 cases; the rg/fd integration cases skip when a binary is missing)
 - Inspect publishable tarballs: `pnpm run pack:check`
 - Try an extension in a live pi session without installing: `pi -e ./packages/pi-repo-model`
-- Publish one workspace manually (after `npm login`): `pnpm --filter pi-tian-repo-model publish --access public --no-git-checks`
+- Publish one workspace manually (after `npm login`): `pnpm --filter @tian.zuo/pi-repo-model publish --access public --no-git-checks`
 
 ## Conventions
 
@@ -84,5 +84,5 @@ Workspace → npm package map: `pi-repo-model`→`pi-tian-repo-model`, `pi-repo-
 ## Working agreement
 
 - Prefer small, reviewable changes; bump and publish only the package(s) that actually changed.
-- Always run root `pnpm run typecheck`, `pnpm run check`, and `pnpm test` (or scoped checks `pnpm --filter pi-tian-* run check` / `pnpm --filter pi-tian-* test` for modified packages) before pushing. The publish workflow runs monorepo typecheck, workspace Effect checks, all test suites, and dynamic package publishing across all workspaces.
+- Always run root `pnpm run typecheck`, `pnpm run check`, and `pnpm test` (or scoped checks `pnpm --filter @tian.zuo/pi-* run check` / `pnpm --filter @tian.zuo/pi-* test` for modified packages) before pushing. The publish workflow runs monorepo typecheck, workspace Effect checks, all test suites, and dynamic package publishing across all workspaces.
 - Keep this file in sync with real workflows — update it when commands, workspace layout, or publish steps change.

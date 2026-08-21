@@ -1,6 +1,6 @@
 # Background terminals implementation guide
 
-This document describes the invariants behind `pi-tian-background-terminals`.
+This document describes the invariants behind `@tian.zuo/pi-background-terminals`.
 The package overrides Pi's built-in `bash` model tool, adds the bounded
 read-only `terminal_log_read` tool, and adds one user command, `/ps`.
 
@@ -577,10 +577,10 @@ The package test suite covers:
 Validation commands:
 
 ```bash
-npm run check --workspace pi-tian-background-terminals
-npm test --workspace pi-tian-background-terminals
+npm run check --workspace @tian.zuo/pi-background-terminals
+npm test --workspace @tian.zuo/pi-background-terminals
 npm run typecheck
-npm pack --dry-run --workspace pi-tian-background-terminals
+npm pack --dry-run --workspace @tian.zuo/pi-background-terminals
 ```
 
 The publish workflow runs both typechecks and the package test suite before its

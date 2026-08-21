@@ -35,8 +35,8 @@ test("restoreGoal follows only the active branch's latest custom state", () => {
   const goal = createGoal("Check the current branch", undefined, 100, "goal-2");
   const restored = restoreGoal([
     { type: "custom", customType: "other", data: { goal: "ignore" } },
-    { type: "custom", customType: "pi-tian-goal", data: { version: 1, goal } },
-    { type: "custom", customType: "pi-tian-goal", data: { version: 1, goal: null } },
+    { type: "custom", customType: "pi-goal", data: { version: 1, goal } },
+    { type: "custom", customType: "pi-goal", data: { version: 1, goal: null } },
   ]);
   assert.equal(restored, null);
 });

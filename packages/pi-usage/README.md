@@ -1,4 +1,4 @@
-# pi-tian-usage
+# @tian.zuo/pi-usage
 
 Show **OpenAI Codex**, **GitHub Copilot**, **Z.ai (GLM Coding Plan)**,
 **Z.ai Coding Plan (China)**, and **DeepSeek** account usage from inside the
@@ -118,13 +118,13 @@ export `ZAI_API_KEY` or `ZAI_CODING_CN_API_KEY`) before showing usage informatio
 ## Install
 
 ```bash
-pi install npm:pi-tian-usage
+pi install npm:@tian.zuo/pi-usage
 ```
 
 Try it without installing permanently:
 
 ```bash
-pi -e npm:pi-tian-usage
+pi -e npm:@tian.zuo/pi-usage
 ```
 
 ## License

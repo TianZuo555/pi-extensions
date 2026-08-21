@@ -48,9 +48,9 @@ import {
   buildContinuationPrompt,
 } from "../lib/prompt.ts";
 
-export const CONTINUATION_MESSAGE_TYPE = "pi-tian-goal-continuation";
-export const BUDGET_MESSAGE_TYPE = "pi-tian-goal-budget";
-export const COMPLETION_MESSAGE_TYPE = "pi-tian-goal-completion";
+export const CONTINUATION_MESSAGE_TYPE = "pi-goal-continuation";
+export const BUDGET_MESSAGE_TYPE = "pi-goal-budget";
+export const COMPLETION_MESSAGE_TYPE = "pi-goal-completion";
 
 // --- State -------------------------------------------------------------------
 
@@ -204,7 +204,7 @@ export interface GoalRuntimeShape {
 export class GoalRuntime extends Context.Service<
   GoalRuntime,
   GoalRuntimeShape
->()("pi-tian-goal/GoalRuntime") {}
+>()("pi-goal/GoalRuntime") {}
 
 // --- Pure transition helpers ----------------------------------------------------
 

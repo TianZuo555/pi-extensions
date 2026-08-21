@@ -1,6 +1,6 @@
 {
-  "name": "pi-tian-usage",
-  "version": "0.4.1",
+  "name": "@tian.zuo/pi-usage",
+  "version": "0.1.0",
   "description": "Show OpenAI Codex, GitHub Copilot, Z.ai GLM Coding Plan (global and China), and DeepSeek balance usage in the pi coding agent.",
   "type": "module",
   "keywords": [
@@ -27,12 +27,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/TianZuo555/pi-tian-extensions.git",
+    "url": "git+https://github.com/TianZuo555/pi-extensions.git",
     "directory": "packages/pi-usage"
   },
-  "homepage": "https://github.com/TianZuo555/pi-tian-extensions#usage",
+  "homepage": "https://github.com/TianZuo555/pi-extensions#usage",
   "bugs": {
-    "url": "https://github.com/TianZuo555/pi-tian-extensions/issues"
+    "url": "https://github.com/TianZuo555/pi-extensions/issues"
   },
   "files": [
     "index.ts",

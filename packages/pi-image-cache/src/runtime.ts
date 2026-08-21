@@ -223,7 +223,7 @@ export interface ImageCacheRuntimeShape {
 }
 
 export class ImageCacheRuntime extends Context.Service<ImageCacheRuntime, ImageCacheRuntimeShape>()(
-  "pi-tian-image-cache/ImageCacheRuntime",
+  "pi-image-cache/ImageCacheRuntime",
 ) {}
 
 const makeImageCacheRuntime = (config: ResolvedImageCacheRuntimeConfig) =>

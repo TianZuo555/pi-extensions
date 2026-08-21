@@ -4,7 +4,7 @@
 
 ## Short version
 
-I would build `pi-tian-subagents` as a Pi extension with a deterministic supervisor around isolated child Pi processes.
+I would build `@tian.zuo/pi-subagents` as a Pi extension with a deterministic supervisor around isolated child Pi processes.
 
 The parent Pi remains the planner. One `subagent` tool call creates one bounded **run** from one immutable **profile**. Multiple sibling tool calls give parallelism because Pi already executes sibling tools concurrently. The framework should not invent a second planner, a chain language, or a hidden autonomous team.
 
@@ -330,7 +330,7 @@ The report sent to the parent should be capped, for example at 32 KiB. Full even
 ```text
 Parent Pi session
   |
-  `- pi-tian-subagents extension
+  `- @tian.zuo/pi-subagents extension
        |- profile catalog + trust decisions
        |- supervisor + bounded scheduler
        |- run registry + persistence

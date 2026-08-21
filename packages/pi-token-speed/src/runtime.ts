@@ -113,7 +113,7 @@ export interface TokenSpeedRuntimeShape {
 export class TokenSpeedRuntime extends Context.Service<
   TokenSpeedRuntime,
   TokenSpeedRuntimeShape
->()("pi-tian-token-speed/TokenSpeedRuntime") {}
+>()("pi-token-speed/TokenSpeedRuntime") {}
 
 const makeTokenSpeedRuntime = Effect.gen(function* () {
   const initialMode = (() => {

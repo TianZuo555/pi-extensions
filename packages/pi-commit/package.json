@@ -1,6 +1,6 @@
 {
-  "name": "pi-tian-commit",
-  "version": "0.5.0",
+  "name": "@tian.zuo/pi-commit",
+  "version": "0.1.0",
   "description": "Generate reviewed Git commits with a dedicated configurable model in the pi coding agent.",
   "type": "module",
   "keywords": [
@@ -15,12 +15,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/TianZuo555/pi-tian-extensions.git",
+    "url": "git+https://github.com/TianZuo555/pi-extensions.git",
     "directory": "packages/pi-commit"
   },
-  "homepage": "https://github.com/TianZuo555/pi-tian-extensions#pi-commit",
+  "homepage": "https://github.com/TianZuo555/pi-extensions#pi-commit",
   "bugs": {
-    "url": "https://github.com/TianZuo555/pi-tian-extensions/issues"
+    "url": "https://github.com/TianZuo555/pi-extensions/issues"
   },
   "files": [
     "index.ts",

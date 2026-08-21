@@ -20,7 +20,7 @@ import { firstSanitizedLines } from "./sanitize-text.ts";
 import { SPINNER_FRAMES, SPINNER_INTERVAL_MS } from "./compact-status.ts";
 import { tryReadToolExecutionInternals } from "./tool-internals.ts";
 
-const PATCH_SYMBOL = Symbol.for("pi-tian-compact-output.patch-state");
+const PATCH_SYMBOL = Symbol.for("pi-compact-output.patch-state");
 
 type ToolRender = (this: ToolExecutionComponent, width: number) => string[];
 type ToolSetExpanded = (this: ToolExecutionComponent, expanded: boolean) => void;
@@ -602,13 +602,13 @@ export function installUiPatches(): PatchInstallResult {
   state.refCount = 1;
 
   if (!isSupportedPiVersion(VERSION)) {
-    state.unsupportedReason = `pi-tian-compact-output requires Pi 0.83.x or 0.84.x (found ${VERSION})`;
+    state.unsupportedReason = `pi-compact-output requires Pi 0.83.x or 0.84.x (found ${VERSION})`;
     setPatchState(state);
     return { installed: false, reason: state.unsupportedReason };
   }
 
   if (!hasPatchablePrototypeMethods()) {
-    state.unsupportedReason = "pi-tian-compact-output: required TUI prototype methods are missing";
+    state.unsupportedReason = "pi-compact-output: required TUI prototype methods are missing";
     setPatchState(state);
     return { installed: false, reason: state.unsupportedReason };
   }

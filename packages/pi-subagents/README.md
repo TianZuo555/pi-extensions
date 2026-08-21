@@ -1,9 +1,9 @@
-# pi-tian-subagents
+# @tian.zuo/pi-subagents
 
 Delegate bounded tasks to isolated subagent runs from [pi](https://pi.dev). Each profile can run on a **Herdr pane backend** (interactive agent CLIs in dedicated panes) or fall back to the legacy **RPC child backend** (`pi --mode rpc` headless children).
 
 ```bash
-pi install npm:pi-tian-subagents
+pi install npm:@tian.zuo/pi-subagents
 ```
 
 Requires a Herdr session (`HERDR_ENV=1` and `herdr` on PATH) for non-`pi` agent kinds and for profiles that pin `backend: herdr`. Built-in profiles default to `kind: pi` and `backend: auto`, so out-of-the-box behavior stays RPC-based when Herdr is not active.
@@ -85,7 +85,7 @@ Helper panes and workspaces created by this session stay open for inspection unt
 {
   "profile": "scout",
   "task": "Find where session cost is accumulated and summarize the flow.",
-  "context": "Repo is pi-tian-extensions; subagents live in packages/pi-subagents."
+  "context": "Repo is pi-extensions; subagents live in packages/pi-subagents."
 }
 ```
 
@@ -156,8 +156,8 @@ Patch artifacts are written with `0600` files inside `0700` directories. Each pa
 From the monorepo:
 
 ```bash
-pnpm --filter pi-tian-subagents run check
-pnpm --filter pi-tian-subagents test
+pnpm --filter @tian.zuo/pi-subagents run check
+pnpm --filter @tian.zuo/pi-subagents test
 pi -e ./packages/pi-subagents
 ```
 

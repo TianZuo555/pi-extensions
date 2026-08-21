@@ -1,6 +1,6 @@
 {
-  "name": "pi-tian-goal",
-  "version": "0.1.1",
+  "name": "@tian.zuo/pi-goal",
+  "version": "0.1.0",
   "description": "Codex-style persistent, evidence-checked goals for the pi coding agent.",
   "type": "module",
   "keywords": [
@@ -15,12 +15,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/TianZuo555/pi-tian-extensions.git",
+    "url": "git+https://github.com/TianZuo555/pi-extensions.git",
     "directory": "packages/pi-goal"
   },
-  "homepage": "https://github.com/TianZuo555/pi-tian-extensions#pi-goal",
+  "homepage": "https://github.com/TianZuo555/pi-extensions#pi-goal",
   "bugs": {
-    "url": "https://github.com/TianZuo555/pi-tian-extensions/issues"
+    "url": "https://github.com/TianZuo555/pi-extensions/issues"
   },
   "files": [
     "index.ts",

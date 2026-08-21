@@ -1,5 +1,5 @@
 {
-  "name": "pi-tian-extensions",
+  "name": "pi-extensions",
   "version": "0.1.0",
   "description": "A collection of extensions for the pi coding agent: per-repository defaults, skill toggles, commits, token speed, and more.",
   "type": "module",
@@ -15,11 +15,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/TianZuo555/pi-tian-extensions.git"
+    "url": "git+https://github.com/TianZuo555/pi-extensions.git"
   },
-  "homepage": "https://github.com/TianZuo555/pi-tian-extensions#readme",
+  "homepage": "https://github.com/TianZuo555/pi-extensions#readme",
   "bugs": {
-    "url": "https://github.com/TianZuo555/pi-tian-extensions/issues"
+    "url": "https://github.com/TianZuo555/pi-extensions/issues"
   },
   "pi": {
     "extensions": [
@@ -46,21 +46,21 @@
     "check": "pnpm -r run check",
     "test": "pnpm run test:usage && pnpm -r test",
     "test:usage": "node --test tests/pi-usage-providers.test.mjs",
-    "test:ask-user": "pnpm --filter pi-tian-ask-user test",
-    "test:commit": "pnpm --filter pi-tian-commit test",
-    "test:edit-safe": "pnpm --filter pi-tian-edit-safe test",
-    "test:repo-model": "pnpm --filter pi-tian-repo-model test",
-    "test:repo-skills": "pnpm --filter pi-tian-repo-skills test",
-    "test:todo": "pnpm --filter pi-tian-todo test",
-    "test:token-speed": "pnpm --filter pi-tian-token-speed test",
-    "test:subagents": "pnpm --filter pi-tian-subagents test",
-    "test:compact-output": "pnpm --filter pi-tian-compact-output test",
-    "test:goal": "pnpm --filter pi-tian-goal test",
-    "test:image-cache": "pnpm --filter pi-tian-image-cache test",
-    "test:background-terminals": "pnpm --filter pi-tian-background-terminals test",
-    "test:vscode-bridge": "pnpm --filter pi-tian-vscode-bridge test",
-    "test:web-search": "pnpm --filter pi-tian-web-search test",
-    "test:find": "pnpm --filter pi-tian-find test",
+    "test:ask-user": "pnpm --filter @tian.zuo/pi-ask-user test",
+    "test:commit": "pnpm --filter @tian.zuo/pi-commit test",
+    "test:edit-safe": "pnpm --filter @tian.zuo/pi-edit-safe test",
+    "test:repo-model": "pnpm --filter @tian.zuo/pi-repo-model test",
+    "test:repo-skills": "pnpm --filter @tian.zuo/pi-repo-skills test",
+    "test:todo": "pnpm --filter @tian.zuo/pi-todo test",
+    "test:token-speed": "pnpm --filter @tian.zuo/pi-token-speed test",
+    "test:subagents": "pnpm --filter @tian.zuo/pi-subagents test",
+    "test:compact-output": "pnpm --filter @tian.zuo/pi-compact-output test",
+    "test:goal": "pnpm --filter @tian.zuo/pi-goal test",
+    "test:image-cache": "pnpm --filter @tian.zuo/pi-image-cache test",
+    "test:background-terminals": "pnpm --filter @tian.zuo/pi-background-terminals test",
+    "test:vscode-bridge": "pnpm --filter @tian.zuo/pi-vscode-bridge test",
+    "test:web-search": "pnpm --filter @tian.zuo/pi-web-search test",
+    "test:find": "pnpm --filter @tian.zuo/pi-find test",
     "pack:check": "pnpm -r pack --dry-run"
   },
   "peerDependencies": {

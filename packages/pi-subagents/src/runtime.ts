@@ -61,7 +61,7 @@ export interface SubagentRuntimeShape {
 }
 
 export class SubagentRuntime extends Context.Service<SubagentRuntime, SubagentRuntimeShape>()(
-  "pi-tian-subagents/SubagentRuntime",
+  "pi-subagents/SubagentRuntime",
 ) {}
 
 const makeSubagentRuntime = Effect.gen(function* () {

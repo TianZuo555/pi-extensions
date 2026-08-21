@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-export const GOAL_ENTRY_TYPE = "pi-tian-goal";
+export const GOAL_ENTRY_TYPE = "pi-goal";
 export const MAX_OBJECTIVE_LENGTH = 4_000;
 
 export type GoalStatus =

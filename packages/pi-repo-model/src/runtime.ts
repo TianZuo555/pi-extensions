@@ -61,7 +61,7 @@ export interface RepoModelRuntimeShape {
 export class RepoModelRuntime extends Context.Service<
   RepoModelRuntime,
   RepoModelRuntimeShape
->()("pi-tian-repo-model/RepoModelRuntime") {}
+>()("pi-repo-model/RepoModelRuntime") {}
 
 const makeRepoModelRuntime = Effect.sync(() => {
   const loadConfig: Effect.Effect<RepoModelConfig> = Effect.sync(() => {

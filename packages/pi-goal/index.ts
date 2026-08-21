@@ -37,6 +37,7 @@ import {
   formatGoalSummary,
   formatTokenCount,
   GOAL_ENTRY_TYPE,
+  MAX_OBJECTIVE_LENGTH,
   remainingTokens,
   validateObjective,
   type Goal,
@@ -52,25 +53,27 @@ import {
   type GoalRuntimeInstance,
 } from "./src/runtime.ts";
 
-const STATUS_KEY = "pi-tian-goal";
+const STATUS_KEY = "pi-goal";
 
-const EmptyParams = Type.Object({});
+export const EmptyGoalParams = Type.Object({});
 
-const CreateGoalParams = Type.Object({
+export const CreateGoalParams = Type.Object({
   objective: Type.String({
     minLength: 1,
-    maxLength: 4_000,
+    maxLength: MAX_OBJECTIVE_LENGTH,
+    pattern: "\\S",
     description: GOAL_PARAMETER_DESCRIPTIONS.objective,
   }),
   token_budget: Type.Optional(
     Type.Integer({
       minimum: 1,
+      maximum: Number.MAX_SAFE_INTEGER,
       description: GOAL_PARAMETER_DESCRIPTIONS.token_budget,
     }),
   ),
 });
 
-const UpdateGoalParams = Type.Object({
+export const UpdateGoalParams = Type.Object({
   status: StringEnum(["complete", "blocked"] as const, {
     description: GOAL_PARAMETER_DESCRIPTIONS.status,
   }),
@@ -384,7 +387,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
     description: GET_GOAL_DESCRIPTION,
     promptSnippet: GOAL_PROMPT_SNIPPET,
     promptGuidelines: GOAL_PROMPT_GUIDELINES,
-    parameters: EmptyParams,
+    parameters: EmptyGoalParams,
     executionMode: "sequential",
     async execute(): Promise<AgentToolResult<GoalToolDetails>> {
       const goal = run(goalRuntime.goal);

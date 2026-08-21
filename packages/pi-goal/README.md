@@ -5,7 +5,7 @@ thread into a bounded work loop: an explicit objective is persisted in the
 session, injected into each model turn, checked against evidence, and continued
 when the thread settles.
 
-Install: `npm:pi-tian-goal` · npm package `pi-tian-goal` · workspace
+Install: `npm:@tian.zuo/pi-goal` · npm package `@tian.zuo/pi-goal` · workspace
 `packages/pi-goal`
 
 ## Commands
@@ -40,6 +40,11 @@ Codex:
   explicitly request one. It refuses to replace an unfinished goal.
 - `update_goal` can mark a goal `complete` or `blocked`; pause/resume, budget,
   and usage-limited transitions remain user/runtime controlled.
+
+Tool metadata keeps capabilities in tool descriptions, explicit-creation
+policy in one short guideline, and field contracts in the schema. Active-goal
+system guidance carries completion and blocking policy only when relevant.
+Tests cap serialized metadata for all three tools at 1,050 characters.
 
 ## Design
 
@@ -132,7 +137,7 @@ as `pi-background-terminals`) for its internal orchestration:
 
 Effect-aware tooling matches the established repository pattern: package-local
 `tsconfig.json` with the `@effect/language-service` plugin, `pnpm --filter
-pi-tian-goal run check` (`tsc --noEmit -p .`), and root typecheck exclusions. The shared
+@tian.zuo/pi-goal run check` (`tsc --noEmit -p .`), and root typecheck exclusions. The shared
 `effect-tsgo patch` prepare step remains single-owned by
 `pi-background-terminals`; duplicating it across workspaces races on the same
 TypeScript binary during `pnpm install`.
@@ -140,5 +145,5 @@ TypeScript binary during `pnpm install`.
 ## Tests
 
 ```bash
-pnpm --filter pi-tian-goal test
+pnpm --filter @tian.zuo/pi-goal test
 ```

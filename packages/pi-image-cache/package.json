@@ -1,6 +1,6 @@
 {
-  "name": "pi-tian-image-cache",
-  "version": "0.3.3",
+  "name": "@tian.zuo/pi-image-cache",
+  "version": "0.1.0",
   "description": "Temporary pasted-image cache with compact placeholders for the pi coding agent.",
   "type": "module",
   "keywords": [
@@ -14,12 +14,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/TianZuo555/pi-tian-extensions.git",
+    "url": "git+https://github.com/TianZuo555/pi-extensions.git",
     "directory": "packages/pi-image-cache"
   },
-  "homepage": "https://github.com/TianZuo555/pi-tian-extensions#image-cache",
+  "homepage": "https://github.com/TianZuo555/pi-extensions#image-cache",
   "bugs": {
-    "url": "https://github.com/TianZuo555/pi-tian-extensions/issues"
+    "url": "https://github.com/TianZuo555/pi-extensions/issues"
   },
   "files": [
     "index.ts",

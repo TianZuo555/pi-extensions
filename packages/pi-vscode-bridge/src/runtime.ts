@@ -94,7 +94,7 @@ export interface BridgeClientShape {
 export class BridgeClient extends Context.Service<
     BridgeClient,
     BridgeClientShape
->()("pi-tian-vscode-bridge/BridgeClient") {}
+>()("pi-vscode-bridge/BridgeClient") {}
 
 export interface BridgeClientTestControls {
     readonly retryDelaysMs?: number[];

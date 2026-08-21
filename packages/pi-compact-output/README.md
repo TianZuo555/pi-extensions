@@ -1,4 +1,4 @@
-# pi-tian-compact-output
+# @tian.zuo/pi-compact-output
 
 TUI-only [pi coding agent](https://pi.dev) extension that keeps the transcript compact without changing tool execution, schemas, results, or session data.
 
@@ -16,7 +16,7 @@ TUI-only [pi coding agent](https://pi.dev) extension that keeps the transcript c
 ## Install
 
 ```bash
-pi install npm:pi-tian-compact-output
+pi install npm:@tian.zuo/pi-compact-output
 ```
 
 Try without installing:
@@ -41,7 +41,7 @@ pi -e ./packages/pi-compact-output
   Both default to the values above and are clamped to 1–12.
 
 - The extension does **not** register, replace, or proxy any tools. It patches presentation around Pi's exported `ToolExecutionComponent` and `AssistantMessageComponent` after the real tool owner has already been selected. Pi's existing Ctrl+O action also expands the assistant reasoning view.
-- Load order does not matter relative to FFF, `pi-tian-background-terminals`, or `pi-tian-edit-safe`.
+- Load order does not matter relative to FFF, `@tian.zuo/pi-background-terminals`, or `@tian.zuo/pi-edit-safe`.
 - `/reload` is safe: patch installation is reference-counted and does not stack wrappers.
 
 ## License

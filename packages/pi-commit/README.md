@@ -1,4 +1,4 @@
-# pi-tian-commit
+# @tian.zuo/pi-commit
 
 Generate and review Git commit messages with a dedicated model without changing the model used by the current Pi session.
 
@@ -77,7 +77,7 @@ Optional `fallbackModel` uses the same `provider/model` format. When the primary
 ## Install
 
 ```bash
-pi install npm:pi-tian-commit
+pi install npm:@tian.zuo/pi-commit
 ```
 
 Restart Pi or run `/reload` after installation.
@@ -94,5 +94,5 @@ From the repository root:
 
 ```bash
 pnpm run typecheck
-pnpm --filter pi-tian-commit test
+pnpm --filter @tian.zuo/pi-commit test
 ```

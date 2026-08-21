@@ -1,4 +1,4 @@
-# pi-tian-web-search
+# @tian.zuo/pi-web-search
 
 Clean, lightweight web search and fetch tools for the [pi coding agent](https://pi.dev).
 
@@ -19,7 +19,7 @@ Supports **OpenAI Responses** (with simple, concise system instructions and auto
 ## Installation
 
 ```bash
-pi install npm:pi-tian-web-search
+pi install npm:@tian.zuo/pi-web-search
 ```
 
 Or try in a live session without installing:
@@ -30,7 +30,7 @@ pi -e ./packages/pi-web-search
 
 ## Configuration
 
-Precedence: **Environment Variables** > **`~/.config/pi-tian-web-search/config.json`** > **`~/.pi/agent/auth.json` (Codex / OpenAI login)**.
+Precedence: **Environment Variables** > **`~/.config/@tian.zuo/pi-web-search/config.json`** > **`~/.pi/agent/auth.json` (Codex / OpenAI login)**.
 
 ### Environment Variables
 

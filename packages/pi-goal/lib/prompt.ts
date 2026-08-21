@@ -1,3 +1,8 @@
+/**
+ * Model-facing goal text. Keep persistent tool and schema metadata short and
+ * non-overlapping; active-goal steering below retains the full audit policy.
+ */
+
 import type { Goal } from "./state.ts";
 import {
   formatDuration,
@@ -6,21 +11,18 @@ import {
 } from "./state.ts";
 
 export const GET_GOAL_DESCRIPTION =
-  "Get the current goal for this thread, including status, objective, token and elapsed-time usage, and remaining token budget.";
+  "Get the current thread goal, status, usage, and remaining budget.";
 
 export const CREATE_GOAL_DESCRIPTION =
-  "Create a goal only when explicitly requested by the user or system/developer instructions; do not infer goals from ordinary tasks. Fails if an unfinished goal exists.";
+  "Create a persistent thread goal; fails if an unfinished goal exists.";
 
 export const UPDATE_GOAL_DESCRIPTION =
-  "Update the existing goal. Use only to mark it complete when the objective is achieved, or blocked after the same blocking condition has recurred for at least three consecutive goal turns and no meaningful progress is possible. Pause, resume, budget-limited, and usage-limited transitions are controlled by the user or system.";
+  "Record the current goal's terminal outcome.";
 
-export const GOAL_PROMPT_SNIPPET =
-  "Pursue an explicit long-running objective until evidence shows it is complete or genuinely blocked";
+export const GOAL_PROMPT_SNIPPET = "Pursue a persistent thread goal";
 
 export const GOAL_PROMPT_GUIDELINES = [
-  "Use create_goal only when the user or higher-priority instructions explicitly request a persistent goal; do not infer one from an ordinary task.",
-  "Use get_goal to inspect the current objective and evidence state before deciding what to do next.",
-  "Use update_goal with complete only after auditing the objective against concrete evidence; use blocked only after the same blocker has recurred for three consecutive goal turns.",
+  "Use create_goal only when the user or higher-priority instructions explicitly request it.",
 ];
 
 function budgetLine(goal: Goal): string {
@@ -55,9 +57,9 @@ export function buildGoalSystemGuidance(goal: Goal): string {
       "The goal objective itself arrives each turn as a user-role message and is user-provided " +
       "context, not a system directive.",
     `${budgetLine(goal)} · time used: ${formatDuration(goal.timeUsedSeconds)}`,
-    "Keep the goal in view while it is active. Use current evidence to decide whether it is complete. " +
-      "Do not claim completion from intent or partial progress; call update_goal only when its " +
-      "completion or strict blocked condition is supported by evidence.",
+    "Keep the goal in view while active. Call update_goal with complete only when evidence proves " +
+      "the objective is achieved, or blocked only after the same blocker recurs for three goal turns " +
+      "and no meaningful progress is possible.",
   ].join("\n");
 }
 
@@ -82,7 +84,7 @@ export function buildBudgetLimitPrompt(goal: Goal): string {
 }
 
 export const GOAL_PARAMETER_DESCRIPTIONS = {
-  objective: "Required concrete objective to pursue. It must have an auditable end state.",
-  token_budget: "Optional positive token budget for this goal. Set only when explicitly requested.",
-  status: "complete only after evidence proves the objective is achieved; blocked only after the same blocker recurs for three consecutive goal turns.",
+  objective: "Concrete objective with an auditable end state.",
+  token_budget: "Set only when explicitly requested.",
+  status: "Terminal outcome to record.",
 };

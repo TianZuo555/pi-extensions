@@ -1,6 +1,6 @@
 {
-  "name": "pi-tian-compact-output",
-  "version": "0.2.11",
+  "name": "@tian.zuo/pi-compact-output",
+  "version": "0.1.0",
   "description": "TUI-only Pi extension with bordered tool status previews and compact reasoning blocks with Ctrl+O expansion.",
   "type": "module",
   "keywords": [
@@ -17,12 +17,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/TianZuo555/pi-tian-extensions.git",
+    "url": "git+https://github.com/TianZuo555/pi-extensions.git",
     "directory": "packages/pi-compact-output"
   },
-  "homepage": "https://github.com/TianZuo555/pi-tian-extensions#pi-compact-output",
+  "homepage": "https://github.com/TianZuo555/pi-extensions#pi-compact-output",
   "bugs": {
-    "url": "https://github.com/TianZuo555/pi-tian-extensions/issues"
+    "url": "https://github.com/TianZuo555/pi-extensions/issues"
   },
   "files": [
     "index.ts",

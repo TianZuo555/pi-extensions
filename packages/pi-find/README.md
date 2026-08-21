@@ -2,7 +2,7 @@
 
 ripgrep/fd-backed `grep` and `find` for the [pi coding agent](https://pi.dev).
 
-Install: `npm:pi-tian-find` · npm package `pi-tian-find` · workspace `packages/pi-find`
+Install: `npm:@tian.zuo/pi-find` · npm package `@tian.zuo/pi-find` · workspace `packages/pi-find`
 
 ## Why
 
@@ -150,8 +150,8 @@ stops early once `limit` files have been matched. Beyond that:
 ## Development
 
 ```bash
-pnpm --filter pi-tian-find run check   # typecheck
-pnpm --filter pi-tian-find test        # 159 tests
+pnpm --filter @tian.zuo/pi-find run check   # typecheck
+pnpm --filter @tian.zuo/pi-find test        # 159 tests
 pi -e ./packages/pi-find               # try it live
 ```
 

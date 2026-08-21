@@ -40,7 +40,7 @@ export async function searchExa(
   const config = resolveExaConfig();
   if (!config) {
     throw new Error(
-      "Exa API key not found. Set EXA_API_KEY or configure ~/.config/pi-tian-web-search/config.json",
+      "Exa API key not found. Set EXA_API_KEY or configure ~/.config/pi-web-search/config.json",
     );
   }
 
@@ -114,7 +114,7 @@ export async function fetchExa(
   const config = resolveExaConfig();
   if (!config) {
     throw new Error(
-      "Exa API key not found. Set EXA_API_KEY or configure ~/.config/pi-tian-web-search/config.json",
+      "Exa API key not found. Set EXA_API_KEY or configure ~/.config/pi-web-search/config.json",
     );
   }
 

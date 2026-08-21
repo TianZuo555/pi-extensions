@@ -1,4 +1,4 @@
-// pi-tian-find — ripgrep/fd-backed search tools for the pi coding agent.
+// pi-find — ripgrep/fd-backed search tools for the pi coding agent.
 //
 // Registers grep and find under pi's built-in tool names so they
 // replace the built-ins rather than sitting alongside them. What they add over

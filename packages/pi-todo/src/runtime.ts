@@ -52,7 +52,7 @@ export interface TodoRuntimeShape {
 }
 
 export class TodoRuntime extends Context.Service<TodoRuntime, TodoRuntimeShape>()(
-  "pi-tian-todo/TodoRuntime",
+  "pi-todo/TodoRuntime",
 ) {}
 
 const makeTodoRuntime = Effect.gen(function* () {

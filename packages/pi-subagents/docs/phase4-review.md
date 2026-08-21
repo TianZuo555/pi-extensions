@@ -128,7 +128,7 @@ package if it is already reachable as a dependency (prefer the regex; do not add
 
 ## B9 — Flaky suite: unhandled async EPIPE in `rpc-child.ts`
 
-`npm test -w pi-tian-subagents` failed once with `write EPIPE` at `lib/rpc-child.ts:207`
+`npm test -w @tian.zuo/pi-subagents` failed once with `write EPIPE` at `lib/rpc-child.ts:207`
 (`supervisor-lifecycle.test.ts` → "clears pending delivery state on dispose"). Running that file
 alone passes, and a direct `node --test test/*.test.ts` passed 110/110 — so it is load-dependent,
 pre-existing, and not caused by Phase 4. It still makes CI unreliable.
@@ -149,8 +149,8 @@ Route it through `withEnv`.
 
 ## Acceptance
 
-- `npm run check -w pi-tian-subagents` clean.
-- `npm test -w pi-tian-subagents` green **three consecutive runs** (B9 is a flake — one green run
+- `npm run check -w @tian.zuo/pi-subagents` clean.
+- `npm test -w @tian.zuo/pi-subagents` green **three consecutive runs** (B9 is a flake — one green run
   is not evidence).
 - New tests exist for B1, B3, B4, B6.
 - No `try/catch` around any `yield*` anywhere in the package.

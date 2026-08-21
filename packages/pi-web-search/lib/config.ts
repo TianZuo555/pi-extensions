@@ -15,7 +15,7 @@ export { DEFAULT_OPENAI_SYSTEM_PROMPT } from "./prompt.ts";
 const PRIMARY_CONFIG_PATH = path.join(
     os.homedir(),
     ".config",
-    "pi-tian-web-search",
+    "pi-web-search",
     "config.json",
 );
 const LEGACY_CONFIG_PATH = path.join(os.homedir(), ".pi", "web-search.json");

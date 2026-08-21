@@ -72,7 +72,7 @@ All four support git worktree isolation for concurrent writers:
 - **codex**: TUI agent picker, Alt-arrow navigation, collab tool-call history cells, rollout-trace interaction edges.
 - **maka**: Tool-activity UI, child progress projector, Agent Graph client projection / timeline, SQLite session catalog.
 
-## Implications for `pi-tian-subagents`
+## Implications for `@tian.zuo/pi-subagents`
 
 The design in [`subagents-system-design.md`](../subagents-system-design.md) aligns closest with **nicobailon** (process-per-run, profile-owned capabilities, no chain DSL) but proposes **RPC mode** instead of nicobailon’s **JSON print mode** (`--mode json -p`). RPC gives streaming `agent_settled` and mid-run abort; print mode is simpler but weaker on lifecycle edges.
 

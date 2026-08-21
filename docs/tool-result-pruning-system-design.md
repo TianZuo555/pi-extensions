@@ -2,7 +2,7 @@
 
 **Status:** design and experiment plan only; no implementation has started.
 
-**Proposed package:** `pi-tian-tool-prune` (`packages/pi-tool-prune/` when approved)
+**Proposed package:** `@tian.zuo/pi-tool-prune` (`packages/pi-tool-prune/` when approved)
 
 **Verified against:** Pi `0.80.10` extension, session, and compaction APIs; Maka's public runtime implementation and published Terminal-Bench report.
 

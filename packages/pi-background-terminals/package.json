@@ -1,6 +1,6 @@
 {
-  "name": "pi-tian-background-terminals",
-  "version": "0.4.1",
+  "name": "@tian.zuo/pi-background-terminals",
+  "version": "0.1.0",
   "description": "Replace Pi's built-in Bash with automatic background yielding, exactly-once completion notifications, and a /ps viewer.",
   "type": "module",
   "keywords": [
@@ -17,12 +17,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/TianZuo555/pi-tian-extensions.git",
+    "url": "git+https://github.com/TianZuo555/pi-extensions.git",
     "directory": "packages/pi-background-terminals"
   },
-  "homepage": "https://github.com/TianZuo555/pi-tian-extensions#background-terminals",
+  "homepage": "https://github.com/TianZuo555/pi-extensions#background-terminals",
   "bugs": {
-    "url": "https://github.com/TianZuo555/pi-tian-extensions/issues"
+    "url": "https://github.com/TianZuo555/pi-extensions/issues"
   },
   "files": [
     "index.ts",

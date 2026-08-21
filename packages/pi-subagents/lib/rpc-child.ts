@@ -75,7 +75,7 @@ async function writePromptToTempFile(
   profileName: string,
   prompt: string,
 ): Promise<{ dir: string; filePath: string }> {
-  const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "pi-tian-subagent-"));
+  const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), "pi-subagent-"));
   const safeName = profileName.replace(/[^\w.-]+/g, "_");
   const filePath = path.join(tmpDir, `prompt-${safeName}.md`);
   await fs.promises.writeFile(filePath, prompt, { encoding: "utf-8", mode: 0o600 });

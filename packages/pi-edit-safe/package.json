@@ -1,6 +1,6 @@
 {
-  "name": "pi-tian-edit-safe",
-  "version": "0.1.5",
+  "name": "@tian.zuo/pi-edit-safe",
+  "version": "0.1.0",
   "description": "A stricter edit tool for the pi coding agent with full-span match verification, verbatim replacement, and an array-only edits schema.",
   "type": "module",
   "keywords": [
@@ -14,12 +14,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/TianZuo555/pi-tian-extensions.git",
+    "url": "git+https://github.com/TianZuo555/pi-extensions.git",
     "directory": "packages/pi-edit-safe"
   },
-  "homepage": "https://github.com/TianZuo555/pi-tian-extensions#pi-edit-safe",
+  "homepage": "https://github.com/TianZuo555/pi-extensions#pi-edit-safe",
   "bugs": {
-    "url": "https://github.com/TianZuo555/pi-tian-extensions/issues"
+    "url": "https://github.com/TianZuo555/pi-extensions/issues"
   },
   "files": [
     "index.ts",

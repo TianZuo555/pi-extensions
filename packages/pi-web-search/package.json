@@ -1,6 +1,6 @@
 {
-  "name": "pi-tian-web-search",
-  "version": "0.4.2",
+  "name": "@tian.zuo/pi-web-search",
+  "version": "0.1.0",
   "description": "Web search (OpenAI Responses with simple prompt, Exa, Firecrawl, Ollama) and web fetch for the pi coding agent.",
   "type": "module",
   "keywords": [
@@ -20,12 +20,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/TianZuo555/pi-tian-extensions.git",
+    "url": "git+https://github.com/TianZuo555/pi-extensions.git",
     "directory": "packages/pi-web-search"
   },
-  "homepage": "https://github.com/TianZuo555/pi-tian-extensions#pi-web-search",
+  "homepage": "https://github.com/TianZuo555/pi-extensions#pi-web-search",
   "bugs": {
-    "url": "https://github.com/TianZuo555/pi-tian-extensions/issues"
+    "url": "https://github.com/TianZuo555/pi-extensions/issues"
   },
   "files": [
     "index.ts",

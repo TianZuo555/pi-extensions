@@ -71,7 +71,7 @@ export interface RepoSkillsRuntimeShape {
 export class RepoSkillsRuntime extends Context.Service<
   RepoSkillsRuntime,
   RepoSkillsRuntimeShape
->()("pi-tian-repo-skills/RepoSkillsRuntime") {}
+>()("pi-repo-skills/RepoSkillsRuntime") {}
 
 const makeRepoSkillsRuntime = Effect.sync(() => {
   const loadConfig: Effect.Effect<RepoSkillsConfig> = Effect.sync(() => {

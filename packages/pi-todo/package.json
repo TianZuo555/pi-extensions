@@ -1,6 +1,6 @@
 {
-  "name": "pi-tian-todo",
-  "version": "0.2.2",
+  "name": "@tian.zuo/pi-todo",
+  "version": "0.1.0",
   "description": "A small todo-list tool for the pi coding agent: one call shape, a short prompt, and visible warnings when a write drops unfinished items.",
   "type": "module",
   "keywords": [
@@ -14,12 +14,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/TianZuo555/pi-tian-extensions.git",
+    "url": "git+https://github.com/TianZuo555/pi-extensions.git",
     "directory": "packages/pi-todo"
   },
-  "homepage": "https://github.com/TianZuo555/pi-tian-extensions#pi-todo",
+  "homepage": "https://github.com/TianZuo555/pi-extensions#pi-todo",
   "bugs": {
-    "url": "https://github.com/TianZuo555/pi-tian-extensions/issues"
+    "url": "https://github.com/TianZuo555/pi-extensions/issues"
   },
   "files": [
     "index.ts",

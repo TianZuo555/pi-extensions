@@ -1,6 +1,6 @@
 {
-  "name": "pi-tian-repo-skills",
-  "version": "0.2.1",
+  "name": "@tian.zuo/pi-repo-skills",
+  "version": "0.1.0",
   "description": "Per-repository skill enable and disable controls for the pi coding agent.",
   "type": "module",
   "keywords": [
@@ -14,12 +14,12 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/TianZuo555/pi-tian-extensions.git",
+    "url": "git+https://github.com/TianZuo555/pi-extensions.git",
     "directory": "packages/pi-repo-skills"
   },
-  "homepage": "https://github.com/TianZuo555/pi-tian-extensions#pi-repo-skills",
+  "homepage": "https://github.com/TianZuo555/pi-extensions#pi-repo-skills",
   "bugs": {
-    "url": "https://github.com/TianZuo555/pi-tian-extensions/issues"
+    "url": "https://github.com/TianZuo555/pi-extensions/issues"
   },
   "files": [
     "index.ts",

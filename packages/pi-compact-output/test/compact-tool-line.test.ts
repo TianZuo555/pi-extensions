@@ -220,13 +220,13 @@ test("self-shell style component compacts from call renderer line", () => {
   const line = buildCompactToolLine(
     internals({
       toolName: "bash",
-      args: { command: "npm test -w pi-tian-compact-output" },
-      callRendererComponent: new FakeComponent(["$ npm test -w pi-tian-compact-output"]),
+      args: { command: "npm test -w pi-compact-output" },
+      callRendererComponent: new FakeComponent(["$ npm test -w pi-compact-output"]),
       isPartial: true,
     }),
     120,
   )[0];
-  assert.match(line, /npm test -w pi-tian-compact-output/);
+  assert.match(line, /npm test -w pi-compact-output/);
 });
 
 test("styled FFF-like call lines preserve trailing ANSI reset codes", () => {

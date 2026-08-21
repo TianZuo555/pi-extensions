@@ -1,7 +1,7 @@
-# pi-tian-subagents — implementation handoff informed by oh-my-pi
+# @tian.zuo/pi-subagents — implementation handoff informed by oh-my-pi
 
 **Status:** approved implementation handoff  
-**Package:** `pi-tian-subagents` (`packages/pi-subagents`)  
+**Package:** `@tian.zuo/pi-subagents` (`packages/pi-subagents`)  
 **Reference implementation:** [can1357/oh-my-pi](https://github.com/can1357/oh-my-pi), checked at `003bb5548c7c1e759336e264305790de435708d1`  
 **Local Pi version checked:** `@earendil-works/pi-coding-agent` 0.80.10  
 **Supersedes:** the earlier proposal in this file; update `../subagent-tech-decision.md` where this handoff changes a locked decision
@@ -355,7 +355,7 @@ Update all affected documentation so it matches behavior:
 - tool descriptions and profile examples, including `maxTurns`.
 
 This is a backward-compatible feature release plus fixes. Bump only
-`pi-tian-subagents` from `0.2.4` to `0.3.0` and synchronize `package-lock.json`.
+`@tian.zuo/pi-subagents` from `0.2.4` to `0.3.0` and synchronize `package-lock.json`.
 Do not commit or push; leave the working tree for review.
 
 ## Verification commands
@@ -363,9 +363,9 @@ Do not commit or push; leave the working tree for review.
 Run at minimum:
 
 ```bash
-npm test -w pi-tian-subagents
+npm test -w @tian.zuo/pi-subagents
 npm run typecheck
-npm run check -w pi-tian-background-terminals
+npm run check -w @tian.zuo/pi-background-terminals
 ```
 
 Also inspect the package tarball if a new runtime/artifact module is added:
