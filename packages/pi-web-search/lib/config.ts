@@ -12,7 +12,7 @@ import { DEFAULT_OPENAI_SYSTEM_PROMPT } from "./prompt.ts";
 
 export { DEFAULT_OPENAI_SYSTEM_PROMPT } from "./prompt.ts";
 
-const PRIMARY_CONFIG_PATH = path.join(
+export const PRIMARY_CONFIG_PATH = path.join(
     os.homedir(),
     ".config",
     "pi-web-search",

@@ -10,7 +10,13 @@ pi install npm:@tian.zuo/pi-web-search
 
 ## Where to put your keys
 
-You have two options. Environment variables win if both are set.
+**Easiest — the `/websearch-auth` command** (inside a pi session). It walks you through each provider, shows what's already configured, and saves straight to the config file:
+
+1. Pick a provider: `exa` · `firecrawl` · `ollama`
+2. Paste your key. For **Ollama** it asks for two things: base URL (default `http://localhost:11434`) and an optional API key.
+3. Done — submit empty input to remove a stored value; `esc` cancels without saving.
+
+Otherwise you have two manual options. Environment variables win if both are set.
 
 **Option 1 — environment variables** (e.g. in your shell profile or a `.env` loader):
 
@@ -64,6 +70,12 @@ flowchart TB
     Next1 -- "no" --> Fail["error listing\nall failures"]
     Next2 -- "no" --> Fail
 ```
+
+## Commands
+
+| Command | Description |
+| :--- | :--- |
+| `/websearch-auth` | Interactive credential setup (Exa / Firecrawl / Ollama) |
 
 ## The tools
 
