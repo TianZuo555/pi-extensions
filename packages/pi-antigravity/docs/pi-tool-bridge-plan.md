@@ -132,12 +132,27 @@ agy's native skill expansion is disabled by `--disable-slash-commands`, so do
 it cursor-sdk-style:
 
 1. Inject the pi skill catalog (name + one-line description) into the agy
-   prompt on bootstrap sends.
+   prompt on bootstrap sends. Source it from pi's `before_agent_start`
+   `event.systemPromptOptions` (loaded skills with name/description/path) so
+   we respect `--no-skills`, `pi config` enable/disable, and `/reload` —
+   snapshot per bootstrap send, never cached across reloads. Keep entries to
+   name + one-liner only: an oversized or interactive-only-heavy catalog can
+   derail headless turns the same way the built-in `antigravity_guide` skill
+   does.
 2. Expose `pi__activate_skill` as a bridge tool that returns the full
-   `SKILL.md` content + bundled resource list for a named skill.
+   `SKILL.md` content + bundled resource list for a named skill. Resolve
+   relative resource references (scripts, docs) to absolute paths at return
+   time — SKILL.md files reference resources relative to their own directory,
+   and raw relative paths would leave agy unable to locate them.
 3. If the bridge is disabled, fall back to instructing agy to read the
    `SKILL.md` paths directly (they are absolute local paths — works because
-   agy runs locally with workspace access).
+   agy runs locally with workspace access). **Verified 2026-08-21** (agy
+   1.1.17): headless agy read `/Users/tian/.pi/agent/skills/herdr/SKILL.md` —
+   outside the `--add-dir <cwd>` workspace — under
+   `--dangerously-skip-permissions --disable-slash-commands` and returned its
+   frontmatter unprompted (`PROBE_RESULT name=herdr`, exit 0). The
+   no-bridge fallback works for user-level skills; keep an eye on it across
+   agy upgrades since it depends on permission behavior, not a guarantee.
 
 ### Phase 3 — Polish
 
@@ -166,4 +181,12 @@ it cursor-sdk-style:
    how to scope/clean up the global `pi-bridge` entry.
 5. How does agy name MCP tools in `tool_info` (e.g. `call_mcp_tool` with a
    server/tool parameter vs `mcp__server__tool`)? Determines card rendering
-   and the pending-call correlation on the agy side.
+   and the pending-call correlation on the agy side — for Phase 1 and for
+   `pi__activate_skill` in Phase 2 alike.
+6. ~~Can headless agy read files under `~/.pi/agent/skills/` (outside the
+   `--add-dir <cwd>` workspace) without permission prompts?~~ **Yes —
+   verified 2026-08-21** via probe script (`bash /tmp/agy-skill-probe.sh`,
+   run through Herdr): agy 1.1.17 print mode with
+   `--dangerously-skip-permissions --disable-slash-commands --add-dir <cwd>`
+   read `~/.pi/agent/skills/herdr/SKILL.md` and echoed its frontmatter name.
+   Phase 2's no-bridge fallback is viable.
