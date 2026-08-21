@@ -37,7 +37,7 @@ const RESULT_STDERR_MAX_LINES = 20;
 // explain their own values; runtime errors provide detailed recovery on demand.
 export const BASH_TOOL_DESCRIPTION =
   "Run Bash in a fresh shell — no interactive stdin; use working_dir, not a standalone cd. " +
-  `Default wait: ${DEFAULT_YIELD_TIME_MS / 1000} s (yield_time_ms); returns output if done; otherwise returns a background terminal id and reports once on exit — do not poll it. ` +
+  "Returns output if done within the initial wait; otherwise returns a background terminal id and reports once on exit — do not poll it. " +
   `yield_time_ms sets the wait; timeout kills the process tree; max ${MAX_RUNNING} running terminals.`;
 
 export const BASH_PROMPT_SNIPPET =
@@ -51,7 +51,7 @@ export const BASH_PARAMETER_DESCRIPTIONS = {
   command: "Shell script to run.",
   title: "/ps label; default derived from command.",
   workingDir:
-    "Call directory, relative to session cwd or absolute; default session cwd.",
+    "Working directory for the command, relative to session cwd or absolute; default session cwd.",
   yieldTimeMs:
     `Initial wait in ms; default ${DEFAULT_YIELD_TIME_MS}, clamped to ${MIN_YIELD_TIME_MS}-${MAX_YIELD_TIME_MS}.`,
   timeout: "Hard runtime limit in seconds; no default.",
