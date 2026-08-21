@@ -144,6 +144,11 @@ const makeRuntime = Effect.gen(function* () {
               cwd,
               timeoutMs: 600_000,
               signal: turnAbort.signal,
+              onConversation: (id) => {
+                // Track eagerly — a turn hung on a background task may never
+                // resolve, and /agy-tasks needs the id meanwhile.
+                conversationId = id;
+              },
               onActivity: (activity) => controller.push(activity),
             };
             void runAgyTurn(spawnRequest)

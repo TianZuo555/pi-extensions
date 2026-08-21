@@ -32,6 +32,12 @@ export interface AgyTurnRequest {
   signal?: AbortSignal;
   /** Called with each structured activity event as tool steps stream in. */
   onActivity?: (activity: AgyActivity) => void;
+  /**
+   * Called once the stream reveals the agy conversation id — before the turn
+   * resolves, so callers can track it even when a turn hangs on background
+   * tasks and ends in an error.
+   */
+  onConversation?: (conversationId: string) => void;
   /** Test seam: replaces the spawned binary. */
   spawnOverride?: typeof spawn;
 }
@@ -120,6 +126,27 @@ export function runAgyTurn(request: AgyTurnRequest): Promise<AgyTurnOutcome> {
       { once: true },
     );
 
+    let conversationReported = false;
+    const handleParsed = (parsed: ReturnType<typeof parseAgyLine>) => {
+      if (!conversationReported) {
+        const id =
+          parsed.kind === "init"
+            ? parsed.conversationId
+            : parsed.kind === "step"
+              ? parsed.step.conversation_id
+              : parsed.kind === "result"
+                ? parsed.result.conversation_id
+                : undefined;
+        if (id) {
+          conversationReported = true;
+          request.onConversation?.(id);
+        }
+      }
+      for (const activity of applyEvent(outcome, parsed)) {
+        request.onActivity?.(activity);
+      }
+    };
+
     child.stdout?.setEncoding("utf-8");
     child.stdout?.on("data", (chunk: string) => {
       stdoutBuf += chunk;
@@ -127,10 +154,7 @@ export function runAgyTurn(request: AgyTurnRequest): Promise<AgyTurnOutcome> {
       while ((nl = stdoutBuf.indexOf("\n")) >= 0) {
         const line = stdoutBuf.slice(0, nl);
         stdoutBuf = stdoutBuf.slice(nl + 1);
-        const parsed = parseAgyLine(line);
-        for (const activity of applyEvent(outcome, parsed)) {
-          request.onActivity?.(activity);
-        }
+        handleParsed(parseAgyLine(line));
       }
     });
 
@@ -154,9 +178,7 @@ export function runAgyTurn(request: AgyTurnRequest): Promise<AgyTurnOutcome> {
     child.on("close", (code) => {
       // Flush any trailing line without a newline.
       if (stdoutBuf.trim()) {
-        for (const activity of applyEvent(outcome, parseAgyLine(stdoutBuf))) {
-          request.onActivity?.(activity);
-        }
+        handleParsed(parseAgyLine(stdoutBuf));
       }
       finish(() => {
         if (outcome.finished) {

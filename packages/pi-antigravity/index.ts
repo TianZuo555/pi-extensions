@@ -26,6 +26,7 @@ import {
   type AgyModelInfo,
 } from "./lib/models.ts";
 import { AgyReplayStore, type RecordedAgyTool } from "./lib/replay.ts";
+import { findAgyTask, listAgyTasks, stopAgyTask } from "./lib/tasks.ts";
 import {
   agyToolLabel,
   formatAgyCall,
@@ -231,6 +232,64 @@ export default async function antigravityExtension(pi: ExtensionAPI): Promise<vo
       const id = snapshot.conversationId ?? "(none — next turn starts fresh)";
       ctx.ui.notify(
         `antigravity: conversation ${id}\nmodel: ${snapshot.model ?? "unselected"} · turns: ${snapshot.turns} · models: ${cache.models.length} (${cache.source})`,
+        "info",
+      );
+    },
+  });
+
+  pi.registerCommand("agy-tasks", {
+    description: "List agy background tasks; `stop <task-id>|stop all` to terminate",
+    handler: async (args, ctx) => {
+      const arg = args.trim().toLowerCase();
+      const snapshot = await runAntigravity(runtime, service.snapshot);
+      const conversationId = snapshot.conversationId;
+      if (!conversationId) {
+        ctx.ui.notify("agy-tasks: no agy conversation in this session yet.", "error");
+        return;
+      }
+      const tasks = await listAgyTasks(conversationId, { sessionCwd: ctx.cwd });
+      if (tasks.length === 0) {
+        ctx.ui.notify("agy-tasks: no background tasks for this conversation.", "info");
+        return;
+      }
+
+      const stopMatch = arg.match(/^stop\s+(.+)$/);
+      if (!stopMatch) {
+        if (arg) {
+          ctx.ui.notify('agy-tasks: usage "/agy-tasks" or "/agy-tasks stop <task-id>|all".', "error");
+          return;
+        }
+        const lines = tasks.map((task) => {
+          const status =
+            task.pids.length > 0
+              ? "[running]"
+              : task.orphans.length > 0
+                ? `[orphan ${task.orphans.join(",")}]`
+                : "[done]   ";
+          return `${status} ${task.id} — ${task.description}`;
+        });
+        ctx.ui.notify(
+          `agy background tasks (${conversationId.slice(0, 8)}):\n${lines.join("\n")}\n\n/agy-tasks stop <task-id> to terminate`,
+          "info",
+        );
+        return;
+      }
+
+      const target = stopMatch[1].trim();
+      const selected =
+        target === "all"
+          ? tasks.filter((task) => task.pids.length > 0 || task.orphans.length > 0)
+          : [findAgyTask(tasks, target)].filter(
+              (task): task is NonNullable<typeof task> => task !== undefined,
+            );
+      if (selected.length === 0) {
+        ctx.ui.notify(`agy-tasks: no running task "${target}" in this conversation.`, "error");
+        return;
+      }
+      const results = await Promise.all(selected.map((task) => stopAgyTask(task)));
+      const stopped = selected.map((task) => task.id).join(", ");
+      ctx.ui.notify(
+        `agy-tasks: sent SIGTERM to ${stopped} (${results.reduce((sum, count) => sum + count, 0)} process(es)).`,
         "info",
       );
     },

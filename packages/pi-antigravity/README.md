@@ -61,6 +61,24 @@ Try from a checkout: `pi -e ./packages/pi-antigravity --model antigravity/gemini
 - `/agy reset` — drop the agy conversation; the next turn starts fresh
 - `/agy models` — re-discover models from `agy models` and re-register the provider
 
+## Background tasks: `/agy-tasks`
+
+agy runs long-lived commands as its own background tasks; in headless mode their tool step never completes and the turn ends with "timeout waiting for response" while the spawned process keeps running (see Notes & limits). The `/agy-tasks` command lets you inspect and kill them:
+
+```
+/agy-tasks              → list tasks for the current agy conversation
+/agy-tasks stop 3       → SIGTERM task-3 (process group included)
+/agy-tasks stop all     → terminate every running task
+```
+
+```text
+[running] task-3 — [dev] $ npm start
+[orphan 41978] task-4 — (no output)
+[done]   task-5 — vite build
+```
+
+Liveness comes from the filesystem, since the stream-json RPC does not report background tasks: a running task either holds its log file open (`lsof`) or — after agy itself has exited — shows up as an orphaned process (re-parented to launchd, cwd = session directory, started when the log was created).
+
 ## Notes & limits
 
 - **Background commands:** agy runs long-lived commands (dev servers, watchers) as its own background tasks. In headless print mode such a step never completes — the turn ends with "timeout waiting for response" while the spawned process keeps running. The extension detects this and the card explains it; follow up in a later message to have agy check the task's output, or run long-lived processes with pi's own bash instead.

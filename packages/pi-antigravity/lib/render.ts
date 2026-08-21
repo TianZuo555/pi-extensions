@@ -105,7 +105,7 @@ export function formatAgyCall(tool: string, input: unknown, theme: Theme): strin
       return `${label} ${url === undefined ? invalid : theme.fg("accent", url)}`;
     }
     case "run_command": {
-      const command = pickArg(args, ["command", "Command", "cmd"]);
+      const command = pickArg(args, ["command", "Command", "cmd", "CommandLine", "commandline"]);
       return `${label} ${command === undefined ? invalid : theme.fg("accent", command)}`;
     }
     case "view_file":

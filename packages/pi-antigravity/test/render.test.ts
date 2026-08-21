@@ -42,6 +42,10 @@ test("formatAgyCall renders native-style call lines", () => {
     formatAgyCall("run_command", { command: "just test" }, theme),
     "bash just test",
   );
+  assert.equal(
+    formatAgyCall("run_command", { CommandLine: "sleep 120" }, theme),
+    "bash sleep 120",
+  );
 });
 
 test("formatAgyCall shortens $HOME paths and bounds unknown-tool JSON", () => {
