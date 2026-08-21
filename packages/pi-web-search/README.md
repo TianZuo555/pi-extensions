@@ -8,40 +8,32 @@ Web search and web fetch for the [pi coding agent](https://pi.dev). Two tools, f
 pi install npm:@tian.zuo/pi-web-search
 ```
 
-## Where to put your keys
+## Configuration
 
-**Easiest — the `/websearch-auth` command** (inside a pi session). It walks you through each provider, shows what's already configured, and saves straight to the config file:
+**Easiest — `/websearch-auth`** inside a pi session: pick a provider, paste your key, done. Each option shows its state in pi's login style — green `✓ env: EXA_API_KEY` when an env var is set, green `✓ config: fc-1…ab3d` for a stored key, `• unconfigured` otherwise. Ollama asks for a base URL (empty = `localhost:11434`) and an optional API key. Empty input removes a stored value; `esc` cancels.
 
-1. Pick a provider — the list shows each one's state in pi's login-list style: `✓ env: EXA_API_KEY` when an env var is set, `✓ config: fc-1…ab3d` for a stored key, `• unconfigured` otherwise.
-2. Paste your key. For **Ollama** it asks for two things: base URL (empty = `localhost:11434`) and an optional API key.
-3. Done — submit empty input to remove a stored value; `esc` cancels without saving. Env vars always win over stored keys at request time; you'll get a warning if both are set.
-
-Otherwise you have two manual options. Environment variables win if both are set.
-
-**Option 1 — environment variables** (e.g. in your shell profile or a `.env` loader):
+**Manual** — env variables (highest priority):
 
 | Variable | Unlocks |
 | :--- | :--- |
-| `OPENAI_API_KEY` | OpenAI search (also reuses your pi Codex/OpenAI login automatically) |
+| `OPENAI_API_KEY` | OpenAI search (also reuses your pi Codex/OpenAI login) |
 | `EXA_API_KEY` | Exa search + fetch |
 | `FIRECRAWL_API_KEY` | Firecrawl search + fetch |
-| `OLLAMA_HOST` / `OLLAMA_API_KEY` | Ollama (local defaults to `http://localhost:11434`) |
+| `OLLAMA_HOST` / `OLLAMA_API_KEY` | Ollama (default `http://localhost:11434`) |
 
-**Option 2 — config file** at `~/.config/@tian.zuo/pi-web-search/config.json`:
+…or a config file at `~/.config/pi-web-search/config.json` (plain text, like pi's own `auth.json`):
 
 ```json
 {
   "searchProvider": "exa",
   "fetchProvider": "firecrawl",
-  "openai":  { "apiKey": "sk-...", "model": "gpt-5.6-luna" },
-  "exa":     { "apiKey": "..." },
-  "firecrawl": { "apiKey": "fc-..." },
-  "ollama":  { "baseUrl": "http://localhost:11434", "apiKey": "..." }
+  "exa": { "apiKey": "..." },
+  "firecrawl": { "apiKey": "..." },
+  "ollama": { "baseUrl": "http://localhost:11434", "apiKey": "..." }
 }
 ```
 
-- `searchProvider` / `fetchProvider` set your **preferred** provider; everything else with a valid key stays in the fallback chain.
-- No keys at all? Search falls back to Ollama, fetch falls back to **direct fetch** (plain HTTP + main-content extraction, no key needed).
+`searchProvider` / `fetchProvider` set your preferred provider; everything else with a valid key stays in the fallback chain. No keys at all? Search falls back to Ollama, fetch falls back to **direct fetch** (keyless, no config needed).
 
 ## How the fallback chain works
 

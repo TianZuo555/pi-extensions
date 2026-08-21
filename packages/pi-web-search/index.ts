@@ -20,25 +20,31 @@ function maskKey(key: string | undefined): string {
  *   exa       ✓ env: EXA_API_KEY
  *   firecrawl ✓ config: fc-1…ab3d
  *   ollama    • unconfigured
+ * Configured providers are rendered green.
  */
+const GREEN = "\x1b[32m";
+const RESET = "\x1b[0m";
+
 function providerLine(name: "exa" | "firecrawl" | "ollama", config: WebSearchConfig): string {
   const label = name.padEnd(10);
   const envKey =
     name === "exa" ? process.env.EXA_API_KEY?.trim()
     : name === "firecrawl" ? process.env.FIRECRAWL_API_KEY?.trim()
     : (process.env.OLLAMA_HOST?.trim() || process.env.OLLAMA_API_KEY?.trim());
-  if (envKey) return `${label}✓ env: ${name === "ollama" ? (process.env.OLLAMA_HOST?.trim() ? "OLLAMA_HOST" : "OLLAMA_API_KEY") : name === "exa" ? "EXA_API_KEY" : "FIRECRAWL_API_KEY"}`;
+  if (envKey) {
+    return GREEN + `${label}✓ env: ${name === "ollama" ? (process.env.OLLAMA_HOST?.trim() ? "OLLAMA_HOST" : "OLLAMA_API_KEY") : name === "exa" ? "EXA_API_KEY" : "FIRECRAWL_API_KEY"}` + RESET;
+  }
   if (name === "ollama") {
     if (!config.ollama && !process.env.OLLAMA_HOST?.trim()) {
       return `${label}• unconfigured (default localhost:11434)`;
     }
     const url = config.ollama?.baseUrl ?? OLLAMA_DEFAULT_URL;
     const key = config.ollama?.apiKey ? ` · key: ${maskKey(config.ollama.apiKey)}` : "";
-    return `${label}✓ config: ${url}${key}`;
+    return GREEN + `${label}✓ config: ${url}${key}` + RESET;
   }
   const stored = config[name]?.apiKey;
   return stored
-    ? `${label}✓ config: ${maskKey(stored)}`
+    ? GREEN + `${label}✓ config: ${maskKey(stored)}` + RESET
     : `${label}• unconfigured`;
 }
 
@@ -66,7 +72,10 @@ export default function webSearchExtension(pi: ExtensionAPI): void {
         providerLine("ollama", config),
       ]);
       if (!provider) return;
-      const name = provider.split(" ")[0] as "exa" | "firecrawl" | "ollama";
+      // Lines may start with a green ANSI code; match on the provider name.
+      const name = (["exa", "firecrawl", "ollama"] as const).find((n) =>
+        provider.includes(n),
+      )!;
 
       let next = config;
       if (name === "exa" || name === "firecrawl") {
