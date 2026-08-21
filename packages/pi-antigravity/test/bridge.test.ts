@@ -170,6 +170,53 @@ test("bridge-virtual tools are listed and handled in-process", async () => {
   }
 });
 
+test("dynamic per-skill tools replace wholesale and route in-process", async () => {
+  const bridge = new AgyPiBridge();
+  bridge.setOnCall(() => {
+    throw new Error("skill tools must not be routed into the agy turn");
+  });
+  bridge.setToolSource(() => TOOL_DEFS);
+  await bridge.start();
+  try {
+    bridge.setDynamicTools([
+      {
+        name: "grilling",
+        description: "Interview the user relentlessly.",
+        parameters: { type: "object", properties: {} },
+        handler: async () => ({ content: "SKILL.md body", isError: false }),
+      },
+    ]);
+    let list = await post(bridge, { jsonrpc: "2.0", id: 10, method: "tools/list" });
+    let names = (list.json.result.tools as Array<{ name: string }>).map((tool) => tool.name);
+    assert.ok(names.includes(`${BRIDGE_TOOL_PREFIX}grilling`));
+
+    // Wholesale replacement: removed skills disappear.
+    bridge.setDynamicTools([]);
+    list = await post(bridge, { jsonrpc: "2.0", id: 11, method: "tools/list" });
+    names = (list.json.result.tools as Array<{ name: string }>).map((tool) => tool.name);
+    assert.ok(!names.includes(`${BRIDGE_TOOL_PREFIX}grilling`));
+
+    // Routing still works while present.
+    bridge.setDynamicTools([
+      {
+        name: "grilling",
+        description: "d",
+        parameters: { type: "object", properties: {} },
+        handler: async () => ({ content: "body", isError: false }),
+      },
+    ]);
+    const res = await post(bridge, {
+      jsonrpc: "2.0",
+      id: 12,
+      method: "tools/call",
+      params: { name: `${BRIDGE_TOOL_PREFIX}grilling`, arguments: {} },
+    });
+    assert.equal(res.json.result.content[0].text, "body");
+  } finally {
+    await bridge.close();
+  }
+});
+
 test("resolveBridgeResultsFromContext resolves matching toolResult messages", async () => {
   const bridge = await startedBridge((call) => {
     setTimeout(() => {

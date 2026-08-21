@@ -64,7 +64,7 @@ export function formatSkillCatalog(
   });
   const how =
     mode === "bridge"
-      ? "To activate a skill, call the pi__activate_skill tool with its name."
+      ? "Each skill is exposed as a pi__<skill_name> bridge tool; call that tool to activate the skill."
       : "To activate a skill, read its SKILL.md file directly.";
   return [
     "## pi Agent Skills",

@@ -65,6 +65,7 @@ const DISCOVERY_TIMEOUT_MS = 15_000;
 
 const BRIDGE_ENABLED = process.env.PI_ANTIGRAVITY_PI_TOOL_BRIDGE !== "0";
 const EXPOSE_BUILTIN_TOOLS = process.env.PI_ANTIGRAVITY_EXPOSE_BUILTIN_TOOLS === "1";
+const MAX_SKILL_TOOL_DESCRIPTION = 200;
 
 /**
  * Built-in pi tools hidden from the bridge by default — agy has native
@@ -186,6 +187,24 @@ export default async function antigravityExtension(pi: ExtensionAPI): Promise<vo
       BRIDGE_ENABLED ? "bridge" : "direct",
     );
 
+  /** Publish one bridge tool per global pi skill: `pi__<skill_name>`. */
+  function refreshSkillTools(): void {
+    if (!BRIDGE_ENABLED) return;
+    bridge.setDynamicTools(
+      nonWorkspaceSkills(loadedSkills, tasksSessionCwd).map((skill) => ({
+        // MCP tool names allow [A-Za-z0-9_-]; skill names are directory
+        // names but sanitize anyway.
+        name: skill.name.replace(/[^A-Za-z0-9_-]/g, "_"),
+        description:
+          (skill.description.replace(/\s+/g, " ").trim().slice(0, MAX_SKILL_TOOL_DESCRIPTION) ||
+            `pi Agent Skill "${skill.name}"`) +
+          " (pi Agent Skill — calling this tool activates the skill: returns its full SKILL.md and bundled resource paths)",
+        parameters: { type: "object", properties: {} },
+        handler: () => readSkillBundle(skill),
+      })),
+    );
+  }
+
   bridge.setToolSource(() => {
     if (!BRIDGE_ENABLED) return [];
     let activeNames: string[] = [];
@@ -218,31 +237,8 @@ export default async function antigravityExtension(pi: ExtensionAPI): Promise<vo
     return tools;
   });
 
-  // Bridge-virtual tool: activate_skill is a local file read — handled
-  // in-process, no pi toolUse round-trip needed.
-  bridge.registerVirtualTool(
-    "activate_skill",
-    {
-      description:
-        "Activate a pi Agent Skill by name: returns the full SKILL.md instructions and the absolute paths of bundled resources. Activate a skill before following its workflow.",
-      parameters: {
-        type: "object",
-        properties: {
-          name: { type: "string", description: "Skill name from the pi Agent Skills catalog" },
-        },
-        required: ["name"],
-      },
-    },
-    async (args) => {
-      const name = String(args.name ?? "").trim();
-      const skill = loadedSkills.find((candidate) => candidate.name === name);
-      if (!skill) {
-        const known = loadedSkills.map((candidate) => candidate.name).join(", ") || "(none)";
-        return { content: `antigravity: unknown skill "${name}". Available: ${known}.`, isError: true };
-      }
-      return readSkillBundle(skill);
-    },
-  );
+  // Bridge-virtual tools are gone; per-skill tools are published dynamically
+  // via refreshSkillTools() on every skills capture.
 
   // --- Status-bar hint for live agy background tasks -----------------------
 
@@ -374,6 +370,7 @@ export default async function antigravityExtension(pi: ExtensionAPI): Promise<vo
 
   pi.on("before_agent_start", (event) => {
     captureSkills(event.systemPromptOptions?.skills);
+    refreshSkillTools();
   });
 
   pi.on("session_start", async (_event, ctx: ExtensionContext) => {

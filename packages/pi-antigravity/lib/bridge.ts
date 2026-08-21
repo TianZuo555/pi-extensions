@@ -53,14 +53,17 @@ type PendingCall = BridgeCall & {
 
 /**
  * A bridge-virtual tool: handled entirely inside the extension without a
- * pi toolUse round-trip (used for `activate_skill` — a local file read
- * needs no hooks, permissions, or rendering).
+ * pi toolUse round-trip (a local file read needs no hooks, permissions, or
+ * rendering).
  */
 interface VirtualTool {
   description: string;
   parameters: unknown;
   handler: (args: Record<string, unknown>) => Promise<BridgeCallResult>;
 }
+
+/** A dynamically-refreshed virtual tool (one per bridged pi skill). */
+type DynamicTool = VirtualTool;
 
 interface JsonRpcRequest {
   id?: number | string | null;
@@ -83,6 +86,8 @@ export class AgyPiBridge {
   /** Source of the current active-tool snapshot, invoked once per provider request. */
   #toolSource: (() => BridgeToolDef[]) | undefined;
   #virtual = new Map<string, VirtualTool>();
+  /** Replaced wholesale on every skills refresh (one entry per skill). */
+  #dynamic = new Map<string, DynamicTool>();
 
   setOnCall(onCall: (call: BridgeCall) => boolean): void {
     this.#onCall = onCall;
@@ -107,6 +112,27 @@ export class AgyPiBridge {
     handler: (args: Record<string, unknown>) => Promise<BridgeCallResult>,
   ): void {
     this.#virtual.set(name, { ...definition, handler });
+  }
+
+  /**
+   * Replace the dynamic tool set (used for per-skill `pi__<skill_name>`
+   * tools). Unlike {@link registerVirtualTool}, the whole set is swapped so
+   * removed skills disappear from tools/list on the next refresh.
+   */
+  setDynamicTools(
+    tools: Array<{
+      name: string;
+      description: string;
+      parameters: unknown;
+      handler: (args: Record<string, unknown>) => Promise<BridgeCallResult>;
+    }>,
+  ): void {
+    this.#dynamic = new Map(tools.map((tool) => [tool.name, { ...tool }]));
+  }
+
+  /** Static + dynamic virtual tools, merged for listing and routing. */
+  #allVirtual(): Map<string, VirtualTool> {
+    return new Map([...this.#virtual, ...this.#dynamic]);
   }
 
   get url(): string | undefined {
@@ -238,7 +264,7 @@ export class AgyPiBridge {
                   `pi tool "${tool.name}" bridged into agy by ${BRIDGE_SERVER_NAME}.`,
                 inputSchema: tool.parameters,
               })),
-              ...[...this.#virtual].map(([name, definition]) => ({
+              ...[...this.#allVirtual()].map(([name, definition]) => ({
                 name: `${BRIDGE_TOOL_PREFIX}${name}`,
                 description: definition.description,
                 inputSchema: definition.parameters,
@@ -277,11 +303,19 @@ export class AgyPiBridge {
       return { content: `antigravity: unknown tool "${mcpName}" — only pi__* bridge tools exist.`, isError: true };
     }
     const tool = mcpName.slice(BRIDGE_TOOL_PREFIX.length);
+    // Real pi tools win over same-named skills; dynamic (per-skill) tools
+    // come next; static virtual tools last.
+    if (this.#tools.some((def) => def.name === tool)) {
+      return this.#routeToPiTool(tool, args);
+    }
+    const dynamic = this.#dynamic.get(tool);
+    if (dynamic) return dynamic.handler(args);
     const virtual = this.#virtual.get(tool);
     if (virtual) return virtual.handler(args);
-    if (!this.#tools.some((def) => def.name === tool)) {
-      return { content: `antigravity: tool "${tool}" is not currently active in pi.`, isError: true };
-    }
+    return { content: `antigravity: tool "${tool}" is not currently active in pi.`, isError: true };
+  }
+
+  async #routeToPiTool(tool: string, args: Record<string, unknown>): Promise<BridgeCallResult> {
     const id = `pi-bridge-${++this.#seq}`;
     const dispatched = this.#onCall?.({ id, tool, args }) ?? false;
     if (!dispatched) {

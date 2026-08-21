@@ -23,7 +23,7 @@ test("formatSkillCatalog lists name, one-liner, and path", () => {
   assert.ok(block.includes("## pi Agent Skills"));
   assert.ok(block.includes("- grilling: Interview the user relentlessly"));
   assert.ok(block.includes("(/skills/grilling/SKILL.md)"));
-  assert.ok(block.includes("pi__activate_skill"));
+  assert.ok(block.includes("pi__<skill_name>"));
   assert.ok(!block.includes("read its SKILL.md file directly"));
 });
 

@@ -133,8 +133,12 @@ Risks / details to design carefully:
 
 ### Phase 2 — Skills via the bridge
 
-**Status: implemented (v0.4.0).** agy's native skill expansion is disabled by
-`--disable-slash-commands`, so it is done bridge-first:
+**Status: implemented (v0.4.0; per-skill tools since v0.5.0).** agy's native
+skill expansion is disabled by `--disable-slash-commands`, so it is done
+bridge-first. Each bridged global skill is exposed as its own
+`pi__<skill_name>` tool (description = the skill's one-liner; calling it
+returns the SKILL.md bundle), replacing the earlier single
+`pi__activate_skill` design.
 
 **Skill discovery overlap (verified 2026-08-21 via probes in a scratch
 workspace):** agy natively scans `<workspace>/.agents/skills/` (walking up
