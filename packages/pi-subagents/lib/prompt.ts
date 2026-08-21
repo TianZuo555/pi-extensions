@@ -26,8 +26,8 @@ export const SUBAGENT_PARAMETER_DESCRIPTIONS = {
   context: "Facts the child cannot cheaply rediscover — not parent transcript history.",
   mode: "foreground (default) blocks until complete; background returns a run id immediately.",
   runId: "Subagent run id (e.g. sa-a13f9c2b).",
-  applyRunId: "Completed worker run id with a patch artifact.",
-  cancelRunId: "Subagent run id to cancel.",
+  applyRunId: "Completed worker run id (e.g. sa-a13f9c2b) with a patch artifact.",
+  cancelRunId: "Subagent run id (e.g. sa-a13f9c2b) to cancel.",
   cancelReason: "Optional reason for cancellation.",
 };
 

@@ -1,6 +1,6 @@
 {
   "name": "@tian.zuo/pi-subagents",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Isolated subagent runs via Herdr panes or Pi RPC children — profiles, background runs, and git worktrees.",
   "type": "module",
   "keywords": [
