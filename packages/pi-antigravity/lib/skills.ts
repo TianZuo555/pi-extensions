@@ -32,6 +32,22 @@ const MAX_RESOURCES = 20;
 export type SkillCatalogMode = "bridge" | "direct";
 
 /**
+ * Skills agy cannot discover on its own.
+ *
+ * agy natively scans `<workspace>/.agents/skills/` (walking up from its cwd
+ * to the repo root) and injects those skills' names/descriptions itself —
+ * verified 2026-08-21, even under `--disable-slash-commands`. Injecting
+ * those again would duplicate agy's own catalog, so the bootstrap catalog
+ * only includes skills OUTSIDE the session workspace (pi-only globals like
+ * `~/.pi/agent/skills` and `~/.agents/skills`, which agy never scans).
+ */
+export function nonWorkspaceSkills(skills: SkillLite[], sessionCwd: string | undefined): SkillLite[] {
+  if (!sessionCwd) return skills;
+  const prefix = sessionCwd.endsWith(path.sep) ? sessionCwd : sessionCwd + path.sep;
+  return skills.filter((skill) => !skill.filePath.startsWith(prefix));
+}
+
+/**
  * Format the bootstrap-prompt catalog block. Returns undefined when there
  * are no model-invocable skills, so nothing is injected.
  */

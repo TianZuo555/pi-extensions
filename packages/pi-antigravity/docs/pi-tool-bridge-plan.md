@@ -136,6 +136,17 @@ Risks / details to design carefully:
 **Status: implemented (v0.4.0).** agy's native skill expansion is disabled by
 `--disable-slash-commands`, so it is done bridge-first:
 
+**Skill discovery overlap (verified 2026-08-21 via probes in a scratch
+workspace):** agy natively scans `<workspace>/.agents/skills/` (walking up
+from its cwd to the repo root) plus `~/.gemini/config/skills/` and built-ins,
+and injects those skills' names/descriptions EVEN under
+`--disable-slash-commands` — and the model can then self-activate by reading
+the SKILL.md (probe: headless turn answered a planted codeword after reading
+the file). It does NOT scan `~/.agents/skills` or `~/.pi/agent/skills`.
+Therefore: workspace-project skills are deduped out of our injected catalog
+(`nonWorkspaceSkills`); the bridge catalog covers pi-only global skills,
+which agy would never see otherwise.
+
 1. Inject the pi skill catalog (name + one-line description) into the agy
    prompt on bootstrap sends. Source it from pi's `before_agent_start`
    `event.systemPromptOptions` (loaded skills with name/description/path) so

@@ -29,6 +29,7 @@ import {
 } from "./lib/bridge.ts";
 import {
   formatSkillCatalog,
+  nonWorkspaceSkills,
   readSkillBundle,
   type SkillLite,
 } from "./lib/skills.ts";
@@ -179,7 +180,11 @@ export default async function antigravityExtension(pi: ExtensionAPI): Promise<vo
   }
 
   const getBootstrapSuffix = () =>
-    formatSkillCatalog(loadedSkills, BRIDGE_ENABLED ? "bridge" : "direct");
+    formatSkillCatalog(
+      // agy injects workspace .agents/skills itself — only bridge the rest.
+      nonWorkspaceSkills(loadedSkills, tasksSessionCwd),
+      BRIDGE_ENABLED ? "bridge" : "direct",
+    );
 
   bridge.setToolSource(() => {
     if (!BRIDGE_ENABLED) return [];

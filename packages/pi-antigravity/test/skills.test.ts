@@ -3,7 +3,12 @@ import { test } from "node:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { formatSkillCatalog, readSkillBundle, type SkillLite } from "../lib/skills.ts";
+import {
+  formatSkillCatalog,
+  nonWorkspaceSkills,
+  readSkillBundle,
+  type SkillLite,
+} from "../lib/skills.ts";
 
 const SKILL: SkillLite = {
   name: "grilling",
@@ -68,4 +73,17 @@ test("readSkillBundle reports unreadable skills as errors", async () => {
   });
   assert.equal(result.isError, true);
   assert.match(result.content, /failed to read skill "ghost"/);
+});
+
+test("nonWorkspaceSkills drops skills inside the session cwd, keeps globals", () => {
+  const project: SkillLite = { ...SKILL, filePath: "/repo/.agents/skills/proj/SKILL.md" };
+  const global: SkillLite = {
+    ...SKILL,
+    name: "herdr",
+    filePath: "/Users/x/.pi/agent/skills/herdr/SKILL.md",
+  };
+  const filtered = nonWorkspaceSkills([project, global], "/repo");
+  assert.deepEqual(filtered.map((skill) => skill.name), ["herdr"]);
+  // No session cwd (pre-session_start) → keep everything.
+  assert.equal(nonWorkspaceSkills([project], undefined).length, 1);
 });
