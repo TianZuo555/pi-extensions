@@ -45,7 +45,9 @@ import {
 } from "./lib/models.ts";
 import { AgyReplayStore, type RecordedAgyTool } from "./lib/replay.ts";
 import { findAgyTask, listAgyTasks, stopAgyTask, type AgyTask } from "./lib/tasks.ts";
+import { findAgyArtifact, listAgyArtifacts } from "./lib/artifacts.ts";
 import { openAgyTasksPicker } from "./src/tasks-ui.ts";
+import { openArtifact, openAgyArtifactsPicker } from "./src/artifacts-ui.ts";
 import {
   agyToolLabel,
   formatAgyCall,
@@ -538,6 +540,47 @@ export default async function antigravityExtension(pi: ExtensionAPI): Promise<vo
         "info",
       );
       updateAgyTasksWidget();
+    },
+  });
+
+  pi.registerCommand("agy-artifacts", {
+    description: "List the agy conversation's artifacts (agent-created files, uploads)",
+    handler: async (args, ctx) => {
+      const snapshot = await runAntigravity(runtime, service.snapshot);
+      const conversationId = snapshot.conversationId;
+      if (!conversationId) {
+        ctx.ui.notify("agy-artifacts: no agy conversation in this session yet.", "error");
+        return;
+      }
+      const rescan = () => listAgyArtifacts(conversationId);
+      const arg = args.trim();
+
+      // `open <name>`: non-interactive open by exact name or unique prefix.
+      const openMatch = arg.match(/^open\s+(.+)$/);
+      if (openMatch) {
+        const artifacts = await rescan();
+        const artifact = findAgyArtifact(artifacts, openMatch[1]);
+        if (!artifact) {
+          ctx.ui.notify(`agy-artifacts: no artifact matching "${openMatch[1]}".`, "error");
+          return;
+        }
+        try {
+          await openArtifact(artifact.absolutePath);
+          ctx.ui.notify(`agy-artifacts: opened ${artifact.name}`, "info");
+        } catch (error) {
+          ctx.ui.notify(
+            `agy-artifacts: failed to open ${artifact.name} (${error instanceof Error ? error.message : error}).`,
+            "error",
+          );
+        }
+        return;
+      }
+      if (arg) {
+        ctx.ui.notify('agy-artifacts: usage "/agy-artifacts" or "/agy-artifacts open <name>".', "error");
+        return;
+      }
+
+      await openAgyArtifactsPicker(ctx, rescan);
     },
   });
 }
