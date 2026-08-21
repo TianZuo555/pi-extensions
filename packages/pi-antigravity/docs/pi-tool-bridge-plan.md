@@ -133,7 +133,7 @@ Risks / details to design carefully:
 
 ### Phase 2 — Skills via the bridge
 
-**Status: implemented (v0.4.0; per-skill tools since v0.5.0).** agy's native
+**Status: implemented (0.3.0, with per-skill tools).** agy's native
 skill expansion is disabled by `--disable-slash-commands`, so it is done
 bridge-first. Each bridged global skill is exposed as its own
 `pi__<skill_name>` tool (description = the skill's one-liner; calling it
