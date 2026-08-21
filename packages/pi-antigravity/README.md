@@ -24,7 +24,20 @@ Use Google Antigravity (`agy`) models inside the [pi coding agent](https://pi.de
 - `--add-dir <cwd>` registers the session directory as the agy workspace: agy's print mode does **not** treat the process cwd as the workspace and would otherwise fall back to `~/.gemini/antigravity-cli/scratch`.
 - pi's thinking level maps to `agy --effort`: `minimal`/`low` → `low`, `medium` → `medium`, `high`/`xhigh`/`max` (and unset) → `high`. Models are registered without effort suffixes — one base model per family, effort chosen per turn.
 - The NDJSON event stream (`init` / `step_update` / `result`) is parsed tolerantly and folded into pi events:
-  - agy tool steps render as **native pi tool cards** — `⏺ search_web {"query":"…"}` while running, `✓ search_web (2.04s)` with a bounded output preview once done (full text on Ctrl+O). The provider ends the assistant message at each completed tool step (`stopReason: "toolUse"`), pi executes the display-only `agy` wrapper tool (which returns the recorded agy result — no tool work runs inside pi), and the next provider request re-attaches to the still-running agy turn.
+  - agy tool steps render as **native pi tool cards**, styled like pi's built-in tools:
+
+    ```text
+    grep "version" in ~/Workspace/pi-tian-extensions/packages/pi-antigravity
+    ✓ 2 matches in 2 files (0.05s)
+
+    find *.md in ~/Workspace/pi-tian-extensions/packages/pi-antigravity
+    ✓ 1 result (0.02s)
+
+    search_web "Los Angeles weather today"
+    ✓ (2.39s)
+    ```
+
+    Calls show a bold native-equivalent label (`find`, `grep`, `read`, `write`, `edit`, `ls`, `bash`, …) with human-readable arguments instead of JSON; results show match/result counts where the output allows, plus a bounded output preview (full text on Ctrl+O). Pending, success, and error states get pi's standard background fills. The provider ends the assistant message at each completed tool step (`stopReason: "toolUse"`), pi executes the display-only `agy` wrapper tool (which returns the recorded agy result — no tool work runs inside pi), and the next provider request re-attaches to the still-running agy turn.
   - `agent_response` `text_delta` chunks stream live into pi's text channel. agy has no separate reasoning channel — the model writes its reasoning inline as markdown, so it streams (and renders) like normal text.
   - final `result.response` → the authoritative assistant text; `result.usage` → pi token usage; conversation continues via `--conversation <id>` across turns
 - Conversation continuity: the agy conversation is reused across turns and reset when the model changes or via `/agy reset`.
@@ -50,6 +63,7 @@ Try from a checkout: `pi -e ./packages/pi-antigravity --model antigravity/gemini
 
 ## Notes & limits
 
+- **Background commands:** agy runs long-lived commands (dev servers, watchers) as its own background tasks. In headless print mode such a step never completes — the turn ends with "timeout waiting for response" while the spawned process keeps running. The extension detects this and the card explains it; follow up in a later message to have agy check the task's output, or run long-lived processes with pi's own bash instead.
 - Model discovery runs `agy models` at startup (15s timeout, cached 24h in `~/.pi/antigravity/model-list.json`); a bundled fallback snapshot registers when discovery fails. Effort variants are collapsed into base models.
 - **Cost display:** agy is subscription-billed on the Google side, so registered rates are reference Gemini API prices (USD per Mtok; flash tier by default, pro tier for `-pro` ids) that feed pi's native cost calculation. Override any model's rates through pi's own model config — `~/.pi/agent/models.json`:
 

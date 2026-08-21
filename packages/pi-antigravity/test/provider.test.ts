@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { latestUserPrompt, mapThinkingToEffort, mapUsage } from "../src/provider.ts";
+import {
+  agyIncompleteToolError,
+  latestUserPrompt,
+  mapThinkingToEffort,
+  mapUsage,
+} from "../src/provider.ts";
 import type { Context } from "@earendil-works/pi-ai";
 
 function contextWith(messages: unknown[]): Context {
@@ -61,4 +66,23 @@ test("mapThinkingToEffort maps pi thinking levels to agy effort", () => {
   assert.equal(mapThinkingToEffort("high"), "high");
   assert.equal(mapThinkingToEffort("xhigh"), "high");
   assert.equal(mapThinkingToEffort("max"), "high");
+});
+
+test("agyIncompleteToolError explains agy background tasks for run_command", () => {
+  const bg = agyIncompleteToolError("run_command", "timeout waiting for response");
+  assert.match(bg, /background task/);
+  assert.match(bg, /keeps running/);
+
+  // Unknown stream end for run_command still gets the background hint.
+  assert.match(agyIncompleteToolError("run_command"), /background task/);
+
+  // Other tools and unrelated errors keep the generic message.
+  assert.equal(
+    agyIncompleteToolError("search_web", "timeout waiting for response"),
+    "agy tool call did not complete.",
+  );
+  assert.equal(
+    agyIncompleteToolError("run_command", "permission check failed"),
+    "agy tool call did not complete.",
+  );
 });

@@ -25,7 +25,12 @@ import {
   pricingForModel,
   type AgyModelInfo,
 } from "./lib/models.ts";
-import { AgyReplayStore, summarizeAgyArgs, type RecordedAgyTool } from "./lib/replay.ts";
+import { AgyReplayStore, type RecordedAgyTool } from "./lib/replay.ts";
+import {
+  agyToolLabel,
+  formatAgyCall,
+  summarizeAgyResult,
+} from "./lib/render.ts";
 import { streamAntigravity } from "./src/provider.ts";
 import {
   AntigravityRuntime,
@@ -103,7 +108,7 @@ async function discoverModels(refresh = false): Promise<ModelCache> {
 }
 
 const AGY_TOOL_DESCRIPTION =
-  "Display-only replay of a Google Antigravity (agy) tool execution. The agy agent loop already ran this tool; pi renders the recorded result. Never callable meaningfully by the model — execution only returns the recorded agy output.";
+  "Replay a recorded Google Antigravity (agy) tool result. The agy agent already ran the tool; calling this only returns the recorded output.";
 
 export default async function antigravityExtension(pi: ExtensionAPI): Promise<void> {
   const runtime = createAntigravityRuntime();
@@ -136,24 +141,23 @@ export default async function antigravityExtension(pi: ExtensionAPI): Promise<vo
       };
     },
     renderCall(args, theme) {
-      const summary = summarizeAgyArgs(args.input);
-      return new Text(
-        theme.fg("toolTitle", theme.bold("⏺ ")) +
-          theme.fg("accent", args.tool) +
-          (summary ? theme.fg("dim", ` ${summary}`) : ""),
-        0,
-        0,
-      );
+      return new Text(formatAgyCall(args.tool, args.input, theme), 0, 0);
     },
     renderResult(result, { expanded }, theme, context) {
       const body = result.content[0]?.type === "text" ? result.content[0].text : "";
       const details = result.details as RecordedAgyTool | undefined;
+      const tool = details?.agyTool ?? "tool";
+      if (context.isError) {
+        const message = body && body !== "(no output)" ? body.split("\n")[0] : "failed";
+        return new Text(theme.fg("error", `✗ ${agyToolLabel(tool)}: ${message}`), 0, 0);
+      }
       const secs =
-        typeof details?.durationSeconds === "number" && !context.isError
-          ? ` (${details.durationSeconds.toFixed(2)}s)`
+        typeof details?.durationSeconds === "number"
+          ? theme.fg("muted", ` (${details.durationSeconds.toFixed(2)}s)`)
           : "";
-      const icon = context.isError ? theme.fg("error", "✗ ") : theme.fg("success", "✓ ");
-      let text = icon + theme.fg("accent", details?.agyTool ?? "agy") + theme.fg("muted", secs);
+      const { counts } = summarizeAgyResult(tool, details?.output);
+      const parts = [theme.fg("success", "✓ "), counts ? theme.fg("muted", counts) : "", secs];
+      let text = parts.join("");
       if (body && body !== "(no output)") {
         const lines = body.split("\n");
         const shown = expanded ? lines : lines.slice(0, 3);

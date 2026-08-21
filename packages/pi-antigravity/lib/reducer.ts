@@ -78,7 +78,8 @@ export function applyEvent(outcome: AgyTurnOutcome, event: ParsedAgyEvent): AgyA
           activities.push({
             type: "tool_done",
             name,
-            output: step.output,
+            // agy nests tool output under tool_info on DONE steps.
+            output: step.output ?? step.tool_info?.output,
             durationSeconds:
               typeof step.duration_seconds === "number" ? step.duration_seconds : undefined,
           });

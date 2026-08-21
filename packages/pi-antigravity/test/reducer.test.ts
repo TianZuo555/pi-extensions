@@ -46,10 +46,33 @@ test("reducer folds the real error capture", () => {
   const done = outcome.activities.find((a) => a.type === "tool_done");
   assert.ok(done && done.type === "tool_done" && done.name === "view_file");
   assert.ok(typeof done.durationSeconds === "number");
+  assert.equal(done.output, "55 lines, 2955 bytes");
 
   const error = outcome.activities.find((a) => a.type === "tool_error");
   assert.ok(error && error.type === "tool_error" && error.name === "run_command");
   assert.ok(error.message.includes("permission check failed"));
+});
+
+test("reducer reads tool output from tool_info when top-level output is absent", () => {
+  const outcome = reduceAgyStream(
+    [
+      JSON.stringify({
+        event: "step_update",
+        step_update: {
+          conversation_id: "c-info-1",
+          step_index: 0,
+          state: "DONE",
+          step_type: "tool",
+          tool_name: "grep_search",
+          duration_seconds: 0.05,
+          tool_info: { name: "grep_search", parameters: {}, output: "./a.ts: hi" },
+        },
+      }),
+    ].join("\n"),
+  );
+  const done = outcome.activities.find((a) => a.type === "tool_done");
+  assert.ok(done && done.type === "tool_done");
+  assert.equal(done.output, "./a.ts: hi");
 });
 
 test("reducer folds a successful turn", () => {

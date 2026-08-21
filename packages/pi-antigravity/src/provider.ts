@@ -74,6 +74,27 @@ export function mapUsage(u: AgyUsage | undefined): AssistantMessage["usage"] {
 
 const OVERFLOW_PATTERN = /context (length|window|size).*(exceed|limit)|exceeds.*context/i;
 
+/**
+ * Error recorded for an agy tool call that never reached DONE. agy runs
+ * long-lived commands as background tasks (its own manage_task system); in
+ * headless print mode the step never completes and the turn ends with
+ * "timeout waiting for response" while the spawned process keeps running.
+ */
+export function agyIncompleteToolError(tool: string, resultError?: string): string {
+  if (
+    tool === "run_command" &&
+    (!resultError || /timeout waiting for response/i.test(resultError))
+  ) {
+    return (
+      "agy started this command as a background task, which headless agy cannot await " +
+      "(\u201ctimeout waiting for response\u201d). The process keeps running after the turn \u2014 " +
+      "follow up in a later message to have agy check the task\u2019s output, or run " +
+      "long-lived processes with pi\u2019s own bash instead."
+    );
+  }
+  return "agy tool call did not complete.";
+}
+
 /** Map pi's thinking level to agy's `--effort` (low|medium|high). */
 export function mapThinkingToEffort(level: ThinkingLevel | undefined): AgyEffort {
   if (level === "low" || level === "minimal") return "low";
@@ -173,7 +194,7 @@ export function streamAntigravity(
               // The agy stream ended while a tool call was still open.
               replay.record(open.id, {
                 agyTool: open.name,
-                error: "agy tool call did not complete.",
+                error: agyIncompleteToolError(open.name),
               });
               endWithToolUse();
               return;
@@ -245,7 +266,7 @@ export function streamAntigravity(
               if (open) {
                 replay.record(open.id, {
                   agyTool: open.name,
-                  error: "agy tool call did not complete.",
+                  error: agyIncompleteToolError(open.name, activity.error),
                 });
                 endWithToolUse();
                 return;
