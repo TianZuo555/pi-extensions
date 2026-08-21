@@ -9,8 +9,14 @@
 //   /agy reset      drop the current agy conversation (next turn starts fresh)
 //   /agy models     re-discover models from `agy models` and re-register
 
-import type { ExtensionAPI, ExtensionContext, ProviderModelConfig, Theme } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+  ExtensionUIContext,
+  ProviderModelConfig,
+  Theme,
+} from "@earendil-works/pi-coding-agent";
+import { Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { execFile } from "node:child_process";
 import path from "node:path";
@@ -26,7 +32,8 @@ import {
   type AgyModelInfo,
 } from "./lib/models.ts";
 import { AgyReplayStore, type RecordedAgyTool } from "./lib/replay.ts";
-import { findAgyTask, listAgyTasks, stopAgyTask } from "./lib/tasks.ts";
+import { findAgyTask, listAgyTasks, stopAgyTask, type AgyTask } from "./lib/tasks.ts";
+import { openAgyTasksPicker } from "./src/tasks-ui.ts";
 import {
   agyToolLabel,
   formatAgyCall,
@@ -117,6 +124,64 @@ export default async function antigravityExtension(pi: ExtensionAPI): Promise<vo
   const replay = new AgyReplayStore();
   const cache = await discoverModels();
 
+  // --- Status-bar hint for live agy background tasks -----------------------
+
+  const AGY_TASKS_WIDGET_KEY = "agy-tasks";
+  let tasksUi: ExtensionUIContext | undefined;
+  let tasksSessionCwd: string | undefined;
+  let widgetLiveCount = -1;
+  let widgetScanInFlight = false;
+
+  function setAgyTasksWidget(live: number): void {
+    if (!tasksUi || live === widgetLiveCount) return;
+    widgetLiveCount = live;
+    try {
+      if (live === 0) {
+        tasksUi.setWidget(AGY_TASKS_WIDGET_KEY, undefined);
+        return;
+      }
+      tasksUi.setWidget(AGY_TASKS_WIDGET_KEY, (_tui, theme) => {
+        const line =
+          theme.fg("warning", "■ ") +
+          theme.fg("text", `${live} agy background task${live === 1 ? "" : "s"}`) +
+          theme.fg("dim", " • ") +
+          theme.fg("accent", "/agy-tasks") +
+          theme.fg("dim", " to view");
+        return {
+          render: (width: number) => [truncateToWidth(line, width, "")],
+          invalidate: () => {},
+        };
+      });
+    } catch {
+      // UI may be unavailable (print/RPC modes or teardown).
+    }
+  }
+
+  /** Rescan the conversation's task logs and refresh the status-bar hint. */
+  function updateAgyTasksWidget(): void {
+    if (!tasksUi || widgetScanInFlight) return;
+    widgetScanInFlight = true;
+    void (async () => {
+      try {
+        const snapshot = await runAntigravity(runtime, service.snapshot);
+        if (!snapshot.conversationId) {
+          setAgyTasksWidget(0);
+          return;
+        }
+        const tasks = await listAgyTasks(snapshot.conversationId, {
+          sessionCwd: tasksSessionCwd,
+        });
+        setAgyTasksWidget(
+          tasks.filter((task) => task.pids.length > 0 || task.orphans.length > 0).length,
+        );
+      } catch {
+        // Runtime closed or scan failed; leave the widget as-is.
+      } finally {
+        widgetScanInFlight = false;
+      }
+    })();
+  }
+
   pi.registerTool({
     name: "agy",
     label: "antigravity",
@@ -177,11 +242,14 @@ export default async function antigravityExtension(pi: ExtensionAPI): Promise<vo
     apiKey: "agy-local-session",
     api: "antigravity-stream-json",
     models: cache.models.map(toProviderModel),
-    streamSimple: streamAntigravity(runtime, service, replay),
+    streamSimple: streamAntigravity(runtime, service, replay, updateAgyTasksWidget),
   });
 
   pi.on("session_start", async (_event, ctx: ExtensionContext) => {
     await runAntigravity(runtime, service.setSession(ctx.cwd, undefined));
+    if (ctx.hasUI) tasksUi = ctx.ui;
+    tasksSessionCwd = ctx.cwd;
+    updateAgyTasksWidget();
   });
 
   pi.on("session_shutdown", async () => {
@@ -192,6 +260,13 @@ export default async function antigravityExtension(pi: ExtensionAPI): Promise<vo
     } catch {
       // Already closed.
     }
+    try {
+      tasksUi?.setWidget(AGY_TASKS_WIDGET_KEY, undefined);
+    } catch {
+      // UI may already be gone.
+    }
+    tasksUi = undefined;
+    widgetLiveCount = -1;
     try {
       await runtime.dispose();
     } catch {
@@ -216,7 +291,7 @@ export default async function antigravityExtension(pi: ExtensionAPI): Promise<vo
           apiKey: "agy-local-session",
           api: "antigravity-stream-json",
           models: refreshed.models.map(toProviderModel),
-          streamSimple: streamAntigravity(runtime, service, replay),
+          streamSimple: streamAntigravity(runtime, service, replay, updateAgyTasksWidget),
         });
         ctx.ui.notify(
           `antigravity: ${refreshed.models.length} models registered (${refreshed.source}).`,
@@ -247,34 +322,21 @@ export default async function antigravityExtension(pi: ExtensionAPI): Promise<vo
         ctx.ui.notify("agy-tasks: no agy conversation in this session yet.", "error");
         return;
       }
-      const tasks = await listAgyTasks(conversationId, { sessionCwd: ctx.cwd });
-      if (tasks.length === 0) {
-        ctx.ui.notify("agy-tasks: no background tasks for this conversation.", "info");
+      const rescan = () => listAgyTasks(conversationId, { sessionCwd: ctx.cwd });
+
+      // No arguments: interactive dashboard overlay (x stops, r rescans).
+      if (!arg) {
+        await openAgyTasksPicker(ctx, rescan);
+        updateAgyTasksWidget();
         return;
       }
 
+      const tasks = await rescan();
       const stopMatch = arg.match(/^stop\s+(.+)$/);
       if (!stopMatch) {
-        if (arg) {
-          ctx.ui.notify('agy-tasks: usage "/agy-tasks" or "/agy-tasks stop <task-id>|all".', "error");
-          return;
-        }
-        const lines = tasks.map((task) => {
-          const status =
-            task.pids.length > 0
-              ? "[running]"
-              : task.orphans.length > 0
-                ? `[orphan ${task.orphans.join(",")}]`
-                : "[done]   ";
-          return `${status} ${task.id} — ${task.description}`;
-        });
-        ctx.ui.notify(
-          `agy background tasks (${conversationId.slice(0, 8)}):\n${lines.join("\n")}\n\n/agy-tasks stop <task-id> to terminate`,
-          "info",
-        );
+        ctx.ui.notify('agy-tasks: usage "/agy-tasks" or "/agy-tasks stop <task-id>|all".', "error");
         return;
       }
-
       const target = stopMatch[1].trim();
       const selected =
         target === "all"
@@ -292,6 +354,7 @@ export default async function antigravityExtension(pi: ExtensionAPI): Promise<vo
         `agy-tasks: sent SIGTERM to ${stopped} (${results.reduce((sum, count) => sum + count, 0)} process(es)).`,
         "info",
       );
+      updateAgyTasksWidget();
     },
   });
 }

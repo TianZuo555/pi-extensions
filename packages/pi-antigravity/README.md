@@ -63,21 +63,28 @@ Try from a checkout: `pi -e ./packages/pi-antigravity --model antigravity/gemini
 
 ## Background tasks: `/agy-tasks`
 
-agy runs long-lived commands as its own background tasks; in headless mode their tool step never completes and the turn ends with "timeout waiting for response" while the spawned process keeps running (see Notes & limits). The `/agy-tasks` command lets you inspect and kill them:
-
-```
-/agy-tasks              → list tasks for the current agy conversation
-/agy-tasks stop 3       → SIGTERM task-3 (process group included)
-/agy-tasks stop all     → terminate every running task
-```
+agy runs long-lived commands as its own background tasks; in headless mode their tool step never completes and the turn ends with "timeout waiting for response" while the spawned process keeps running (see Notes & limits). The `/agy-tasks` command opens a full-screen dashboard in the style of `/ps`:
 
 ```text
-[running] task-3 — [dev] $ npm start
-[orphan 41978] task-4 — (no output)
-[done]   task-5 — vite build
+  agy background tasks                              1 live / 2
+╭─ tasks ────────────────────────────────────────────────────────╮
+│ ❯ ■ (no output) task-1                    pid - · 0B · done   │
+│   ■ [dev] $ npm start task-2              pid 47791 · running │
+╰───────────────────────────────────────────────────────────────╯
+  ↑/↓/jk select · x stop · r rescan · esc close
 ```
 
-Liveness comes from the filesystem, since the stream-json RPC does not report background tasks: a running task either holds its log file open (`lsof`) or — after agy itself has exited — shows up as an orphaned process (re-parented to launchd, cwd = session directory, started when the log was created).
+- `x` terminates the selected task (SIGTERM, process group included) and rescans
+- `r` rescans the conversation's task logs
+- `esc` closes; `/agy-tasks stop <task-id>|all` still works for non-interactive use
+
+While any task is live, a status-bar hint shows above the editor:
+
+```text
+■ 1 agy background task • /agy-tasks to view
+```
+
+It refreshes when turns settle, on session start, and after `/agy-tasks` interactions.
 
 ## Notes & limits
 

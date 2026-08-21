@@ -109,6 +109,9 @@ export function streamAntigravity(
   runtime: AntigravityRuntimeInstance,
   service: AntigravityRuntimeShape,
   replay: AgyReplayStore,
+  /** Called when a turn fully settles (stop or error) — the moment an agy
+   * background task may have been created. */
+  onSettled?: () => void,
 ) {
   return (
     model: Model<string>,
@@ -131,6 +134,7 @@ export function streamAntigravity(
 
       const clearTurn = () => {
         runtime.runPromise(service.finishTurn).catch(() => {});
+        onSettled?.();
       };
 
       const fail = (message: string) => {
