@@ -180,16 +180,31 @@ async function pgidOf(pid: number): Promise<number | undefined> {
   });
 }
 
+let cachedOwnPgid: Promise<number | undefined> | undefined;
+
+/** Our own process group id, so stopAgyTask can refuse to signal it. */
+function ownPgid(): Promise<number | undefined> {
+  cachedOwnPgid ??= new Promise((resolve) => {
+    execFile("ps", ["-o", "pgid=", "-p", String(process.pid)], { timeout: 5_000 }, (error, stdout) => {
+      const pgid = Number.parseInt(String(stdout).trim(), 10);
+      resolve(error || !Number.isInteger(pgid) ? undefined : pgid);
+    });
+  });
+  return cachedOwnPgid;
+}
+
 /**
  * Terminate a task's processes: prefer the process group (covers wrapper
- * scripts spawning children), always including the pid itself. Never kills
- * our own process group. Returns the number of signals delivered.
+ * scripts spawning children), always including the pid itself. Never signals
+ * our own process group — an orphan can inherit agy's pgid, which may be the
+ * one pi lives in. Returns the number of signals delivered.
  */
 export async function stopAgyTask(task: AgyTask): Promise<number> {
+  const mine = await ownPgid();
   let signaled = 0;
   for (const pid of [...task.pids, ...task.orphans]) {
     const pgid = await pgidOf(pid);
-    if (pgid !== undefined && pgid !== process.pid) {
+    if (pgid !== undefined && pgid !== mine && pgid !== process.pid) {
       try {
         process.kill(-pgid, "SIGTERM");
         signaled++;

@@ -253,8 +253,27 @@ export default async function antigravityExtension(pi: ExtensionAPI): Promise<vo
   });
 
   pi.on("session_shutdown", async () => {
-    // Close first: aborts any in-flight agy child process, then tear down
-    // the Effect runtime.
+    // Stop any live agy background tasks so closing pi leaves nothing
+    // running silently. Runs before service.close: the orphan scan needs
+    // the task logs' birth times, and killing agy first turns direct-pid
+    // detections into orphan detections (both are handled, but earlier is
+    // more precise).
+    try {
+      const snapshot = await runAntigravity(runtime, service.snapshot);
+      if (snapshot.conversationId) {
+        const tasks = await listAgyTasks(snapshot.conversationId, {
+          sessionCwd: tasksSessionCwd,
+        });
+        const live = tasks.filter(
+          (task) => task.pids.length > 0 || task.orphans.length > 0,
+        );
+        await Promise.all(live.map((task) => stopAgyTask(task)));
+      }
+    } catch {
+      // Runtime closed or scan failed; nothing to stop.
+    }
+    // Close the runtime: aborts any in-flight agy child process, then tear
+    // down the Effect runtime.
     try {
       await runAntigravity(runtime, service.close);
     } catch {

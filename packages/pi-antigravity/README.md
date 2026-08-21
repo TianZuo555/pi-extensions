@@ -110,6 +110,8 @@ Open `/agy-tasks` any time to see and manage everything agy left running:
 
 The hint disappears when the last live task is gone. For scripts and non-interactive runs, `/agy-tasks stop <task-id>` and `/agy-tasks stop all` work without the UI.
 
+**Closing pi stops the tasks.** On session shutdown the extension SIGTERMs any live background tasks of the current conversation, so exiting never leaves stray dev servers behind. (The agy conversation itself survives on Google's side and can be continued later.)
+
 ### How tracking works
 
 The stream-json RPC does not report background tasks, so the extension reads them from the filesystem: each task writes a log under
