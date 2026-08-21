@@ -32,6 +32,8 @@ export interface AgyToolInfo {
   parameters?: Record<string, unknown>;
   /** Tool output on DONE steps (agy nests it here, not at the step top level). */
   output?: string;
+  /** Error detail on ERROR steps (agy nests it here, not at the step top level). */
+  error?: AgyToolError;
 }
 
 export type AgyStepState = "ACTIVE" | "DONE" | "ERROR" | string;

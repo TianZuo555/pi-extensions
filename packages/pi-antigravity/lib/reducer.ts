@@ -95,7 +95,10 @@ export function applyEvent(outcome: AgyTurnOutcome, event: ParsedAgyEvent): AgyA
             args: step.tool_info?.parameters ?? {},
           });
         } else if (step.state === "ERROR") {
-          const message = step.error?.message ?? "tool error";
+          // agy puts the error detail under tool_info on ERROR steps (e.g.
+          // generate_image 429 rate limits); step.error is often absent.
+          const message =
+            step.error?.message ?? step.tool_info?.error?.message ?? "tool error";
           activities.push({
             type: "tool_error",
             name,

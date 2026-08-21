@@ -102,6 +102,8 @@ Tracking works by reading each task's log under `~/.gemini/antigravity-cli/brain
 
 - **agy quirks the extension handles for you:** the prompt must come right after `--print`; print mode needs `--add-dir <cwd>` to see your project; `--disable-slash-commands` stops agy's built-in guide skill from hijacking headless turns.
 - **Permissions:** `--dangerously-skip-permissions` is always passed. For fully autonomous agy shell commands, add `{ "permissions": { "allow": ["command(*)"] } }` to `~/.gemini/antigravity-cli/settings.json`. MCP calls (the bridge) need no extra rules.
+- **Artifact review:** headless runs cannot show agy's artifact-review panel, so image generation would abort after creating the file. Set `"artifactReviewMode": "always-proceed"` in the same `settings.json` to let generated artifacts through (this also applies to your interactive agy runs).
+- **Image generation errors:** `generate_image` can fail with 429 rate limits on Google's image model; agy retries and usually succeeds — the failed attempts show on the card with the real reason.
 - **Thinking level** maps to `agy --effort`: low → `low`, medium → `medium`, high and above → `high`.
 - **Conversation memory** lives on agy's side and is reused across turns; it resets when you switch models, change projects, or run `/agy reset`. (agy pins a conversation to the workspace it was created in — reusing it from another project would write into the old one.) pi-side compaction does not compact it.
 - **Images** are not supported by agy's print interface; they are replaced by an omission note.
