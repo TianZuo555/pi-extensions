@@ -270,6 +270,39 @@ test("a stringified-array pattern runs as written but carries the resend notice"
   }
 });
 
+test("out-of-range context and limit clamp with a notice instead of failing", {
+  skip: !hasRg,
+}, async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "pi-find-tool-clamp-"));
+  const { runtime, tools } = captureTools();
+  try {
+    // Reproduces a real session failure: a model sent context=45 (max 20)
+    // and pi rejected the whole call with a validation error.
+    writeFileSync(
+      path.join(root, "code.ts"),
+      Array.from({ length: 39 }, (_, index) => `filler ${index}`).join("\n") +
+        "\nobjective line is injected here\n",
+    );
+    const grep = tools.get("grep")!;
+    const result = await grep.execute(
+      "grep-clamp",
+      { pattern: "objective line", context: 45, limit: 5000 },
+      undefined,
+      undefined,
+      { cwd: root },
+    );
+    const output = result.content[0];
+    assert.equal(output?.type, "text");
+    const text = output?.type === "text" ? output.text : "";
+    assert.match(text, /context=45 is outside 0–20; ran with context=20/);
+    assert.match(text, /limit=5000 is outside 1–1000; ran with limit=1000/);
+    assert.match(text, /1 match in 1 file/);
+  } finally {
+    await runtime.dispose();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("the custom renderer satisfies TUI width safety at 42 columns", async () => {
   const { runtime, tools } = captureTools();
   try {

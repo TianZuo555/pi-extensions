@@ -6,6 +6,7 @@ import {
   renderGrepLines,
 } from "../lib/tools.ts";
 import {
+  clampParam,
   FIND_PARAMETER_DESCRIPTIONS,
   FIND_PROMPT_SNIPPET,
   FIND_TOOL_DESCRIPTION,
@@ -167,13 +168,41 @@ test("model-facing search metadata stays concise", () => {
   }
 });
 
-test("descriptions do not restate bounds the schema already carries", () => {
-  for (const descriptions of [
-    GREP_PARAMETER_DESCRIPTIONS,
-    FIND_PARAMETER_DESCRIPTIONS,
-  ]) {
-    for (const [name, text] of Object.entries(descriptions)) {
-      assert.doesNotMatch(text, /maximum \d/i, `${name} restates a schema bound`);
-    }
+test("numeric caps live in descriptions; runtime clamps instead of the schema", () => {
+  // The schema must not reject out-of-range integers with a validation
+  // error; execute() clamps them and appends a notice instead.
+  for (const schema of [GrepParams, FindParams]) {
+    assert.doesNotMatch(
+      JSON.stringify(schema.properties.limit),
+      /"maximum"/,
+      "limit schema should stay lenient",
+    );
   }
+  assert.doesNotMatch(
+    JSON.stringify(GrepParams.properties.context),
+    /"maximum"/,
+    "context schema should stay lenient",
+  );
+  // With the bounds gone from the schema, descriptions are the only place
+  // that advertises them.
+  assert.match(GREP_PARAMETER_DESCRIPTIONS.context, /at most 20\./);
+  assert.match(GREP_PARAMETER_DESCRIPTIONS.limit, /at most 1000\./);
+  assert.match(FIND_PARAMETER_DESCRIPTIONS.limit, /at most 1000\./);
+});
+
+test("clampParam clamps out-of-range values and explains the substitution", () => {
+  const inRange = clampParam("limit", 50, 1, 1000);
+  assert.equal(inRange.value, 50);
+  assert.equal(inRange.notice, "");
+
+  const tooHigh = clampParam("context", 45, 0, 20);
+  assert.equal(tooHigh.value, 20);
+  assert.match(
+    tooHigh.notice,
+    /context=45 is outside 0–20; ran with context=20/,
+  );
+
+  const tooLow = clampParam("context", -3, 0, 20);
+  assert.equal(tooLow.value, 0);
+  assert.match(tooLow.notice, /ran with context=0/);
 });

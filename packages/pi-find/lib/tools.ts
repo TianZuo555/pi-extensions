@@ -27,6 +27,7 @@ import {
   GREP_PROMPT_SNIPPET,
   grepResultHeader,
   GREP_TOOL_DESCRIPTION,
+  clampParam,
   looksLikeStringifiedArray,
   MAX_CONTEXT_LINES,
   MAX_FIND_LIMIT,
@@ -70,18 +71,10 @@ export const GrepParams = Type.Object({
     Type.Boolean({ description: GREP_PARAMETER_DESCRIPTIONS.caseSensitive }),
   ),
   context: Type.Optional(
-    Type.Integer({
-      minimum: 0,
-      maximum: MAX_CONTEXT_LINES,
-      description: GREP_PARAMETER_DESCRIPTIONS.context,
-    }),
+    Type.Integer({ description: GREP_PARAMETER_DESCRIPTIONS.context }),
   ),
   limit: Type.Optional(
-    Type.Integer({
-      minimum: 1,
-      maximum: MAX_GREP_LIMIT,
-      description: GREP_PARAMETER_DESCRIPTIONS.limit,
-    }),
+    Type.Integer({ description: GREP_PARAMETER_DESCRIPTIONS.limit }),
   ),
 });
 
@@ -92,11 +85,7 @@ export const FindParams = Type.Object({
   path: pathConstraint(FIND_PARAMETER_DESCRIPTIONS.path),
   exclude: pathConstraint(FIND_PARAMETER_DESCRIPTIONS.exclude),
   limit: Type.Optional(
-    Type.Integer({
-      minimum: 1,
-      maximum: MAX_FIND_LIMIT,
-      description: FIND_PARAMETER_DESCRIPTIONS.limit,
-    }),
+    Type.Integer({ description: FIND_PARAMETER_DESCRIPTIONS.limit }),
   ),
 });
 
@@ -216,9 +205,17 @@ export function registerTools(
       const query = patterns.join(", ");
 
       const service = runtime.runSync(SearchRuntime);
-      const effectiveLimit = Math.min(
+      const limitParam = clampParam(
+        "limit",
+        params.limit ?? DEFAULT_GREP_LIMIT,
+        1,
         MAX_GREP_LIMIT,
-        Math.max(1, params.limit ?? DEFAULT_GREP_LIMIT),
+      );
+      const contextParam = clampParam(
+        "context",
+        params.context ?? 0,
+        0,
+        MAX_CONTEXT_LINES,
       );
       const outcome = await runSearch(
         runtime,
@@ -228,12 +225,15 @@ export function registerTools(
           path: params.path,
           exclude: params.exclude,
           caseSensitive: params.caseSensitive,
-          context: params.context,
-          limit: effectiveLimit,
+          context: contextParam.value,
+          limit: limitParam.value,
           cwd: ctx.cwd,
           signal,
         }),
         { signal },
+      );
+      const clampNotices = [limitParam.notice, contextParam.notice].filter(
+        (notice) => notice !== "",
       );
 
       // A stringified pattern array parses as a permissive character class
@@ -254,9 +254,12 @@ export function registerTools(
           content: [
             {
               type: "text" as const,
-              text: NO_GREP_MATCHES +
-                emptyResultHint(outcome.hasConstraints) +
-                stringifiedNotice,
+              text: [
+                NO_GREP_MATCHES +
+                  emptyResultHint(outcome.hasConstraints) +
+                  stringifiedNotice,
+                ...clampNotices,
+              ].join("\n"),
             },
           ],
           details: {
@@ -274,9 +277,10 @@ export function registerTools(
       const fileCount = countFiles(outcome);
       const header = grepResultHeader(matchCount, fileCount);
       const notices = outcome.truncated
-        ? [resultLimitNotice("matches", effectiveLimit, MAX_GREP_LIMIT)]
+        ? [resultLimitNotice("matches", limitParam.value, MAX_GREP_LIMIT)]
         : [];
       if (stringifiedNotice !== "") notices.push(stringifiedNotice);
+      notices.push(...clampNotices);
       const text = [header, "", body.text, ...notices.flatMap((notice) => ["", notice])]
         .join("\n");
 
@@ -333,10 +337,13 @@ export function registerTools(
 
     async execute(_toolCallId, params: FindInput, signal, _onUpdate, ctx) {
       const service = runtime.runSync(SearchRuntime);
-      const effectiveLimit = Math.min(
+      const limitParam = clampParam(
+        "limit",
+        params.limit ?? DEFAULT_FIND_LIMIT,
+        1,
         MAX_FIND_LIMIT,
-        Math.max(1, params.limit ?? DEFAULT_FIND_LIMIT),
       );
+      const effectiveLimit = limitParam.value;
       const outcome = await runSearch(
         runtime,
         service.find({
@@ -374,6 +381,7 @@ export function registerTools(
       const notices = outcome.limitReached
         ? [resultLimitNotice("files", effectiveLimit, MAX_FIND_LIMIT)]
         : [];
+      if (limitParam.notice !== "") notices.push(limitParam.notice);
       const text = [header, "", body.text, ...notices.flatMap((notice) => ["", notice])]
         .join("\n");
 

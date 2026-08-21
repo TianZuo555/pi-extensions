@@ -24,8 +24,8 @@ export const GREP_PARAMETER_DESCRIPTIONS = {
     path: PATH_DESCRIPTION,
     exclude: EXCLUDE_DESCRIPTION,
     caseSensitive: "True forces case-sensitive; default is smart-case.",
-    context: "Lines before/after matches; default 0.",
-    limit: `Maximum matches; default ${DEFAULT_GREP_LIMIT}.`,
+    context: `Lines before/after matches; default 0, at most ${MAX_CONTEXT_LINES}.`,
+    limit: `Maximum matches; default ${DEFAULT_GREP_LIMIT}, at most ${MAX_GREP_LIMIT}.`,
 };
 
 // --- find --------------------------------------------------------------------
@@ -39,7 +39,7 @@ export const FIND_PARAMETER_DESCRIPTIONS = {
         "Whole-path substrings/regexes; spaces mean AND; empty lists all files.",
     path: PATH_DESCRIPTION,
     exclude: EXCLUDE_DESCRIPTION,
-    limit: `Maximum files; default ${DEFAULT_FIND_LIMIT}.`,
+    limit: `Maximum files; default ${DEFAULT_FIND_LIMIT}, at most ${MAX_FIND_LIMIT}.`,
 };
 
 // --- result framing ----------------------------------------------------------
@@ -107,6 +107,28 @@ export function resultLimitNotice(
             ? `rerun with limit=${nextLimit} to show more results, or `
             : "";
     return `[Result limit reached at ${limit} ${kind}; ${continuation}narrow the search with path/exclude.]`;
+}
+
+/**
+ * Clamp a numeric argument into [min, max] instead of letting schema
+ * validation reject the call. Models occasionally send out-of-range guesses
+ * (context: 45); a hard validation error costs a full round-trip, while a
+ * clamp notice costs one line. Parameter descriptions still advertise the
+ * cap so in-range calls never see the notice.
+ */
+export function clampParam(
+    name: string,
+    value: number,
+    min: number,
+    max: number,
+): { readonly value: number; readonly notice: string } {
+    const clamped = Math.min(max, Math.max(min, Math.trunc(value)));
+    return clamped === value
+        ? { value, notice: "" }
+        : {
+              value: clamped,
+              notice: `[${name}=${value} is outside ${min}–${max}; ran with ${name}=${clamped}.]`,
+          };
 }
 
 /** Explain an empty result so the model adjusts instead of retrying verbatim. */
