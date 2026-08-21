@@ -1,4 +1,6 @@
 import type { FetchOptions, FetchResponse } from "./types.ts";
+import { parseHTML } from "linkedom";
+import { Defuddle } from "defuddle/node";
 
 const DEFAULT_FETCH_TIMEOUT_MS = 30_000;
 const MAX_DIRECT_FETCH_BYTES = 100_000; // 100KB
@@ -122,6 +124,13 @@ export function htmlToMarkdown(html: string): string {
   return text;
 }
 
+/**
+ * Minimum extracted length for Defuddle output to be trusted over the naive
+ * regex converter. Shorter results mean Defuddle could not find main content
+ * (SPAs, non-article pages) and we fall back to htmlToMarkdown.
+ */
+const MIN_DEFUDDLE_CONTENT_CHARS = 200;
+
 export async function fetchDirect(
   url: string,
   options: FetchOptions = {},
@@ -154,8 +163,25 @@ export async function fetchDirect(
   const rawBody = await readLimitedText(res, MAX_DIRECT_FETCH_BYTES);
 
   const isHtml = contentType.includes("html") || /<html/i.test(rawBody.slice(0, 1000));
-  const title = isHtml ? extractHtmlTitle(rawBody) : undefined;
-  const text = options.raw || !isHtml ? rawBody : htmlToMarkdown(rawBody);
+  let title = isHtml ? extractHtmlTitle(rawBody) : undefined;
+  let text = options.raw || !isHtml ? rawBody : htmlToMarkdown(rawBody);
+
+  // Prefer real main-content extraction for HTML pages: Defuddle removes nav,
+  // sidebars, cookie banners, etc. and returns clean Markdown. Fall back to
+  // the naive converter when it finds nothing usable (SPAs, tiny fragments).
+  if (isHtml && !options.raw) {
+    try {
+      const { document } = parseHTML(rawBody);
+      const result = await Defuddle(document, url, { markdown: true });
+      const content = typeof result?.content === "string" ? result.content.trim() : "";
+      if (content.length >= MIN_DEFUDDLE_CONTENT_CHARS) {
+        text = content;
+        if (result.title) title = result.title;
+      }
+    } catch {
+      // Keep the naive-conversion text.
+    }
+  }
 
   return {
     url,

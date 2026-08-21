@@ -64,6 +64,31 @@ test("htmlToMarkdown strips scripts, styles, and extracts readable content", () 
   assert.doesNotMatch(md, /body \{ color: red; \}/);
 });
 
+test("fetchDirect prefers Defuddle main-content extraction for HTML", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = (async () =>
+    new Response(
+      `<html><head><title>Docs</title></head><body>
+        <nav>Home Products Pricing Blog Contact</nav>
+        <article>
+          <h1>Real Article Title</h1>
+          <p>${"Real article content. ".repeat(30)}</p>
+        </article>
+        <footer>Copyright 2026 ExampleCorp</footer>
+      </body></html>`,
+      { status: 200, headers: { "Content-Type": "text/html" } },
+    )) as typeof fetch;
+
+  try {
+    const response = await fetchDirect("https://example.com/article");
+    assert.match(response.text, /Real Article Title/);
+    assert.doesNotMatch(response.text, /Home Products Pricing/);
+    assert.doesNotMatch(response.text, /Copyright 2026/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test("fetchDirect enforces its response byte limit", async () => {
   const originalFetch = globalThis.fetch;
   globalThis.fetch = (async () =>

@@ -1,49 +1,85 @@
 # @tian.zuo/pi-web-search
 
-Clean, lightweight web search and fetch tools for the [pi coding agent](https://pi.dev).
+Web search and web fetch for the [pi coding agent](https://pi.dev). Two tools, four providers, automatic fallback — no single point of failure.
 
-Supports **OpenAI Responses** (with simple, concise system instructions and automatic pi/Codex OAuth reuse), **Exa**, **Firecrawl**, and **Ollama** (local/cloud), plus built-in direct HTML-to-Markdown fetch fallback.
-
-## Features
-
-- **`web_search` Tool**: Queries live web sources and returns concise summaries with cited source links.
-  - **OpenAI Responses (`/v1/responses` or Codex)**: Uses OpenAI's server-side web search with a simple, clean prompt. Reuses your active pi login (`openai-codex` or `openai`), or uses `OPENAI_API_KEY`.
-  - **Exa**: High quality search results via `EXA_API_KEY`.
-  - **Firecrawl**: Clean search output via `FIRECRAWL_API_KEY`.
-  - **Ollama**: Local (`http://localhost:11434`) or cloud web search.
-- **`web_fetch` Tool**: Reads web pages and documentation as clean Markdown.
-  - Native scrapers for **Firecrawl** (`/v1/scrape`), **Exa** (`/contents`), and **Ollama** (`/api/web_fetch`).
-  - **Direct Fetch Fallback**: High-performance HTML-to-Markdown extraction when no scraping key is provided.
-- **Session Fallback Chains**: Every call walks an ordered fallback chain — search: `openai → exa → firecrawl → ollama`; fetch: `firecrawl → exa → ollama → direct`. When a provider runs out of usage (402/403, out of credits, usage limits) it is skipped **for the rest of the session**, so the next search/fetch goes straight to the next healthy provider. Plain rate limits (429) only apply a short cooldown. Successful responses report which providers they fell back from.
-
-## Installation
+## Install
 
 ```bash
 pi install npm:@tian.zuo/pi-web-search
 ```
 
-Or try in a live session without installing:
+## Where to put your keys
 
-```bash
-pi -e ./packages/pi-web-search
+You have two options. Environment variables win if both are set.
+
+**Option 1 — environment variables** (e.g. in your shell profile or a `.env` loader):
+
+| Variable | Unlocks |
+| :--- | :--- |
+| `OPENAI_API_KEY` | OpenAI search (also reuses your pi Codex/OpenAI login automatically) |
+| `EXA_API_KEY` | Exa search + fetch |
+| `FIRECRAWL_API_KEY` | Firecrawl search + fetch |
+| `OLLAMA_HOST` / `OLLAMA_API_KEY` | Ollama (local defaults to `http://localhost:11434`) |
+
+**Option 2 — config file** at `~/.config/@tian.zuo/pi-web-search/config.json`:
+
+```json
+{
+  "searchProvider": "exa",
+  "fetchProvider": "firecrawl",
+  "openai":  { "apiKey": "sk-...", "model": "gpt-5.6-luna" },
+  "exa":     { "apiKey": "..." },
+  "firecrawl": { "apiKey": "fc-..." },
+  "ollama":  { "baseUrl": "http://localhost:11434", "apiKey": "..." }
+}
 ```
 
-## Configuration
+- `searchProvider` / `fetchProvider` set your **preferred** provider; everything else with a valid key stays in the fallback chain.
+- No keys at all? Search falls back to Ollama, fetch falls back to **direct fetch** (plain HTTP + main-content extraction, no key needed).
 
-Precedence: **Environment Variables** > **`~/.config/@tian.zuo/pi-web-search/config.json`** > **`~/.pi/agent/auth.json` (Codex / OpenAI login)**.
+## How the fallback chain works
 
-### Environment Variables
+The chain is built automatically from whichever providers have credentials:
 
-| Variable | Description | Default |
-| :--- | :--- | :--- |
-| `OPENAI_API_KEY` | OpenAI API key or Codex JWT | Reused from Pi login if available |
-| `OPENAI_BASE_URL` | Custom OpenAI Responses endpoint | `https://api.openai.com/v1/responses` |
-| `OPENAI_SEARCH_MODEL` | Model for OpenAI Responses search | `gpt-5.6-luna` |
-| `EXA_API_KEY` | Exa API key | - |
-| `FIRECRAWL_API_KEY` | Firecrawl API key | - |
-| `FIRECRAWL_BASE_URL` | Custom Firecrawl API URL | `https://api.firecrawl.dev/v1` |
-| `OLLAMA_HOST` | Ollama host URL | `http://localhost:11434` |
-| `OLLAMA_API_KEY` | Ollama API key (for cloud endpoints) | - |
+- **search:** `openai → exa → firecrawl → ollama`
+- **fetch:** `firecrawl → exa → ollama → direct`
+
+Every call starts at your preferred provider and walks the chain until one succeeds:
+
+- **Quota failures** (402/403, out of credits, usage limits) skip that provider **for the rest of the session** — the next call starts directly at the next healthy provider.
+- **Rate limits** (429) only apply a short 2-minute cooldown.
+- Successful responses report which providers they fell back from.
+
+```mermaid
+flowchart TB
+    Call["web_search / web_fetch"] --> Pref["start at your\npreferred provider"]
+    Pref --> Try{"try provider"}
+    Try -- "success" --> Done["return result\n(+ which providers\nit fell back from)"]
+    Try -- "quota failure\n(402/403, credits,\nusage limit)" --> Skip["skip provider for\nthe whole session"]
+    Skip --> Next1{"more providers\nin chain?"}
+    Try -- "rate limit (429)" --> Cooldown["cooldown ~2 min"]
+    Cooldown --> Next2{"more providers\nin chain?"}
+    Next1 -- "yes" --> Try
+    Next2 -- "yes" --> Try
+    Next1 -- "no" --> Fail["error listing\nall failures"]
+    Next2 -- "no" --> Fail
+```
+
+## The tools
+
+### `web_search`
+
+Queries live web sources, returns a concise summary with cited links.
+
+- **OpenAI**: server-side web search via the Responses API with a simple prompt; reuses your active pi login (`openai-codex` / `openai`) or `OPENAI_API_KEY`.
+- **Exa / Firecrawl / Ollama**: native API calls.
+
+### `web_fetch`
+
+Reads web pages as clean Markdown.
+
+- **Firecrawl** (`/v1/scrape`), **Exa** (`/contents`), **Ollama** (`/api/web_fetch`): native scrapers.
+- **Direct fetch** (the keyless fallback): plain HTTP GET, then main-content extraction with [Defuddle](https://github.com/kepano/defuddle) (the engine behind Obsidian Web Clipper) — navigation, sidebars, and cookie banners are removed before Markdown conversion. If Defuddle finds no usable main content (SPAs, tiny fragments), it falls back to a built-in regex-based converter. Pass `raw: true` to get the untouched response body instead.
 
 ## License
 
