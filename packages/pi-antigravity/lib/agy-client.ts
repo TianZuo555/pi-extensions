@@ -43,9 +43,14 @@ export class AgySpawnError extends Error {
 
 export function buildAgyArgs(request: AgyTurnRequest): string[] {
   const timeout = Math.ceil((request.timeoutMs ?? 600_000) / 1000);
+  // NOTE: agy's --print consumes the NEXT token as the prompt value (it is
+  // not a boolean flag). The prompt MUST come immediately after --print,
+  // otherwise the first following flag string becomes the prompt.
   const args = [
     "--print",
+    request.prompt,
     "--dangerously-skip-permissions",
+    "--disable-slash-commands",
     "--output-format",
     "stream-json",
     "--print-timeout",
@@ -53,7 +58,6 @@ export function buildAgyArgs(request: AgyTurnRequest): string[] {
   ];
   if (request.conversationId) args.push("--conversation", request.conversationId);
   if (request.model) args.push("--model", request.model);
-  args.push(request.prompt);
   return args;
 }
 

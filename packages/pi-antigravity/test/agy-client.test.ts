@@ -43,12 +43,14 @@ function fakeSpawn(output: string, code = 0) {
   return child as unknown as never;
 }
 
-test("buildAgyArgs always skips permissions and supports resume/model", () => {
+test("buildAgyArgs always skips permissions and puts the prompt directly after --print", () => {
   const base = buildAgyArgs({ prompt: "hi" });
+  assert.equal(base[0], "--print");
+  assert.equal(base[1], "hi");
   assert.ok(base.includes("--dangerously-skip-permissions"));
+  assert.ok(base.includes("--disable-slash-commands"));
   assert.ok(base.includes("--output-format"));
   assert.equal(base[base.indexOf("--output-format") + 1], "stream-json");
-  assert.equal(base[base.length - 1], "hi");
   assert.ok(!base.includes("--conversation"));
 
   const full = buildAgyArgs({ prompt: "hi", conversationId: "c1", model: "m1", timeoutMs: 90_000 });
