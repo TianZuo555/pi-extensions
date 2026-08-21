@@ -29,10 +29,10 @@ import {
 } from "effect";
 import {
   addGoalUsage,
-  canCreateOver,
   cloneGoal,
   completionBudgetReport,
   createGoal,
+  editGoalObjective,
   formatTokenCount,
   restoreGoal,
   setGoalStatus,
@@ -46,9 +46,11 @@ import {
 import {
   buildBudgetLimitPrompt,
   buildContinuationPrompt,
+  buildObjectiveUpdatedPrompt,
 } from "../lib/prompt.ts";
 
 export const CONTINUATION_MESSAGE_TYPE = "pi-goal-continuation";
+export const OBJECTIVE_UPDATED_MESSAGE_TYPE = "pi-goal-objective-updated";
 export const BUDGET_MESSAGE_TYPE = "pi-goal-budget";
 export const COMPLETION_MESSAGE_TYPE = "pi-goal-completion";
 
@@ -120,9 +122,6 @@ export interface GoalOpResult {
 export class NoGoalError extends Data.TaggedError("NoGoalError")<{
   readonly message: string;
 }> {}
-export class UnfinishedGoalError extends Data.TaggedError("UnfinishedGoalError")<{
-  readonly message: string;
-}> {}
 export class AlreadyCompleteError extends Data.TaggedError("AlreadyCompleteError")<{
   readonly message: string;
 }> {}
@@ -138,7 +137,6 @@ export class GoalRuntimeClosedError extends Data.TaggedError(
 
 export type GoalError =
   | NoGoalError
-  | UnfinishedGoalError
   | AlreadyCompleteError
   | InvalidObjectiveError
   | InvalidBudgetError
@@ -177,13 +175,10 @@ export interface GoalRuntimeShape {
   readonly setBudget: (
     tokenBudget: number | undefined,
   ) => Effect.Effect<GoalOpResult, GoalError>;
-  readonly createGoal: (
+  readonly setGoalObjective: (
     objective: string,
     tokenBudget: number | undefined,
-  ) => Effect.Effect<GoalOpResult, GoalError>;
-  readonly replaceGoal: (
-    objective: string,
-    tokenBudget: number | undefined,
+    steerActiveRun: boolean,
   ) => Effect.Effect<GoalOpResult, GoalError>;
   readonly updateGoalStatus: (
     status: "complete" | "blocked",
@@ -274,9 +269,7 @@ function sendDirective(
   return { kind: "send", customType, content, details, deliverAs, triggerTurn };
 }
 
-/** Attach the in-flight turn to a goal that became active mid-turn (model
- * creation only; resumed/replaced goals never take over a turn that began
- * under another state). */
+/** Attach an in-flight turn to the active goal for usage accounting. */
 function trackCurrentTurnGoal(
   state: GoalRuntimeState,
   goal: Goal,
@@ -550,7 +543,12 @@ function pauseTransition(
 }
 
 function resumeTransition(state: GoalRuntimeState): [GoalOpResult, GoalRuntimeState] {
-  if (!state.goal || state.goal.status !== "paused") {
+  if (
+    !state.goal ||
+    (state.goal.status !== "paused" &&
+      state.goal.status !== "blocked" &&
+      state.goal.status !== "usage-limited")
+  ) {
     return [resultOf(state, [], false), state];
   }
   const nextStatus: GoalStatus =
@@ -615,58 +613,65 @@ function setBudgetTransition(
   return [{ ok: true, result: resultOf(next, [persistDirective(goal)], true) }, next];
 }
 
-function createGoalTransition(
+function setGoalObjectiveTransition(
   state: GoalRuntimeState,
   objective: string,
   tokenBudget: number | undefined,
+  steerActiveRun: boolean,
 ): readonly [TransitionOutcome<GoalError>, GoalRuntimeState] {
-  if (!canCreateOver(state.goal)) {
-    return [
-      {
-        ok: false,
-        error: new UnfinishedGoalError({
-          message:
-            "An unfinished goal already exists. Use get_goal to inspect it; only a complete goal can be replaced by create_goal.",
-        }),
-      },
-      state,
-    ];
-  }
-  const outcome = validateNewGoal(objective, tokenBudget);
+  const outcome = validateGoalInput(objective, tokenBudget);
   if (!outcome.ok) return [{ ok: false, error: outcome.error }, state];
-  const goal = createGoal(objective, tokenBudget);
-  let next: GoalRuntimeState = {
-    ...state,
-    goal,
-    continuationSuppressed: false,
-    budgetSteeringGoalId: undefined,
-  };
-  // The model's own turn is the new goal's first turn.
-  next = trackCurrentTurnGoal(next, goal);
-  return [{ ok: true, result: resultOf(next, [persistDirective(goal)], true) }, next];
-}
 
-function replaceGoalTransition(
-  state: GoalRuntimeState,
-  objective: string,
-  tokenBudget: number | undefined,
-): readonly [TransitionOutcome<GoalError>, GoalRuntimeState] {
-  const outcome = validateNewGoal(objective, tokenBudget);
-  if (!outcome.ok) return [{ ok: false, error: outcome.error }, state];
-  const goal = createGoal(objective, tokenBudget);
+  if (!state.goal) {
+    const goal = createGoal(objective, tokenBudget);
+    const next: GoalRuntimeState = {
+      ...state,
+      goal,
+      continuationSuppressed: false,
+      continuationQueued: false,
+      budgetSteeringGoalId: undefined,
+    };
+    return [{ ok: true, result: resultOf(next, [persistDirective(goal)], true) }, next];
+  }
+
+  const edited = editGoalObjective(state.goal, objective);
+  const goal: Goal =
+    tokenBudget === undefined ? edited : { ...edited, tokenBudget };
+  const changed =
+    goal.objective !== state.goal.objective ||
+    goal.status !== state.goal.status ||
+    goal.tokenBudget !== state.goal.tokenBudget;
+  if (!changed) {
+    return [{ ok: true, result: resultOf(state, [], false) }, state];
+  }
+
   const next: GoalRuntimeState = {
     ...state,
     goal,
-    // The in-flight turn snapshot (if any) still belongs to the previous
-    // goal and must not be re-pointed at the replacement.
-    continuationSuppressed: false,
-    continuationQueued: false,
-    budgetSteeringGoalId: undefined,
+    continuationSuppressed: goal.status !== "active",
+    // A queued continuation remains valid: its revision metadata lets the
+    // context hook supplement it with the edited objective before the call.
+    continuationQueued: state.continuationQueued,
+    budgetSteeringGoalId:
+      goal.status === "active" ? undefined : state.budgetSteeringGoalId,
+    pendingCompletionReportGoalId: undefined,
   };
-  return [{ ok: true, result: resultOf(next, [persistDirective(goal)], true) }, next];
+  const directives: GoalDirective[] = [persistDirective(goal)];
+  if (steerActiveRun && goal.status === "active") {
+    directives.push(
+      sendDirective(
+        OBJECTIVE_UPDATED_MESSAGE_TYPE,
+        buildObjectiveUpdatedPrompt(goal),
+        { goalId: goal.goalId, goalUpdatedAt: goal.updatedAt },
+        "steer",
+        false,
+      ),
+    );
+  }
+  return [{ ok: true, result: resultOf(next, directives, true) }, next];
 }
 
-function validateNewGoal(
+function validateGoalInput(
   objective: string,
   tokenBudget: number | undefined,
 ): { readonly ok: true } | { readonly ok: false; readonly error: GoalError } {
@@ -744,7 +749,7 @@ function queueContinuationTransition(
       sendDirective(
         CONTINUATION_MESSAGE_TYPE,
         buildContinuationPrompt(state.goal),
-        { goalId: state.goal.goalId },
+        { goalId: state.goal.goalId, goalUpdatedAt: state.goal.updatedAt },
         "followUp",
         true,
       ),
@@ -845,10 +850,10 @@ const makeGoalRuntime = Effect.gen(function* () {
     pause: (reason) => transitionOk((s) => pauseTransition(s, reason)),
     resume: transitionOk(resumeTransition),
     setBudget: (tokenBudget) => transition((s) => setBudgetTransition(s, tokenBudget)),
-    createGoal: (objective, tokenBudget) =>
-      transition((s) => createGoalTransition(s, objective, tokenBudget)),
-    replaceGoal: (objective, tokenBudget) =>
-      transition((s) => replaceGoalTransition(s, objective, tokenBudget)),
+    setGoalObjective: (objective, tokenBudget, steerActiveRun) =>
+      transition((s) =>
+        setGoalObjectiveTransition(s, objective, tokenBudget, steerActiveRun),
+      ),
     updateGoalStatus: (status) => transition((s) => updateGoalStatusTransition(s, status)),
     completeGoal: transitionOk(completeGoalTransition),
     clearGoal: transitionOk(clearGoalTransition),

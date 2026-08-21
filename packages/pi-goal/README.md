@@ -11,11 +11,12 @@ Install: `npm:@tian.zuo/pi-goal` · npm package `@tian.zuo/pi-goal` · workspace
 ## Commands
 
 ```text
-/goal <objective>                    Start or replace a goal
-/goal --budget 50000 <objective>     Start one with a token budget
+/goal <objective>                    Start a goal or edit its objective in place
+/goal --budget 50000 <objective>     Start/edit and set the token budget
 /goal                                Show the current goal and usage
+/goal edit                           Edit the objective in a prefilled editor
 /goal pause                          Pause automatic continuation
-/goal resume                         Resume a paused goal
+/goal resume                         Resume a paused or stopped goal
 /goal budget 50000                   Set the current goal's budget
 /goal budget clear                   Remove the budget
 /goal complete                       Manually mark it complete
@@ -32,19 +33,17 @@ benchmark, while keeping the correctness suite green.
 
 ## Model tools
 
-The extension exposes the same intentionally asymmetric tool contract as
-Codex:
+Goal content is user-owned. The model receives only the lifecycle operations
+it needs while working:
 
 - `get_goal` reads the thread's objective, status, usage, and remaining budget.
-- `create_goal` starts a goal only when the user or higher-priority instructions
-  explicitly request one. It refuses to replace an unfinished goal.
-- `update_goal` can mark a goal `complete` or `blocked`; pause/resume, budget,
-  and usage-limited transitions remain user/runtime controlled.
+- `update_goal` can mark a goal `complete` or `blocked`; objective edits,
+  pause/resume, budget, and clearing remain user/runtime controlled.
 
-Tool metadata keeps capabilities in tool descriptions, explicit-creation
-policy in one short guideline, and field contracts in the schema. Active-goal
-system guidance carries completion and blocking policy only when relevant.
-Tests cap serialized metadata for all three tools at 1,050 characters.
+Tool metadata keeps capabilities in short descriptions and field contracts in
+the schema. Active-goal system guidance carries completion and blocking policy
+only when relevant. Tests cap serialized metadata for both tools at 500
+characters.
 
 ## Design
 
@@ -61,17 +60,19 @@ and implemented in Codex's [goal runtime](https://github.com/openai/codex/tree/m
   extension guidance (evidence audit, `update_goal` rules). The user-controlled
   objective is injected as a transient user-role message before every LLM call
   (ordinary prompts, automatic continuations, retries, and internal turns) and
-  is never persisted or promoted to system/developer authority. Continuation
-  messages carry the full objective at the same user authority.
+  is never persisted or promoted to system/developer authority. `/goal edit`
+  opens a prefilled editor; repeated `/goal <objective>` calls use the same
+  in-place update path. Continuation messages carry the objective at the same
+  user authority.
 - **Conservative continuation:** after an active run settles, pi queues one
   follow-up goal turn only while the thread is idle and no user input is
   pending. Aggregate-run provenance (was this run a continuation?) and tool
   activity accumulate across all low-level runs of an unsettled sequence, so
   retries and compaction cannot reset them. A continuation that makes no tool
   call suppresses the next automatic continuation, preventing chat-only spin.
-- **Lifecycle authority:** the model can create and complete/block goals, but
-  pause, resume, interruption, and budget-limited transitions belong to the
-  user or runtime.
+- **Lifecycle authority:** only the user creates or edits objectives. The model
+  can inspect a goal and mark it complete/blocked; pause, resume, interruption,
+  budget, and clearing belong to the user or runtime.
 - **Usage accounting:** assistant and nested tool-result tokens plus turn time
   are accumulated for the goal. Crossing a token budget changes the goal to
   `budget-limited` and injects a stop-and-report steering message; lowering the
@@ -85,11 +86,12 @@ and implemented in Codex's [goal runtime](https://github.com/openai/codex/tree/m
   that turn is not billed to the goal. The completion tool result never
   presents pre-accounting totals as final — a corrected budget report is
   steered to the model once that turn's usage is persisted.
-- **Replacement safety:** every goal has a new id, and in-flight turn
-  accounting is ignored when it belongs to an older replacement. Replacing a
-  goal while a run is active aborts and settles the old run first, so its work
-  is billed to the previous goal and the new goal is never left paused by the
-  abort's interrupt handling.
+- **In-place objective editing:** edits preserve the goal id, accumulated token
+  and time usage, budget, and creation time. An active edit steers the revised
+  objective into the current run without aborting it; queued continuations carry
+  revision metadata so stale objective text is supplemented before the next
+  model call. Paused, blocked, and usage-limited goals stay stopped; editing a
+  complete or budget-limited goal reactivates it.
 - **Reload parity:** after `/reload`, an active persisted goal resumes the same
   continuation behavior as startup, resume, new, and fork. (Interrupt-paused
   goals are only auto-reactivated on startup/resume, never on reload, because
@@ -118,8 +120,8 @@ as `pi-background-terminals`) for its internal orchestration:
   counts, per-turn snapshots — in a single `SynchronizedRef` behind a
   `Context.Service`. Every state transition is one serialized
   `SynchronizedRef.modify` whose pure computation may fail with a typed
-  `GoalError` (`NoGoalError`, `UnfinishedGoalError`, `AlreadyCompleteError`,
-  `InvalidObjectiveError`, `InvalidBudgetError`, `GoalRuntimeClosedError`)
+  `GoalError` (`NoGoalError`, `AlreadyCompleteError`, `InvalidObjectiveError`,
+  `InvalidBudgetError`, `GoalRuntimeClosedError`)
   without touching the state.
 - Transitions return **directives** (`persist` / `notify` / `send`) that the
   imperative adapter in `index.ts` executes in order; the runtime itself

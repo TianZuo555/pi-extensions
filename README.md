@@ -16,7 +16,7 @@ A small collection of [pi coding agent](https://pi.dev) extensions.
 | **find** | overrides tools `grep`/`find` | Bounded ripgrep/fd search with whole-path matching, multi-pattern grep, glob filters, and exclusions. |
 | **subagents** | tool `subagent`, `/agents` | Isolated RPC child processes with profiles, background runs, and worktrees. |
 | **compact-output** | (TUI only) | Shows bordered tool status blocks with up to three preview lines; Ctrl+O restores full output; reasoning stays compact. |
-| **goal** | `/goal`, tools `get_goal`/`create_goal`/`update_goal` | Codex-style persistent, evidence-checked objective with bounded automatic continuation. |
+| **goal** | `/goal`, tools `get_goal`/`update_goal` | User-owned, editable objective with evidence-checked bounded continuation. |
 | **vscode-bridge** | `/vscode-connect` | Attaches a VS Code window so right-click "Send to Pi" prefills file, line, and diff-hunk references into Pi's editor. |
 
 Each extension is described in detail under [Extensions](#extensions).

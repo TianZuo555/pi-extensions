@@ -187,8 +187,31 @@ export function isTerminalGoal(goal: Goal): boolean {
   return TERMINAL_STATUSES.has(goal.status);
 }
 
-export function canCreateOver(goal: Goal | null): boolean {
-  return goal === null || goal.status === "complete";
+/** Edit user-owned goal content in place, preserving identity and accounting.
+ * Codex keeps paused/blocked/usage-limited goals stopped, while editing a
+ * complete or budget-limited goal makes the revised objective active again. */
+export function editGoalObjective(
+  goal: Goal,
+  objective: string,
+  now = Date.now(),
+): Goal {
+  const normalizedObjective = objective.trim();
+  const objectiveError = validateObjective(normalizedObjective);
+  if (objectiveError) throw new Error(objectiveError);
+  const status =
+    goal.status === "complete" || goal.status === "budget-limited"
+      ? "active"
+      : goal.status;
+  return {
+    ...goal,
+    objective: normalizedObjective,
+    status,
+    // This doubles as the objective revision carried by queued steering.
+    updatedAt: Math.max(now, goal.updatedAt + 1),
+    ...(status === "paused"
+      ? { pauseReason: goal.pauseReason ?? "user" }
+      : { pauseReason: undefined }),
+  };
 }
 
 export function setGoalStatus(
@@ -209,7 +232,7 @@ export function setGoalStatus(
 
 /**
  * Account a turn that started while this goal was active. The goal id is
- * checked by the caller so an old turn cannot charge a replacement goal.
+ * checked by the caller so an old turn cannot charge a different goal.
  */
 export function addGoalUsage(goal: Goal, usage: GoalUsage, now = Date.now()): Goal {
   const nextTokens = goal.tokensUsed + Math.max(0, usage.tokens);

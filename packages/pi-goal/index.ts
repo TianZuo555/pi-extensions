@@ -25,10 +25,8 @@ import { Type, type Static } from "typebox";
 import {
   buildGoalContextMessage,
   buildGoalSystemGuidance,
-  CREATE_GOAL_DESCRIPTION,
   GET_GOAL_DESCRIPTION,
   GOAL_PARAMETER_DESCRIPTIONS,
-  GOAL_PROMPT_GUIDELINES,
   GOAL_PROMPT_SNIPPET,
   UPDATE_GOAL_DESCRIPTION,
 } from "./lib/prompt.ts";
@@ -37,7 +35,6 @@ import {
   formatGoalSummary,
   formatTokenCount,
   GOAL_ENTRY_TYPE,
-  MAX_OBJECTIVE_LENGTH,
   remainingTokens,
   validateObjective,
   type Goal,
@@ -47,6 +44,7 @@ import {
   BUDGET_MESSAGE_TYPE,
   CONTINUATION_MESSAGE_TYPE,
   createGoalRuntime,
+  OBJECTIVE_UPDATED_MESSAGE_TYPE,
   GoalRuntime,
   runGoalSync,
   type GoalDirective,
@@ -57,32 +55,15 @@ const STATUS_KEY = "pi-goal";
 
 export const EmptyGoalParams = Type.Object({});
 
-export const CreateGoalParams = Type.Object({
-  objective: Type.String({
-    minLength: 1,
-    maxLength: MAX_OBJECTIVE_LENGTH,
-    pattern: "\\S",
-    description: GOAL_PARAMETER_DESCRIPTIONS.objective,
-  }),
-  token_budget: Type.Optional(
-    Type.Integer({
-      minimum: 1,
-      maximum: Number.MAX_SAFE_INTEGER,
-      description: GOAL_PARAMETER_DESCRIPTIONS.token_budget,
-    }),
-  ),
-});
-
 export const UpdateGoalParams = Type.Object({
   status: StringEnum(["complete", "blocked"] as const, {
     description: GOAL_PARAMETER_DESCRIPTIONS.status,
   }),
 });
 
-type CreateGoalInput = Static<typeof CreateGoalParams>;
 type UpdateGoalInput = Static<typeof UpdateGoalParams>;
 
-type GoalOperation = "get" | "create" | "update";
+type GoalOperation = "get" | "update";
 
 interface GoalToolDetails {
   operation: GoalOperation;
@@ -311,14 +292,21 @@ export default function goalExtension(pi: ExtensionAPI): void {
     if (!goal || goal.status !== "active") return;
     const messages = event.messages;
     const last = messages.length > 0 ? messages[messages.length - 1] : undefined;
-    // The goal continuation prompt already carries the full objective; do not
-    // duplicate it into the same request.
-    if (
-      last !== undefined &&
-      typeof last === "object" &&
-      (last as { customType?: unknown }).customType === CONTINUATION_MESSAGE_TYPE
-    ) {
-      return;
+    // Goal steering messages already carry the objective. Skip duplicate
+    // context only when they contain the current revision; a queued stale
+    // continuation must be supplemented after the user edits the objective.
+    if (last !== undefined && typeof last === "object") {
+      const steering = last as {
+        customType?: unknown;
+        details?: { goalUpdatedAt?: unknown };
+      };
+      if (
+        (steering.customType === CONTINUATION_MESSAGE_TYPE ||
+          steering.customType === OBJECTIVE_UPDATED_MESSAGE_TYPE) &&
+        steering.details?.goalUpdatedAt === goal.updatedAt
+      ) {
+        return;
+      }
     }
     const goalMessage = {
       role: "user" as const,
@@ -386,7 +374,6 @@ export default function goalExtension(pi: ExtensionAPI): void {
     label: "Get Goal",
     description: GET_GOAL_DESCRIPTION,
     promptSnippet: GOAL_PROMPT_SNIPPET,
-    promptGuidelines: GOAL_PROMPT_GUIDELINES,
     parameters: EmptyGoalParams,
     executionMode: "sequential",
     async execute(): Promise<AgentToolResult<GoalToolDetails>> {
@@ -395,35 +382,6 @@ export default function goalExtension(pi: ExtensionAPI): void {
     },
     renderCall(_args, theme) {
       return renderCall("get_goal", {}, theme);
-    },
-    renderResult(toolResult, { expanded }, theme) {
-      return renderResult(toolResult, expanded, theme);
-    },
-  });
-
-  pi.registerTool({
-    name: "create_goal",
-    label: "Create Goal",
-    description: CREATE_GOAL_DESCRIPTION,
-    parameters: CreateGoalParams,
-    executionMode: "sequential",
-    async execute(
-      _toolCallId,
-      params: CreateGoalInput,
-      _signal,
-      _onUpdate,
-      ctx,
-    ): Promise<AgentToolResult<GoalToolDetails>> {
-      try {
-        const op = run(goalRuntime.createGoal(params.objective, params.token_budget));
-        executeDirectives(ctx, op.directives);
-        return result("create", `Goal created.\n${formatGoalForTool(op.goal)}`, op.goal);
-      } catch (error) {
-        throw toPiError(error);
-      }
-    },
-    renderCall(args, theme) {
-      return renderCall("create_goal", args as unknown as Record<string, unknown>, theme);
     },
     renderResult(toolResult, { expanded }, theme) {
       return renderResult(toolResult, expanded, theme);
@@ -467,9 +425,9 @@ export default function goalExtension(pi: ExtensionAPI): void {
   });
 
   pi.registerCommand("goal", {
-    description: "Set, view, pause, resume, or clear the current long-running goal",
+    description: "Set, edit, view, pause, resume, or clear the current long-running goal",
     getArgumentCompletions: (prefix) => {
-      const options = ["pause", "resume", "clear", "complete", "budget"];
+      const options = ["edit", "pause", "resume", "clear", "complete", "budget"];
       const matches = options
         .filter((option) => option.startsWith(prefix.trim().toLowerCase()))
         .map((value) => ({ value, label: value }));
@@ -483,6 +441,71 @@ export default function goalExtension(pi: ExtensionAPI): void {
       }
 
       const command = raw.toLowerCase();
+
+      const setUserObjective = async (
+        objective: string,
+        tokenBudget?: number,
+      ): Promise<void> => {
+        const objectiveError = validateObjective(objective);
+        if (objectiveError) throw new Error(objectiveError);
+
+        const before = run(goalRuntime.goal);
+        const reactivatesStoppedGoal =
+          before === null ||
+          before.status === "complete" ||
+          before.status === "budget-limited";
+        if (reactivatesStoppedGoal && !ctx.isIdle()) {
+          ctx.abort();
+          await ctx.waitForIdle();
+        }
+
+        const steerActiveRun =
+          before?.status === "active" && !ctx.isIdle();
+        const op = run(
+          goalRuntime.setGoalObjective(
+            objective,
+            tokenBudget,
+            steerActiveRun,
+          ),
+        );
+        executeDirectives(ctx, op.directives);
+        const message = !op.changed
+          ? "Goal objective unchanged."
+          : before
+            ? "Goal objective updated."
+            : "Goal started.";
+        notify(ctx, `${message}\n${formatGoalSummary(op.goal)}`);
+        if (op.changed && op.goal?.status === "active" && ctx.isIdle()) {
+          scheduleContinuation(ctx);
+        }
+      };
+
+      if (command === "edit") {
+        let current: Goal | null;
+        try {
+          current = run(goalRuntime.goal);
+        } catch (error) {
+          notify(ctx, errorText(error), "error");
+          return;
+        }
+        if (!current) {
+          notify(ctx, "No goal exists to edit.", "warning");
+          return;
+        }
+        if (!ctx.hasUI) {
+          notify(ctx, "Use /goal <objective> to edit the goal in this mode.", "error");
+          return;
+        }
+        const objective = await ctx.ui.editor("Edit goal", current.objective);
+        if (objective === undefined) return;
+        try {
+          await setUserObjective(objective);
+        } catch (error) {
+          notify(ctx, errorText(error), "error");
+        }
+        return;
+      }
+
       if (command === "pause") {
         const op = run(goalRuntime.pause("user"));
         executeDirectives(ctx, op.directives);
@@ -492,16 +515,21 @@ export default function goalExtension(pi: ExtensionAPI): void {
       }
       if (command === "resume") {
         const before = run(goalRuntime.goal);
-        if (!before || before.status !== "paused") {
-          notify(ctx, "No paused goal to resume.", "warning");
+        if (
+          !before ||
+          (before.status !== "paused" &&
+            before.status !== "blocked" &&
+            before.status !== "usage-limited")
+        ) {
+          notify(ctx, "No paused or stopped goal to resume.", "warning");
           return;
         }
         const willActivate =
           before.tokenBudget === undefined ||
           before.tokensUsed < before.tokenBudget;
         if (willActivate && !ctx.isIdle()) {
-          // Keep the goal paused while the current run settles: the in-flight
-          // turn began while paused and must not be billed to the resumed
+          // Keep the goal stopped while the current run settles: the in-flight
+          // turn began while stopped and must not be billed to the resumed
           // goal, and the settling run must neither repause the goal (via an
           // aborted agent_end) nor re-suppress the explicit resume. Activate
           // and schedule only from idle.
@@ -511,7 +539,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
         const op = run(goalRuntime.resume);
         executeDirectives(ctx, op.directives);
         if (!op.changed) {
-          notify(ctx, "No paused goal to resume.", "warning");
+          notify(ctx, "No paused or stopped goal to resume.", "warning");
         } else if (op.goal?.status === "budget-limited") {
           // The cap is exhausted: describe the actual resulting state instead
           // of claiming the goal was resumed.
@@ -519,7 +547,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
         } else {
           notify(ctx, "Goal resumed.", "info");
         }
-        if (op.changed) scheduleContinuation(ctx);
+        if (op.goal?.status === "active") scheduleContinuation(ctx);
         return;
       }
       if (command === "clear") {
@@ -604,25 +632,8 @@ export default function goalExtension(pi: ExtensionAPI): void {
         }
       }
 
-      const objectiveError = validateObjective(objective);
-      if (objectiveError) {
-        notify(ctx, objectiveError, "error");
-        return;
-      }
-
       try {
-        // Replacing a goal while a run is active: settle the old run first so
-        // its remaining work is billed to the previous goal (never to the
-        // replacement) and the abort's interrupt handling cannot pause the
-        // newly created goal.
-        if (!ctx.isIdle()) {
-          ctx.abort();
-          await ctx.waitForIdle();
-        }
-        const op = run(goalRuntime.replaceGoal(objective, tokenBudget));
-        executeDirectives(ctx, op.directives);
-        notify(ctx, `Goal started.\n${formatGoalSummary(op.goal)}`);
-        scheduleContinuation(ctx);
+        await setUserObjective(objective, tokenBudget);
       } catch (error) {
         notify(ctx, errorText(error), "error");
       }

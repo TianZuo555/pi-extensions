@@ -2,9 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   addGoalUsage,
-  canCreateOver,
   completionBudgetReport,
   createGoal,
+  editGoalObjective,
   formatDuration,
   formatTokenCount,
   normalizeGoal,
@@ -26,9 +26,47 @@ test("goal state resets usage when a new objective is created", () => {
     createdAt: 100,
     updatedAt: 100,
   });
-  assert.equal(canCreateOver(null), true);
-  assert.equal(canCreateOver(goal), false);
   assert.equal(remainingTokens(goal), 1_000);
+});
+
+test("editing an objective preserves identity, accounting, and stopped states", () => {
+  const created = createGoal("Original objective", 1_000, 100, "goal-edit");
+  const accounted = addGoalUsage(
+    created,
+    { tokens: 250, seconds: 12 },
+    150,
+  );
+  const paused = setGoalStatus(accounted, "paused", 175, "user");
+  const edited = editGoalObjective(paused, "  Revised objective  ", 200);
+
+  assert.deepEqual(edited, {
+    ...paused,
+    objective: "Revised objective",
+    updatedAt: 200,
+  });
+  assert.equal(edited.goalId, "goal-edit");
+  assert.equal(edited.tokensUsed, 250);
+  assert.equal(edited.timeUsedSeconds, 12);
+  assert.equal(edited.tokenBudget, 1_000);
+  assert.equal(edited.status, "paused");
+  assert.equal(edited.pauseReason, "user");
+  assert.equal(
+    editGoalObjective(paused, "Another revision", paused.updatedAt).updatedAt,
+    paused.updatedAt + 1,
+  );
+
+  for (const status of ["blocked", "usage-limited"] as const) {
+    assert.equal(
+      editGoalObjective(setGoalStatus(accounted, status), "Revised").status,
+      status,
+    );
+  }
+  for (const status of ["complete", "budget-limited"] as const) {
+    assert.equal(
+      editGoalObjective(setGoalStatus(accounted, status), "Revised").status,
+      "active",
+    );
+  }
 });
 
 test("restoreGoal follows only the active branch's latest custom state", () => {

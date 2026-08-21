@@ -4,6 +4,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import goalExtension from "../index.ts";
 
 const CONTINUATION_TYPE = "pi-goal-continuation";
+const OBJECTIVE_UPDATED_TYPE = "pi-goal-objective-updated";
 const BUDGET_TYPE = "pi-goal-budget";
 const COMPLETION_TYPE = "pi-goal-completion";
 
@@ -16,6 +17,8 @@ interface Captured {
   notifications: Array<{ message: string; type?: string }>;
   statuses: Map<string, string | undefined>;
   workingMessage: string | undefined;
+  editorValue: string | undefined;
+  editorCalls: Array<{ title: string; initial: string }>;
   aborted: number;
   branch: any[];
   ctx: any;
@@ -31,6 +34,8 @@ function setup(): Captured {
     notifications: [],
     statuses: new Map(),
     workingMessage: undefined,
+    editorValue: undefined,
+    editorCalls: [],
     aborted: 0,
     branch: [],
     ctx: undefined,
@@ -52,6 +57,10 @@ function setup(): Captured {
       },
       notify(message: string, type?: string) {
         captured.notifications.push({ message, type });
+      },
+      async editor(title: string, initial: string) {
+        captured.editorCalls.push({ title, initial });
+        return captured.editorValue;
       },
     },
     sessionManager: {
@@ -141,7 +150,7 @@ test("goal command persists state, exposes tools, and queues a continuation", as
   await captured.commands.get("goal").handler("--budget 5000 Run the checkout benchmark", captured.ctx);
   await settleMicrotasks();
 
-  assert.equal(captured.tools.size, 3);
+  assert.deepEqual([...captured.tools.keys()].sort(), ["get_goal", "update_goal"]);
   assert.equal(captured.entries.length, 1);
   assert.equal(captured.messages.length, 1);
   assert.match(captured.messages[0].message.content, /Run the checkout benchmark/);
@@ -180,22 +189,32 @@ test("the working loader names the active goal and restores its default otherwis
   assert.equal(captured.workingMessage, undefined);
 });
 
-test("model cannot create over an unfinished goal, but can complete it", async () => {
+test("/goal edit opens a prefilled editor and updates the objective in place", async () => {
+  const captured = setup();
+  await captured.commands.get("goal").handler("Original objective", captured.ctx);
+  await captured.commands.get("goal").handler("pause", captured.ctx);
+  const before = await goalState(captured);
+  captured.editorValue = "Revised objective with new constraints";
+
+  await captured.commands.get("goal").handler("edit", captured.ctx);
+
+  assert.deepEqual(captured.editorCalls, [
+    { title: "Edit goal", initial: "Original objective" },
+  ]);
+  const edited = await goalState(captured);
+  assert.equal(edited.goalId, before.goalId);
+  assert.equal(edited.objective, "Revised objective with new constraints");
+  assert.equal(edited.status, "paused");
+  assert.equal(edited.tokensUsed, before.tokensUsed);
+  assert.equal(edited.tokenBudget, before.tokenBudget);
+});
+
+test("the agent can inspect and finish a user-created goal", async () => {
   const captured = setup();
   await captured.commands.get("goal").handler("Inspect the migration", captured.ctx);
   await settleMicrotasks();
 
-  await assert.rejects(
-    captured.tools.get("create_goal").execute(
-      "create-1",
-      { objective: "Replace the migration" },
-      undefined,
-      undefined,
-      captured.ctx,
-    ),
-    /unfinished goal/,
-  );
-
+  assert.equal(captured.tools.has("create_goal"), false);
   const updateResult = await captured.tools.get("update_goal").execute(
     "update-1",
     { status: "complete" },
@@ -375,6 +394,13 @@ test("terminal goals stay terminal under every budget update", async () => {
   await captured.commands.get("goal").handler("budget 1", captured.ctx);
   goal = await goalState(captured);
   assert.equal(goal.status, "blocked");
+
+  // Clear the exhausted cap, then resume the blocked goal before revising it
+  // for the usage-limit case.
+  await captured.commands.get("goal").handler("budget clear", captured.ctx);
+  await captured.commands.get("goal").handler("resume", captured.ctx);
+  goal = await goalState(captured);
+  assert.equal(goal.status, "active");
 
   // Usage-limited goals are equally protected.
   await captured.commands.get("goal").handler("Limited work", captured.ctx);
@@ -771,52 +797,48 @@ test("a settled hard quota failure marks the goal usage-limited", async () => {
   assert.equal(captured.messages.length, before);
 });
 
-test("replacing a goal during an active run never bills the old turn to the new goal", async () => {
+test("editing an active objective preserves identity and accounting without aborting", async () => {
   const captured = setup();
-  await captured.commands.get("goal").handler("Old objective", captured.ctx);
+  await captured.commands.get("goal").handler("--budget 1000 Old objective", captured.ctx);
   await settleMicrotasks();
+  const original = await goalState(captured);
 
-  // The old objective is streaming a turn when the user replaces the goal.
   await emit(captured, "agent_start", {});
   await emit(captured, "turn_start", { turnIndex: 1, timestamp: Date.now() });
   captured.ctx.setIdle(false);
-  const replacement = captured.commands.get("goal").handler("Replacement objective", captured.ctx);
+  await captured.commands.get("goal").handler("Revised objective", captured.ctx);
 
-  // The command aborts and waits for the old run to settle before installing
-  // the replacement. The settle sequence fires while the command waits.
-  await settleMicrotasks();
-  assert.equal(captured.aborted, 1);
+  const edited = await goalState(captured);
+  assert.equal(captured.aborted, 0);
+  assert.equal(edited.goalId, original.goalId);
+  assert.equal(edited.objective, "Revised objective");
+  assert.equal(edited.tokenBudget, 1_000);
+  assert.equal(edited.tokensUsed, 0);
+  const steering = messagesOfType(captured, OBJECTIVE_UPDATED_TYPE);
+  assert.equal(steering.length, 1);
+  assert.match(steering[0].message.content, /Revised objective/);
+
   await emit(captured, "turn_end", {
     turnIndex: 1,
     message: { role: "assistant", usage: { totalTokens: 99 } },
     toolResults: [],
   });
   await emit(captured, "agent_end", {
-    messages: [{ role: "assistant", stopReason: "aborted", usage: {} }],
+    messages: [{ role: "assistant", stopReason: "stop", usage: {} }],
   });
   await emit(captured, "agent_settled", {});
-  await settleMicrotasks();
   captured.ctx.setIdle(true);
-  await replacement;
   await settleMicrotasks();
 
-  const goal = await goalState(captured);
-  assert.equal(goal.objective, "Replacement objective");
-  assert.equal(goal.status, "active");
-  assert.equal(goal.tokensUsed, 0);
-
-  // The old in-flight turn's usage was billed to the old goal (99 tokens),
-  // never to the replacement.
-  const replacementEntries = captured.entries.filter(
-    (e) => e.data.goal?.objective === "Replacement objective",
+  const accounted = await goalState(captured);
+  assert.equal(accounted.goalId, original.goalId);
+  assert.equal(accounted.objective, "Revised objective");
+  assert.equal(accounted.tokensUsed, 99);
+  assert.ok(
+    captured.entries
+      .filter((entry) => entry.data.goal)
+      .every((entry) => entry.data.goal.goalId === original.goalId),
   );
-  assert.ok(replacementEntries.length >= 1);
-  assert.ok(replacementEntries.every((e) => e.data.goal.tokensUsed === 0));
-  const oldEntries = captured.entries.filter((e) => e.data.goal?.objective === "Old objective");
-  assert.ok(oldEntries.some((e) => e.data.goal.tokensUsed === 99));
-
-  // The replacement goal is active and its own continuation was queued.
-  assert.equal(messagesOfType(captured, CONTINUATION_TYPE).length, 2);
 });
 
 test("completing an unbudgeted goal makes no false budget-report promise", async () => {
@@ -953,14 +975,38 @@ test("objective text is injected at user authority, never into system-role text"
     .join("\n");
   assert.ok(!systemText.includes(sneaky));
 
-  // Continuation prompts already carry the objective; no duplicate injection.
+  // Current continuation prompts already carry the objective; stale queued
+  // continuations are supplemented after an in-place objective edit.
+  const current = await goalState(captured);
   const continuationResult = await emit(captured, "context", {
     messages: [
       { role: "user", content: [{ type: "text", text: "hi" }] },
-      { role: "user", customType: CONTINUATION_TYPE, content: [{ type: "text", text: "continue" }] },
+      {
+        role: "user",
+        customType: CONTINUATION_TYPE,
+        details: { goalUpdatedAt: current.updatedAt },
+        content: [{ type: "text", text: "continue" }],
+      },
     ],
   });
   assert.equal(continuationResult, undefined);
+
+  const staleContinuation = await emit(captured, "context", {
+    messages: [
+      { role: "user", content: [{ type: "text", text: "hi" }] },
+      {
+        role: "user",
+        customType: CONTINUATION_TYPE,
+        details: { goalUpdatedAt: current.updatedAt - 1 },
+        content: [{ type: "text", text: "stale objective" }],
+      },
+    ],
+  });
+  assert.ok(
+    staleContinuation.messages.some(
+      (message: any) => message.content?.[0]?.text?.includes(sneaky),
+    ),
+  );
 
   // Non-active goals do not inject objective context.
   await captured.commands.get("goal").handler("pause", captured.ctx);
@@ -1048,9 +1094,9 @@ test("session_shutdown disposes the runtime and later work fails fast", async ()
 
   // Mutations fail with the translated typed error and append nothing.
   await assert.rejects(
-    captured.tools.get("create_goal").execute(
-      "c1",
-      { objective: "After shutdown" },
+    captured.tools.get("update_goal").execute(
+      "u1",
+      { status: "complete" },
       undefined,
       undefined,
       captured.ctx,
