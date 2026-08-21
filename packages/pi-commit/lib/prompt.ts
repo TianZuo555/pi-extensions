@@ -77,7 +77,6 @@ export function buildCommitAllPrompt(snapshot: StagedSnapshot, guidance: string)
     "COMMIT-ALL TASK (trusted task instructions):",
     "Create a logical commit plan for the complete staged snapshot.",
     "Group related whole files into the smallest sensible commits, separating independent features and logic changes.",
-    "Do not omit, duplicate, rename, or invent paths. Return every STAGED PATH exactly once in the JSON plan.",
   ].join("\n");
 }
 
