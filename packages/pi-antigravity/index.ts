@@ -248,9 +248,11 @@ export default async function antigravityExtension(pi: ExtensionAPI): Promise<vo
   // --- Status-bar hint for live agy background tasks -----------------------
 
   const AGY_TASKS_WIDGET_KEY = "agy-tasks";
+  const AGY_ARTIFACTS_WIDGET_KEY = "agy-artifacts";
   let tasksUi: ExtensionUIContext | undefined;
   let tasksSessionCwd: string | undefined;
   let widgetLiveCount = -1;
+  let widgetArtifactCount = -1;
   let widgetScanInFlight = false;
 
   function setAgyTasksWidget(live: number): void {
@@ -278,6 +280,31 @@ export default async function antigravityExtension(pi: ExtensionAPI): Promise<vo
     }
   }
 
+  function setAgyArtifactsWidget(count: number): void {
+    if (!tasksUi || count === widgetArtifactCount) return;
+    widgetArtifactCount = count;
+    try {
+      if (count === 0) {
+        tasksUi.setWidget(AGY_ARTIFACTS_WIDGET_KEY, undefined);
+        return;
+      }
+      tasksUi.setWidget(AGY_ARTIFACTS_WIDGET_KEY, (_tui, theme) => {
+        const line =
+          theme.fg("success", "◆ ") +
+          theme.fg("text", `${count} agy artifact${count === 1 ? "" : "s"}`) +
+          theme.fg("dim", " • ") +
+          theme.fg("accent", "/agy-artifacts") +
+          theme.fg("dim", " to view");
+        return {
+          render: (width: number) => [truncateToWidth(line, width, "")],
+          invalidate: () => {},
+        };
+      });
+    } catch {
+      // UI may be unavailable (print/RPC modes or teardown).
+    }
+  }
+
   /** Rescan the conversation's task logs and refresh the status-bar hint. */
   function updateAgyTasksWidget(): void {
     if (!tasksUi || widgetScanInFlight) return;
@@ -287,14 +314,19 @@ export default async function antigravityExtension(pi: ExtensionAPI): Promise<vo
         const snapshot = await runAntigravity(runtime, service.snapshot);
         if (!snapshot.conversationId) {
           setAgyTasksWidget(0);
+          setAgyArtifactsWidget(0);
           return;
         }
-        const tasks = await listAgyTasks(snapshot.conversationId, {
-          sessionCwd: tasksSessionCwd,
-        });
+        const [tasks, artifacts] = await Promise.all([
+          listAgyTasks(snapshot.conversationId, {
+            sessionCwd: tasksSessionCwd,
+          }),
+          listAgyArtifacts(snapshot.conversationId),
+        ]);
         setAgyTasksWidget(
           tasks.filter((task) => task.pids.length > 0 || task.orphans.length > 0).length,
         );
+        setAgyArtifactsWidget(artifacts.length);
       } catch {
         // Runtime closed or scan failed; leave the widget as-is.
       } finally {
@@ -440,11 +472,13 @@ export default async function antigravityExtension(pi: ExtensionAPI): Promise<vo
     }
     try {
       tasksUi?.setWidget(AGY_TASKS_WIDGET_KEY, undefined);
+      tasksUi?.setWidget(AGY_ARTIFACTS_WIDGET_KEY, undefined);
     } catch {
       // UI may already be gone.
     }
     tasksUi = undefined;
     widgetLiveCount = -1;
+    widgetArtifactCount = -1;
     try {
       await runtime.dispose();
     } catch {
