@@ -23,7 +23,7 @@ import {
   type ThinkingLevel,
 } from "@earendil-works/pi-ai";
 import type { AgyEffort } from "../lib/agy-client.ts";
-import { BRIDGE_SERVER_NAME, type AgyPiBridge, resolveBridgeResultsFromContext } from "../lib/bridge.ts";
+import { type AgyPiBridge, resolveBridgeResultsFromContext } from "../lib/bridge.ts";
 import type { AgyUsage } from "../lib/reducer.ts";
 import { AgyReplayStore } from "../lib/replay.ts";
 import type { AntigravityRuntimeInstance, AntigravityRuntimeShape } from "./runtime.ts";
@@ -114,8 +114,8 @@ let replayCallSeq = 0;
 function isBridgedMcpStep(activity: {
   name: string;
   args: Record<string, unknown>;
-}): boolean {
-  return activity.name === "call_mcp_tool" && activity.args?.["ServerName"] === BRIDGE_SERVER_NAME;
+}, serverName: string): boolean {
+  return activity.name === "call_mcp_tool" && activity.args?.["ServerName"] === serverName;
 }
 
 /** Build the streamSimple implementation bound to the runtime service. */
@@ -239,7 +239,7 @@ export function streamAntigravity(
               break;
             }
             case "tool_start": {
-              if (isBridgedMcpStep(activity)) break;
+              if (isBridgedMcpStep(activity, bridge.serverName)) break;
               closeText();
               const id = `agy-replay-${++replayCallSeq}`;
               const toolCall = {
@@ -261,7 +261,7 @@ export function streamAntigravity(
               break;
             }
             case "tool_done": {
-              if (!open || isBridgedMcpStep(activity)) break;
+              if (!open || isBridgedMcpStep(activity, bridge.serverName)) break;
               replay.record(open.id, {
                 agyTool: activity.name,
                 output: activity.output,
@@ -271,7 +271,7 @@ export function streamAntigravity(
               return;
             }
             case "tool_error": {
-              if (!open || isBridgedMcpStep(activity)) break;
+              if (!open || isBridgedMcpStep(activity, bridge.serverName)) break;
               replay.record(open.id, { agyTool: activity.name, error: activity.message });
               endWithToolUse();
               return;

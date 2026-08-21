@@ -247,3 +247,28 @@ test("resolveBridgeResultsFromContext resolves matching toolResult messages", as
     await bridge.close();
   }
 });
+
+test("bridge enforces the shared token when configured", async () => {
+  const bridge = new AgyPiBridge("pi-bridge-test");
+  bridge.requireToken("secret-token");
+  bridge.setOnCall(() => true);
+  bridge.setToolSource(() => TOOL_DEFS);
+  await bridge.start();
+  try {
+    const denied = await fetch(bridge.url!, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+    });
+    assert.equal(denied.status, 403);
+
+    const ok = await fetch(bridge.url!, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-pi-bridge-token": "secret-token" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/list" }),
+    });
+    assert.equal(ok.status, 200);
+  } finally {
+    await bridge.close();
+  }
+});

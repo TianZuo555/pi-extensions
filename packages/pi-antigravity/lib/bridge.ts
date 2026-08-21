@@ -81,6 +81,10 @@ export class AgyPiBridge {
   #port = 0;
   #seq = 0;
   #pending = new Map<string, PendingCall>();
+  /** Shared secret agy must send on every request; unset = no auth (tests). */
+  #token: string | undefined;
+  /** Per-session server name so concurrent pi sessions cannot hijack each other's registration. */
+  readonly serverName: string;
   /** Callback that routes a call into the live agy turn controller. Returns false when no turn is active. */
   #onCall: ((call: BridgeCall) => boolean) | undefined;
   /** Source of the current active-tool snapshot, invoked once per provider request. */
@@ -88,6 +92,15 @@ export class AgyPiBridge {
   #virtual = new Map<string, VirtualTool>();
   /** Replaced wholesale on every skills refresh (one entry per skill). */
   #dynamic = new Map<string, DynamicTool>();
+
+  constructor(serverName: string = BRIDGE_SERVER_NAME) {
+    this.serverName = serverName;
+  }
+
+  /** Require `token` in the x-pi-bridge-token header on every request. */
+  requireToken(token: string): void {
+    this.#token = token;
+  }
 
   setOnCall(onCall: (call: BridgeCall) => boolean): void {
     this.#onCall = onCall;
@@ -152,8 +165,14 @@ export class AgyPiBridge {
     const server = createServer((req, res) => this.#handleHttp(req, res));
     this.#server = server;
     return new Promise((resolve, reject) => {
-      server.once("error", reject);
+      const onError = (error: Error) => {
+        // A failed listen must not leave the bridge marked as running.
+        this.#server = undefined;
+        reject(error);
+      };
+      server.once("error", onError);
       server.listen(0, "127.0.0.1", () => {
+        server.off("error", onError);
         const addr = server.address();
         if (addr && typeof addr === "object") this.#port = addr.port;
         resolve();
@@ -198,6 +217,11 @@ export class AgyPiBridge {
   // --- HTTP / JSON-RPC -----------------------------------------------------
 
   #handleHttp(req: IncomingMessage, res: ServerResponse): void {
+    if (this.#token !== undefined && req.headers["x-pi-bridge-token"] !== this.#token) {
+      res.writeHead(403, { "content-type": "application/json" });
+      res.end(JSON.stringify({ jsonrpc: "2.0", error: { code: -32000, message: "Forbidden" } }));
+      return;
+    }
     if (req.method !== "POST") {
       res.writeHead(405, { "content-type": "application/json" });
       res.end(JSON.stringify({ jsonrpc: "2.0", error: { code: -32000, message: "GET not supported" } }));

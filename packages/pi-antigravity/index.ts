@@ -19,6 +19,7 @@ import type {
 import { Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { piConfigDir, readJson, writeJson } from "./lib/config.ts";
 import { AGY_BINARY } from "./lib/agy-client.ts";
@@ -159,7 +160,9 @@ export default async function antigravityExtension(pi: ExtensionAPI): Promise<vo
 
   // --- Pi-tool bridge setup -------------------------------------------------
 
-  const bridge = new AgyPiBridge();
+  const bridge = new AgyPiBridge(`${BRIDGE_SERVER_NAME}-${process.pid}`);
+  const bridgeToken = randomUUID();
+  bridge.requireToken(bridgeToken);
   bridge.setOnCall((call) => service.pushBridgeCall(call));
 
   // --- Skill passing (Phase 2) ----------------------------------------------
@@ -383,7 +386,11 @@ export default async function antigravityExtension(pi: ExtensionAPI): Promise<vo
     if (BRIDGE_ENABLED) {
       try {
         await bridge.start();
-        await execAgy(["mcp", "add", "--type", "http", BRIDGE_SERVER_NAME, bridge.url!]);
+        await execAgy([
+          "mcp", "add", "--type", "http",
+          "--header", `x-pi-bridge-token: ${bridgeToken}`,
+          bridge.serverName, bridge.url!,
+        ]);
         bridge.refreshTools();
       } catch (error) {
         ctx.ui.notify(
@@ -423,7 +430,7 @@ export default async function antigravityExtension(pi: ExtensionAPI): Promise<vo
     }
     if (bridge.running) {
       try {
-        await execAgy(["mcp", "remove", BRIDGE_SERVER_NAME]);
+        await execAgy(["mcp", "remove", bridge.serverName]);
       } catch {
         // Registration may already be gone.
       }
