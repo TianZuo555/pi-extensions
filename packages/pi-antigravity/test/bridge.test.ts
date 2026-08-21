@@ -139,6 +139,37 @@ test("bridge times out pending calls with an isError result", async () => {
   }
 });
 
+test("bridge-virtual tools are listed and handled in-process", async () => {
+  const bridge = new AgyPiBridge();
+  bridge.setOnCall(() => {
+    throw new Error("virtual tools must not be routed into the agy turn");
+  });
+  bridge.setToolSource(() => TOOL_DEFS);
+  bridge.registerVirtualTool(
+    "activate_skill",
+    { description: "Activate a skill.", parameters: { type: "object", properties: {} } },
+    async (args) => ({ content: `activated:${String(args.name)}`, isError: false }),
+  );
+  await bridge.start();
+  try {
+    bridge.refreshTools();
+    const list = await post(bridge, { jsonrpc: "2.0", id: 8, method: "tools/list" });
+    const names = (list.json.result.tools as Array<{ name: string }>).map((tool) => tool.name);
+    assert.ok(names.includes(`${BRIDGE_TOOL_PREFIX}activate_skill`));
+
+    const res = await post(bridge, {
+      jsonrpc: "2.0",
+      id: 9,
+      method: "tools/call",
+      params: { name: `${BRIDGE_TOOL_PREFIX}activate_skill`, arguments: { name: "grilling" } },
+    });
+    assert.equal(res.json.result.isError, false);
+    assert.equal(res.json.result.content[0].text, "activated:grilling");
+  } finally {
+    await bridge.close();
+  }
+});
+
 test("resolveBridgeResultsFromContext resolves matching toolResult messages", async () => {
   const bridge = await startedBridge((call) => {
     setTimeout(() => {

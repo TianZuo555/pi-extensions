@@ -133,8 +133,8 @@ Risks / details to design carefully:
 
 ### Phase 2 — Skills via the bridge
 
-agy's native skill expansion is disabled by `--disable-slash-commands`, so do
-it cursor-sdk-style:
+**Status: implemented (v0.4.0).** agy's native skill expansion is disabled by
+`--disable-slash-commands`, so it is done bridge-first:
 
 1. Inject the pi skill catalog (name + one-line description) into the agy
    prompt on bootstrap sends. Source it from pi's `before_agent_start`

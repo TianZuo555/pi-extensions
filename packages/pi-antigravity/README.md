@@ -59,6 +59,14 @@ On `session_start` the extension hosts a loopback MCP server (streamable HTTP on
 
 Calls fail closed: no active turn, unknown tool, or a 480s timeout (below agy's 600s turn cap) returns an error to agy instead of hanging.
 
+### Skill passing
+
+pi's loaded Agent Skills reach agy turns automatically:
+
+- On bootstrap sends (fresh agy process), a compact catalog — name + one-liner + absolute `SKILL.md` path — is appended to the prompt. Sourced from pi's `before_agent_start` `systemPromptOptions.skills`, so `--no-skills`, `pi config`, and `/reload` are respected; skills with `disable-model-invocation` are excluded.
+- With the bridge on, agy activates a skill via the bridge-virtual `pi__activate_skill` tool: it returns the full `SKILL.md` plus the absolute paths of bundled resources (relative refs are useless to agy). Handled in-process — no pi toolUse round-trip.
+- With the bridge off (`PI_ANTIGRAVITY_PI_TOOL_BRIDGE=0`), the catalog instructs agy to read the `SKILL.md` paths directly — headless agy can read user-level skill dirs outside its workspace (verified 2026-08-21).
+
 Environment flags:
 
 - `PI_ANTIGRAVITY_PI_TOOL_BRIDGE=0` — disable the bridge entirely (no server, no registration).

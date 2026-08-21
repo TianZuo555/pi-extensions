@@ -1,0 +1,110 @@
+/**
+ * Skill passing for agy — Phase 2 of the pi-tool & skill bridge.
+ *
+ * agy's native skill expansion is disabled by our always-on
+ * `--disable-slash-commands`, so pi skills reach agy two ways:
+ *   - bridge mode: a compact catalog is appended to bootstrap prompts and a
+ *     bridge-virtual `pi__activate_skill` tool returns the full SKILL.md;
+ *   - direct mode (bridge off): the catalog lists absolute SKILL.md paths
+ *     and headless agy reads them straight from disk (verified 2026-08-21).
+ *
+ * Catalogs stay name + one-liner only — oversized catalogs derail headless
+ * turns the same way agy's built-in antigravity_guide skill does.
+ */
+
+import { readdir, readFile } from "node:fs/promises";
+import path from "node:path";
+
+/** Minimal shape of pi's loaded skills (from systemPromptOptions.skills). */
+export interface SkillLite {
+  name: string;
+  description: string;
+  /** Absolute path to SKILL.md. */
+  filePath: string;
+  /** Absolute directory containing SKILL.md and bundled resources. */
+  baseDir: string;
+}
+
+const MAX_DESCRIPTION = 120;
+const MAX_SKILL_BODY = 24_000;
+const MAX_RESOURCES = 20;
+
+export type SkillCatalogMode = "bridge" | "direct";
+
+/**
+ * Format the bootstrap-prompt catalog block. Returns undefined when there
+ * are no model-invocable skills, so nothing is injected.
+ */
+export function formatSkillCatalog(
+  skills: SkillLite[],
+  mode: SkillCatalogMode,
+): string | undefined {
+  const usable = skills.filter((skill) => skill.filePath);
+  if (usable.length === 0) return undefined;
+  const lines = usable.map((skill) => {
+    const description =
+      skill.description.replace(/\s+/g, " ").trim().slice(0, MAX_DESCRIPTION) || "(no description)";
+    return `- ${skill.name}: ${description} (${skill.filePath})`;
+  });
+  const how =
+    mode === "bridge"
+      ? "To activate a skill, call the pi__activate_skill tool with its name."
+      : "To activate a skill, read its SKILL.md file directly.";
+  return [
+    "## pi Agent Skills",
+    "",
+    "The following pi Agent Skills are available in this session:",
+    ...lines,
+    "",
+    how,
+    "Activate a skill BEFORE attempting its workflow; follow the activated instructions.",
+  ].join("\n");
+}
+
+/**
+ * Load a skill bundle for agy: the full SKILL.md plus the absolute paths of
+ * bundled resources (relative references in SKILL.md are useless to agy —
+ * they resolve against the skill directory, not the agy workspace).
+ */
+export async function readSkillBundle(skill: SkillLite): Promise<{
+  content: string;
+  isError: boolean;
+}> {
+  let body: string;
+  try {
+    body = await readFile(skill.filePath, "utf-8");
+  } catch (error) {
+    return {
+      content: `antigravity: failed to read skill "${skill.name}" (${error instanceof Error ? error.message : error}).`,
+      isError: true,
+    };
+  }
+  if (body.length > MAX_SKILL_BODY) {
+    body = `${body.slice(0, MAX_SKILL_BODY)}\n\n[… truncated after ${MAX_SKILL_BODY} characters]`;
+  }
+
+  const resources: string[] = [];
+  try {
+    const entries = await readdir(skill.baseDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (resources.length >= MAX_RESOURCES) {
+        resources.push(`… (+${entries.length - MAX_RESOURCES} more entries)`);
+        break;
+      }
+      if (entry.name === "SKILL.md") continue;
+      resources.push(path.join(skill.baseDir, entry.name) + (entry.isDirectory() ? "/" : ""));
+    }
+  } catch {
+    // Resource listing is best-effort; the SKILL.md body is the payload.
+  }
+
+  const parts = [body.trim()];
+  if (resources.length > 0) {
+    parts.push(
+      "---",
+      "Bundled resources (absolute paths):",
+      ...resources.map((resource) => `- ${resource}`),
+    );
+  }
+  return { content: parts.join("\n\n"), isError: false };
+}

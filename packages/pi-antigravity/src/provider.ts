@@ -128,6 +128,11 @@ export function streamAntigravity(
   /** Called when a turn fully settles (stop or error) — the moment an agy
    * background task may have been created. */
   onSettled?: () => void,
+  /**
+   * Extra prompt text for bootstrap sends (fresh agy process) — used to
+   * inject the pi skill catalog. Evaluated once per request.
+   */
+  getBootstrapSuffix?: () => string | undefined,
 ) {
   return (
     model: Model<string>,
@@ -175,6 +180,7 @@ export function streamAntigravity(
         const controller = await runtime.runPromise(
           service.beginStreamTurn({
             prompt,
+            bootstrapSuffix: getBootstrapSuffix?.(),
             modelId: model.id,
             effort: mapThinkingToEffort(options?.reasoning),
             signal: options?.signal,

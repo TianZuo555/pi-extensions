@@ -51,6 +51,17 @@ type PendingCall = BridgeCall & {
   timer: NodeJS.Timeout;
 };
 
+/**
+ * A bridge-virtual tool: handled entirely inside the extension without a
+ * pi toolUse round-trip (used for `activate_skill` — a local file read
+ * needs no hooks, permissions, or rendering).
+ */
+interface VirtualTool {
+  description: string;
+  parameters: unknown;
+  handler: (args: Record<string, unknown>) => Promise<BridgeCallResult>;
+}
+
 interface JsonRpcRequest {
   id?: number | string | null;
   method?: string;
@@ -71,6 +82,7 @@ export class AgyPiBridge {
   #onCall: ((call: BridgeCall) => boolean) | undefined;
   /** Source of the current active-tool snapshot, invoked once per provider request. */
   #toolSource: (() => BridgeToolDef[]) | undefined;
+  #virtual = new Map<string, VirtualTool>();
 
   setOnCall(onCall: (call: BridgeCall) => boolean): void {
     this.#onCall = onCall;
@@ -83,6 +95,18 @@ export class AgyPiBridge {
   /** Refresh the exposed-tool snapshot from the configured source. */
   refreshTools(): void {
     this.#tools = this.#toolSource?.() ?? [];
+  }
+
+  /**
+   * Register a bridge-virtual tool. Virtual tools are always listed and are
+   * handled in-process instead of being routed into the agy turn.
+   */
+  registerVirtualTool(
+    name: string,
+    definition: { description: string; parameters: unknown },
+    handler: (args: Record<string, unknown>) => Promise<BridgeCallResult>,
+  ): void {
+    this.#virtual.set(name, { ...definition, handler });
   }
 
   get url(): string | undefined {
@@ -206,13 +230,20 @@ export class AgyPiBridge {
         return {
           ...base,
           result: {
-            tools: this.#tools.map((tool) => ({
-              name: `${BRIDGE_TOOL_PREFIX}${tool.name}`,
-              description:
-                tool.description ||
-                `pi tool "${tool.name}" bridged into agy by ${BRIDGE_SERVER_NAME}.`,
-              inputSchema: tool.parameters,
-            })),
+            tools: [
+              ...this.#tools.map((tool) => ({
+                name: `${BRIDGE_TOOL_PREFIX}${tool.name}`,
+                description:
+                  tool.description ||
+                  `pi tool "${tool.name}" bridged into agy by ${BRIDGE_SERVER_NAME}.`,
+                inputSchema: tool.parameters,
+              })),
+              ...[...this.#virtual].map(([name, definition]) => ({
+                name: `${BRIDGE_TOOL_PREFIX}${name}`,
+                description: definition.description,
+                inputSchema: definition.parameters,
+              })),
+            ],
           },
         };
       }
@@ -246,6 +277,8 @@ export class AgyPiBridge {
       return { content: `antigravity: unknown tool "${mcpName}" — only pi__* bridge tools exist.`, isError: true };
     }
     const tool = mcpName.slice(BRIDGE_TOOL_PREFIX.length);
+    const virtual = this.#virtual.get(tool);
+    if (virtual) return virtual.handler(args);
     if (!this.#tools.some((def) => def.name === tool)) {
       return { content: `antigravity: tool "${tool}" is not currently active in pi.`, isError: true };
     }

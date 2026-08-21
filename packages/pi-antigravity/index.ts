@@ -28,6 +28,11 @@ import {
   type BridgeToolDef,
 } from "./lib/bridge.ts";
 import {
+  formatSkillCatalog,
+  readSkillBundle,
+  type SkillLite,
+} from "./lib/skills.ts";
+import {
   CONTEXT_WINDOW,
   FALLBACK_MODELS,
   MAX_TOKENS,
@@ -154,6 +159,28 @@ export default async function antigravityExtension(pi: ExtensionAPI): Promise<vo
 
   const bridge = new AgyPiBridge();
   bridge.setOnCall((call) => service.pushBridgeCall(call));
+
+  // --- Skill passing (Phase 2) ----------------------------------------------
+  // pi's loaded skills, refreshed per turn via before_agent_start so /reload
+  // is respected. Model-invocation-disabled skills are excluded.
+  let loadedSkills: SkillLite[] = [];
+
+  function captureSkills(skills: unknown): void {
+    if (!Array.isArray(skills)) return;
+    loadedSkills = skills
+      .map((skill) => skill as Partial<SkillLite> & { disableModelInvocation?: boolean })
+      .filter((skill) => skill.disableModelInvocation !== true && typeof skill.filePath === "string")
+      .map((skill) => ({
+        name: String(skill.name),
+        description: String(skill.description ?? ""),
+        filePath: String(skill.filePath),
+        baseDir: String(skill.baseDir ?? path.dirname(String(skill.filePath))),
+      }));
+  }
+
+  const getBootstrapSuffix = () =>
+    formatSkillCatalog(loadedSkills, BRIDGE_ENABLED ? "bridge" : "direct");
+
   bridge.setToolSource(() => {
     if (!BRIDGE_ENABLED) return [];
     let activeNames: string[] = [];
@@ -185,6 +212,32 @@ export default async function antigravityExtension(pi: ExtensionAPI): Promise<vo
     }
     return tools;
   });
+
+  // Bridge-virtual tool: activate_skill is a local file read — handled
+  // in-process, no pi toolUse round-trip needed.
+  bridge.registerVirtualTool(
+    "activate_skill",
+    {
+      description:
+        "Activate a pi Agent Skill by name: returns the full SKILL.md instructions and the absolute paths of bundled resources. Activate a skill before following its workflow.",
+      parameters: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "Skill name from the pi Agent Skills catalog" },
+        },
+        required: ["name"],
+      },
+    },
+    async (args) => {
+      const name = String(args.name ?? "").trim();
+      const skill = loadedSkills.find((candidate) => candidate.name === name);
+      if (!skill) {
+        const known = loadedSkills.map((candidate) => candidate.name).join(", ") || "(none)";
+        return { content: `antigravity: unknown skill "${name}". Available: ${known}.`, isError: true };
+      }
+      return readSkillBundle(skill);
+    },
+  );
 
   // --- Status-bar hint for live agy background tasks -----------------------
 
@@ -304,7 +357,18 @@ export default async function antigravityExtension(pi: ExtensionAPI): Promise<vo
     apiKey: "agy-local-session",
     api: "antigravity-stream-json",
     models: cache.models.map(toProviderModel),
-    streamSimple: streamAntigravity(runtime, service, replay, bridge, updateAgyTasksWidget),
+    streamSimple: streamAntigravity(
+      runtime,
+      service,
+      replay,
+      bridge,
+      updateAgyTasksWidget,
+      getBootstrapSuffix,
+    ),
+  });
+
+  pi.on("before_agent_start", (event) => {
+    captureSkills(event.systemPromptOptions?.skills);
   });
 
   pi.on("session_start", async (_event, ctx: ExtensionContext) => {
@@ -394,7 +458,14 @@ export default async function antigravityExtension(pi: ExtensionAPI): Promise<vo
           apiKey: "agy-local-session",
           api: "antigravity-stream-json",
           models: refreshed.models.map(toProviderModel),
-          streamSimple: streamAntigravity(runtime, service, replay, bridge, updateAgyTasksWidget),
+          streamSimple: streamAntigravity(
+            runtime,
+            service,
+            replay,
+            bridge,
+            updateAgyTasksWidget,
+            getBootstrapSuffix,
+          ),
         });
         ctx.ui.notify(
           `antigravity: ${refreshed.models.length} models registered (${refreshed.source}).`,

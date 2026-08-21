@@ -58,6 +58,12 @@ export interface AntigravityRuntimeShape {
    */
   readonly beginStreamTurn: (request: {
     readonly prompt: string;
+    /**
+     * Extra prompt text appended ONLY when this request spawns a fresh agy
+     * process (bootstrap). Ignored on re-attach, and excluded from the
+     * re-attach prompt match, which uses the base prompt.
+     */
+    readonly bootstrapSuffix?: string;
     readonly modelId: string;
     readonly effort: "low" | "medium" | "high";
     readonly signal?: AbortSignal;
@@ -147,7 +153,9 @@ const makeRuntime = Effect.gen(function* () {
                 );
             }
             const spawnRequest: AgyTurnRequest = {
-              prompt: request.prompt,
+              prompt: request.bootstrapSuffix
+                ? `${request.prompt}\n\n${request.bootstrapSuffix}`
+                : request.prompt,
               conversationId,
               model: request.modelId,
               effort: request.effort,
