@@ -53,9 +53,12 @@ Source: https://github.com/fitchmultz/pi-cursor-sdk (README, 2026-08).
   `antigravity_guide` skill from hijacking headless turns — disables "slash
   command **and skill expansion**" in print mode. So agy's native skill
   invocation is unavailable in pi-antigravity turns.
-- **Settings are global.** No per-run MCP flag was found in `agy --help`;
-  there may be per-project config (unverified). We already manage
-  `permissions.allow` rules in that file for headless runs.
+- **Settings are global.** No per-run MCP flag exists in `agy --help` and no
+  per-project config is honored (verified 2026-08-21, see open question 4).
+  Registrations live in `~/.gemini/config/mcp_config.json`
+  (`{"mcpServers": {…}}`) — **not** `antigravity-cli/settings.json`, which
+  only holds `permissions.allow` etc. We already manage those permission
+  rules for headless runs.
 - **Headless quirks we already handle** (context for the bridge design):
   - print mode ignores the process cwd; the workspace must be registered via
     `--add-dir <cwd>`;
@@ -114,9 +117,11 @@ tools *execute in pi* instead of being display-only replay.
 
 Risks / details to design carefully:
 - **Permissions:** headless agy must auto-approve MCP tool calls. We already
-  pass `--dangerously-skip-permissions`, but verify MCP calls are covered;
-  otherwise add an allow rule (`mcp__pi-bridge` shape TBD) to
-  `settings.json` alongside the existing `permissions.allow` handling.
+  pass `--dangerously-skip-permissions`; **verified 2026-08-21** that stdio
+  MCP calls are covered — no allow rule was needed for the echo probe (see
+  open question 1 for the full verification). Re-confirm when the bridge
+  lands; if a rule is ever needed, add an allow rule to `settings.json`
+  alongside the existing `permissions.allow` handling.
 - **Timeouts:** agy turn timeout is 600s; long-running pi tools (background
   terminals) may outlive it. Decide: cap bridge tool timeout, or stream a
   "still running" placeholder. cursor-sdk raises MCP tool timeout to 3600s.
@@ -156,10 +161,10 @@ it cursor-sdk-style:
 
 ### Phase 3 — Polish
 
-1. **AGENTS.md dedup:** first verify whether agy print mode loads project
-   `AGENTS.md` (Gemini CLI does). If yes, strip pi's overlapping
-   `<project_instructions>` blocks for `antigravity/*` models the way
-   cursor-sdk does, with a preserve flag.
+1. ~~**AGENTS.md dedup:**~~ ~~first verify whether agy print mode loads project
+   `AGENTS.md`~~ **Dropped — see open question 2.** agy does load it, but pi
+   injects the same file, so content is identical by construction; dedup
+   would add complexity for no behavioral gain.
 2. Auto-manage the bridge permission allow-rule in `settings.json`.
 3. Callable-surfaces manifest block in the prompt (list current `pi__*`
    names, prefer-bridge guidance).
@@ -168,21 +173,57 @@ it cursor-sdk-style:
 
 ## Open questions (verify before coding Phase 1)
 
-1. Does agy headless actually **invoke** MCP tools under
+1. ~~Does agy headless actually **invoke** MCP tools under
    `--dangerously-skip-permissions`, and do MCP calls appear as normal
-   `tool` steps in the stream (so existing cards render them)? Probe with a
-   trivial echo MCP server.
-2. Does agy print mode load project `AGENTS.md`? (Determines Phase 3.1.)
-3. Does the bridge server need to be reachable at agy spawn time only, or per
-   call? (Affects whether we can lazily start it and whether
-   `session_shutdown` disable is enough.)
-4. Is there per-project MCP configuration (e.g. workspace
-   `.gemini/settings.json`) so we avoid writing global state? If not, decide
-   how to scope/clean up the global `pi-bridge` entry.
-5. How does agy name MCP tools in `tool_info` (e.g. `call_mcp_tool` with a
-   server/tool parameter vs `mcp__server__tool`)? Determines card rendering
-   and the pending-call correlation on the agy side — for Phase 1 and for
-   `pi__activate_skill` in Phase 2 alike.
+   `tool` steps in the stream (so existing cards render them)?~~ **Yes —
+   verified 2026-08-21** (agy 1.1.17): registered a trivial stdio echo MCP
+   server via `agy mcp add demo-echo -- node /tmp/echo-mcp.mjs`; headless
+   print mode listed its tools, invoked `echo` autonomously (no permission
+   prompt), and returned the server's exact output (`ECHO:hello-from-pi`,
+   status SUCCESS). The call appeared as a normal `tool` step
+   (`call_mcp_tool`, ACTIVE→DONE with `output`) — existing card rendering
+   applies unchanged.
+2. ~~Does agy print mode load project `AGENTS.md`?~~ **Yes — verified
+   2026-08-21** (agy 1.1.17): planted a workspace `AGENTS.md` with a random
+   codeword; headless print mode answered the codeword with **zero tool
+   steps** (no file reads) — it was loaded into context automatically.
+   **Decision:** no dedup work. Pi consumes the same project-root
+   `AGENTS.md` and injects it as `<project_instructions>`, so agy sees the
+   identical content twice — redundant but consistent, and both harnesses
+   stay in sync by construction. Phase 3.1 (stripping overlapping blocks,
+   cursor-sdk style) is dropped unless real-world token bloat or conflicts
+   from nested/parent-dir AGENTS.md files ever warrant revisiting.
+3. ~~Does the bridge server need to be reachable at agy spawn time only, or
+   per call?~~ **At spawn time — verified 2026-08-21.** agy eagerly spawns
+   stdio MCP servers at process startup and immediately sends
+   `tools/list`, even when the turn never calls a tool (one spawn per agy
+   run, confirmed via spawn-log timestamps). A dead stdio command or an
+   unreachable HTTP URL does not abort startup: the turn proceeds, but any
+   `call_mcp_tool` against it errors and the turn ends `status: ERROR`
+   ("server … failed to load" / "tool … is not enabled for server").
+   Consequences for the bridge:
+   - start the loopback server **before** spawning agy; lazy start is not
+     viable;
+   - servers do not outlive the agy process, so `session_shutdown` disable/
+     remove is sufficient cleanup — no orphaned bridge processes;
+   - bridge downtime = failed antigravity turns (fail closed), which makes
+     the rollback flag and careful port/lifecycle handling mandatory.
+4. ~~Is there per-project MCP configuration?~~ **No — verified 2026-08-21.**
+   A workspace-local `.gemini/settings.json` with an `mcpServers` block is
+   ignored by `agy mcp list`; `agy mcp add` has no scope flag; the
+   `projects/default-cli-project.json` store carries no MCP resources.
+   Decision: accept writing global state — register one well-known
+   `pi-bridge` entry in `~/.gemini/config/mcp_config.json` and remove it on
+   `session_shutdown`. Keep permission rules in `antigravity-cli/settings.json`
+   as today (separate file, separate concern).
+5. ~~How does agy name MCP tools in `tool_info`?~~ **Verified 2026-08-21:**
+   it is the generic built-in `call_mcp_tool` (not `mcp__server__tool`),
+   with the target in `step_update.step_info.parameters`:
+   `{ServerName: "demo-echo", ToolName: "echo", Arguments: {…}}` and the
+   result in `.output`. Card rendering should display `ToolName` (with
+   `ServerName` as context); pending-call correlation keys off
+   `ServerName` + `ToolName` + `Arguments`. Same mechanism serves
+   `pi__activate_skill` in Phase 2.
 6. ~~Can headless agy read files under `~/.pi/agent/skills/` (outside the
    `--add-dir <cwd>` workspace) without permission prompts?~~ **Yes —
    verified 2026-08-21** via probe script (`bash /tmp/agy-skill-probe.sh`,
