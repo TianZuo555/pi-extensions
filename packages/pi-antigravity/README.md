@@ -126,3 +126,5 @@ pnpm --filter @tian.zuo/pi-antigravity test
 ```
 
 Design history and probe results: [`docs/pi-tool-bridge-plan.md`](docs/pi-tool-bridge-plan.md).
+
+Reference: [Pi-cursor-sdk](https://github.com/fitchmultz/pi-cursor-sdk)
