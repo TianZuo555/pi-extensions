@@ -24,7 +24,7 @@ const PI_AUTH_FILE = path.join(os.homedir(), ".pi", "agent", "auth.json");
 export const DEFAULT_OPENAI_MODEL = "gpt-5.6-luna";
 export const DEFAULT_OLLAMA_HOST = "http://localhost:11434";
 export const DEFAULT_EXA_API_URL = "https://api.exa.ai";
-export const DEFAULT_FIRECRAWL_API_URL = "https://api.firecrawl.dev/v1";
+export const DEFAULT_FIRECRAWL_API_URL = "https://api.firecrawl.dev/v2";
 
 interface PiAuthEntry {
     type?: string;

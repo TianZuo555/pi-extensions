@@ -82,7 +82,7 @@ Queries live web sources, returns a concise summary with cited links.
 
 Reads web pages as clean Markdown.
 
-- **Firecrawl** (`/v1/scrape`), **Exa** (`/contents`), **Ollama** (`/api/web_fetch`): native scrapers.
+- **Firecrawl** (`/v2/scrape`, `onlyMainContent` on), **Exa** (`/contents`), **Ollama** (`/api/web_fetch`): native scrapers.
 - **Direct fetch** (the keyless fallback): plain HTTP GET, then main-content extraction with [Defuddle](https://github.com/kepano/defuddle) (the engine behind Obsidian Web Clipper) — navigation, sidebars, and cookie banners are removed before Markdown conversion. If Defuddle finds no usable main content (SPAs, tiny fragments), it falls back to a built-in regex-based converter. Pass `raw: true` to get the untouched response body instead.
 
 ## License

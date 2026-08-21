@@ -43,7 +43,7 @@ export async function searchFirecrawl(
   const config = resolveFirecrawlConfig();
   if (!config) {
     throw new Error(
-      "Firecrawl API key not found. Set FIRECRAWL_API_KEY or configure ~/.config/pi-web-search/config.json",
+      "Firecrawl API key not found. Set FIRECRAWL_API_KEY or run /websearch-auth",
     );
   }
 
@@ -99,7 +99,7 @@ export async function fetchFirecrawl(
   const config = resolveFirecrawlConfig();
   if (!config) {
     throw new Error(
-      "Firecrawl API key not found. Set FIRECRAWL_API_KEY or configure ~/.config/pi-web-search/config.json",
+      "Firecrawl API key not found. Set FIRECRAWL_API_KEY or run /websearch-auth",
     );
   }
 
@@ -118,6 +118,8 @@ export async function fetchFirecrawl(
     body: JSON.stringify({
       url,
       formats: ["markdown"],
+      // v2: deterministic HTML-level filter that drops navs, headers, footers.
+      onlyMainContent: true,
     }),
     signal: combinedSignal,
   });
