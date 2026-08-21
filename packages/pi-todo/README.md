@@ -25,7 +25,7 @@ that has no such slots; pi has both.
 | call contract | repeated prose | localized schema descriptions |
 | usage policy | mixed into the schema | two short `promptGuidelines` |
 | per-write nag | ~30 tokens | none |
-| metadata budget | unbounded | under 900 characters, enforced by tests |
+| metadata budget | unbounded | under 950 serialized characters, enforced by tests |
 
 It also contradicted itself — the description says "Use this tool VERY
 frequently", then the write handler warns *"Small todo list (<3 items). This

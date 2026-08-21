@@ -8,6 +8,16 @@ import {
   TODO_TOOL_DESCRIPTION,
 } from "../lib/prompt.ts";
 
+type SchemaNode = {
+  type?: string;
+  description?: string;
+  enum?: string[];
+  minimum?: number;
+  minLength?: number;
+  items?: SchemaNode;
+  properties?: Record<string, SchemaNode>;
+};
+
 test("todo metadata stays concise and non-redundant", () => {
   assert.equal(TODO_PROMPT_GUIDELINES.length, 2);
   assert.match(TODO_PROMPT_GUIDELINES[0]!, /skip single-step/);
@@ -18,30 +28,35 @@ test("todo metadata stays concise and non-redundant", () => {
   assert.ok(TODO_PROMPT_SNIPPET.length <= 24);
   assert.doesNotMatch(TODO_TOOL_DESCRIPTION, /read|write|id/i);
 
-  const modelChars = JSON.stringify({
+  const metadataChars = JSON.stringify({
     name: "todo",
     description: TODO_TOOL_DESCRIPTION,
     parameters: TodoParams,
-  }).length +
-    TODO_PROMPT_SNIPPET.length +
-    TODO_PROMPT_GUIDELINES.reduce((total, guideline) => total + guideline.length, 0);
-  assert.ok(modelChars <= 900, `prompt budget exceeded: ${modelChars} chars`);
+    promptSnippet: TODO_PROMPT_SNIPPET,
+    promptGuidelines: TODO_PROMPT_GUIDELINES,
+  }).length;
+  assert.ok(
+    metadataChars <= 950,
+    `prompt budget exceeded: ${metadataChars} chars`,
+  );
 });
 
 test("todo schema carries localized contracts and validation", () => {
-  assert.deepEqual(Object.keys(TodoParams.properties), ["operation", "todoList"]);
+  const schema = JSON.parse(JSON.stringify(TodoParams)) as SchemaNode;
+  assert.deepEqual(Object.keys(schema.properties ?? {}), ["operation", "todoList"]);
 
-  const operation = TodoParams.properties.operation;
-  const todoList = TodoParams.properties.todoList;
-  const item = todoList.items;
-  const { id, title, status } = item.properties;
+  const operation = schema.properties?.operation;
+  const todoList = schema.properties?.todoList;
+  const id = todoList?.items?.properties?.id;
+  const title = todoList?.items?.properties?.title;
+  const status = todoList?.items?.properties?.status;
 
-  assert.deepEqual(operation.enum, ["write", "read"]);
-  assert.equal(id.type, "integer");
-  assert.equal(id.minimum, 1);
-  assert.equal(title.type, "string");
-  assert.equal(title.minLength, 1);
-  assert.deepEqual(status.enum, ["not-started", "in-progress", "completed"]);
+  assert.deepEqual(operation?.enum, ["write", "read"]);
+  assert.equal(id?.type, "integer");
+  assert.equal(id?.minimum, 1);
+  assert.equal(title?.type, "string");
+  assert.equal(title?.minLength, 1);
+  assert.deepEqual(status?.enum, ["not-started", "in-progress", "completed"]);
 
   for (const [name, node] of [
     ["operation", operation],
@@ -50,11 +65,11 @@ test("todo schema carries localized contracts and validation", () => {
     ["todoList.title", title],
     ["todoList.status", status],
   ] as const) {
-    assert.ok(node.description, `${name} has no description`);
+    assert.ok(node?.description, `${name} has no description`);
   }
 
   assert.match(TODO_PARAMETER_DESCRIPTIONS.operation, /write replaces/);
-  assert.match(TODO_PARAMETER_DESCRIPTIONS.todoList, /Required for write/);
+  assert.match(TODO_PARAMETER_DESCRIPTIONS.todoList, /required for write/);
   assert.match(TODO_PARAMETER_DESCRIPTIONS.id, /reuse across writes/);
   assert.doesNotMatch(TODO_PARAMETER_DESCRIPTIONS.status, /not-started|completed/);
   assert.ok(JSON.stringify(TodoParams).length <= 625);
