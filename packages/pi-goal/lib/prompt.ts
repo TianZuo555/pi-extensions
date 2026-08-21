@@ -11,7 +11,7 @@ import {
 } from "./state.ts";
 
 export const GET_GOAL_DESCRIPTION =
-  "Get the current thread goal, status, usage, and remaining budget.";
+  "Get the current thread goal, status, and usage.";
 
 export const UPDATE_GOAL_DESCRIPTION =
   "Record the current goal's terminal outcome.";
@@ -87,5 +87,5 @@ export function buildBudgetLimitPrompt(goal: Goal): string {
 }
 
 export const GOAL_PARAMETER_DESCRIPTIONS = {
-  status: "Terminal outcome to record.",
+  status: "Resulting state of the goal.",
 };
