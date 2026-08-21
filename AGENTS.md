@@ -1,89 +1,28 @@
 # AGENTS.md
 
-A collection of extensions for the [pi coding agent](https://pi.dev): per-repo model defaults, per-repo skill toggles, dedicated-model Git commits, token-speed meter, pasted-image cache, an ask-user tool, provider usage display, background-yielding bash, web search & fetch, and a strict edit tool. Published as independent npm packages from one pnpm-workspace monorepo.
+A collection of independent extensions for the [pi coding agent](https://pi.dev) published as npm packages from a pnpm workspace monorepo.
 
-## Tech stack
+## Stack & Architecture
 
-- Language: TypeScript 7 (strict, `noEmit`, `target: ES2022`, `module: ESNext`, `moduleResolution: bundler`). Source is shipped as-is — there is **no build step**; the `lib/` and `src/` directories under each package are committed TypeScript, not compiled output.
-- Runtime: Node 26 and pnpm 11 (both pinned in `mise.toml`; the exact pnpm version is also declared in the root `package.json` `packageManager` field). Type-only ESM.
-- Framework: **Effect v4** (`effect@4.x`). Effect v4 is the standard framework and first choice for extensions requiring async orchestration, mutable state, lifecycle control, service layers, and typed error handling. The root `tsconfig.json` configures the compiler options and `@effect/language-service` plugin for the entire monorepo, while package-level `tsconfig.json` files extend `../../tsconfig.json`.
-- pi runtime packages (`@earendil-works/pi-coding-agent`, `@earendil-works/pi-ai`, `@earendil-works/pi-tui`, `typebox`) are **peer dependencies** — pi provides them at runtime; they must not be bundled. They are also root `devDependencies` so every workspace resolves them via pnpm's `resolvePeersFromWorkspaceRoot` and the shared typecheck works without per-package duplication.
-- `effect-tsgo patch` (the editor language-service binary patch) is declared **only** by `pi-background-terminals`. pnpm runs every workspace project's `prepare` during `pnpm install`, and two concurrent patches of the same TypeScript binary race on the backup rename; other Effect packages intentionally omit `prepare` and rely on the shared patched binary.
-- Tooling: pnpm workspaces (`pnpm-workspace.yaml`), `tsc` for typecheck-only, Node's built-in `node --test` runner, GitHub Actions for publishing. Dependency overrides live in `pnpm-workspace.yaml` (`overrides:`), not in `package.json`.
+- **Runtime & Tooling:** Node 26, pnpm 11 workspaces (`pnpm-workspace.yaml`), TypeScript 7 (strict, `noEmit`, ESM).
+- **No Build Step:** Packages ship uncompiled TypeScript directly (`lib/`, `src/`). Use only erasable syntax supported by Node's type stripper: **no `enum`**, **no `namespace`**, and **no constructor parameter properties** (`constructor(readonly x: T)`).
+- **Frameworks:** [Effect v4](https://effect.website) (`effect@4.x`) for async orchestration, mutable state, and service layers. Pi runtime packages (`@earendil-works/*`, `typebox`) are peer dependencies provided at runtime; do not bundle them.
+- **Monorepo Layout:**
+  - `packages/<pkg>/` — source of truth for all extensions.
+  - `extensions/<pkg>.ts` — legacy re-export stubs; **never add logic here**.
 
-## Repository layout
+## Common Commands
 
-- `packages/` — one publishable workspace per extension. Real implementation lives here, mostly as `index.ts` (+ `lib/*.ts` helpers), except Effect-based packages also ship `src/**` runtimes (`pi-background-terminals`, `pi-commit`, `pi-goal`, `pi-image-cache`, `pi-repo-model`, `pi-repo-skills`, `pi-subagents`, `pi-todo`, `pi-token-speed`, `pi-usage`, `pi-vscode-bridge`, `pi-web-search`, `pi-antigravity`). The pnpm workspace configuration (`packages/*` globs in `pnpm-workspace.yaml`) dynamically discovers all extension packages for checks, tests, and publishing.
-- `extensions/` — thin re-export stubs (`export { default } from "../packages/<pkg>/index"`) kept only as compatibility entry points for the legacy aggregate Git package. **Do not put logic here** — edit the matching `packages/*` instead.
-- `tests/` — repo-level tests run from the root (currently `pi-usage-providers.test.mjs`). Package-local tests live under `test/` (or next to source for `pi-background-terminals`).
-- `.github/workflows/publish.yml` — npm publish on push to `main` (installs with pnpm, runs typecheck, workspace checks, and tests dynamically across all packages, then publishes via the npm CLI for OIDC trusted publishing).
-- `pnpm-workspace.yaml` — workspace globs and dependency overrides.
-- `pnpm-lock.yaml` — pnpm lockfile (do not commit `package-lock.json`).
-- `tsconfig.json` — root typecheck config covering all extensions and workspace packages.
-- `mise.toml` — tooling pins (Node, pnpm).
+- Install: `pnpm install`
+- Typecheck: `pnpm run typecheck`
+- Effect check: `pnpm run check` (or scoped: `pnpm --filter <pkg> run check`)
+- Test all: `pnpm test` (or scoped: `pnpm --filter <pkg> test`)
+- Try locally: `pi -e ./packages/<pkg>`
 
-Workspace → npm package map: `pi-repo-model`→`@tian.zuo/pi-repo-model`, `pi-repo-skills`→`@tian.zuo/pi-repo-skills`, `pi-commit`→`@tian.zuo/pi-commit`, `pi-token-speed`→`@tian.zuo/pi-token-speed`, `pi-image-cache`→`@tian.zuo/pi-image-cache`, `pi-ask-user`→`@tian.zuo/pi-ask-user`, `pi-usage`→`@tian.zuo/pi-usage`, `pi-background-terminals`→`@tian.zuo/pi-background-terminals`, `pi-edit-safe`→`@tian.zuo/pi-edit-safe`, `pi-find`→`@tian.zuo/pi-find`, `pi-todo`→`@tian.zuo/pi-todo`, `pi-subagents`→`@tian.zuo/pi-subagents`, `pi-compact-output`→`@tian.zuo/pi-compact-output`, `pi-goal`→`@tian.zuo/pi-goal`, `pi-vscode-bridge`→`@tian.zuo/pi-vscode-bridge`, `pi-web-search`→`@tian.zuo/pi-web-search`, `pi-antigravity`→`@tian.zuo/pi-antigravity`.
+## Core Conventions
 
-## Common tasks
-
-- Install deps: `pnpm install`
-- Typecheck the whole monorepo (all extensions and packages): `pnpm run typecheck`
-- Typecheck all Effect packages across workspaces: `pnpm run check`
-- Typecheck individual Effect packages (scoped check):
-    - `pnpm --filter @tian.zuo/pi-background-terminals run check`
-    - `pnpm --filter @tian.zuo/pi-commit run check`
-    - `pnpm --filter @tian.zuo/pi-goal run check`
-    - `pnpm --filter @tian.zuo/pi-image-cache run check`
-    - `pnpm --filter @tian.zuo/pi-repo-model run check`
-    - `pnpm --filter @tian.zuo/pi-repo-skills run check`
-    - `pnpm --filter @tian.zuo/pi-find run check`
-    - `pnpm --filter @tian.zuo/pi-subagents run check`
-    - `pnpm --filter @tian.zuo/pi-todo run check`
-    - `pnpm --filter @tian.zuo/pi-token-speed run check`
-    - `pnpm --filter @tian.zuo/pi-usage run check`
-    - `pnpm --filter @tian.zuo/pi-vscode-bridge run check`
-    - `pnpm --filter @tian.zuo/pi-web-search run check`
-- Run all tests (repo-level and all package workspaces): `pnpm test`
-- Test repo-level (usage providers): `pnpm run test:usage`
-- Test individual packages (scoped test):
-    - Test `pi-usage` (fetch/runtime): `pnpm --filter @tian.zuo/pi-usage test`
-    - Test `pi-ask-user`: `pnpm --filter @tian.zuo/pi-ask-user test`
-    - Test `pi-commit`: `pnpm --filter @tian.zuo/pi-commit test`
-    - Test `pi-edit-safe`: `pnpm --filter @tian.zuo/pi-edit-safe test` (45 cases); A/B vs pi's real built-in edit: `pnpm --filter @tian.zuo/pi-edit-safe run bench`
-    - Test `pi-repo-model`: `pnpm --filter @tian.zuo/pi-repo-model test`
-    - Test `pi-repo-skills`: `pnpm --filter @tian.zuo/pi-repo-skills test`
-    - Test `pi-todo`: `pnpm --filter @tian.zuo/pi-todo test`
-    - Test `pi-token-speed`: `pnpm --filter @tian.zuo/pi-token-speed test`
-    - Test `pi-background-terminals`: `pnpm --filter @tian.zuo/pi-background-terminals test`
-    - Test `pi-subagents`: `pnpm --filter @tian.zuo/pi-subagents test`
-    - Test `pi-compact-output`: `pnpm --filter @tian.zuo/pi-compact-output test`
-    - Test `pi-goal`: `pnpm --filter @tian.zuo/pi-goal test`
-    - Test `pi-image-cache`: `pnpm --filter @tian.zuo/pi-image-cache test`
-    - Test `pi-vscode-bridge`: `pnpm --filter @tian.zuo/pi-vscode-bridge test`; compile its VS Code host with `pnpm --filter @tian.zuo/pi-vscode-bridge run compile:vscode`
-    - Test `pi-web-search`: `pnpm --filter @tian.zuo/pi-web-search test`
-    - Test `pi-antigravity`: `pnpm --filter @tian.zuo/pi-antigravity test` (16 cases; live `agy` runs are faked via spawn overrides)
-    - Test `pi-find`: `pnpm --filter @tian.zuo/pi-find test` (159 cases; the rg/fd integration cases skip when a binary is missing)
-- Inspect publishable tarballs: `pnpm run pack:check`
-- Try an extension in a live pi session without installing: `pi -e ./packages/pi-repo-model`
-- Publish one workspace manually (after `npm login`): `pnpm --filter @tian.zuo/pi-repo-model publish --access public --no-git-checks`
-
-## Conventions
-
-- When developing extensions, use **Effect v4** for non-trivial async orchestration, mutable session state, subprocess/file lifecycle, or concurrent cleanup — prefer `Effect`/`@effect/*` idioms (typed effects, `Effect.gen`, dependency injection via `Context`, `ManagedRuntime`, `SynchronizedRef`) over raw async/throw patterns. Follow `pi-background-terminals`, `pi-commit`, `pi-goal`, `pi-image-cache`, `pi-repo-model`, `pi-repo-skills`, `pi-find`, `pi-subagents`, `pi-todo`, `pi-token-speed`, `pi-usage`, `pi-vscode-bridge`, `pi-web-search`, and `pi-antigravity` as reference implementations.
-- **TUI width safety:** every custom `Component.render(width)`, `ctx.ui.setWidget` renderer, custom footer/editor, tool renderer, and message renderer must return lines whose ANSI-aware `visibleWidth()` is no greater than `width`. Use `truncateToWidth(line, width, "")` (or width-aware wrapping) after composing prefixes, content, and suffixes; never return fixed-width strings. Exercise renderers at narrow widths such as 42 columns.
-- **Prompt & schema description separation:** Keep all model-facing text (tool `description`, `promptSnippet`, `promptGuidelines`, parameter/schema `description`s, system prompts, continuation prompts, and result formatters) in a dedicated `prompt.ts` module (under `lib/prompt.ts` or `src/prompt.ts`). Do not inline prompt strings or schema descriptions directly into runtime orchestration, tool definitions, or schema definitions in `index.ts` or implementation files. This enables tuning model-facing phrasing, token budgets, and behavioral policies cleanly without touching execution logic or UI rendering.
-- **Intentional non-Effect packages** (linear/sync UI or trivial I/O only): `pi-ask-user`, `pi-compact-output`, `pi-edit-safe`.
-- One extension per package; the package `name`/version in each `packages/*/package.json` is the source of truth for npm publishing.
-- `files` arrays in each package's `package.json` define tarball contents — add new source files there when they should ship (e.g. `lib`, `src`, `docs`).
-- Machine-local state (per-repo prefs, caches, tokens) lives under `~/.pi/...`, never inside a repo. Extensions read credentials pi already writes to `~/.pi/agent/auth.json`.
-- Packages ship **uncompiled TypeScript**, so all source must use erasable-syntax-only constructs — no `enum`, no namespaces, and no constructor parameter properties (`constructor(readonly x: T)`), which Node's type-stripping loader rejects. Declare the field and assign it in the body instead.
-- Keep `extensions/*.ts` as one-line re-export stubs; real code goes in `packages/*`.
-- When changing an extension, bump that package's `version` to trigger an npm release — CI compares the local version against the registry and publishes only unpublished versions, with provenance.
-- Version update policy: bump only the changed package; use a patch release for fixes, a minor release for backward-compatible features, and a major release for breaking changes. Documentation-only changes that do not alter a published package do not require a version bump. Keep `pnpm-lock.yaml` synchronized when package versions change.
-- **Temporarily disabling publish:** set `"private": true` in `packages/<pkg>/package.json`. The CI workflow checks this field and automatically skips publishing private packages (`⏭ <name> is private, skipping`). Remove `"private": true` when ready to publish again.
-
-## Working agreement
-
-- Prefer small, reviewable changes; bump and publish only the package(s) that actually changed.
-- Always run root `pnpm run typecheck`, `pnpm run check`, and `pnpm test` (or scoped checks `pnpm --filter @tian.zuo/pi-* run check` / `pnpm --filter @tian.zuo/pi-* test` for modified packages) before pushing. The publish workflow runs monorepo typecheck, workspace Effect checks, all test suites, and dynamic package publishing across all workspaces.
-- Keep this file in sync with real workflows — update it when commands, workspace layout, or publish steps change.
+- **TUI Width Safety:** All renderers (`Component.render(width)`, `setWidget`, tool renderers) must guarantee `visibleWidth(line) <= width` (e.g., via ANSI-aware truncation or wrapping).
+- **Prompt Separation:** Keep all model-facing text (tool descriptions, system prompts, schema strings) in a dedicated `prompt.ts` module (`lib/prompt.ts` or `src/prompt.ts`), separated from runtime execution logic.
+- **State & Auth:** Machine-local state and caches belong under `~/.pi/...`, never inside the repository.
+- **Publishing & Versioning:** Bump `version` in `packages/<pkg>/package.json` when modifying an extension. To temporarily disable CI publishing for a package, set `"private": true` in its `package.json`.
+- **Pre-push Verification:** Ensure `pnpm run typecheck`, `pnpm run check`, and `pnpm test` pass before committing.

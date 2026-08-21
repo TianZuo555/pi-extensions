@@ -1,510 +1,98 @@
-# pi-extensions
+# pi-tian-extensions
 
-A small collection of [pi coding agent](https://pi.dev) extensions.
+A collection of independent extensions for the [pi coding agent](https://pi.dev),
+published as npm packages from a pnpm workspace monorepo.
 
-| Extension | Commands / Tools | What it does |
+Each extension has its own package and its own README under
+[`packages/`](packages/) — this file is only an index.
+
+## Extensions
+
+| Package | Commands / Tools | What it does |
 |---|---|---|
-| **pi-repo-model** | `/repo-model`, `/repo-model-unset`, `/repo-model-list` | Per-repo default model + thinking level, auto-applied at session start. |
-| **pi-repo-skills** | `/skills`, `/skills-list`, `/skills-reset` | Per-repo skill toggles via checkbox TUI; disabled skills leave the prompt. |
-| **pi-commit** | `/commit`, `/commit-all` | Git commits written by a separately configured model. |
-| **token-speed** | `/tps` | Live tok/s meter in the footer plus an end-of-message summary. |
-| **image-cache** | `Ctrl+V`, `/images`, `/image-cache-clear` | Caches pasted images as `[Image#NNN]` and re-attaches them on send. |
-| **ask-user** | tool `ask_user` | Lets the model ask 1–5 single-choice questions in one form. |
-| **usage** | `/usage` | Codex and Copilot account usage in a menu, plus a footer meter. |
-| **background-terminals** | `/ps`, overrides tool `bash` | One no-stdin bash path: long commands yield to background and notify once. |
-| **edit-safe** | overrides tool `edit` | Stricter `edit`: verbatim splice, ambiguity throws, one `edits[]` shape. |
-| **find** | overrides tools `grep`/`find` | Bounded ripgrep/fd search with whole-path matching, multi-pattern grep, glob filters, and exclusions. |
-| **subagents** | tool `subagent`, `/agents` | Isolated RPC child processes with profiles, background runs, and worktrees. |
-| **compact-output** | (TUI only) | Shows bordered tool status blocks with up to three preview lines; Ctrl+O restores full output; reasoning stays compact. |
-| **goal** | `/goal`, tools `get_goal`/`update_goal` | User-owned, editable objective with evidence-checked bounded continuation. |
-| **vscode-bridge** | `/vscode-connect` | Attaches a VS Code window so right-click "Send to Pi" prefills file, line, and diff-hunk references into Pi's editor. |
-
-Each extension is described in detail under [Extensions](#extensions).
-
-Selections for the per-repo extensions are stored centrally and keyed by git
-root, so each repository keeps its own preferences without touching global
-settings or the repo's own `.pi/` folder.
+| [pi-repo-model](packages/pi-repo-model/README.md) | `/repo-model`, `/repo-model-unset`, `/repo-model-list` | Per-repo default model + thinking level, auto-applied at session start. |
+| [pi-repo-skills](packages/pi-repo-skills/README.md) | `/skills`, `/skills-list`, `/skills-reset` | Per-repo skill toggles via checkbox TUI; disabled skills leave the prompt. |
+| [pi-commit](packages/pi-commit/README.md) | `/commit`, `/commit-all` | Git commits written by a separately configured model. |
+| [pi-token-speed](packages/pi-token-speed/README.md) | `/tps` | Live tok/s meter in the footer plus an end-of-message summary. |
+| [pi-image-cache](packages/pi-image-cache/README.md) | `Ctrl+V`, `/images`, `/image-cache-clear` | Caches pasted images as `[Image#NNN]` and re-attaches them on send. |
+| [pi-ask-user](packages/pi-ask-user/README.md) | tool `ask_user` | Lets the model ask 1–5 single-choice questions in one form. |
+| [pi-usage](packages/pi-usage/README.md) | `/usage`, `/tokens` | Provider account usage (Codex, Copilot, Z.ai, DeepSeek) plus a token/cost dashboard. |
+| [pi-background-terminals](packages/pi-background-terminals/README.md) | `/ps`, overrides tool `bash` | One no-stdin bash path: long commands yield to background and notify once. |
+| [pi-edit-safe](packages/pi-edit-safe/README.md) | overrides tool `edit` | Stricter `edit`: verbatim splice, ambiguity throws, one `edits[]` shape. |
+| [pi-find](packages/pi-find/README.md) | overrides tools `grep`/`find` | Bounded ripgrep/fd search with whole-path matching and exclusions. |
+| [pi-subagents](packages/pi-subagents/README.md) | tool `subagent`, `/agents` | Isolated subagent runs with profiles, Herdr pane backend, and worktrees. |
+| [pi-compact-output](packages/pi-compact-output/README.md) | (TUI only) | Compact tool status blocks; Ctrl+O restores full output. |
+| [pi-goal](packages/pi-goal/README.md) | `/goal`, tools `get_goal`/`update_goal` | User-owned, editable objective with evidence-checked bounded continuation. |
+| [pi-todo](packages/pi-todo/README.md) | tool `todo` | Small shared todo list for multi-step work. |
+| [pi-web-search](packages/pi-web-search/README.md) | tools `web_search`/`web_fetch` | Clean web search & fetch via OpenAI Responses, Exa, Firecrawl, or Ollama. |
+| [pi-antigravity](packages/pi-antigravity/README.md) | `/agy` | Google Antigravity (`agy`) models inside pi via stream-json RPC. |
+| [pi-vscode-bridge](packages/pi-vscode-bridge/README.md) | `/vscode-connect` | Send file/line/diff-hunk refs from VS Code into pi's editor. |
 
 ## Install
 
-The extensions are published as independent npm packages, so you can
-install all of them or only the ones you need.
-
-### Install all
+The extensions are published as independent npm packages — install only the
+ones you need:
 
 ```bash
-pi install npm:@tian.zuo/pi-repo-model
-pi install npm:@tian.zuo/pi-repo-skills
 pi install npm:@tian.zuo/pi-commit
-pi install npm:@tian.zuo/pi-token-speed
-pi install npm:@tian.zuo/pi-image-cache
-pi install npm:@tian.zuo/pi-ask-user
-pi install npm:@tian.zuo/pi-usage
 pi install npm:@tian.zuo/pi-background-terminals
-pi install npm:@tian.zuo/pi-edit-safe
-pi install npm:@tian.zuo/pi-find
-pi install npm:@tian.zuo/pi-subagents
-pi install npm:@tian.zuo/pi-compact-output
-pi install npm:@tian.zuo/pi-goal
 ```
 
-Restart pi or run `/reload` in an existing session after installation.
-
-The commands above add these entries to `~/.pi/agent/settings.json`:
-
-```json
-{
-  "packages": [
-    "npm:@tian.zuo/pi-repo-model",
-    "npm:@tian.zuo/pi-repo-skills",
-    "npm:@tian.zuo/pi-commit",
-    "npm:@tian.zuo/pi-token-speed",
-    "npm:@tian.zuo/pi-image-cache",
-    "npm:@tian.zuo/pi-ask-user",
-    "npm:@tian.zuo/pi-usage",
-    "npm:@tian.zuo/pi-background-terminals",
-    "npm:@tian.zuo/pi-edit-safe",
-    "npm:@tian.zuo/pi-find",
-    "npm:@tian.zuo/pi-subagents",
-    "npm:@tian.zuo/pi-compact-output",
-    "npm:@tian.zuo/pi-goal"
-  ]
-}
-```
-
-### Install individual extensions
-
-| Extension | Install command |
-|-----------|-----------------|
-| [@tian.zuo/pi-repo-model](https://www.npmjs.com/package/@tian.zuo/pi-repo-model) | `pi install npm:@tian.zuo/pi-repo-model` |
-| [@tian.zuo/pi-repo-skills](https://www.npmjs.com/package/@tian.zuo/pi-repo-skills) | `pi install npm:@tian.zuo/pi-repo-skills` |
-| [@tian.zuo/pi-commit](https://www.npmjs.com/package/@tian.zuo/pi-commit) | `pi install npm:@tian.zuo/pi-commit` |
-| [@tian.zuo/pi-token-speed](https://www.npmjs.com/package/@tian.zuo/pi-token-speed) | `pi install npm:@tian.zuo/pi-token-speed` |
-| [@tian.zuo/pi-image-cache](https://www.npmjs.com/package/@tian.zuo/pi-image-cache) | `pi install npm:@tian.zuo/pi-image-cache` |
-| [@tian.zuo/pi-ask-user](https://www.npmjs.com/package/@tian.zuo/pi-ask-user) | `pi install npm:@tian.zuo/pi-ask-user` |
-| [@tian.zuo/pi-usage](https://www.npmjs.com/package/@tian.zuo/pi-usage) | `pi install npm:@tian.zuo/pi-usage` |
-| [@tian.zuo/pi-background-terminals](https://www.npmjs.com/package/@tian.zuo/pi-background-terminals) | `pi install npm:@tian.zuo/pi-background-terminals` |
-| [@tian.zuo/pi-edit-safe](https://www.npmjs.com/package/@tian.zuo/pi-edit-safe) | `pi install npm:@tian.zuo/pi-edit-safe` |
-| [@tian.zuo/pi-find](https://www.npmjs.com/package/@tian.zuo/pi-find) | `pi install npm:@tian.zuo/pi-find` |
-| [@tian.zuo/pi-subagents](https://www.npmjs.com/package/@tian.zuo/pi-subagents) | `pi install npm:@tian.zuo/pi-subagents` |
-| [@tian.zuo/pi-compact-output](https://www.npmjs.com/package/@tian.zuo/pi-compact-output) | `pi install npm:@tian.zuo/pi-compact-output` |
-| [@tian.zuo/pi-goal](https://www.npmjs.com/package/@tian.zuo/pi-goal) | `pi install npm:@tian.zuo/pi-goal` |
-| [@tian.zuo/pi-vscode-bridge](https://www.npmjs.com/package/@tian.zuo/pi-vscode-bridge) | `pi install npm:@tian.zuo/pi-vscode-bridge` |
-
-Try an extension temporarily without adding it to settings:
+Restart pi or run `/reload` after installation. Try an extension temporarily
+without adding it to settings:
 
 ```bash
 pi -e npm:@tian.zuo/pi-image-cache
 ```
 
-### Migrate from a Git install
-
-Do not load the Git package and its npm replacements together; that would load
-the same extension twice. Check your current packages first:
-
-```bash
-pi list
-```
-
-Remove any old package shown by `pi list`, then install the npm packages you
-want:
-
-```bash
-# Old aggregate package, if installed:
-pi remove git:github.com/TianZuo555/pi-extensions
-
-# Old standalone token-speed package, if installed:
-pi remove git:github.com/TianZuo555/pi-token-speed
-
-pi install npm:@tian.zuo/pi-repo-model
-pi install npm:@tian.zuo/pi-repo-skills
-pi install npm:@tian.zuo/pi-commit
-pi install npm:@tian.zuo/pi-token-speed
-pi install npm:@tian.zuo/pi-image-cache
-pi install npm:@tian.zuo/pi-ask-user
-pi install npm:@tian.zuo/pi-usage
-pi install npm:@tian.zuo/pi-background-terminals
-```
-
-Your existing extension preferences and caches remain in `~/.pi/`; changing the
-package source does not remove them.
-
-### Update installed extensions
-
-Update every installed Pi package and reload the current session:
+Update installed extensions and reload:
 
 ```bash
 pi update --extensions
 ```
 
-Then restart pi or run `/reload`. To update only one package:
-
-```bash
-pi update npm:@tian.zuo/pi-repo-model
-```
-
-Remove an extension independently with, for example:
+Remove one independently:
 
 ```bash
 pi remove npm:@tian.zuo/pi-token-speed
 ```
 
-### Legacy aggregate Git install
+## Development
 
-The repository root remains an aggregate package for backward compatibility:
-
-```bash
-pi install git:github.com/TianZuo555/pi-extensions
-```
-
-New installations should prefer the individual npm packages above.
-
-## Extensions
-
-### pi-repo-model
-
-Stores one model preference per repository in `~/.pi/repo-model/config.json` and
-applies it at session start (default triggers: fresh start + new session). An explicit `pi --model ...` takes precedence on startup.
-
-- `/repo-model` — pick a model, then a thinking level, from dropdowns.
-- `/repo-model provider/model[:thinking]` — set directly, e.g. `/repo-model cursor/composer-2.5:high`.
-- `/repo-model-unset` — clear the current repo's default.
-- `/repo-model-list` — list every configured repo.
-
-### pi-repo-skills
-
-Turns individual skills on/off per repository. Disabled skills are removed from
-the system prompt (like `disable-model-invocation: true`), so the model won't
-auto-load them. State lives in `~/.pi/repo-skills/config.json`.
-
-- `/skills` — checkbox TUI: `↑↓/jk` move, `space` toggle, `a` disable all,
-  `n` enable all, `enter` save, `esc` cancel.
-- `/skills-list` — list all repos with overrides.
-- `/skills-reset` — clear this repo's overrides.
-
-`disabled` is stored as an array of skill names or the sentinel `"ALL"` (every
-skill off, future-proof against newly installed skills).
-
-### pi-commit
-
-Generates commit messages with a dedicated model without changing the active Pi
-session model. The default is `deepseek/deepseek-v4-flash`; override it globally
-in `~/.pi/agent/settings.json` or, for a trusted project, in `.pi/settings.json`:
-
-```json
-{
-  "piCommit": {
-    "model": "deepseek/deepseek-v4-flash",
-    "thinkingLevel": "high"
-  }
-}
-```
-
-For example, to use GPT-5.6 Luna with maximum reasoning:
-
-```json
-{
-  "piCommit": {
-    "model": "openai-codex/gpt-5.6-luna",
-    "thinkingLevel": "max"
-  }
-}
-```
-
-- `/commit [guidance]` — generate, edit, and confirm a commit for changes already staged in Git.
-- `/commit-all [guidance]` — confirm `git add --all`, then generate, edit, and confirm the commit.
-
-`/commit` never stages files. `/commit-all` includes tracked, deleted, and
-untracked files but not ignored files. Cancelling after its staging step leaves
-those changes staged. The extension fingerprints both the staged tree and
-`HEAD`, honors normal Git hooks/signing, and aborts if the snapshot changes
-while the message is being reviewed. Staged paths containing `node_modules` are
-rejected before their contents are sent to the model or committed. The prompt
-also warns against dependency trees and generated artifacts. The staged diff is
-sent to the configured model provider; patch context is capped at 256 KiB.
-
-### token-speed
-
-A live generation-speed readout. While the assistant streams, the footer shows a
-smoothed tokens-per-second rate; when the message finishes it shows a summary
-with the average rate, total output tokens, and time-to-first-token. The summary
-stays on screen after the stream stops — including the model's between-stream
-thinking and tool-call gaps — so the readout is always visible instead of
-blanking out whenever generation pauses.
-
-- `/tps` — cycle the display mode: `live` → `final` → `off`.
-- `/tps live` — live meter + summary.
-- `/tps final` — summary only.
-- `/tps off` — show nothing.
-
-The live rate is sampled from streamed text (a responsive chars-per-token
-estimate); the end-of-message average uses the provider's authoritative output
-token count when available. The mode is remembered in
-`~/.pi/token-speed/config.json`.
-
-### image-cache
-
-Caches pasted images so they survive as compact `[Image#NNN]` placeholders and
-are re-attached to the model on send. On macOS, `Ctrl+V` pastes the clipboard
-image directly — both raw image data (screenshots, "Copy Image") and image
-files copied in Finder, including multiple files at once. File references win
-over pasteboard image data, because Finder also puts a generic 1024×1024
-document icon on the clipboard next to the file it copied. Cache lives under
-`~/.pi/agent/cache/image-cache/` with a 24h TTL, alongside a small PNG
-rendition per non-PNG image so inline previews work in Kitty-protocol
-terminals (Ghostty, Kitty, WezTerm) and after a session resume.
-
-### ask-user
-
-Registers an `ask_user` tool the model can call with 1–5 questions and 2–5
-options per question. Full questions and option descriptions word-wrap instead
-of being clipped. Each question accepts one selection, and a free-form
-**Other** option is always appended.
-
-- `←` / `→` switches questions while preserving answers.
-- `↑` / `↓` moves the focused option; `Space` selects it.
-- `Enter` advances to the next question or submits after all questions are
-  answered; `Esc` dismisses.
-- Other opens an inline multi-line editor. RPC mode uses built-in dialogs;
-  print/json mode reports that no UI was available.
-- Tool calls stored by versions through 0.1.2 with top-level `question` and
-  `options` are upgraded automatically to the new `questions[]` schema.
-
-The result lists every answer with its question and option number (or marks it
-as custom text), so the model never silently assumes an answer.
-
-### usage
-
-Shows current-account usage for **OpenAI Codex** and **GitHub Copilot** without
-leaving pi.
-
-- `/usage` — open a menu listing both providers' usage (limits, remaining
-  percentage, absolute quota, and reset time). Pick **Refresh** to re-query or
-  **Close** to dismiss. In non-interactive modes it prints a one-line summary.
-- When the active model belongs to a supported provider, a compact meter such
-  as `codex 60% wk` or `copilot 49% premium` is published to the footer and
-  refreshed at most every five minutes (results are cached).
-
-Credentials come from the same store pi writes (`~/.pi/agent/auth.json`): Codex
-uses the ChatGPT OAuth access token; Copilot uses the stored GitHub OAuth token
-(with `GH_TOKEN` / `GITHUB_TOKEN` and `~/.config/github-copilot/apps.json` as
-fallbacks). `/usage` skips the usage request for each provider with no login
-information and shows it as **Not configured** — sign in with `/login` and select
-it.
-
-### background-terminals
-
-Replaces the built-in `bash` tool with one no-stdin execution path. Quick
-commands return normally; a command that outlives the initial wait keeps running
-as a session-scoped background terminal and its result is delivered to the model
-exactly once, so there is nothing to poll. Quick Bash rows show their useful
-command and a bounded output preview; only commands that actually yield collapse
-to compact terminal rows. Complete human-facing stdout/stderr remains in `/ps`.
-
-- Parameters: `command`, plus optional `timeout` (hard kill), `working_dir`,
-  `title`, and `yield_time_ms` (default 10s, clamped to 250–30,000 ms).
-- `/ps` — full-screen viewer: list every tracked terminal, then inspect its
-  default **Info** tab or switch to stdout/stderr, tail live output, and stop a
-  running terminal with `x`.
-- Once a stream outgrows in-memory retention, the viewer pages the **complete
-  on-disk log** instead of only what fits in memory.
-- A one-line widget renders above the editor while any terminal is running.
-- Every call uses a fresh shell; prompt guidance directs the model to
-  `working_dir` rather than persistent `cd` assumptions. Read-only Bash
-  exploration warns at 6 calls and blocks after 8 within one agent run.
-
-Inspection and termination are user-owned — the model gets no status, list,
-kill, or stdin tools. See
-[packages/pi-background-terminals/README.md](packages/pi-background-terminals/README.md)
-for the full design.
-
-### edit-safe
-
-Overrides the built-in `edit` tool with a stricter matcher. Fuzzy matching only
-**locates** a target span; the replacement is always spliced in verbatim, never
-re-indented or rewritten.
-
-- **Ambiguity throws.** Occurrences are counted overlap-aware (`aa` in `aaa` is
-  ambiguous, not unique), and a strategy matching more than one candidate fails
-  instead of falling through to a looser matcher or picking a "best" candidate.
-- **No partial-signal matching.** No first/last-line anchoring and no similarity
-  thresholds — every fuzzy candidate must be a full-span structural match that
-  occurs exactly once.
-- **Untouched bytes stay untouched.** BOMs and bytes outside the matched span
-  survive, and mixed-line-ending files are never flattened.
-- **Lenient input, strict schema.** The model is offered exactly **one** call
-  shape — `{path, edits: [...]}`, always an array, even for a single change — so
-  there is no per-call choice to get wrong. Looser shapes
-  (`file_path`/`old_string` aliases, a stringified `edits` array, a bare edit
-  object, top-level `oldText`/`newText`) are still folded onto that form before
-  validation, so off-contract or older resumed calls are normalized rather than
-  rejected.
-- **Sequential multi-edit.** `edits[]` applies in order, each matched against the
-  already-updated text, so dependent edits work; a later failure leaves the file
-  unchanged because the write happens once at the end.
-
-Returns pi's built-in `EditToolDetails` (`diff`, `patch`, `firstChangedLine`) and
-defines no custom renderers, so pi's streaming diff preview and final diff
-rendering are inherited.
-
-Disable without uninstalling: `PI_EDIT_SAFE_DISABLE=1 pi`.
-
-See [packages/pi-edit-safe](packages/pi-edit-safe/README.md) for the full
-matching order and the A/B bench against pi's real built-in edit.
-
-### find
-
-Overrides pi's built-in `grep` and `find` tools. Searches use ripgrep and fd
-with smart-case content matching, multi-pattern grep in one pass, whole-path
-pattern matching (substring, regex, or multi-word AND), include/exclude globs,
-directory pruning, and hard output bounds. Install it
-instead of enabling another grep/find override such as FFF.
-
-See [packages/pi-find](packages/pi-find/README.md) for the path DSL and
-search behavior.
-
-### compact-output
-
-TUI-only presentation extension for Pi **0.83.x**. It does not register or
-override any tools.
-
-- Consecutive collapsed tool calls share one padded, background-filled area;
-  each row starts with `🔧` and the newest row appears first.
-- Press **Ctrl+O** (`app.tools.expand`) to toggle tool rows and assistant reasoning
-  between compact and each original renderer in execution order — search output,
-  read buffers, edit diffs, background-terminal views, images, errors, and full
-  reasoning text return unchanged.
-- While working, the animated loader shows `Thinking: <one-line reasoning preview>`;
-  the transcript also keeps reasoning to one concise line until Ctrl+O expands it.
-
-```bash
-pi install npm:@tian.zuo/pi-compact-output
-pi -e ./packages/pi-compact-output
-```
-
-### vscode-bridge
-
-Attaches a VS Code window to a running pi agent so right-click **Send to Pi** prefills file, line, and diff-hunk references into the input editor. The human reviews the text and presses Enter themselves.
-
-Install both sides:
-
-```bash
-pi install npm:@tian.zuo/pi-vscode-bridge
-pnpm --filter @tian.zuo/pi-vscode-bridge run package:vscode
-code --install-extension packages/pi-vscode-bridge/vscode/pi-vscode-bridge-0.1.0.vsix
-```
-
-Run `/vscode-connect` in Pi. See [packages/pi-vscode-bridge](packages/pi-vscode-bridge/README.md)
-for setup, ref formats, and limitations.
-
-### goal
-
-Codex-style long-running goals for Pi. `/goal <objective>` persists a
-thread-scoped completion contract, injects it into each turn, accounts token and
-elapsed-time usage, and continues only while the thread is idle. A continuation
-that makes no tool call suppresses the next automatic continuation, so this is
-not an unbounded loop.
-
-```bash
-pi install npm:@tian.zuo/pi-goal
-pi -e ./packages/pi-goal
-```
-
-Use `/goal pause`, `/goal resume`, `/goal clear`, or `/goal --budget 50000
-<objective>` to manage it. See [packages/pi-goal](packages/pi-goal/README.md)
-for the full lifecycle and Codex design mapping.
-
-The repository is a pnpm workspace with one publishable package per extension:
-
-| Workspace | npm package |
-|-----------|-------------|
-| `packages/pi-repo-model` | `@tian.zuo/pi-repo-model` |
-| `packages/pi-repo-skills` | `@tian.zuo/pi-repo-skills` |
-| `packages/pi-commit` | `@tian.zuo/pi-commit` |
-| `packages/pi-token-speed` | `@tian.zuo/pi-token-speed` |
-| `packages/pi-image-cache` | `@tian.zuo/pi-image-cache` |
-| `packages/pi-ask-user` | `@tian.zuo/pi-ask-user` |
-| `packages/pi-usage` | `@tian.zuo/pi-usage` |
-| `packages/pi-background-terminals` | `@tian.zuo/pi-background-terminals` |
-| `packages/pi-edit-safe` | `@tian.zuo/pi-edit-safe` |
-| `packages/pi-find` | `@tian.zuo/pi-find` |
-| `packages/pi-subagents` | `@tian.zuo/pi-subagents` |
-| `packages/pi-compact-output` | `@tian.zuo/pi-compact-output` |
-| `packages/pi-goal` | `@tian.zuo/pi-goal` |
-| `packages/pi-vscode-bridge` | `@tian.zuo/pi-vscode-bridge` |
-
-Install dependencies, typecheck every workspace, run the commit and
-managed-terminal suites, and inspect publishable tarballs:
+The repository is a pnpm workspace with one package per extension under
+`packages/`.
 
 ```bash
 pnpm install
-pnpm run typecheck
-pnpm --filter @tian.zuo/pi-background-terminals run check
-pnpm --filter @tian.zuo/pi-background-terminals test
-pnpm --filter @tian.zuo/pi-commit test
-pnpm --filter @tian.zuo/pi-edit-safe test
-pnpm --filter @tian.zuo/pi-find test
-pnpm --filter @tian.zuo/pi-subagents test
-pnpm --filter @tian.zuo/pi-compact-output test
-pnpm --filter @tian.zuo/pi-goal test
-pnpm run pack:check
+pnpm run typecheck   # TypeScript across all workspaces
+pnpm run check       # Effect checks
+pnpm test            # all extension test suites
 ```
 
-Test a workspace directly:
+Try a single extension from a checkout:
 
 ```bash
 pi -e ./packages/pi-repo-model
 ```
 
-The files under `extensions/` are compatibility entry points for the aggregate
-Git package. Implementations live in `packages/` so each npm tarball is
-self-contained.
-
-Extensions import pi's runtime packages
-(`@earendil-works/pi-coding-agent`, `@earendil-works/pi-tui`,
-`@earendil-works/pi-ai`, `typebox`) as **peer dependencies** — pi provides them
-at runtime.
+Extensions import pi's runtime packages (`@earendil-works/*`, `typebox`) as
+**peer dependencies** — pi provides them at runtime; they are never bundled.
 
 ## Publishing
 
-### Automated (GitHub Actions)
+The [`Publish`](.github/workflows/publish.yml) workflow publishes to npm on
+every push to `main` that touches `packages/**`: it runs the checks and test
+suites, compares each workspace's version against npm, and publishes only
+versions not yet present — bumping one `package.json` version is enough to
+release it. Packages are published with npm provenance via OIDC trusted
+publishing (no token secret needed). The workflow can also be run manually
+from *Actions → Publish* with an optional dry-run toggle.
 
-The [`Publish`](.github/workflows/publish.yml) workflow publishes packages to npm
-automatically. On every push to `main` that touches `packages/**`, it runs both
-TypeScript checks plus the extension test suites, including goal and
-background-terminals, then
-checks each workspace's version against npm and publishes only versions not yet present
-(so bumping one `package.json` version is enough to release it). Packages are
-published with [npm provenance](https://docs.npmjs.com/generating-provenance-statements).
-
-Requirements:
-
-- Publishing uses [OIDC trusted publishing](https://docs.npmjs.com/trusted-publishers/) —
-  configure a trusted publisher for each package pointing at this repository and
-  the `publish.yml` workflow; no npm token secret is needed.
-- The workflow can also be triggered manually via *Actions → Publish → Run
-  workflow*, with an optional **dry-run** toggle that runs `npm publish
-  --dry-run` without releasing.
-
-### Manual
-
-After logging in to npm, publish each workspace independently with pnpm:
+Manual publish for a single package:
 
 ```bash
-pnpm --filter @tian.zuo/pi-repo-model publish --access public --no-git-checks
-pnpm --filter @tian.zuo/pi-repo-skills publish --access public --no-git-checks
 pnpm --filter @tian.zuo/pi-commit publish --access public --no-git-checks
-pnpm --filter @tian.zuo/pi-token-speed publish --access public --no-git-checks
-pnpm --filter @tian.zuo/pi-image-cache publish --access public --no-git-checks
-pnpm --filter @tian.zuo/pi-ask-user publish --access public --no-git-checks
-pnpm --filter @tian.zuo/pi-usage publish --access public --no-git-checks
-pnpm --filter @tian.zuo/pi-background-terminals publish --access public --no-git-checks
-pnpm --filter @tian.zuo/pi-find publish --access public --no-git-checks
-pnpm --filter @tian.zuo/pi-goal publish --access public --no-git-checks
 ```
-
-Version and publish only the package that changed, or bump them all together for
-a coordinated release.
 
 ## License
 
