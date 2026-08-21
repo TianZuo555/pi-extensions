@@ -5,6 +5,7 @@ Use Google Antigravity (`agy`) models inside the [pi coding agent](https://pi.de
 **Highlights**
 
 - Native pi tool cards for agy's tools (`grep`, `find`, `search_web`, …) with live text streaming
+- **Pi-tool bridge** — agy can call pi's own extension tools (web search, subagents, repo tools) through a loopback MCP server; results execute in pi with full permission/hook/rendering ownership
 - **Background-task management** — agy's long-running commands (dev servers, watchers) show up in a `/ps`-style dashboard with one-keystroke kill (`/agy-tasks`)
 - Reference cost display via pi's native cost calculation, overridable per model
 
@@ -47,6 +48,23 @@ Use Google Antigravity (`agy`) models inside the [pi coding agent](https://pi.de
   - `agent_response` `text_delta` chunks stream live into pi's text channel. agy has no separate reasoning channel — the model writes its reasoning inline as markdown, so it streams (and renders) like normal text.
   - final `result.response` → the authoritative assistant text; `result.usage` → pi token usage; conversation continues via `--conversation <id>` across turns
 - Conversation continuity: the agy conversation is reused across turns and reset when the model changes or via `/agy reset`.
+
+## Pi-tool bridge
+
+On `session_start` the extension hosts a loopback MCP server (streamable HTTP on `127.0.0.1`) and registers it as an agy MCP server named `pi-bridge`. Active pi extension tools are exposed as `pi__<name>` (built-ins `read/bash/write/edit/grep/find/ls` and the display-only `agy` wrapper are hidden — agy has native equivalents). When agy calls one:
+
+1. the bridge routes the call into the live agy turn;
+2. the provider ends the assistant message with a toolUse for the **real** pi tool — native card, hooks, permissions, abort all apply;
+3. pi executes it; the next provider request hands the result back to the still-running agy turn over the bridge.
+
+Calls fail closed: no active turn, unknown tool, or a 480s timeout (below agy's 600s turn cap) returns an error to agy instead of hanging.
+
+Environment flags:
+
+- `PI_ANTIGRAVITY_PI_TOOL_BRIDGE=0` — disable the bridge entirely (no server, no registration).
+- `PI_ANTIGRAVITY_EXPOSE_BUILTIN_TOOLS=1` — also expose the hidden built-in tools.
+
+The registration lives in the global `~/.gemini/config/mcp_config.json` (agy has no per-project MCP config) and is removed on `session_shutdown`.
 
 ## Requirements
 

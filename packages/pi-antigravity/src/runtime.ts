@@ -64,6 +64,16 @@ export interface AntigravityRuntimeShape {
   }) => Effect.Effect<AgyTurnController, AntigravityRuntimeClosedError>;
   /** Clear the active controller once a provider turn reached a terminal state. */
   readonly finishTurn: Effect.Effect<void>;
+  /**
+   * Route a bridged agy MCP call into the live turn controller as a
+   * synthetic bridge_call activity. Returns false when no turn is active
+   * (the bridge then fails the MCP call closed).
+   */
+  readonly pushBridgeCall: (call: {
+    readonly id: string;
+    readonly tool: string;
+    readonly args: Record<string, unknown>;
+  }) => boolean;
   readonly reset: Effect.Effect<void, AntigravityRuntimeClosedError>;
   readonly snapshot: Effect.Effect<AntigravityStateSnapshot, AntigravityRuntimeClosedError>;
   readonly close: Effect.Effect<void, AntigravityRuntimeClosedError>;
@@ -168,6 +178,12 @@ const makeRuntime = Effect.gen(function* () {
     finishTurn: Effect.sync(() => {
       if (active?.isClosed()) active = undefined;
     }),
+
+    pushBridgeCall: (call) => {
+      if (closed || !active || active.isClosed()) return false;
+      active.push({ type: "bridge_call", id: call.id, name: call.tool, args: call.args });
+      return true;
+    },
 
     reset: ensureOpen.pipe(
       Effect.andThen(

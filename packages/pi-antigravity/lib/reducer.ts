@@ -13,8 +13,16 @@ import { parseAgyLine } from "./events.ts";
 
 export type AgyActivity =
   | { type: "tool_start"; name: string; args: Record<string, unknown> }
-  | { type: "tool_done"; name: string; output?: string; durationSeconds?: number }
-  | { type: "tool_error"; name: string; message: string }
+  | { type: "tool_done"; name: string; args: Record<string, unknown>; output?: string; durationSeconds?: number }
+  | { type: "tool_error"; name: string; args: Record<string, unknown>; message: string }
+  | {
+      /** Synthetic — pushed by the bridge when agy invokes a `pi__*` tool.
+      * Never produced by applyEvent. */
+      type: "bridge_call";
+      id: string;
+      name: string;
+      args: Record<string, unknown>;
+    }
   | { type: "text"; delta: string }
   | { type: "usage"; usage: AgyUsage }
   | {
@@ -82,12 +90,16 @@ export function applyEvent(outcome: AgyTurnOutcome, event: ParsedAgyEvent): AgyA
             output: step.output ?? step.tool_info?.output,
             durationSeconds:
               typeof step.duration_seconds === "number" ? step.duration_seconds : undefined,
+            // Kept so call_mcp_tool completions can be correlated with the
+            // bridged server (ServerName) by the provider.
+            args: step.tool_info?.parameters ?? {},
           });
         } else if (step.state === "ERROR") {
           const message = step.error?.message ?? "tool error";
           activities.push({
             type: "tool_error",
             name,
+            args: step.tool_info?.parameters ?? {},
             message: message.replace(/\s+/g, " ").slice(0, 160),
           });
         }

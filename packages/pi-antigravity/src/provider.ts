@@ -23,6 +23,7 @@ import {
   type ThinkingLevel,
 } from "@earendil-works/pi-ai";
 import type { AgyEffort } from "../lib/agy-client.ts";
+import { BRIDGE_SERVER_NAME, type AgyPiBridge, resolveBridgeResultsFromContext } from "../lib/bridge.ts";
 import type { AgyUsage } from "../lib/reducer.ts";
 import { AgyReplayStore } from "../lib/replay.ts";
 import type { AntigravityRuntimeInstance, AntigravityRuntimeShape } from "./runtime.ts";
@@ -104,11 +105,26 @@ export function mapThinkingToEffort(level: ThinkingLevel | undefined): AgyEffort
 
 let replayCallSeq = 0;
 
+/**
+ * True for agy `call_mcp_tool` steps that target our own bridge server.
+ * Those calls surface as synthetic bridge_call activities (emitted as the
+ * real pi tool), so the raw call_mcp_tool step must not render a duplicate
+ * display-only card. MCP calls against OTHER servers render normally.
+ */
+function isBridgedMcpStep(activity: {
+  name: string;
+  args: Record<string, unknown>;
+}): boolean {
+  return activity.name === "call_mcp_tool" && activity.args?.["ServerName"] === BRIDGE_SERVER_NAME;
+}
+
 /** Build the streamSimple implementation bound to the runtime service. */
 export function streamAntigravity(
   runtime: AntigravityRuntimeInstance,
   service: AntigravityRuntimeShape,
   replay: AgyReplayStore,
+  /** Pi-tool bridge; pass a detached AgyPiBridge when the bridge is off. */
+  bridge: AgyPiBridge,
   /** Called when a turn fully settles (stop or error) — the moment an agy
    * background task may have been created. */
   onSettled?: () => void,
@@ -165,6 +181,11 @@ export function streamAntigravity(
           }),
         );
 
+        // Refresh the exposed-tool snapshot per request and hand back the
+        // results of bridged tools pi executed since the previous request.
+        bridge.refreshTools();
+        resolveBridgeResultsFromContext(bridge, context.messages);
+
         let usage: AgyUsage | undefined;
         let open: { id: string; name: string } | undefined;
         let textIndex: number | null = null;
@@ -212,6 +233,7 @@ export function streamAntigravity(
               break;
             }
             case "tool_start": {
+              if (isBridgedMcpStep(activity)) break;
               closeText();
               const id = `agy-replay-${++replayCallSeq}`;
               const toolCall = {
@@ -233,7 +255,7 @@ export function streamAntigravity(
               break;
             }
             case "tool_done": {
-              if (!open) break;
+              if (!open || isBridgedMcpStep(activity)) break;
               replay.record(open.id, {
                 agyTool: activity.name,
                 output: activity.output,
@@ -243,8 +265,31 @@ export function streamAntigravity(
               return;
             }
             case "tool_error": {
-              if (!open) break;
+              if (!open || isBridgedMcpStep(activity)) break;
               replay.record(open.id, { agyTool: activity.name, error: activity.message });
+              endWithToolUse();
+              return;
+            }
+            case "bridge_call": {
+              // agy invoked a pi tool through the bridge: end this message
+              // with a toolUse for the REAL pi tool so pi executes it with
+              // full ownership (hooks, permissions, rendering, abort).
+              closeText();
+              const toolCall = {
+                type: "toolCall" as const,
+                id: activity.id,
+                name: activity.name,
+                arguments: activity.args,
+              };
+              output.content.push(toolCall);
+              const index = output.content.length - 1;
+              stream.push({ type: "toolcall_start", contentIndex: index, partial: output });
+              stream.push({
+                type: "toolcall_end",
+                contentIndex: index,
+                toolCall,
+                partial: output,
+              });
               endWithToolUse();
               return;
             }

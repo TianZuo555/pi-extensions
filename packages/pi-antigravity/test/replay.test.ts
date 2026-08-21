@@ -8,6 +8,7 @@ const start: AgyActivity = { type: "tool_start", name: "search_web", args: { que
 const done: AgyActivity = {
   type: "tool_done",
   name: "search_web",
+  args: {},
   output: "results",
   durationSeconds: 4.38,
 };

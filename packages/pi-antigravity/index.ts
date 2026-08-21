@@ -23,6 +23,11 @@ import path from "node:path";
 import { piConfigDir, readJson, writeJson } from "./lib/config.ts";
 import { AGY_BINARY } from "./lib/agy-client.ts";
 import {
+  AgyPiBridge,
+  BRIDGE_SERVER_NAME,
+  type BridgeToolDef,
+} from "./lib/bridge.ts";
+import {
   CONTEXT_WINDOW,
   FALLBACK_MODELS,
   MAX_TOKENS,
@@ -49,6 +54,27 @@ import {
 const MODEL_CACHE_FILE = path.join(piConfigDir("antigravity"), "model-list.json");
 const MODEL_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const DISCOVERY_TIMEOUT_MS = 15_000;
+
+// --- Pi-tool bridge ---------------------------------------------------------
+
+const BRIDGE_ENABLED = process.env.PI_ANTIGRAVITY_PI_TOOL_BRIDGE !== "0";
+const EXPOSE_BUILTIN_TOOLS = process.env.PI_ANTIGRAVITY_EXPOSE_BUILTIN_TOOLS === "1";
+
+/**
+ * Built-in pi tools hidden from the bridge by default — agy has native
+ * equivalents, and duplicating them bloats agy's prompt and invites it to
+ * round-trip work through pi for no gain.
+ */
+const HIDDEN_BUILTIN_TOOLS = new Set(["read", "bash", "write", "edit", "grep", "find", "ls"]);
+
+function execAgy(args: string[], timeoutMs = DISCOVERY_TIMEOUT_MS): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(AGY_BINARY, args, { timeout: timeoutMs }, (err, stdout, stderr) => {
+      if (err) reject(new Error(stderr.trim() || err.message));
+      else resolve(stdout);
+    });
+  });
+}
 
 interface ModelCache {
   fetchedAt?: number;
@@ -123,6 +149,42 @@ export default async function antigravityExtension(pi: ExtensionAPI): Promise<vo
   const service = runtime.runSync(AntigravityRuntime);
   const replay = new AgyReplayStore();
   const cache = await discoverModels();
+
+  // --- Pi-tool bridge setup -------------------------------------------------
+
+  const bridge = new AgyPiBridge();
+  bridge.setOnCall((call) => service.pushBridgeCall(call));
+  bridge.setToolSource(() => {
+    if (!BRIDGE_ENABLED) return [];
+    let activeNames: string[] = [];
+    let allTools: Array<{
+      name: string;
+      description?: string;
+      parameters?: unknown;
+      sourceInfo?: { source?: string };
+    }> = [];
+    try {
+      activeNames = pi.getActiveTools();
+      allTools = pi.getAllTools() as typeof allTools;
+    } catch {
+      return []; // API unavailable (print/RPC edge) — expose nothing.
+    }
+    const active = new Set(activeNames);
+    const tools: BridgeToolDef[] = [];
+    for (const tool of allTools) {
+      if (!active.has(tool.name)) continue;
+      if (tool.name === "agy") continue; // display-only replay wrapper
+      const source = tool.sourceInfo?.source;
+      if (
+        !EXPOSE_BUILTIN_TOOLS &&
+        (source === "builtin" || HIDDEN_BUILTIN_TOOLS.has(tool.name))
+      ) {
+        continue;
+      }
+      tools.push({ name: tool.name, description: tool.description ?? "", parameters: tool.parameters });
+    }
+    return tools;
+  });
 
   // --- Status-bar hint for live agy background tasks -----------------------
 
@@ -242,7 +304,7 @@ export default async function antigravityExtension(pi: ExtensionAPI): Promise<vo
     apiKey: "agy-local-session",
     api: "antigravity-stream-json",
     models: cache.models.map(toProviderModel),
-    streamSimple: streamAntigravity(runtime, service, replay, updateAgyTasksWidget),
+    streamSimple: streamAntigravity(runtime, service, replay, bridge, updateAgyTasksWidget),
   });
 
   pi.on("session_start", async (_event, ctx: ExtensionContext) => {
@@ -250,6 +312,20 @@ export default async function antigravityExtension(pi: ExtensionAPI): Promise<vo
     if (ctx.hasUI) tasksUi = ctx.ui;
     tasksSessionCwd = ctx.cwd;
     updateAgyTasksWidget();
+    // Bridge must be registered before the first agy spawn of the session:
+    // agy eagerly connects to MCP servers at startup (verified 2026-08-21).
+    if (BRIDGE_ENABLED) {
+      try {
+        await bridge.start();
+        await execAgy(["mcp", "add", "--type", "http", BRIDGE_SERVER_NAME, bridge.url!]);
+        bridge.refreshTools();
+      } catch (error) {
+        ctx.ui.notify(
+          `antigravity: pi-tool bridge unavailable (${error instanceof Error ? error.message : error}).`,
+          "warning",
+        );
+      }
+    }
   });
 
   pi.on("session_shutdown", async () => {
@@ -278,6 +354,14 @@ export default async function antigravityExtension(pi: ExtensionAPI): Promise<vo
       await runAntigravity(runtime, service.close);
     } catch {
       // Already closed.
+    }
+    if (bridge.running) {
+      try {
+        await execAgy(["mcp", "remove", BRIDGE_SERVER_NAME]);
+      } catch {
+        // Registration may already be gone.
+      }
+      await bridge.close();
     }
     try {
       tasksUi?.setWidget(AGY_TASKS_WIDGET_KEY, undefined);
@@ -310,7 +394,7 @@ export default async function antigravityExtension(pi: ExtensionAPI): Promise<vo
           apiKey: "agy-local-session",
           api: "antigravity-stream-json",
           models: refreshed.models.map(toProviderModel),
-          streamSimple: streamAntigravity(runtime, service, replay, updateAgyTasksWidget),
+          streamSimple: streamAntigravity(runtime, service, replay, bridge, updateAgyTasksWidget),
         });
         ctx.ui.notify(
           `antigravity: ${refreshed.models.length} models registered (${refreshed.source}).`,
