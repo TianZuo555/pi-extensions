@@ -10,7 +10,7 @@ that weaker models can actually use.
 > tools elsewhere, instead of pi's all-against-the-original-file semantic.
 >
 > The looser shapes models emit anyway are still folded onto that form before
-> validation, so a stray legacy call is normalized rather than rejected — they
+> validation, so off-contract calls are normalized rather than rejected — they
 > are just not advertised.
 
 Install: `npm:@tian.zuo/pi-edit-safe` · npm package `@tian.zuo/pi-edit-safe` · workspace `packages/pi-edit-safe`
@@ -38,7 +38,7 @@ for `path`; `old_string`/`new_string`, `oldString`/`newString`, `old_str`/`new_s
 for the pair (per entry or top-level); top-level `oldText`/`newText` shorthand;
 `edits` as a JSON **string**; and `edits` as a single object.
 
-This keeps old resumed sessions and off-contract calls working without widening
+This keeps off-contract calls working without widening
 the public schema. Exact duplicate entries are rejected loudly. When a later edit
 fails because an earlier edit in the same call rewrote its target, the error says
 exactly that.

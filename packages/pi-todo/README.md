@@ -1,46 +1,19 @@
 # pi-todo
 
-A small `todo` tool for the **pi coding agent**. Replaces
-[`tintinweb/pi-manage-todo-list`](https://github.com/tintinweb/pi-manage-todo-list),
-which is a verbatim clone of GitHub Copilot's `manage_todo_list`.
+A small `todo` tool for the **pi coding agent**.
 
 Install: `npm:@tian.zuo/pi-todo` · npm package `@tian.zuo/pi-todo` · workspace `packages/pi-todo`
 
-## Why replace it
-
-The Copilot clone spends **~565 tokens on every request**: a 22-line
-`description` holding "When to use" (7 bullets), "When NOT to use" (3), a
-"CRITICAL workflow" (5 steps), and a "Todo states" block — plus ~180 tokens of
-parameter descriptions, and a ~30-token nag appended to every write result
-("Ensure that you continue to use the todo list…").
-
-The cause is structural: it defines **no `promptSnippet` and no
-`promptGuidelines`**, so behavioural policy had nowhere to go but the one field
-that ships inside the tool schema on every turn. It was written for a harness
-that has no such slots; pi has both.
-
-| Concern | Copilot clone | **pi-todo** |
-|---|---|---|
-| capability | mixed into 22 policy-heavy lines | one 44-character description |
-| call contract | repeated prose | localized schema descriptions |
-| usage policy | mixed into the schema | two short `promptGuidelines` |
-| per-write nag | ~30 tokens | none |
-| metadata budget | unbounded | under 950 serialized characters, enforced by tests |
-
-It also contradicted itself — the description says "Use this tool VERY
-frequently", then the write handler warns *"Small todo list (<3 items). This
-task might not need a todo list."*
-
-## What this one does
+## What it does
 
 - One tool, `todo`, with `write` (replace the whole list) and `read`.
 - Items are `{ id, title, status }`. There is no per-item prose field: writes
   resend the entire list every time, so per-item descriptions are paid
   repeatedly and never shown.
-- Statuses are unchanged from the tool it replaces — `not-started`,
-  `in-progress`, `completed` — so lists in existing sessions still rebuild.
+- Statuses are `not-started`, `in-progress`, `completed`.
 - The list renders through pi's own `ctx.ui.setWidget` above the editor. No
   bespoke widget component.
+- Tool metadata stays under 950 serialized characters, enforced by tests.
 - `/todos` shows progress, `/todos clear` empties the list.
 
 ## The one guard
@@ -64,9 +37,7 @@ items.
 ## State and branching
 
 State lives in tool-result `details`, so branching, forking, and resuming
-rebuild the list belonging to that point in history. The session scanner also
-accepts results from the old `manage_todo_list` tool, so lists created before
-the switch survive.
+rebuild the list belonging to that point in history.
 
 ## Tests
 

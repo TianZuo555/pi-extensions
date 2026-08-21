@@ -21,9 +21,6 @@ Interactive controls:
 - `Enter` — move to the next question or submit the completed form
 - `Esc` — go back from the custom-answer editor or dismiss the form
 
-The public schema uses `questions[]`. Calls saved by versions through 0.1.2 with
-top-level `question` and `options` are upgraded automatically when resumed.
-
 While it waits for your answer, the tool reports the input requirement on pi's
 **shared event bus** (`pi.events`). This is pi's in-process mechanism for tool ↔
 integration communication: an integration subscribes with `pi.events.on(...)`,
@@ -55,5 +52,8 @@ one waiting on a human. Emitting is best-effort, balanced active→inactive via
 `try/finally`, and a harmless no-op when nothing listens. No event is emitted in
 non-UI modes.
 
-See the [collection repository](https://github.com/TianZuo555/pi-extensions#ask-user)
-for full documentation.
+See the [collection repository](https://github.com/TianZuo555/pi-extensions) for more extensions.
+
+## License
+
+[MIT](../../LICENSE) © Tian Zuo

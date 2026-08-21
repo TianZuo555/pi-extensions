@@ -169,8 +169,6 @@ pnpm test
 
 ## Credits
 
-Ported from [`davis7dotsh/my-pi-setup`](https://github.com/davis7dotsh/my-pi-setup/tree/main/extensions/background-terminals).
-
 ## License
 
 MIT

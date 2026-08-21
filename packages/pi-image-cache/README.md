@@ -1,12 +1,32 @@
 # @tian.zuo/pi-image-cache
 
-Temporary pasted-image caching with compact placeholders for [pi](https://pi.dev).
+Temporary pasted-image caching with compact placeholders for the [pi coding agent](https://pi.dev).
 
 ```bash
 pi install npm:@tian.zuo/pi-image-cache
 ```
 
-Provides `Ctrl+V` clipboard-image support on macOS (raw image data and image
-files copied in Finder), `/images`, and `/image-cache-clear`.
+## How it works
 
-See the [collection repository](https://github.com/TianZuo555/pi-extensions#image-cache) for full documentation.
+Caches pasted images so they survive as compact `[Image#NNN]` placeholders and
+are re-attached to the model on send.
+
+On macOS, `Ctrl+V` pastes the clipboard image directly — both raw image data
+(screenshots, "Copy Image") and image files copied in Finder, including
+multiple files at once. File references win over pasteboard image data,
+because Finder also puts a generic 1024×1024 document icon on the clipboard
+next to the file it copied.
+
+The cache lives under `~/.pi/agent/cache/image-cache/` with a 24h TTL,
+alongside a small PNG rendition per non-PNG image so inline previews work in
+Kitty-protocol terminals (Ghostty, Kitty, WezTerm) and after a session resume.
+
+## Commands
+
+- `Ctrl+V` — paste a clipboard image (macOS).
+- `/images` — list cached images.
+- `/image-cache-clear` — clear the cache.
+
+## License
+
+[MIT](../../LICENSE) © Tian Zuo

@@ -129,4 +129,4 @@ pi -e npm:@tian.zuo/pi-usage
 
 ## License
 
-[MIT](./LICENSE) © Tian Zuo
+[MIT](../../LICENSE) © Tian Zuo
