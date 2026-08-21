@@ -88,12 +88,13 @@ export function tooManyResultsNotice(
     const remaining = total - shown;
     // Output pages are capped by lines/bytes, so a higher limit cannot reveal
     // what was omitted — only a narrower search (or less context) can.
+    const unit = kind === "grep" ? "line" : "path";
     const narrow = kind === "grep"
         ? "Narrow the search with path/exclude or reduce context"
         : "Narrow the search with path/exclude";
-    return `[Showing ${shown} of ${total} output lines (${remaining} more line${
+    return `[Showing ${shown} of ${total} output ${unit}s (${remaining} more ${unit}${
         remaining === 1 ? "" : "s"
-    } omitted). ${narrow}; raising limit does not reveal omitted lines.]`;
+    } omitted). ${narrow}; raising limit does not reveal omitted ${unit}s.]`;
 }
 
 export function resultLimitNotice(

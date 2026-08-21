@@ -88,7 +88,7 @@ test("the overflow notice shows shown, total, and remaining count", () => {
 });
 
 test("the overflow notice uses a singular for one remaining line", () => {
-  assert.match(tooManyResultsNotice(20, 21, "find"), /1 more line omitted/);
+  assert.match(tooManyResultsNotice(20, 21, "find"), /1 more path omitted/);
   assert.doesNotMatch(tooManyResultsNotice(20, 21, "find"), /reduce context/);
 });
 

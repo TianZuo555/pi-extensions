@@ -1,6 +1,6 @@
 {
   "name": "@tian.zuo/pi-find",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "ripgrep/fd-backed grep and find tools for the pi coding agent, with a path-constraint DSL, directory pruning, multi-pattern support, and whole-path matching.",
   "type": "module",
   "keywords": [
