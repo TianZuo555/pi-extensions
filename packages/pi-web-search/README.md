@@ -10,7 +10,7 @@ pi install npm:@tian.zuo/pi-web-search
 
 ## Configuration
 
-**Easiest — `/websearch-auth`** inside a pi session: pick a provider, paste your key, done. Each option shows its state in pi's login style — green `✓ env: EXA_API_KEY` when an env var is set, green `✓ config: fc-1…ab3d` for a stored key, `• unconfigured` otherwise. Ollama asks for a base URL (empty = `localhost:11434`) and an optional API key. Empty input removes a stored value; `esc` cancels.
+**Easiest — `/websearch-auth`** inside a pi session: pick a provider, paste your key, done. Keys are stored in pi's own auth file (`~/.pi/agent/auth.json`, same place as `/login` credentials) and never in plain project files. Each option shows its state in pi's login style — green `✓ env: EXA_API_KEY` when an env var is set, green `✓ auth: fc-1…ab3d` for a stored key, `• unconfigured` otherwise. Ollama asks for a base URL (empty = `localhost:11434`, saved to `~/.config/pi-web-search/config.json`) and an optional API key. Empty input removes a stored value; `esc` cancels.
 
 **Manual** — env variables (highest priority):
 
@@ -21,17 +21,17 @@ pi install npm:@tian.zuo/pi-web-search
 | `FIRECRAWL_API_KEY` | Firecrawl search + fetch |
 | `OLLAMA_HOST` / `OLLAMA_API_KEY` | Ollama (default `http://localhost:11434`) |
 
-…or a config file at `~/.config/pi-web-search/config.json` (plain text, like pi's own `auth.json`):
+…or `~/.config/pi-web-search/config.json` for non-secret options (base URLs, preferred provider):
 
 ```json
 {
   "searchProvider": "exa",
   "fetchProvider": "firecrawl",
-  "exa": { "apiKey": "..." },
-  "firecrawl": { "apiKey": "..." },
-  "ollama": { "baseUrl": "http://localhost:11434", "apiKey": "..." }
+  "ollama": { "baseUrl": "http://localhost:11434" }
 }
 ```
+
+API keys themselves live in `~/.pi/agent/auth.json` under `websearch-exa` / `websearch-firecrawl` / `websearch-ollama` (manageable via `/websearch-auth`).
 
 `searchProvider` / `fetchProvider` set your preferred provider; everything else with a valid key stays in the fallback chain. No keys at all? Search falls back to Ollama, fetch falls back to **direct fetch** (keyless, no config needed).
 

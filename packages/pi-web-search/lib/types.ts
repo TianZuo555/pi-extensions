@@ -62,15 +62,12 @@ export interface WebSearchConfig {
     systemPrompt?: string;
   };
   exa?: {
-    apiKey?: string;
     baseUrl?: string;
   };
   firecrawl?: {
-    apiKey?: string;
     baseUrl?: string;
   };
   ollama?: {
     baseUrl?: string;
-    apiKey?: string;
   };
 }

@@ -76,6 +76,47 @@ export function readPiAuthData(): PiAuthData {
     return {};
 }
 
+/** Provider ids used for API keys inside pi's ~/.pi/agent/auth.json. */
+export const AUTH_IDS = {
+    exa: "websearch-exa",
+    firecrawl: "websearch-firecrawl",
+    ollama: "websearch-ollama",
+} as const;
+
+export type AuthProviderId = (typeof AUTH_IDS)[keyof typeof AUTH_IDS];
+
+function piAuthKey(id: AuthProviderId): string | undefined {
+    return readPiAuthData()[id]?.key?.trim() || undefined;
+}
+
+/** Stored API key for a provider, read from pi's auth.json. */
+export function loadProviderKey(
+    name: "exa" | "firecrawl" | "ollama",
+): string | undefined {
+    return piAuthKey(AUTH_IDS[name]);
+}
+
+/**
+ * Store or remove an API key in pi's auth.json, merging with existing
+ * entries. `undefined` removes the entry.
+ */
+export function writePiAuthKey(
+    id: AuthProviderId,
+    key: string | undefined,
+): void {
+    const data = readPiAuthData();
+    if (key === undefined) {
+        delete data[id];
+    } else {
+        data[id] = { type: "api_key", key };
+    }
+    fs.mkdirSync(path.dirname(PI_AUTH_FILE), { recursive: true });
+    fs.writeFileSync(PI_AUTH_FILE, JSON.stringify(data, null, 2) + "\n", {
+        encoding: "utf-8",
+        mode: 0o600,
+    });
+}
+
 export interface ResolvedOpenAIConfig {
     apiKey: string;
     baseUrl: string;
@@ -228,26 +269,17 @@ export function resolveExaConfig(
     config = loadStoredConfig(),
 ): ResolvedExaConfig | null {
     const envKey = process.env.EXA_API_KEY?.trim();
-    if (envKey) {
-        return {
-            apiKey: envKey,
-            baseUrl:
-                process.env.EXA_BASE_URL?.trim() ||
-                config.exa?.baseUrl?.trim() ||
-                DEFAULT_EXA_API_URL,
-            source: "EXA_API_KEY env",
-        };
-    }
-
-    if (config.exa?.apiKey?.trim()) {
-        return {
-            apiKey: config.exa.apiKey.trim(),
-            baseUrl: config.exa.baseUrl?.trim() || DEFAULT_EXA_API_URL,
-            source: "config file",
-        };
-    }
-
-    return null;
+    const authKey = piAuthKey(AUTH_IDS.exa);
+    const key = envKey || authKey;
+    if (!key) return null;
+    return {
+        apiKey: key,
+        baseUrl:
+            process.env.EXA_BASE_URL?.trim() ||
+            config.exa?.baseUrl?.trim() ||
+            DEFAULT_EXA_API_URL,
+        source: envKey ? "EXA_API_KEY env" : "~/.pi/agent/auth.json",
+    };
 }
 
 export interface ResolvedFirecrawlConfig {
@@ -260,27 +292,17 @@ export function resolveFirecrawlConfig(
     config = loadStoredConfig(),
 ): ResolvedFirecrawlConfig | null {
     const envKey = process.env.FIRECRAWL_API_KEY?.trim();
-    if (envKey) {
-        return {
-            apiKey: envKey,
-            baseUrl:
-                process.env.FIRECRAWL_BASE_URL?.trim() ||
-                config.firecrawl?.baseUrl?.trim() ||
-                DEFAULT_FIRECRAWL_API_URL,
-            source: "FIRECRAWL_API_KEY env",
-        };
-    }
-
-    if (config.firecrawl?.apiKey?.trim()) {
-        return {
-            apiKey: config.firecrawl.apiKey.trim(),
-            baseUrl:
-                config.firecrawl.baseUrl?.trim() || DEFAULT_FIRECRAWL_API_URL,
-            source: "config file",
-        };
-    }
-
-    return null;
+    const authKey = piAuthKey(AUTH_IDS.firecrawl);
+    const key = envKey || authKey;
+    if (!key) return null;
+    return {
+        apiKey: key,
+        baseUrl:
+            process.env.FIRECRAWL_BASE_URL?.trim() ||
+            config.firecrawl?.baseUrl?.trim() ||
+            DEFAULT_FIRECRAWL_API_URL,
+        source: envKey ? "FIRECRAWL_API_KEY env" : "~/.pi/agent/auth.json",
+    };
 }
 
 export interface ResolvedOllamaConfig {
@@ -299,7 +321,7 @@ export function resolveOllamaConfig(
         config.ollama?.baseUrl?.trim() ||
         DEFAULT_OLLAMA_HOST
     ).replace(/\/+$/, "");
-    const apiKey = envKey || config.ollama?.apiKey?.trim() || undefined;
+    const apiKey = envKey || piAuthKey(AUTH_IDS.ollama) || undefined;
     const source = envHost
         ? "OLLAMA_HOST env"
         : config.ollama?.baseUrl

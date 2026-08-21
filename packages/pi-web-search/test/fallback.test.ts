@@ -119,7 +119,9 @@ test("provider chains put the requested provider first and dedupe", () => {
     delete process.env.FIRECRAWL_API_KEY;
     delete process.env.OLLAMA_HOST;
 
-    const cfg = { firecrawl: { apiKey: "fc-key" } };
+    // Firecrawl becomes "available" purely through its env key.
+    process.env.FIRECRAWL_API_KEY = "fc-key";
+    const cfg = {};
 
     // Fetch chains never include OpenAI, so they are fully deterministic.
     assert.deepEqual(availableFetchProviders(cfg), ["firecrawl", "direct"]);
