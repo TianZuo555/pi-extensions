@@ -92,6 +92,8 @@ export class AntigravityRuntime extends Context.Service<
 
 const makeRuntime = Effect.gen(function* () {
   let conversationId: string | undefined;
+  /** The cwd the conversation was created in — agy pins conversations to their workspace. */
+  let conversationCwd: string | undefined;
   let model: string | undefined;
   // pi loads extensions with the session directory as process cwd; session_start
   // refreshes this, but the default keeps print mode and early turns correct.
@@ -135,6 +137,15 @@ const makeRuntime = Effect.gen(function* () {
               return active;
             }
             active = undefined;
+            // agy pins a conversation to the workspace it was created in:
+            // resuming it from another directory silently writes into the
+            // OLD workspace (verified 2026-08-21) or rejects writes with
+            // "not a valid artifact path". Start fresh when the project
+            // changed instead of carrying a stale workspace binding.
+            if (conversationId && conversationCwd !== cwd) {
+              conversationId = undefined;
+              conversationCwd = undefined;
+            }
             if (model !== request.modelId) conversationId = undefined;
             model = request.modelId;
             const controller = new AgyTurnController(request.prompt);
@@ -166,6 +177,7 @@ const makeRuntime = Effect.gen(function* () {
                 // Track eagerly — a turn hung on a background task may never
                 // resolve, and /agy-tasks needs the id meanwhile.
                 conversationId = id;
+                conversationCwd = cwd;
               },
               onActivity: (activity) => controller.push(activity),
             };
@@ -197,6 +209,7 @@ const makeRuntime = Effect.gen(function* () {
       Effect.andThen(
         Effect.sync(() => {
           conversationId = undefined;
+          conversationCwd = undefined;
           turns = 0;
         }),
       ),
@@ -214,6 +227,7 @@ const makeRuntime = Effect.gen(function* () {
           Effect.sync(() => {
             closed = true;
             conversationId = undefined;
+            conversationCwd = undefined;
             // Kill any in-flight agy child process immediately.
             activeTurnAbort?.abort();
             activeTurnAbort = undefined;

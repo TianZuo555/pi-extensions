@@ -104,3 +104,15 @@ test("summarizeAgyResult counts grep matches and find results", () => {
 
   assert.deepEqual(summarizeAgyResult("search_web", undefined), {});
 });
+
+test("write/edit cards render TargetFile paths (regression: [invalid arg])", () => {
+  const theme = {
+    bold: (s: string) => s,
+    fg: (_role: string, s: string) => s,
+  } as never;
+  for (const tool of ["write_to_file", "replace_file_content"]) {
+    const line = formatAgyCall(tool, { TargetFile: "/repo/src/custom-actions.ts" }, theme);
+    assert.ok(!line.includes("[invalid arg]"), tool);
+    assert.ok(line.includes("/repo/src/custom-actions.ts"), tool);
+  }
+});

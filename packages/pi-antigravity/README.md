@@ -103,7 +103,7 @@ Tracking works by reading each task's log under `~/.gemini/antigravity-cli/brain
 - **agy quirks the extension handles for you:** the prompt must come right after `--print`; print mode needs `--add-dir <cwd>` to see your project; `--disable-slash-commands` stops agy's built-in guide skill from hijacking headless turns.
 - **Permissions:** `--dangerously-skip-permissions` is always passed. For fully autonomous agy shell commands, add `{ "permissions": { "allow": ["command(*)"] } }` to `~/.gemini/antigravity-cli/settings.json`. MCP calls (the bridge) need no extra rules.
 - **Thinking level** maps to `agy --effort`: low → `low`, medium → `medium`, high and above → `high`.
-- **Conversation memory** lives on agy's side and is reused across turns; it resets when you switch models or run `/agy reset`. pi-side compaction does not compact it.
+- **Conversation memory** lives on agy's side and is reused across turns; it resets when you switch models, change projects, or run `/agy reset`. (agy pins a conversation to the workspace it was created in — reusing it from another project would write into the old one.) pi-side compaction does not compact it.
 - **Images** are not supported by agy's print interface; they are replaced by an omission note.
 - **Cost display** uses reference Gemini API prices, since agy is subscription-billed. Override rates per model via `~/.pi/agent/models.json` (`providers.antigravity.modelOverrides`).
 - Model discovery runs `agy models` at startup (15s timeout, cached 24h in `~/.pi/antigravity/model-list.json`) with a bundled fallback.
