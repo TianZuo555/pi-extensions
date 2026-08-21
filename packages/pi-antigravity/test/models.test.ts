@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { parseAgyModels } from "../lib/models.ts";
+import { parseAgyModels, pricingForModel } from "../lib/models.ts";
 import { MODELS_OUTPUT } from "./fixtures.ts";
 
-test("parseAgyModels parses tab-separated model lines and skips noise", () => {
+test("parseAgyModels parses tab-separated model lines, collapses effort variants, and skips noise", () => {
   const models = parseAgyModels(MODELS_OUTPUT);
-  assert.equal(models.length, 4);
-  assert.deepEqual(models[0], { id: "gemini-3.7-flash-high", name: "Gemini 3.7 Flash (High)" });
-  assert.equal(models[3].id, "gemini-3.6-flash-high");
+  assert.equal(models.length, 3);
+  assert.deepEqual(models[0], { id: "gemini-3.7-flash", name: "Gemini 3.7 Flash" });
+  assert.deepEqual(models[1], { id: "gemini-3.7-pro", name: "Gemini 3.7 Pro" });
+  assert.equal(models[2].id, "gemini-3.6-flash");
 });
 
 test("parseAgyModels dedupes ids and rejects malformed lines", () => {
@@ -22,4 +23,13 @@ test("parseAgyModels dedupes ids and rejects malformed lines", () => {
 
 test("parseAgyModels returns empty for empty output", () => {
   assert.deepEqual(parseAgyModels(""), []);
+});
+
+test("pricingForModel picks the flash or pro reference tier", () => {
+  const flash = pricingForModel("gemini-3.7-flash");
+  assert.equal(flash.input, 0.3);
+  assert.equal(flash.output, 2.5);
+  const pro = pricingForModel("gemini-3.7-pro");
+  assert.equal(pro.input, 1.25);
+  assert.equal(pro.output, 10);
 });

@@ -24,6 +24,7 @@ import {
   type AgyTurnRequest,
 } from "../lib/agy-client.ts";
 import type { AgyTurnOutcome } from "../lib/reducer.ts";
+import { AgyTurnController } from "../lib/turn.ts";
 
 export class AntigravitySpawnError extends Data.TaggedError("AntigravitySpawnError")<{
   readonly message: string;
@@ -50,15 +51,19 @@ export interface AntigravityRuntimeShape {
     cwd: string,
     modelId: string | undefined,
   ) => Effect.Effect<void, AntigravityRuntimeClosedError>;
-  readonly beginTurn: (
-    modelId: string,
-  ) => Effect.Effect<
-    { resumeConversationId: string | undefined },
-    AntigravityRuntimeClosedError
-  >;
-  readonly runTurn: (
-    request: AgyTurnRequest,
-  ) => Effect.Effect<AgyTurnOutcome, AntigravityRuntimeError>;
+  /**
+   * Start a new agy turn or re-attach to the active one. Re-attachment
+   * happens when pi re-invokes the provider after a tool-use turn: the same
+   * prompt maps to the still-running (or finished-but-unconsumed) controller.
+   */
+  readonly beginStreamTurn: (request: {
+    readonly prompt: string;
+    readonly modelId: string;
+    readonly effort: "low" | "medium" | "high";
+    readonly signal?: AbortSignal;
+  }) => Effect.Effect<AgyTurnController, AntigravityRuntimeClosedError>;
+  /** Clear the active controller once a provider turn reached a terminal state. */
+  readonly finishTurn: Effect.Effect<void>;
   readonly reset: Effect.Effect<void, AntigravityRuntimeClosedError>;
   readonly snapshot: Effect.Effect<AntigravityStateSnapshot, AntigravityRuntimeClosedError>;
   readonly close: Effect.Effect<void, AntigravityRuntimeClosedError>;
@@ -72,9 +77,12 @@ export class AntigravityRuntime extends Context.Service<
 const makeRuntime = Effect.gen(function* () {
   let conversationId: string | undefined;
   let model: string | undefined;
-  let cwd: string | undefined;
+  // pi loads extensions with the session directory as process cwd; session_start
+  // refreshes this, but the default keeps print mode and early turns correct.
+  let cwd: string | undefined = process.cwd();
   let turns = 0;
   let closed = false;
+  let active: AgyTurnController | undefined;
 
   const ensureOpen: Effect.Effect<void, AntigravityRuntimeClosedError> = Effect.suspend(() =>
     closed
@@ -97,45 +105,49 @@ const makeRuntime = Effect.gen(function* () {
         ),
       ),
 
-    beginTurn: (modelId) =>
+    beginStreamTurn: (request) =>
       ensureOpen.pipe(
         Effect.andThen(
           Effect.sync(() => {
-            if (model !== modelId) {
-              conversationId = undefined;
-              model = modelId;
+            if (
+              active &&
+              active.prompt === request.prompt &&
+              (!active.isClosed() || active.hasPending())
+            ) {
+              return active;
             }
-            return { resumeConversationId: conversationId };
+            active = undefined;
+            if (model !== request.modelId) conversationId = undefined;
+            model = request.modelId;
+            const controller = new AgyTurnController(request.prompt);
+            active = controller;
+            const spawnRequest: AgyTurnRequest = {
+              prompt: request.prompt,
+              conversationId,
+              model: request.modelId,
+              effort: request.effort,
+              cwd,
+              timeoutMs: 600_000,
+              signal: request.signal,
+              onActivity: (activity) => controller.push(activity),
+            };
+            void runAgyTurn(spawnRequest)
+              .then((outcome: AgyTurnOutcome) => {
+                turns += 1;
+                if (outcome.conversationId) conversationId = outcome.conversationId;
+                controller.close();
+              })
+              .catch((cause: unknown) => {
+                controller.fail(cause instanceof Error ? cause : new Error(String(cause)));
+              });
+            return controller;
           }),
         ),
       ),
 
-    runTurn: (request) =>
-      ensureOpen.pipe(
-        Effect.flatMap(() =>
-          Effect.tryPromise({
-            try: () =>
-              runAgyTurn({
-                ...request,
-                cwd: request.cwd ?? cwd,
-                conversationId: request.conversationId ?? conversationId,
-              }),
-            catch: (cause) =>
-              cause instanceof AgySpawnError
-                ? new AntigravitySpawnError({ message: cause.message, stderr: cause.stderr })
-                : new AntigravitySpawnError({
-                    message: cause instanceof Error ? cause.message : String(cause),
-                    stderr: "",
-                  }),
-          }),
-        ),
-        Effect.tap((outcome) =>
-          Effect.sync(() => {
-            turns += 1;
-            if (outcome.conversationId) conversationId = outcome.conversationId;
-          }),
-        ),
-      ),
+    finishTurn: Effect.sync(() => {
+      if (active?.isClosed()) active = undefined;
+    }),
 
     reset: ensureOpen.pipe(
       Effect.andThen(

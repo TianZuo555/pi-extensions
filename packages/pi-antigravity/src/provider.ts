@@ -2,9 +2,14 @@
  * streamSimple adapter — runs one agy turn per pi request and translates the
  * reduced outcome into pi AssistantMessageEvents.
  *
- * agy streams no assistant-text deltas; tool activity streams live and is
- * surfaced through pi's thinking channel (dim, collapsible), while the final
- * text arrives from the terminal result event as a single text block.
+ * agy streams response text (reasoning included — agy writes it inline as
+ * markdown) as text_delta continuation chunks on agent_response steps; these
+ * stream live into pi's text channel. agy tool steps render as native pi
+ * tool cards: when a tool step completes, the provider records the result in
+ * the replay store and ends the assistant message with stopReason
+ * "toolUse", so pi renders the card, executes the display-only `agy`
+ * wrapper tool, and re-invokes this adapter — which re-attaches to the
+ * still-running agy turn via the runtime's turn controller.
  */
 
 import {
@@ -15,8 +20,11 @@ import {
   type Context,
   type Model,
   type SimpleStreamOptions,
+  type ThinkingLevel,
 } from "@earendil-works/pi-ai";
-import type { AgyTurnOutcome } from "../lib/reducer.ts";
+import type { AgyEffort } from "../lib/agy-client.ts";
+import type { AgyUsage } from "../lib/reducer.ts";
+import { AgyReplayStore } from "../lib/replay.ts";
 import type { AntigravityRuntimeInstance, AntigravityRuntimeShape } from "./runtime.ts";
 
 interface TextPart {
@@ -52,19 +60,8 @@ export function latestUserPrompt(context: Context): { prompt: string; images: nu
   return { prompt: "", images: 0 };
 }
 
-const EMPTY_OUTCOME: AgyTurnOutcome = {
-  conversationId: undefined,
-  status: "UNKNOWN",
-  response: "",
-  error: undefined,
-  usage: undefined,
-  toolLines: [],
-  finished: false,
-};
-
 /** Map agy usage fields to pi usage fields. */
-export function mapUsage(outcome: AgyTurnOutcome): AssistantMessage["usage"] {
-  const u = outcome.usage;
+export function mapUsage(u: AgyUsage | undefined): AssistantMessage["usage"] {
   return {
     input: u?.input_tokens ?? 0,
     output: u?.output_tokens ?? 0,
@@ -77,10 +74,20 @@ export function mapUsage(outcome: AgyTurnOutcome): AssistantMessage["usage"] {
 
 const OVERFLOW_PATTERN = /context (length|window|size).*(exceed|limit)|exceeds.*context/i;
 
+/** Map pi's thinking level to agy's `--effort` (low|medium|high). */
+export function mapThinkingToEffort(level: ThinkingLevel | undefined): AgyEffort {
+  if (level === "low" || level === "minimal") return "low";
+  if (level === "medium") return "medium";
+  return "high"; // high, xhigh, max, and undefined default
+}
+
+let replayCallSeq = 0;
+
 /** Build the streamSimple implementation bound to the runtime service. */
 export function streamAntigravity(
   runtime: AntigravityRuntimeInstance,
   service: AntigravityRuntimeShape,
+  replay: AgyReplayStore,
 ) {
   return (
     model: Model<string>,
@@ -96,9 +103,13 @@ export function streamAntigravity(
         api: model.api,
         provider: model.provider,
         model: model.id,
-        usage: mapUsage(EMPTY_OUTCOME),
+        usage: mapUsage(undefined),
         stopReason: "pending",
         timestamp: Date.now(),
+      };
+
+      const clearTurn = () => {
+        runtime.runPromise(service.finishTurn).catch(() => {});
       };
 
       const fail = (message: string) => {
@@ -107,6 +118,7 @@ export function streamAntigravity(
           : "";
         output.stopReason = options?.signal?.aborted ? "aborted" : "error";
         output.errorMessage = `${message}${hint}`;
+        clearTurn();
         stream.push({ type: "error", reason: output.stopReason, error: output });
         stream.end();
       };
@@ -119,82 +131,175 @@ export function streamAntigravity(
           throw new Error("antigravity: no user text found in the request context.");
         }
 
-        const { resumeConversationId } = await runtime.runPromise(
-          service.beginTurn(model.id),
-        );
-
-        let thinkingIndex = -1;
-        const ensureThinking = () => {
-          if (thinkingIndex >= 0) return;
-          output.content.push({ type: "thinking", thinking: "" });
-          thinkingIndex = output.content.length - 1;
-          stream.push({ type: "thinking_start", contentIndex: thinkingIndex, partial: output });
-        };
-
-        const result: AgyTurnOutcome = await runtime.runPromise(
-          service.runTurn({
+        const controller = await runtime.runPromise(
+          service.beginStreamTurn({
             prompt,
-            conversationId: resumeConversationId,
-            model: model.id,
-            timeoutMs: 600_000,
+            modelId: model.id,
+            effort: mapThinkingToEffort(options?.reasoning),
             signal: options?.signal,
-            onActivity: (line) => {
-              ensureThinking();
-              const block = output.content[thinkingIndex];
-              if (block.type === "thinking") block.thinking += `${line}\n`;
-              stream.push({
-                type: "thinking_delta",
-                contentIndex: thinkingIndex,
-                delta: `${line}\n`,
-                partial: output,
-              });
-            },
           }),
         );
 
-        if (thinkingIndex >= 0) {
-          const block = output.content[thinkingIndex];
-          stream.push({
-            type: "thinking_end",
-            contentIndex: thinkingIndex,
-            content: block.type === "thinking" ? block.thinking : "",
-            partial: output,
-          });
-        }
+        let usage: AgyUsage | undefined;
+        let open: { id: string; name: string } | undefined;
+        let textIndex: number | null = null;
+        let textBuffer = "";
 
-        output.usage = mapUsage(result);
-        calculateCost(model, output.usage);
-
-        if (result.response) {
-          output.content.push({ type: "text", text: result.response });
-          const idx = output.content.length - 1;
-          stream.push({ type: "text_start", contentIndex: idx, partial: output });
-          stream.push({
-            type: "text_delta",
-            contentIndex: idx,
-            delta: result.response,
-            partial: output,
-          });
+        const closeText = () => {
+          if (textIndex === null) return;
           stream.push({
             type: "text_end",
-            contentIndex: idx,
-            content: result.response,
+            contentIndex: textIndex,
+            content: textBuffer,
             partial: output,
           });
-        }
+          textIndex = null;
+          textBuffer = "";
+        };
 
-        if (result.status === "ERROR") {
-          const message = result.error || "agy reported an error for this turn.";
-          output.stopReason = "error";
-          output.errorMessage = OVERFLOW_PATTERN.test(message)
-            ? `context_length_exceeded: ${message}`
-            : message;
-          stream.push({ type: "error", reason: "error", error: output });
-        } else {
-          output.stopReason = "stop";
-          stream.push({ type: "done", reason: "stop", message: output });
+        const endWithToolUse = () => {
+          closeText();
+          output.usage = mapUsage(usage);
+          calculateCost(model, output.usage);
+          output.stopReason = "toolUse";
+          stream.push({ type: "done", reason: "toolUse", message: output });
+          stream.end();
+        };
+
+        while (true) {
+          const activity = await controller.next();
+          if (activity === null) {
+            if (open) {
+              // The agy stream ended while a tool call was still open.
+              replay.record(open.id, {
+                agyTool: open.name,
+                error: "agy tool call did not complete.",
+              });
+              endWithToolUse();
+              return;
+            }
+            throw new Error("agy turn ended without a result event.");
+          }
+
+          switch (activity.type) {
+            case "usage": {
+              usage = activity.usage;
+              break;
+            }
+            case "tool_start": {
+              closeText();
+              const id = `agy-replay-${++replayCallSeq}`;
+              const toolCall = {
+                type: "toolCall" as const,
+                id,
+                name: "agy",
+                arguments: { tool: activity.name, input: activity.args },
+              };
+              output.content.push(toolCall);
+              const index = output.content.length - 1;
+              stream.push({ type: "toolcall_start", contentIndex: index, partial: output });
+              stream.push({
+                type: "toolcall_end",
+                contentIndex: index,
+                toolCall,
+                partial: output,
+              });
+              open = { id, name: activity.name };
+              break;
+            }
+            case "tool_done": {
+              if (!open) break;
+              replay.record(open.id, {
+                agyTool: activity.name,
+                output: activity.output,
+                durationSeconds: activity.durationSeconds,
+              });
+              endWithToolUse();
+              return;
+            }
+            case "tool_error": {
+              if (!open) break;
+              replay.record(open.id, { agyTool: activity.name, error: activity.message });
+              endWithToolUse();
+              return;
+            }
+            case "text": {
+              if (textIndex === null) {
+                output.content.push({ type: "text", text: "" });
+                textIndex = output.content.length - 1;
+                textBuffer = "";
+                stream.push({ type: "text_start", contentIndex: textIndex, partial: output });
+              }
+              textBuffer += activity.delta;
+              const block = output.content[textIndex];
+              if (block.type === "text") block.text = textBuffer;
+              stream.push({
+                type: "text_delta",
+                contentIndex: textIndex,
+                delta: activity.delta,
+                partial: output,
+              });
+              break;
+            }
+            case "result": {
+              if (open) {
+                replay.record(open.id, {
+                  agyTool: open.name,
+                  error: "agy tool call did not complete.",
+                });
+                endWithToolUse();
+                return;
+              }
+              output.usage = mapUsage(activity.usage);
+              calculateCost(model, output.usage);
+
+              if (activity.response) {
+                if (textIndex !== null) {
+                  // Deltas already streamed this block; snap it to the
+                  // authoritative final text in case of drift.
+                  if (textBuffer !== activity.response) {
+                    const block = output.content[textIndex];
+                    if (block.type === "text") block.text = activity.response;
+                  }
+                  closeText();
+                } else {
+                  output.content.push({ type: "text", text: activity.response });
+                  const idx = output.content.length - 1;
+                  stream.push({ type: "text_start", contentIndex: idx, partial: output });
+                  stream.push({
+                    type: "text_delta",
+                    contentIndex: idx,
+                    delta: activity.response,
+                    partial: output,
+                  });
+                  stream.push({
+                    type: "text_end",
+                    contentIndex: idx,
+                    content: activity.response,
+                    partial: output,
+                  });
+                }
+              } else {
+                closeText();
+              }
+
+              if (activity.status === "ERROR") {
+                const message = activity.error || "agy reported an error for this turn.";
+                output.stopReason = "error";
+                output.errorMessage = OVERFLOW_PATTERN.test(message)
+                  ? `context_length_exceeded: ${message}`
+                  : message;
+                stream.push({ type: "error", reason: "error", error: output });
+              } else {
+                output.stopReason = "stop";
+                stream.push({ type: "done", reason: "stop", message: output });
+              }
+              clearTurn();
+              stream.end();
+              return;
+            }
+          }
         }
-        stream.end();
       } catch (error) {
         fail(error instanceof Error ? error.message : String(error));
       }

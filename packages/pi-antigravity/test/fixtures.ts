@@ -102,6 +102,14 @@ export const OK_CAPTURE = [
     step_update: { conversation_id: "c-ok-1", step_index: 1, state: "DONE", step_type: "tool", tool_name: "list_dir", duration_seconds: 0.1, output: "3 entries" },
   }),
   JSON.stringify({
+    event: "step_update",
+    step_update: { conversation_id: "c-ok-1", step_index: 2, state: "ACTIVE", step_type: "agent_response", text_delta: "Hello " },
+  }),
+  JSON.stringify({
+    event: "step_update",
+    step_update: { conversation_id: "c-ok-1", step_index: 2, state: "DONE", step_type: "agent_response", text_delta: "from agy!", duration_seconds: 0.4, usage: { input_tokens: 100, output_tokens: 20, thinking_tokens: 5, cache_read_tokens: 0, total_tokens: 120 } },
+  }),
+  JSON.stringify({
     event: "result",
     result: {
       conversation_id: "c-ok-1",

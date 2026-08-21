@@ -8,8 +8,8 @@ Use Google Antigravity (`agy`) models inside the [pi coding agent](https://pi.de
 
   ```
   agy --print "<prompt>" --dangerously-skip-permissions --disable-slash-commands \
-      --output-format stream-json [--conversation <id>] [--model <id>] \
-      --print-timeout 600s
+      --output-format stream-json [--add-dir <cwd>] [--conversation <id>] \
+      [--model <id>] [--effort low|medium|high] --print-timeout 600s
   ```
 
 - **agy arg-order quirk:** `--print` takes the very next token as the prompt value (it is not a boolean flag). The prompt must be placed immediately after `--print`; trailing it after other flags makes the first flag string the prompt, and the model answers questions about that flag instead.
@@ -21,10 +21,12 @@ Use Google Antigravity (`agy`) models inside the [pi coding agent](https://pi.de
 
   agy runs fully autonomous then; pi's permission layer does not gate it.
 - `--disable-slash-commands` is also always passed: without it, agy's built-in `antigravity_guide` skill hijacks headless turns — the model detours into reading its own skill docs (sometimes tripping agy's hardcoded protection boundary on `~/.gemini/`) instead of answering the prompt.
+- `--add-dir <cwd>` registers the session directory as the agy workspace: agy's print mode does **not** treat the process cwd as the workspace and would otherwise fall back to `~/.gemini/antigravity-cli/scratch`.
+- pi's thinking level maps to `agy --effort`: `minimal`/`low` → `low`, `medium` → `medium`, `high`/`xhigh`/`max` (and unset) → `high`. Models are registered without effort suffixes — one base model per family, effort chosen per turn.
 - The NDJSON event stream (`init` / `step_update` / `result`) is parsed tolerantly and folded into pi events:
-  - live tool activity → pi thinking channel (dim, collapsible)
-  - final `result.response` → the assistant text (agy emits no text deltas)
-  - `result.usage` → pi token usage; conversation continues via `--conversation <id>` across turns
+  - agy tool steps render as **native pi tool cards** — `⏺ search_web {"query":"…"}` while running, `✓ search_web (2.04s)` with a bounded output preview once done (full text on Ctrl+O). The provider ends the assistant message at each completed tool step (`stopReason: "toolUse"`), pi executes the display-only `agy` wrapper tool (which returns the recorded agy result — no tool work runs inside pi), and the next provider request re-attaches to the still-running agy turn.
+  - `agent_response` `text_delta` chunks stream live into pi's text channel. agy has no separate reasoning channel — the model writes its reasoning inline as markdown, so it streams (and renders) like normal text.
+  - final `result.response` → the authoritative assistant text; `result.usage` → pi token usage; conversation continues via `--conversation <id>` across turns
 - Conversation continuity: the agy conversation is reused across turns and reset when the model changes or via `/agy reset`.
 
 ## Requirements
@@ -35,10 +37,10 @@ Use Google Antigravity (`agy`) models inside the [pi coding agent](https://pi.de
 
 ```
 pi install npm:@tian.zuo/pi-antigravity
-pi --model antigravity/gemini-3.7-flash-high
+pi --model antigravity/gemini-3.7-flash
 ```
 
-Try from a checkout: `pi -e ./packages/pi-antigravity --model antigravity/gemini-3.7-flash-high`
+Try from a checkout: `pi -e ./packages/pi-antigravity --model antigravity/gemini-3.7-flash`
 
 ## Commands
 
@@ -48,10 +50,27 @@ Try from a checkout: `pi -e ./packages/pi-antigravity --model antigravity/gemini
 
 ## Notes & limits
 
-- Model discovery runs `agy models` at startup (15s timeout, cached 24h in `~/.pi/antigravity/model-list.json`); a bundled fallback snapshot registers when discovery fails.
+- Model discovery runs `agy models` at startup (15s timeout, cached 24h in `~/.pi/antigravity/model-list.json`); a bundled fallback snapshot registers when discovery fails. Effort variants are collapsed into base models.
+- **Cost display:** agy is subscription-billed on the Google side, so registered rates are reference Gemini API prices (USD per Mtok; flash tier by default, pro tier for `-pro` ids) that feed pi's native cost calculation. Override any model's rates through pi's own model config — `~/.pi/agent/models.json`:
+
+  ```json
+  {
+    "providers": {
+      "antigravity": {
+        "modelOverrides": {
+          "gemini-3.7-flash": {
+            "cost": { "input": 0.3, "output": 2.5, "cacheRead": 0.075, "cacheWrite": 0.3 }
+          }
+        }
+      }
+    }
+  }
+  ```
 - Context/output limits in the pi model list are placeholders (agy does not expose them); costs are zero (subscription-billed on the Google side).
 - The print interface is text-only: images in the pi context are replaced by an omission note.
 - pi-side compaction does not compact the agy conversation; agy keeps its own authoritative history.
+- Tool cards are display-only replays: agy's DONE steps carry the duration and (for some tools) output text, never structured result payloads, so collapsed cards preview at most three lines of recorded text.
+- If a globally installed older copy of this package exists (`pi list`), remove it with `pi remove npm:@tian.zuo/pi-antigravity` — its registration wins over `-e ./packages/pi-antigravity`.
 
 ## Development
 

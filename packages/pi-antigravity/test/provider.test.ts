@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { latestUserPrompt, mapUsage } from "../src/provider.ts";
-import { newTurnOutcome } from "../lib/reducer.ts";
+import { latestUserPrompt, mapThinkingToEffort, mapUsage } from "../src/provider.ts";
 import type { Context } from "@earendil-works/pi-ai";
 
 function contextWith(messages: unknown[]): Context {
@@ -34,15 +33,13 @@ test("latestUserPrompt returns empty when there is no user message", () => {
 });
 
 test("mapUsage maps agy usage fields to pi usage", () => {
-  const outcome = newTurnOutcome();
-  outcome.usage = {
+  const usage = mapUsage({
     input_tokens: 44909,
     output_tokens: 610,
     thinking_tokens: 395,
     cache_read_tokens: 7,
     total_tokens: 45519,
-  };
-  const usage = mapUsage(outcome);
+  });
   assert.equal(usage.input, 44909);
   assert.equal(usage.output, 610);
   assert.equal(usage.cacheRead, 7);
@@ -51,7 +48,17 @@ test("mapUsage maps agy usage fields to pi usage", () => {
 });
 
 test("mapUsage defaults to zeros without usage", () => {
-  const usage = mapUsage(newTurnOutcome());
+  const usage = mapUsage(undefined);
   assert.equal(usage.input, 0);
   assert.equal(usage.totalTokens, 0);
+});
+
+test("mapThinkingToEffort maps pi thinking levels to agy effort", () => {
+  assert.equal(mapThinkingToEffort(undefined), "high");
+  assert.equal(mapThinkingToEffort("minimal"), "low");
+  assert.equal(mapThinkingToEffort("low"), "low");
+  assert.equal(mapThinkingToEffort("medium"), "medium");
+  assert.equal(mapThinkingToEffort("high"), "high");
+  assert.equal(mapThinkingToEffort("xhigh"), "high");
+  assert.equal(mapThinkingToEffort("max"), "high");
 });

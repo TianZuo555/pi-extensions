@@ -10,23 +10,28 @@
 
 import { spawn } from "node:child_process";
 import { parseAgyLine } from "./events.ts";
-import { applyEvent, newTurnOutcome, type AgyTurnOutcome } from "./reducer.ts";
+import { applyEvent, newTurnOutcome, type AgyActivity, type AgyTurnOutcome } from "./reducer.ts";
 
 export const AGY_BINARY = process.env.AGY_BINARY ?? "agy";
+
+/** agy reasoning effort, as accepted by `agy --effort`. */
+export type AgyEffort = "low" | "medium" | "high";
 
 export interface AgyTurnRequest {
   prompt: string;
   /** Resume a prior conversation; omit to start a new one. */
   conversationId?: string;
-  /** agy model id, e.g. "gemini-3.7-flash-high". */
+  /** agy model id, e.g. "gemini-3.7-flash". */
   model?: string;
+  /** Reasoning effort for this turn (agy --effort). */
+  effort?: AgyEffort;
   /** Working directory for the agy process. */
   cwd?: string;
   /** Overall turn timeout; agy's own --print-timeout is set from this. */
   timeoutMs?: number;
   signal?: AbortSignal;
-  /** Called with each new live activity line as tool steps stream in. */
-  onActivity?: (line: string) => void;
+  /** Called with each structured activity event as tool steps stream in. */
+  onActivity?: (activity: AgyActivity) => void;
   /** Test seam: replaces the spawned binary. */
   spawnOverride?: typeof spawn;
 }
@@ -53,11 +58,15 @@ export function buildAgyArgs(request: AgyTurnRequest): string[] {
     "--disable-slash-commands",
     "--output-format",
     "stream-json",
+    // agy's print mode does not treat the process cwd as the workspace; the
+    // working directory must be registered explicitly via --add-dir.
+    ...(request.cwd ? ["--add-dir", request.cwd] : []),
     "--print-timeout",
     `${timeout}s`,
   ];
   if (request.conversationId) args.push("--conversation", request.conversationId);
   if (request.model) args.push("--model", request.model);
+  if (request.effort) args.push("--effort", request.effort);
   return args;
 }
 

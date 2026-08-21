@@ -3,13 +3,27 @@
  *
  * agy emits no assistant-text deltas: `agent_response` steps complete with
  * usage only, and the final text arrives once in the terminal `result` event.
- * Tool steps, however, stream live (ACTIVE -> DONE/ERROR), so they are
- * surfaced as one-line activity strings the provider can display while the
- * turn runs.
+ * Tool steps stream live (ACTIVE -> DONE/ERROR) and are surfaced as
+ * structured {@link AgyActivity} events the provider renders as native pi
+ * tool cards.
  */
 
 import type { AgyStepUpdate, AgyUsage, ParsedAgyEvent } from "./events.ts";
 import { parseAgyLine } from "./events.ts";
+
+export type AgyActivity =
+  | { type: "tool_start"; name: string; args: Record<string, unknown> }
+  | { type: "tool_done"; name: string; output?: string; durationSeconds?: number }
+  | { type: "tool_error"; name: string; message: string }
+  | { type: "text"; delta: string }
+  | { type: "usage"; usage: AgyUsage }
+  | {
+      type: "result";
+      status: "OK" | "ERROR" | "UNKNOWN";
+      response: string;
+      error: string | undefined;
+      usage: AgyUsage | undefined;
+    };
 
 export interface AgyTurnOutcome {
   /** Conversation id for `--conversation` resume; set by init/result. */
@@ -20,8 +34,8 @@ export interface AgyTurnOutcome {
   /** Error message when status is ERROR. */
   error: string | undefined;
   usage: AgyUsage | undefined;
-  /** Live tool-activity lines, appended as tool steps stream in. */
-  toolLines: string[];
+  /** Structured activity events, appended as the stream unfolds. */
+  activities: AgyActivity[];
   /** True once the result event has been seen. */
   finished: boolean;
 }
@@ -33,41 +47,15 @@ export function newTurnOutcome(): AgyTurnOutcome {
     response: "",
     error: undefined,
     usage: undefined,
-    toolLines: [],
+    activities: [],
     finished: false,
   };
 }
 
-function summarizeParams(step: AgyStepUpdate): string {
-  const params = step.tool_info?.parameters;
-  if (!params) return "";
-  const pick =
-    params.AbsolutePath ??
-    params.Path ??
-    params.CommandLine ??
-    params.Query ??
-    params.Pattern ??
-    params.Url;
-  if (typeof pick === "string") {
-    const short = pick.length > 72 ? `…${pick.slice(-71)}` : pick;
-    return ` ${short}`;
-  }
-  const json = JSON.stringify(params);
-  if (!json || json === "{}") return "";
-  return ` ${json.length > 72 ? `${json.slice(0, 71)}…` : json}`;
-}
-
-function summarizeOutput(output: string | undefined): string {
-  if (!output) return "";
-  const oneLine = output.replace(/\s+/g, " ").trim();
-  if (!oneLine) return "";
-  return ` → ${oneLine.length > 60 ? `${oneLine.slice(0, 59)}…` : oneLine}`;
-}
-
 export type { AgyUsage };
-/** Fold one parsed event into the outcome; returns new activity lines (if any). */
-export function applyEvent(outcome: AgyTurnOutcome, event: ParsedAgyEvent): string[] {
-  const lines: string[] = [];
+/** Fold one parsed event into the outcome; returns new activity events (if any). */
+export function applyEvent(outcome: AgyTurnOutcome, event: ParsedAgyEvent): AgyActivity[] {
+  const activities: AgyActivity[] = [];
   switch (event.kind) {
     case "init": {
       outcome.conversationId = event.conversationId ?? outcome.conversationId;
@@ -81,26 +69,39 @@ export function applyEvent(outcome: AgyTurnOutcome, event: ParsedAgyEvent): stri
       if (step.step_type === "tool") {
         const name = step.tool_name ?? step.tool_info?.name ?? "tool";
         if (step.state === "ACTIVE") {
-          const line = `⏺ ${name}${summarizeParams(step)}`;
-          outcome.toolLines.push(line);
-          lines.push(line);
+          activities.push({
+            type: "tool_start",
+            name,
+            args: step.tool_info?.parameters ?? {},
+          });
         } else if (step.state === "DONE") {
-          const secs =
-            typeof step.duration_seconds === "number"
-              ? ` (${step.duration_seconds.toFixed(2)}s)`
-              : "";
-          const line = `✓ ${name}${secs}${summarizeOutput(step.output)}`;
-          outcome.toolLines.push(line);
-          lines.push(line);
+          activities.push({
+            type: "tool_done",
+            name,
+            output: step.output,
+            durationSeconds:
+              typeof step.duration_seconds === "number" ? step.duration_seconds : undefined,
+          });
         } else if (step.state === "ERROR") {
           const message = step.error?.message ?? "tool error";
-          const line = `✗ ${name}: ${message.replace(/\s+/g, " ").slice(0, 160)}`;
-          outcome.toolLines.push(line);
-          lines.push(line);
+          activities.push({
+            type: "tool_error",
+            name,
+            message: message.replace(/\s+/g, " ").slice(0, 160),
+          });
         }
-      } else if (step.step_type === "agent_response" && step.usage) {
-        // Running per-response usage; the result event carries the totals.
-        outcome.usage = step.usage;
+      } else if (step.step_type === "agent_response") {
+        // agent_response steps stream the response (reasoning included — agy
+        // writes it inline as markdown) as continuation chunks on ACTIVE
+        // steps plus a final chunk on DONE.
+        if (typeof step.text_delta === "string" && step.text_delta) {
+          activities.push({ type: "text", delta: step.text_delta });
+        }
+        if (step.usage) {
+          // Running per-response usage; the result event carries the totals.
+          outcome.usage = step.usage;
+          activities.push({ type: "usage", usage: step.usage });
+        }
       }
       break;
     }
@@ -108,16 +109,25 @@ export function applyEvent(outcome: AgyTurnOutcome, event: ParsedAgyEvent): stri
       const result = event.result;
       outcome.finished = true;
       outcome.conversationId = result.conversation_id ?? outcome.conversationId;
-      outcome.status = result.status === "OK" || result.status === "ERROR" ? result.status : "UNKNOWN";
+      outcome.status =
+        result.status === "OK" || result.status === "ERROR" ? result.status : "UNKNOWN";
       outcome.response = result.response ?? "";
       outcome.error = result.error;
       outcome.usage = result.usage ?? outcome.usage;
+      activities.push({
+        type: "result",
+        status: outcome.status,
+        response: outcome.response,
+        error: outcome.error,
+        usage: outcome.usage,
+      });
       break;
     }
     case "unknown":
       break;
   }
-  return lines;
+  outcome.activities.push(...activities);
+  return activities;
 }
 
 /** Parse a full NDJSON document (test helper) and reduce it. */
@@ -128,4 +138,3 @@ export function reduceAgyStream(text: string): AgyTurnOutcome {
   }
   return outcome;
 }
-

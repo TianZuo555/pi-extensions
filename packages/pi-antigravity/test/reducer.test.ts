@@ -32,9 +32,24 @@ test("reducer folds the real error capture", () => {
   assert.ok(outcome.error?.includes("permission check failed"));
   assert.equal(outcome.usage?.input_tokens, 44909);
   assert.equal(outcome.usage?.total_tokens, 45519);
-  assert.ok(outcome.toolLines.some((l) => l.startsWith("⏺ view_file")));
-  assert.ok(outcome.toolLines.some((l) => l.startsWith("✓ view_file")));
-  assert.ok(outcome.toolLines.some((l) => l.startsWith("✗ run_command")));
+
+  const types = outcome.activities.map((a) => a.type);
+  assert.ok(types.includes("tool_start"));
+  assert.ok(types.includes("tool_done"));
+  assert.ok(types.includes("tool_error"));
+  assert.ok(types.includes("result"));
+
+  const start = outcome.activities.find((a) => a.type === "tool_start");
+  assert.ok(start && start.type === "tool_start" && start.name === "view_file");
+  assert.deepEqual(start.args, { AbsolutePath: "/tmp/notes/todo.md" });
+
+  const done = outcome.activities.find((a) => a.type === "tool_done");
+  assert.ok(done && done.type === "tool_done" && done.name === "view_file");
+  assert.ok(typeof done.durationSeconds === "number");
+
+  const error = outcome.activities.find((a) => a.type === "tool_error");
+  assert.ok(error && error.type === "tool_error" && error.name === "run_command");
+  assert.ok(error.message.includes("permission check failed"));
 });
 
 test("reducer folds a successful turn", () => {
@@ -43,15 +58,21 @@ test("reducer folds a successful turn", () => {
   assert.equal(outcome.response, "Hello from agy!");
   assert.equal(outcome.conversationId, "c-ok-1");
   assert.equal(outcome.usage?.total_tokens, 120);
-  assert.ok(outcome.toolLines.length >= 2);
+  assert.ok(outcome.activities.length >= 2);
+
+  const text = outcome.activities
+    .filter((a) => a.type === "text")
+    .map((a) => (a.type === "text" ? a.delta : ""))
+    .join("");
+  assert.equal(text, "Hello from agy!");
 });
 
-test("applyEvent streams activity lines incrementally", () => {
+test("applyEvent streams activity events incrementally", () => {
   const outcome = newTurnOutcome();
-  const seen: string[] = [];
+  const seen = [];
   for (const line of OK_CAPTURE.split("\n")) {
     seen.push(...applyEvent(outcome, parseAgyLine(line)));
   }
-  assert.deepEqual(seen, outcome.toolLines);
+  assert.deepEqual(seen, outcome.activities);
   assert.ok(seen.length > 0);
 });

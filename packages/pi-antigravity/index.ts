@@ -9,7 +9,9 @@
 //   /agy reset      drop the current agy conversation (next turn starts fresh)
 //   /agy models     re-discover models from `agy models` and re-register
 
-import type { ExtensionAPI, ExtensionContext, ProviderModelConfig } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, ProviderModelConfig, Theme } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
+import { Type } from "typebox";
 import { execFile } from "node:child_process";
 import path from "node:path";
 import { piConfigDir, readJson, writeJson } from "./lib/config.ts";
@@ -18,9 +20,12 @@ import {
   CONTEXT_WINDOW,
   FALLBACK_MODELS,
   MAX_TOKENS,
+  normalizeAgyModelId,
   parseAgyModels,
+  pricingForModel,
   type AgyModelInfo,
 } from "./lib/models.ts";
+import { AgyReplayStore, summarizeAgyArgs, type RecordedAgyTool } from "./lib/replay.ts";
 import { streamAntigravity } from "./src/provider.ts";
 import {
   AntigravityRuntime,
@@ -38,16 +43,31 @@ interface ModelCache {
   models: AgyModelInfo[];
 }
 
+/**
+ * Default rates (USD per Mtok) feed pi's native cost calculation. Per-model
+ * overrides belong in pi's own ~/.pi/agent/models.json under
+ * providers.antigravity.modelOverrides — pi applies them over registered models.
+ */
 function toProviderModel(model: AgyModelInfo): ProviderModelConfig {
   return {
     id: model.id,
     name: model.name,
     reasoning: true,
     input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    cost: pricingForModel(model.id),
     contextWindow: CONTEXT_WINDOW,
     maxTokens: MAX_TOKENS,
   };
+}
+
+/** Collapse effort variants and dedupe (also heals pre-0.2.0 caches). */
+function normalizeModels(models: AgyModelInfo[]): AgyModelInfo[] {
+  const out: AgyModelInfo[] = [];
+  for (const m of models) {
+    const n = normalizeAgyModelId(m.id, m.name);
+    if (!out.some((x) => x.id === n.id)) out.push(n);
+  }
+  return out;
 }
 
 function listAgyModels(): Promise<AgyModelInfo[]> {
@@ -67,12 +87,12 @@ async function discoverModels(refresh = false): Promise<ModelCache> {
       cached.fetchedAt &&
       Date.now() - cached.fetchedAt < MODEL_CACHE_TTL_MS
     ) {
-      return cached;
+      return { ...cached, models: normalizeModels(cached.models) };
     }
   }
   const live = await listAgyModels();
   const cache: ModelCache = live.length
-    ? { fetchedAt: Date.now(), source: "live", models: live }
+    ? { fetchedAt: Date.now(), source: "live", models: normalizeModels(live) }
     : { fetchedAt: Date.now(), source: "fallback", models: FALLBACK_MODELS };
   try {
     writeJson(MODEL_CACHE_FILE, cache);
@@ -82,10 +102,69 @@ async function discoverModels(refresh = false): Promise<ModelCache> {
   return cache;
 }
 
+const AGY_TOOL_DESCRIPTION =
+  "Display-only replay of a Google Antigravity (agy) tool execution. The agy agent loop already ran this tool; pi renders the recorded result. Never callable meaningfully by the model — execution only returns the recorded agy output.";
+
 export default async function antigravityExtension(pi: ExtensionAPI): Promise<void> {
   const runtime = createAntigravityRuntime();
   const service = runtime.runSync(AntigravityRuntime);
+  const replay = new AgyReplayStore();
   const cache = await discoverModels();
+
+  pi.registerTool({
+    name: "agy",
+    label: "antigravity",
+    description: AGY_TOOL_DESCRIPTION,
+    parameters: Type.Object({
+      tool: Type.String({ description: "Recorded agy tool name" }),
+      input: Type.Unknown({ description: "Recorded agy tool arguments" }),
+    }),
+    async execute(toolCallId, params) {
+      const recorded = replay.take(toolCallId);
+      if (!recorded) {
+        throw new Error(`No recorded antigravity result for "${params.tool}".`);
+      }
+      if (recorded.error) {
+        throw new Error(recorded.error);
+      }
+      const body = recorded.output ?? "";
+      return {
+        content: [
+          { type: "text", text: body ? body.slice(0, 16_000) : "(no output)" },
+        ],
+        details: recorded,
+      };
+    },
+    renderCall(args, theme) {
+      const summary = summarizeAgyArgs(args.input);
+      return new Text(
+        theme.fg("toolTitle", theme.bold("⏺ ")) +
+          theme.fg("accent", args.tool) +
+          (summary ? theme.fg("dim", ` ${summary}`) : ""),
+        0,
+        0,
+      );
+    },
+    renderResult(result, { expanded }, theme, context) {
+      const body = result.content[0]?.type === "text" ? result.content[0].text : "";
+      const details = result.details as RecordedAgyTool | undefined;
+      const secs =
+        typeof details?.durationSeconds === "number" && !context.isError
+          ? ` (${details.durationSeconds.toFixed(2)}s)`
+          : "";
+      const icon = context.isError ? theme.fg("error", "✗ ") : theme.fg("success", "✓ ");
+      let text = icon + theme.fg("accent", details?.agyTool ?? "agy") + theme.fg("muted", secs);
+      if (body && body !== "(no output)") {
+        const lines = body.split("\n");
+        const shown = expanded ? lines : lines.slice(0, 3);
+        text += "\n" + shown.map((line) => theme.fg("toolOutput", line)).join("\n");
+        if (!expanded && lines.length > 3) {
+          text += theme.fg("muted", `\n… +${lines.length - 3} lines (ctrl+o to expand)`);
+        }
+      }
+      return new Text(text, 0, 0);
+    },
+  });
 
   pi.registerProvider("antigravity", {
     name: "Google Antigravity (agy)",
@@ -93,7 +172,7 @@ export default async function antigravityExtension(pi: ExtensionAPI): Promise<vo
     apiKey: "agy-local-session",
     api: "antigravity-stream-json",
     models: cache.models.map(toProviderModel),
-    streamSimple: streamAntigravity(runtime, service),
+    streamSimple: streamAntigravity(runtime, service, replay),
   });
 
   pi.on("session_start", async (_event, ctx: ExtensionContext) => {
@@ -125,7 +204,7 @@ export default async function antigravityExtension(pi: ExtensionAPI): Promise<vo
           apiKey: "agy-local-session",
           api: "antigravity-stream-json",
           models: refreshed.models.map(toProviderModel),
-          streamSimple: streamAntigravity(runtime, service),
+          streamSimple: streamAntigravity(runtime, service, replay),
         });
         ctx.ui.notify(
           `antigravity: ${refreshed.models.length} models registered (${refreshed.source}).`,

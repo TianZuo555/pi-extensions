@@ -52,10 +52,14 @@ test("buildAgyArgs always skips permissions and puts the prompt directly after -
   assert.ok(base.includes("--output-format"));
   assert.equal(base[base.indexOf("--output-format") + 1], "stream-json");
   assert.ok(!base.includes("--conversation"));
+  assert.ok(!base.includes("--effort"));
+  assert.ok(!base.includes("--add-dir"));
 
-  const full = buildAgyArgs({ prompt: "hi", conversationId: "c1", model: "m1", timeoutMs: 90_000 });
+  const full = buildAgyArgs({ prompt: "hi", conversationId: "c1", model: "m1", effort: "medium", cwd: "/tmp/w", timeoutMs: 90_000 });
   assert.equal(full[full.indexOf("--conversation") + 1], "c1");
   assert.equal(full[full.indexOf("--model") + 1], "m1");
+  assert.equal(full[full.indexOf("--effort") + 1], "medium");
+  assert.equal(full[full.indexOf("--add-dir") + 1], "/tmp/w");
   assert.equal(full[full.indexOf("--print-timeout") + 1], "90s");
 });
 
@@ -73,13 +77,13 @@ test("runAgyTurn resolves an error result and reports activity live", async () =
   const activity: string[] = [];
   const outcome = await runAgyTurn({
     prompt: "hi",
-    onActivity: (line) => activity.push(line),
+    onActivity: (event) => activity.push(event.type),
     spawnOverride: (() => fakeSpawn(`${REAL_CAPTURE}\n`)) as never,
   });
   assert.equal(outcome.status, "ERROR");
   assert.ok(outcome.error?.includes("permission check failed"));
   assert.ok(activity.length > 0);
-  assert.ok(activity.some((l) => l.startsWith("⏺")));
+  assert.ok(activity.includes("tool_start"));
 });
 
 test("runAgyTurn rejects when the process dies before a result event", async () => {

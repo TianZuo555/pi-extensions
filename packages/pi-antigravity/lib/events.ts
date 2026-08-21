@@ -50,6 +50,8 @@ export interface AgyStepUpdate {
   duration_seconds?: number;
   usage?: AgyUsage;
   output?: string;
+  /** Continuation chunk of the response text on agent_response steps. */
+  text_delta?: string;
   error?: AgyToolError;
 }
 
