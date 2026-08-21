@@ -4,6 +4,7 @@ import {
   PRIMARY_CONFIG_PATH,
   saveStoredConfig,
 } from "./lib/config.ts";
+import type { WebSearchConfig } from "./lib/types.ts";
 import { registerTools } from "./lib/tools.ts";
 import { createWebSearchRuntime } from "./src/runtime.ts";
 
@@ -12,6 +13,33 @@ const OLLAMA_DEFAULT_URL = "http://localhost:11434";
 function maskKey(key: string | undefined): string {
   if (!key) return "not set";
   return key.length <= 8 ? "••••" : `${key.slice(0, 4)}…${key.slice(-4)}`;
+}
+
+/**
+ * Provider status line in pi's login-list style:
+ *   exa       ✓ env: EXA_API_KEY
+ *   firecrawl ✓ config: fc-1…ab3d
+ *   ollama    • unconfigured
+ */
+function providerLine(name: "exa" | "firecrawl" | "ollama", config: WebSearchConfig): string {
+  const label = name.padEnd(10);
+  const envKey =
+    name === "exa" ? process.env.EXA_API_KEY?.trim()
+    : name === "firecrawl" ? process.env.FIRECRAWL_API_KEY?.trim()
+    : (process.env.OLLAMA_HOST?.trim() || process.env.OLLAMA_API_KEY?.trim());
+  if (envKey) return `${label}✓ env: ${name === "ollama" ? (process.env.OLLAMA_HOST?.trim() ? "OLLAMA_HOST" : "OLLAMA_API_KEY") : name === "exa" ? "EXA_API_KEY" : "FIRECRAWL_API_KEY"}`;
+  if (name === "ollama") {
+    if (!config.ollama && !process.env.OLLAMA_HOST?.trim()) {
+      return `${label}• unconfigured (default localhost:11434)`;
+    }
+    const url = config.ollama?.baseUrl ?? OLLAMA_DEFAULT_URL;
+    const key = config.ollama?.apiKey ? ` · key: ${maskKey(config.ollama.apiKey)}` : "";
+    return `${label}✓ config: ${url}${key}`;
+  }
+  const stored = config[name]?.apiKey;
+  return stored
+    ? `${label}✓ config: ${maskKey(stored)}`
+    : `${label}• unconfigured`;
 }
 
 export default function webSearchExtension(pi: ExtensionAPI): void {
@@ -33,9 +61,9 @@ export default function webSearchExtension(pi: ExtensionAPI): void {
 
       const config = loadStoredConfig();
       const provider = await ctx.ui.select("Configure provider:", [
-        `exa       (key: ${maskKey(config.exa?.apiKey)})`,
-        `firecrawl (key: ${maskKey(config.firecrawl?.apiKey)})`,
-        `ollama    (url: ${config.ollama?.baseUrl ?? OLLAMA_DEFAULT_URL}, key: ${maskKey(config.ollama?.apiKey)})`,
+        providerLine("exa", config),
+        providerLine("firecrawl", config),
+        providerLine("ollama", config),
       ]);
       if (!provider) return;
       const name = provider.split(" ")[0] as "exa" | "firecrawl" | "ollama";
@@ -82,7 +110,19 @@ export default function webSearchExtension(pi: ExtensionAPI): void {
 
       try {
         saveStoredConfig(next);
-        ctx.ui.notify(`Saved to ${PRIMARY_CONFIG_PATH}`, "info");
+        const envName =
+          name === "exa" ? "EXA_API_KEY"
+          : name === "firecrawl" ? "FIRECRAWL_API_KEY"
+          : process.env.OLLAMA_HOST?.trim() || process.env.OLLAMA_API_KEY?.trim() ? "OLLAMA_HOST / OLLAMA_API_KEY"
+          : undefined;
+        if (envName && process.env[envName.split(" /")[0]]?.trim()) {
+          ctx.ui.notify(
+            `Saved to ${PRIMARY_CONFIG_PATH} — note: ${envName} is set and takes precedence over the config file`,
+            "warning",
+          );
+        } else {
+          ctx.ui.notify(`Saved to ${PRIMARY_CONFIG_PATH}`, "info");
+        }
       } catch (err) {
         ctx.ui.notify(
           `Failed to save config: ${err instanceof Error ? err.message : String(err)}`,
