@@ -1,0 +1,92 @@
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { buildAgyArgs, runAgyTurn } from "../lib/agy-client.ts";
+import { OK_CAPTURE, REAL_CAPTURE } from "./fixtures.ts";
+
+type FakeChild = {
+  stdout: { setEncoding: (e: string) => void; on: (ev: string, fn: (c: string) => void) => void };
+  stderr: { setEncoding: (e: string) => void; on: (ev: string, fn: (c: string) => void) => void };
+  on: (ev: string, fn: (arg?: unknown) => void) => void;
+  kill: (sig: string) => void;
+};
+
+function fakeSpawn(output: string, code = 0) {
+  const listeners: Record<string, Array<(arg?: unknown) => void>> = {};
+  const stream = () => {
+    const data: Array<(c: string) => void> = [];
+    return {
+      setEncoding: () => {},
+      on: (_ev: string, fn: (c: string) => void) => {
+        data.push(fn);
+      },
+      emit: (c: string) => {
+        for (const fn of data) fn(c);
+      },
+    };
+  };
+  const stdout = stream();
+  const stderr = stream();
+  const child: FakeChild = {
+    stdout,
+    stderr,
+    on: (ev, fn) => {
+      listeners[ev] = listeners[ev] ?? [];
+      listeners[ev].push(fn);
+    },
+    kill: () => {},
+  };
+  queueMicrotask(() => {
+    stdout.emit(output);
+    listeners.data ??= [];
+    (listeners.close ?? []).forEach((fn) => fn(code));
+  });
+  return child as unknown as never;
+}
+
+test("buildAgyArgs always skips permissions and supports resume/model", () => {
+  const base = buildAgyArgs({ prompt: "hi" });
+  assert.ok(base.includes("--dangerously-skip-permissions"));
+  assert.ok(base.includes("--output-format"));
+  assert.equal(base[base.indexOf("--output-format") + 1], "stream-json");
+  assert.equal(base[base.length - 1], "hi");
+  assert.ok(!base.includes("--conversation"));
+
+  const full = buildAgyArgs({ prompt: "hi", conversationId: "c1", model: "m1", timeoutMs: 90_000 });
+  assert.equal(full[full.indexOf("--conversation") + 1], "c1");
+  assert.equal(full[full.indexOf("--model") + 1], "m1");
+  assert.equal(full[full.indexOf("--print-timeout") + 1], "90s");
+});
+
+test("runAgyTurn reduces a successful stream", async () => {
+  const outcome = await runAgyTurn({
+    prompt: "hi",
+    spawnOverride: (() => fakeSpawn(`${OK_CAPTURE}\n`)) as never,
+  });
+  assert.equal(outcome.status, "OK");
+  assert.equal(outcome.response, "Hello from agy!");
+  assert.equal(outcome.conversationId, "c-ok-1");
+});
+
+test("runAgyTurn resolves an error result and reports activity live", async () => {
+  const activity: string[] = [];
+  const outcome = await runAgyTurn({
+    prompt: "hi",
+    onActivity: (line) => activity.push(line),
+    spawnOverride: (() => fakeSpawn(`${REAL_CAPTURE}\n`)) as never,
+  });
+  assert.equal(outcome.status, "ERROR");
+  assert.ok(outcome.error?.includes("permission check failed"));
+  assert.ok(activity.length > 0);
+  assert.ok(activity.some((l) => l.startsWith("⏺")));
+});
+
+test("runAgyTurn rejects when the process dies before a result event", async () => {
+  await assert.rejects(
+    () =>
+      runAgyTurn({
+        prompt: "hi",
+        spawnOverride: (() => fakeSpawn("jetski: no output produced\n", 1)) as never,
+      }),
+    /exited with code 1/,
+  );
+});

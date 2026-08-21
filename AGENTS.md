@@ -13,7 +13,7 @@ A collection of extensions for the [pi coding agent](https://pi.dev): per-repo m
 
 ## Repository layout
 
-- `packages/` — one publishable workspace per extension. Real implementation lives here, mostly as `index.ts` (+ `lib/*.ts` helpers), except Effect-based packages also ship `src/**` runtimes (`pi-background-terminals`, `pi-commit`, `pi-goal`, `pi-image-cache`, `pi-repo-model`, `pi-repo-skills`, `pi-subagents`, `pi-todo`, `pi-token-speed`, `pi-usage`, `pi-vscode-bridge`, `pi-web-search`). The pnpm workspace configuration (`packages/*` globs in `pnpm-workspace.yaml`) dynamically discovers all extension packages for checks, tests, and publishing.
+- `packages/` — one publishable workspace per extension. Real implementation lives here, mostly as `index.ts` (+ `lib/*.ts` helpers), except Effect-based packages also ship `src/**` runtimes (`pi-background-terminals`, `pi-commit`, `pi-goal`, `pi-image-cache`, `pi-repo-model`, `pi-repo-skills`, `pi-subagents`, `pi-todo`, `pi-token-speed`, `pi-usage`, `pi-vscode-bridge`, `pi-web-search`, `pi-antigravity`). The pnpm workspace configuration (`packages/*` globs in `pnpm-workspace.yaml`) dynamically discovers all extension packages for checks, tests, and publishing.
 - `extensions/` — thin re-export stubs (`export { default } from "../packages/<pkg>/index"`) kept only as compatibility entry points for the legacy aggregate Git package. **Do not put logic here** — edit the matching `packages/*` instead.
 - `tests/` — repo-level tests run from the root (currently `pi-usage-providers.test.mjs`). Package-local tests live under `test/` (or next to source for `pi-background-terminals`).
 - `.github/workflows/publish.yml` — npm publish on push to `main` (installs with pnpm, runs typecheck, workspace checks, and tests dynamically across all packages, then publishes via the npm CLI for OIDC trusted publishing).
@@ -22,7 +22,7 @@ A collection of extensions for the [pi coding agent](https://pi.dev): per-repo m
 - `tsconfig.json` — root typecheck config covering all extensions and workspace packages.
 - `mise.toml` — tooling pins (Node, pnpm).
 
-Workspace → npm package map: `pi-repo-model`→`@tian.zuo/pi-repo-model`, `pi-repo-skills`→`@tian.zuo/pi-repo-skills`, `pi-commit`→`@tian.zuo/pi-commit`, `pi-token-speed`→`@tian.zuo/pi-token-speed`, `pi-image-cache`→`@tian.zuo/pi-image-cache`, `pi-ask-user`→`@tian.zuo/pi-ask-user`, `pi-usage`→`@tian.zuo/pi-usage`, `pi-background-terminals`→`@tian.zuo/pi-background-terminals`, `pi-edit-safe`→`@tian.zuo/pi-edit-safe`, `pi-find`→`@tian.zuo/pi-find`, `pi-todo`→`@tian.zuo/pi-todo`, `pi-subagents`→`@tian.zuo/pi-subagents`, `pi-compact-output`→`@tian.zuo/pi-compact-output`, `pi-goal`→`@tian.zuo/pi-goal`, `pi-vscode-bridge`→`@tian.zuo/pi-vscode-bridge`, `pi-web-search`→`@tian.zuo/pi-web-search`.
+Workspace → npm package map: `pi-repo-model`→`@tian.zuo/pi-repo-model`, `pi-repo-skills`→`@tian.zuo/pi-repo-skills`, `pi-commit`→`@tian.zuo/pi-commit`, `pi-token-speed`→`@tian.zuo/pi-token-speed`, `pi-image-cache`→`@tian.zuo/pi-image-cache`, `pi-ask-user`→`@tian.zuo/pi-ask-user`, `pi-usage`→`@tian.zuo/pi-usage`, `pi-background-terminals`→`@tian.zuo/pi-background-terminals`, `pi-edit-safe`→`@tian.zuo/pi-edit-safe`, `pi-find`→`@tian.zuo/pi-find`, `pi-todo`→`@tian.zuo/pi-todo`, `pi-subagents`→`@tian.zuo/pi-subagents`, `pi-compact-output`→`@tian.zuo/pi-compact-output`, `pi-goal`→`@tian.zuo/pi-goal`, `pi-vscode-bridge`→`@tian.zuo/pi-vscode-bridge`, `pi-web-search`→`@tian.zuo/pi-web-search`, `pi-antigravity`→`@tian.zuo/pi-antigravity`.
 
 ## Common tasks
 
@@ -61,6 +61,7 @@ Workspace → npm package map: `pi-repo-model`→`@tian.zuo/pi-repo-model`, `pi-
     - Test `pi-image-cache`: `pnpm --filter @tian.zuo/pi-image-cache test`
     - Test `pi-vscode-bridge`: `pnpm --filter @tian.zuo/pi-vscode-bridge test`; compile its VS Code host with `pnpm --filter @tian.zuo/pi-vscode-bridge run compile:vscode`
     - Test `pi-web-search`: `pnpm --filter @tian.zuo/pi-web-search test`
+    - Test `pi-antigravity`: `pnpm --filter @tian.zuo/pi-antigravity test` (16 cases; live `agy` runs are faked via spawn overrides)
     - Test `pi-find`: `pnpm --filter @tian.zuo/pi-find test` (159 cases; the rg/fd integration cases skip when a binary is missing)
 - Inspect publishable tarballs: `pnpm run pack:check`
 - Try an extension in a live pi session without installing: `pi -e ./packages/pi-repo-model`
@@ -68,7 +69,7 @@ Workspace → npm package map: `pi-repo-model`→`@tian.zuo/pi-repo-model`, `pi-
 
 ## Conventions
 
-- When developing extensions, use **Effect v4** for non-trivial async orchestration, mutable session state, subprocess/file lifecycle, or concurrent cleanup — prefer `Effect`/`@effect/*` idioms (typed effects, `Effect.gen`, dependency injection via `Context`, `ManagedRuntime`, `SynchronizedRef`) over raw async/throw patterns. Follow `pi-background-terminals`, `pi-commit`, `pi-goal`, `pi-image-cache`, `pi-repo-model`, `pi-repo-skills`, `pi-find`, `pi-subagents`, `pi-todo`, `pi-token-speed`, `pi-usage`, `pi-vscode-bridge`, and `pi-web-search` as reference implementations.
+- When developing extensions, use **Effect v4** for non-trivial async orchestration, mutable session state, subprocess/file lifecycle, or concurrent cleanup — prefer `Effect`/`@effect/*` idioms (typed effects, `Effect.gen`, dependency injection via `Context`, `ManagedRuntime`, `SynchronizedRef`) over raw async/throw patterns. Follow `pi-background-terminals`, `pi-commit`, `pi-goal`, `pi-image-cache`, `pi-repo-model`, `pi-repo-skills`, `pi-find`, `pi-subagents`, `pi-todo`, `pi-token-speed`, `pi-usage`, `pi-vscode-bridge`, `pi-web-search`, and `pi-antigravity` as reference implementations.
 - **TUI width safety:** every custom `Component.render(width)`, `ctx.ui.setWidget` renderer, custom footer/editor, tool renderer, and message renderer must return lines whose ANSI-aware `visibleWidth()` is no greater than `width`. Use `truncateToWidth(line, width, "")` (or width-aware wrapping) after composing prefixes, content, and suffixes; never return fixed-width strings. Exercise renderers at narrow widths such as 42 columns.
 - **Prompt & schema description separation:** Keep all model-facing text (tool `description`, `promptSnippet`, `promptGuidelines`, parameter/schema `description`s, system prompts, continuation prompts, and result formatters) in a dedicated `prompt.ts` module (under `lib/prompt.ts` or `src/prompt.ts`). Do not inline prompt strings or schema descriptions directly into runtime orchestration, tool definitions, or schema definitions in `index.ts` or implementation files. This enables tuning model-facing phrasing, token budgets, and behavioral policies cleanly without touching execution logic or UI rendering.
 - **Intentional non-Effect packages** (linear/sync UI or trivial I/O only): `pi-ask-user`, `pi-compact-output`, `pi-edit-safe`.

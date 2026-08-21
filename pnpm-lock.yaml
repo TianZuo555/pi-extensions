@@ -34,6 +34,25 @@ importers:
         specifier: ^7.0.2
         version: 7.0.2
 
+  packages/pi-antigravity:
+    dependencies:
+      '@earendil-works/pi-ai':
+        specifier: ^0.84.2
+        version: 0.84.2(ws@8.21.3)(zod@4.4.3)
+      '@earendil-works/pi-coding-agent':
+        specifier: ^0.84.2
+        version: 0.84.2(ws@8.21.3)(zod@4.4.3)
+      effect:
+        specifier: 4.0.0-beta.101
+        version: 4.0.0-beta.101
+    devDependencies:
+      '@effect/language-service':
+        specifier: ^0.87.2
+        version: 0.87.2
+      typescript:
+        specifier: ^7.0.2
+        version: 7.0.2
+
   packages/pi-ask-user:
     dependencies:
       '@earendil-works/pi-coding-agent':
