@@ -312,6 +312,50 @@ test("grep returns absolute paths for external constraints", { skip: !hasRg }, a
   }
 });
 
+test("grep names a missing external root instead of blaming the binary", {
+  skip: !hasRg,
+}, async () => {
+  const missing = path.join(tmpdir(), "pi-find-missing-root-");
+  rmSync(missing, { recursive: true, force: true });
+  await assert.rejects(
+    grep({ path: missing }),
+    (error: Error) =>
+      error.message.includes(missing) &&
+      !error.message.includes("ENOENT"),
+  );
+});
+
+test("find names a missing external root instead of walking on empty", {
+  skip: !hasFd,
+}, async () => {
+  const missing = path.join(tmpdir(), "pi-find-missing-root-");
+  rmSync(missing, { recursive: true, force: true });
+  await assert.rejects(
+    find({ path: missing }),
+    (error: Error) =>
+      error.message.includes(missing) &&
+      !error.message.includes("ENOENT"),
+  );
+});
+
+test("grep rejects an external root that names a file with a trailing slash", {
+  skip: !hasRg,
+}, async () => {
+  // A trailing slash forces the directory reading, so the search root itself
+  // is a file. Without the guard this dies as a misleading spawn ENOTDIR.
+  const external = mkdtempSync(path.join(tmpdir(), "pi-find-fileroot-"));
+  try {
+    const target = path.join(external, "notes.md");
+    writeFileSync(target, "needle\n");
+    await assert.rejects(
+      grep({ path: `${target}/` }),
+      (error: Error) => error.message.includes(target),
+    );
+  } finally {
+    rmSync(external, { recursive: true, force: true });
+  }
+});
+
 test("grep matches extensionless filenames at any depth", {
   skip: !hasRg,
 }, async () => {

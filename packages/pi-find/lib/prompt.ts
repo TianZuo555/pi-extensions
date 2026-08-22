@@ -67,6 +67,10 @@ export const EMPTY_PATTERN_ERROR =
 export const FIND_WILDCARD_ONLY_ERROR =
     "A wildcard-only pattern matches every path, same as listing files. Use an empty pattern to list everything under path, or a glob in path.";
 
+export function missingSearchRootError(root: string): string {
+  return `Search root does not exist or is not a directory: ${root}. Fix the path or create it, then retry.`;
+}
+
 export function grepResultHeader(
     matchCount: number,
     fileCount: number,

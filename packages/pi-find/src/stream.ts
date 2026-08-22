@@ -8,6 +8,7 @@
  */
 
 import { spawn } from "node:child_process";
+import { statSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { Effect } from "effect";
 import {
@@ -54,6 +55,14 @@ function isBenignExit(
   return binary === "rg" && code === 1;
 }
 
+function isDirectoryPath(candidate: string): boolean {
+  try {
+    return statSync(candidate).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 export function streamLines(
   request: StreamRequest,
 ): Effect.Effect<
@@ -79,6 +88,19 @@ export function streamLines(
     if (outerSignal?.aborted === true || effectSignal.aborted) {
       resume(
         new SearchAbortedError({ message: `${request.binary} search aborted` }),
+      );
+      return;
+    }
+
+    // Node reports a missing spawn cwd as `spawn <binary> ENOENT`, blaming
+    // the executable instead of the directory. Guard it so any future caller
+    // that bypasses the runtime-level root check still gets an honest error.
+    if (!isDirectoryPath(request.cwd)) {
+      resume(
+        new SearchProcessError({
+          message: `${request.binary} could not start: working directory does not exist or is not a directory: ${request.cwd}`,
+          tool: request.binary,
+        }),
       );
       return;
     }

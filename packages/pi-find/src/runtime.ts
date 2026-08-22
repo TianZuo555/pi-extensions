@@ -18,6 +18,7 @@ import {
   EMPTY_PATTERN_ERROR,
   FIND_WILDCARD_ONLY_ERROR,
   MIXED_EXTERNAL_PATH_ERROR,
+  missingSearchRootError,
   WILDCARD_ONLY_ERROR,
 } from "../lib/prompt.ts";
 import { decodeRgEvent, type RgLine } from "../lib/rg-json.ts";
@@ -87,6 +88,22 @@ function resolveRoot(cwd: string, plan: ConstraintPlan): string {
   return path.isAbsolute(plan.searchRoot)
     ? plan.searchRoot
     : path.resolve(cwd, plan.searchRoot);
+}
+
+/**
+ * A nonexistent search root must fail as an input error naming the path.
+ * Spawning rg with a missing cwd surfaces as Node's misleading
+ * `spawn rg ENOENT`, which blames the binary instead of the path, and fd
+ * walks on silently and reports an empty result neither the model nor the
+ * user can distinguish from a genuine miss.
+ */
+function rootInputError(root: string): string | undefined {
+  try {
+    if (statSync(root).isDirectory()) return undefined;
+  } catch {
+    // Missing or unreachable: report below.
+  }
+  return missingSearchRootError(root);
 }
 
 function normalizePath(filePath: string): string {
@@ -413,6 +430,10 @@ const makeSearchRuntime = Effect.gen(function* () {
       const plan = planning.plan;
       const scope = createSearchScope(request.cwd, plan);
       const root = scope.root;
+      const missingRoot = rootInputError(root);
+      if (missingRoot !== undefined) {
+        return Effect.fail(new SearchInputError({ message: missingRoot }));
+      }
       const hasConstraints = plan.include.length + plan.exclude.length > 0 ||
         plan.searchRoot !== undefined;
 
@@ -571,6 +592,10 @@ const makeSearchRuntime = Effect.gen(function* () {
       }
       const scope = createSearchScope(request.cwd, plan);
       const root = scope.root;
+      const missingRoot = rootInputError(root);
+      if (missingRoot !== undefined) {
+        return Effect.fail(new SearchInputError({ message: missingRoot }));
+      }
       const hasConstraints = plan.include.length + plan.exclude.length > 0 ||
         plan.searchRoot !== undefined;
       const fdSearchDirs = resolveSearchDirs(scope.plan, root);
