@@ -118,23 +118,42 @@ test("bridge times out pending calls with an isError result", async () => {
   const bridge = new AgyPiBridge();
   bridge.setOnCall(() => true);
   bridge.setToolSource(() => TOOL_DEFS);
-  // Shrink the timeout via a short-lived override of the private constant is
-  // not possible; instead exercise close() as the fail-closed path.
   await bridge.start();
   try {
     bridge.refreshTools();
-    const pending = post(bridge, {
+    // Attach handlers up front: if the POST itself fails (observed once on a
+    // loaded CI runner), the rejection must surface here as a test failure
+    // with its real cause — never as an unhandled rejection after teardown.
+    let posted: { status: number; json: Record<string, any> } | undefined;
+    let postError: unknown;
+    const settled = post(bridge, {
       jsonrpc: "2.0",
       id: 6,
       method: "tools/call",
       params: { name: `${BRIDGE_TOOL_PREFIX}commit`, arguments: {} },
-    });
-    await new Promise((r) => setTimeout(r, 10));
+    }).then(
+      (value) => { posted = value; },
+      (error) => { postError = error; },
+    );
+    // Wait until the call is routed and pending — a fixed sleep races on
+    // slow CI runners (observed: fetch not delivered within 10ms). Stop
+    // early if the POST already failed.
+    const deadline = Date.now() + 5_000;
+    while (bridge.pendingCount < 1 && !postError && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    if (postError) {
+      await settled;
+      throw postError;
+    }
     assert.equal(bridge.pendingCount, 1);
     await bridge.close(); // session shutdown while pending
-    const res = await pending;
-    assert.equal(res.json.result.isError, true);
-    assert.match(res.json.result.content[0].text, /shut down/);
+    // close() resolves the in-flight POST via the fail-closed path (or
+    // rejects it if the socket died first) — either way it is settled now.
+    await settled;
+    if (postError) throw postError;
+    assert.equal(posted!.json.result.isError, true);
+    assert.match(posted!.json.result.content[0].text, /shut down/);
   } finally {
     await bridge.close();
   }
