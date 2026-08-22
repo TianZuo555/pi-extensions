@@ -47,13 +47,16 @@ test("runCommit throws AbortError on runtime interruption", async () => {
 
   const hang = Effect.never;
   const runPromise = runCommit(runtime, hang);
-  await runtime.dispose();
-
-  await assert.rejects(runPromise, (error: unknown) => {
+  // Attach the rejection handler before dispose(): the AbortError lands
+  // during disposal, and a late assert.rejects would leave the rejection
+  // momentarily unhandled (unhandledRejection → flaky CI failure).
+  const rejected = assert.rejects(runPromise, (error: unknown) => {
     assert.ok(error instanceof Error);
     assert.equal(error.name, "AbortError");
     return true;
   });
+  await runtime.dispose();
+  await rejected;
 });
 
 test("runCommit throws GenerationError for invalid generated commit message normalization", async () => {
