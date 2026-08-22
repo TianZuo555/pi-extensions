@@ -7,7 +7,7 @@ import {
 } from "./lib/config.ts";
 import type { WebSearchConfig } from "./lib/types.ts";
 import { registerTools } from "./lib/tools.ts";
-import { createWebSearchRuntime } from "./src/runtime.ts";
+import { createWebSearchRuntime, type WebSearchRuntimeInstance } from "./src/runtime.ts";
 
 const OLLAMA_DEFAULT_URL = "http://localhost:11434";
 const PI_AUTH_FILE = "~/.pi/agent/auth.json";
@@ -58,9 +58,10 @@ function providerLine(
 }
 
 export default function webSearchExtension(pi: ExtensionAPI): void {
-  const runtime = createWebSearchRuntime();
+  let runtime: WebSearchRuntimeInstance | undefined;
+  const getRuntime = () => (runtime ??= createWebSearchRuntime());
 
-  registerTools(pi, runtime);
+  registerTools(pi, getRuntime);
 
   pi.registerCommand("websearch-auth", {
     description:
@@ -127,7 +128,7 @@ export default function webSearchExtension(pi: ExtensionAPI): void {
 
   pi.on("session_shutdown", async () => {
     try {
-      await runtime.dispose();
+      await runtime?.dispose();
     } catch {
       // Disposed gracefully
     }

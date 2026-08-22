@@ -1,6 +1,6 @@
 {
   "name": "@tian.zuo/pi-web-search",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Web search (OpenAI Responses with simple prompt, Exa, Firecrawl, Ollama) and web fetch for the pi coding agent.",
   "type": "module",
   "keywords": [

@@ -1,6 +1,4 @@
 import type { FetchOptions, FetchResponse } from "./types.ts";
-import { parseHTML } from "linkedom";
-import { Defuddle } from "defuddle/node";
 
 const DEFAULT_FETCH_TIMEOUT_MS = 30_000;
 const MAX_DIRECT_FETCH_BYTES = 100_000; // 100KB
@@ -171,6 +169,10 @@ export async function fetchDirect(
   // the naive converter when it finds nothing usable (SPAs, tiny fragments).
   if (isHtml && !options.raw) {
     try {
+      const [{ parseHTML }, { Defuddle }] = await Promise.all([
+        import("linkedom"),
+        import("defuddle/node"),
+      ]);
       const { document } = parseHTML(rawBody);
       const result = await Defuddle(document, url, { markdown: true });
       const content = typeof result?.content === "string" ? result.content.trim() : "";

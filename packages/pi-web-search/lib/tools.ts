@@ -77,9 +77,9 @@ export async function executeSearch(
   params: WebSearchInput,
   signal: AbortSignal | undefined,
   ctx: ExtensionContext,
-  runtime?: WebSearchRuntimeInstance,
+  runtime?: WebSearchRuntimeInstance | (() => WebSearchRuntimeInstance),
 ): Promise<{ text: string; details: WebSearchDetails }> {
-  const searchRuntime = runtime ?? createWebSearchRuntime();
+  const searchRuntime = typeof runtime === "function" ? runtime() : (runtime ?? createWebSearchRuntime());
   const searchService = searchRuntime.runSync(WebSearchRuntime);
 
   const searchOptions: SearchOptions = {
@@ -132,9 +132,9 @@ export async function executeSearch(
 export async function executeFetch(
   params: WebFetchInput,
   signal: AbortSignal | undefined,
-  runtime?: WebSearchRuntimeInstance,
+  runtime?: WebSearchRuntimeInstance | (() => WebSearchRuntimeInstance),
 ): Promise<{ text: string; details: WebFetchDetails }> {
-  const searchRuntime = runtime ?? createWebSearchRuntime();
+  const searchRuntime = typeof runtime === "function" ? runtime() : (runtime ?? createWebSearchRuntime());
   const searchService = searchRuntime.runSync(WebSearchRuntime);
 
   const response: FetchResponse = await runWebSearch(
@@ -169,7 +169,7 @@ export async function executeFetch(
 
 export function registerTools(
   pi: ExtensionAPI,
-  runtime?: WebSearchRuntimeInstance,
+  runtime?: WebSearchRuntimeInstance | (() => WebSearchRuntimeInstance),
 ): void {
   pi.registerTool({
     name: "web_search",
@@ -179,7 +179,8 @@ export function registerTools(
     parameters: WebSearchParams,
 
     async execute(_toolCallId, params: WebSearchInput, signal, _onUpdate, ctx) {
-      const { text, details } = await executeSearch(params, signal, ctx, runtime);
+      const activeRuntime = typeof runtime === "function" ? runtime() : runtime;
+      const { text, details } = await executeSearch(params, signal, ctx, activeRuntime);
       return {
         content: [{ type: "text" as const, text }],
         details,
@@ -236,7 +237,8 @@ export function registerTools(
     parameters: WebFetchParams,
 
     async execute(_toolCallId, params: WebFetchInput, signal) {
-      const { text, details } = await executeFetch(params, signal, runtime);
+      const activeRuntime = typeof runtime === "function" ? runtime() : runtime;
+      const { text, details } = await executeFetch(params, signal, activeRuntime);
       return {
         content: [{ type: "text" as const, text }],
         details,
