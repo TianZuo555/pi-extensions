@@ -252,8 +252,12 @@ test("UsageRuntime close interrupts outstanding queries", async () => {
   const ctx = mockCtx();
 
   const pending = runUsage(runtime, usage.queryProvider(ctx, spec, true));
+  // Attach the rejection handler before close(): the interrupt lands while
+  // close is still settling, and a late assert.rejects would leave the
+  // rejection momentarily unhandled (unhandledRejection → flaky CI failure).
+  const rejected = assert.rejects(pending);
   await runUsage(runtime, usage.close);
-  await assert.rejects(pending);
+  await rejected;
 
   await runtime.dispose();
 });
