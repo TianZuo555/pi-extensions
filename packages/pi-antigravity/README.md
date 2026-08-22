@@ -101,7 +101,7 @@ Long-running commands (dev servers, watchers) become agy background tasks. After
 ■ 1 agy background task • /agy-tasks to view
 ```
 
-The dashboard lists every task with pid and status: `x` stops it (whole process group), `r` rescans, esc closes. Closing pi stops all live tasks automatically. Non-interactive: `/agy-tasks stop <task-id>|all`.
+The dashboard lists every task with pid and status: `enter` opens a scrollable log view, `x` stops it (whole process group), `r` rescans, esc closes. Closing pi stops all live tasks automatically. Non-interactive: `/agy-tasks stop <task-id>|all`.
 
 ### Artifacts (`/agy-artifacts`)
 

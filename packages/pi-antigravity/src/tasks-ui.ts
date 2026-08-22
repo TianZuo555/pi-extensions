@@ -1,18 +1,24 @@
 /**
  * /agy-tasks UI — full-screen overlay dashboard over the filesystem-scanned
  * agy background tasks, mirroring the /ps dashboard interaction model:
- * arrow/jk selection, `x` to terminate the selected task, `r` to rescan,
- * `esc` to close. Data is a snapshot from lib/tasks.ts (log scan + lsof +
+ * arrow/jk selection, `enter` for a scrollable log detail view, `x` to
+ * terminate the selected task, `r` to rescan, `esc` to close (or to leave
+ * the detail view). Data is a snapshot from lib/tasks.ts (log scan + lsof +
  * orphan heuristics); killing re-scans after a short grace period.
  */
 
+import { promises as fs } from "node:fs";
 import type {
   ExtensionCommandContext,
   KeybindingsManager,
   Theme,
 } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import {
+  stripTerminalSequences,
+  truncateToWidth,
+  visibleWidth,
+} from "@earendil-works/pi-tui";
 import { stopAgyTask, type AgyTask } from "../lib/tasks.ts";
 
 export type AgyTaskStatus = "running" | "orphan" | "done";
@@ -49,6 +55,20 @@ function oneLine(text: string) {
   return text.replace(/\s+/g, " ");
 }
 
+/**
+ * Sanitize raw task-log text into width-safe display lines: strip terminal
+ * escape sequences and remaining control chars, expand tabs, drop trailing
+ * blanks. Always returns at least one line.
+ */
+export function agyTaskLogLines(content: string): string[] {
+  const lines = stripTerminalSequences(content)
+    .replace(/\t/g, "    ")
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "")
+    .split("\n");
+  while (lines.length > 0 && lines[lines.length - 1].trim() === "") lines.pop();
+  return lines.length > 0 ? lines : ["(no output)"];
+}
+
 function configuredKeys(
   keybindings: KeybindingsManager,
   binding: Parameters<KeybindingsManager["getKeys"]>[0],
@@ -80,6 +100,8 @@ export interface AgyTasksModel {
   refresh(): Promise<void>;
   /** Kill the task's processes; resolves after the SIGTERM is sent. */
   kill(task: AgyTask): Promise<number>;
+  /** Read the task's log file; resolves to "" when unreadable. */
+  readLog(task: AgyTask): Promise<string>;
 }
 
 /** Entry point: open the dashboard overlay; resolves when it closes. */
@@ -99,6 +121,7 @@ export async function openAgyTasksPicker(
       tasks = await rescan();
     },
     kill: (task) => stopAgyTask(task),
+    readLog: (task) => fs.readFile(task.logPath, "utf8").catch(() => ""),
   };
   await ctx.ui.custom<null>(
     (tui, theme, keybindings, done) =>
@@ -110,6 +133,16 @@ export async function openAgyTasksPicker(
   );
 }
 
+/** Open log-detail view state: which task, its sanitized log, scroll offset. */
+interface AgyTaskDetailView {
+  taskId: string;
+  lines: string[];
+  scroll: number;
+}
+
+/** Detail body lines above the log viewport: status, log path, separator. */
+const DETAIL_META_LINES = 3;
+
 export class AgyTasksDashboard implements Component {
   private tui: TUI;
   private theme: Theme;
@@ -120,6 +153,7 @@ export class AgyTasksDashboard implements Component {
 
   private closed = false;
   private busy = false;
+  private detail: AgyTaskDetailView | null = null;
 
   constructor(
     tui: TUI,
@@ -156,6 +190,11 @@ export class AgyTasksDashboard implements Component {
     const tasks = this.model.getTasks();
     reconcileAgyTasksSelection(this.selection, tasks);
 
+    if (this.detail) {
+      this.handleDetailInput(data, tasks);
+      return;
+    }
+
     if (this.keybindings.matches(data, "tui.select.cancel")) {
       this.close();
       return;
@@ -177,6 +216,11 @@ export class AgyTasksDashboard implements Component {
       }
       return;
     }
+    if (this.keybindings.matches(data, "tui.select.confirm")) {
+      const task = tasks[this.selection.index];
+      if (task) void this.openDetail(task);
+      return;
+    }
     if (data === "r") {
       void this.rescan();
       return;
@@ -185,6 +229,87 @@ export class AgyTasksDashboard implements Component {
       const task = tasks[this.selection.index];
       if (task && agyTaskStatus(task) !== "done") void this.kill(task);
       return;
+    }
+  }
+
+  private detailViewportHeight(): number {
+    const rows = this.tui.terminal.rows || 30;
+    return Math.max(1, Math.max(6, rows - 5) - DETAIL_META_LINES);
+  }
+
+  private handleDetailInput(data: string, tasks: ReadonlyArray<AgyTask>): void {
+    const detail = this.detail;
+    if (!detail) return;
+    if (this.keybindings.matches(data, "tui.select.cancel")) {
+      this.detail = null;
+      this.tui.requestRender();
+      return;
+    }
+    const viewport = this.detailViewportHeight();
+    const maxScroll = Math.max(0, detail.lines.length - viewport);
+    const scrollTo = (value: number) => {
+      detail.scroll = Math.min(Math.max(0, value), maxScroll);
+      this.tui.requestRender();
+    };
+    if (this.keybindings.matches(data, "tui.select.up") || data === "k") {
+      scrollTo(detail.scroll - 1);
+      return;
+    }
+    if (this.keybindings.matches(data, "tui.select.down") || data === "j") {
+      scrollTo(detail.scroll + 1);
+      return;
+    }
+    if (this.keybindings.matches(data, "tui.select.pageUp")) {
+      scrollTo(detail.scroll - viewport);
+      return;
+    }
+    if (this.keybindings.matches(data, "tui.select.pageDown")) {
+      scrollTo(detail.scroll + viewport);
+      return;
+    }
+    if (data === "g") {
+      scrollTo(0);
+      return;
+    }
+    if (data === "G") {
+      scrollTo(Number.MAX_SAFE_INTEGER);
+      return;
+    }
+    if (data === "r") {
+      void this.reloadDetail();
+      return;
+    }
+    if (data === "x") {
+      const task = tasks.find((entry) => entry.id === detail.taskId);
+      if (task && agyTaskStatus(task) !== "done") void this.kill(task);
+      return;
+    }
+  }
+
+  private async openDetail(task: AgyTask): Promise<void> {
+    this.busy = true;
+    this.tui.requestRender();
+    try {
+      const content = await this.model.readLog(task);
+      this.detail = { taskId: task.id, lines: agyTaskLogLines(content), scroll: 0 };
+    } finally {
+      this.busy = false;
+      this.tui.requestRender();
+    }
+  }
+
+  private async reloadDetail(): Promise<void> {
+    const detail = this.detail;
+    if (!detail) return;
+    this.busy = true;
+    try {
+      await this.model.refresh();
+      const task = this.model.getTasks().find((entry) => entry.id === detail.taskId);
+      if (task) detail.lines = agyTaskLogLines(await this.model.readLog(task));
+      else this.detail = null; // Task vanished — fall back to the list.
+    } finally {
+      this.busy = false;
+      this.tui.requestRender();
     }
   }
 
@@ -233,6 +358,12 @@ export class AgyTasksDashboard implements Component {
     const tasks = this.model.getTasks();
     reconcileAgyTasksSelection(this.selection, tasks);
 
+    // Detail mode only while the task is still listed.
+    const detailTask = this.detail
+      ? tasks.find((task) => task.id === this.detail?.taskId)
+      : undefined;
+    if (this.detail && !detailTask) this.detail = null;
+
     const rows = this.tui.terminal.rows || 30;
     const bodyHeight = Math.max(6, rows - 5);
     const innerWidth = Math.max(0, width - 2);
@@ -261,7 +392,14 @@ export class AgyTasksDashboard implements Component {
     lines.push(
       truncateToWidth(
         theme.fg("border", "╭") +
-          this.borderSegment(innerWidth, this.busy ? "working…" : "tasks") +
+          this.borderSegment(
+            innerWidth,
+            this.busy
+              ? "working…"
+              : detailTask
+                ? `${detailTask.id} · ${agyTaskStatus(detailTask)}`
+                : "tasks",
+          ) +
           theme.fg("border", "╮"),
         width,
       ),
@@ -269,7 +407,10 @@ export class AgyTasksDashboard implements Component {
 
     // Rows
     const divider = theme.fg("border", "│");
-    const rowLines = this.renderRows(tasks, innerWidth, bodyHeight);
+    const rowLines =
+      this.detail && detailTask
+        ? this.renderDetail(detailTask, this.detail, innerWidth, bodyHeight)
+        : this.renderRows(tasks, innerWidth, bodyHeight);
     for (let i = 0; i < bodyHeight; i++) {
       lines.push(
         truncateToWidth(
@@ -290,17 +431,50 @@ export class AgyTasksDashboard implements Component {
     );
 
     // Hints
-    lines.push(
-      truncateToWidth(
-        theme.fg(
-          "dim",
-          `  ${configuredKeys(this.keybindings, "tui.select.up")}/${configuredKeys(this.keybindings, "tui.select.down")}/jk select · x stop · r rescan · ${configuredKeys(this.keybindings, "tui.select.cancel")} close`,
-        ),
-        width,
-      ),
-    );
+    const up = configuredKeys(this.keybindings, "tui.select.up");
+    const down = configuredKeys(this.keybindings, "tui.select.down");
+    const cancel = configuredKeys(this.keybindings, "tui.select.cancel");
+    const hints = this.detail
+      ? `  ${up}/${down}/jk scroll · g/G top/end · x stop · r reload · ${cancel} back`
+      : `  ${up}/${down}/jk select · ${configuredKeys(this.keybindings, "tui.select.confirm")} info · x stop · r rescan · ${cancel} close`;
+    lines.push(truncateToWidth(theme.fg("dim", hints), width));
 
     return lines;
+  }
+
+  private renderDetail(
+    task: AgyTask,
+    detail: AgyTaskDetailView,
+    width: number,
+    height: number,
+  ): string[] {
+    const theme = this.theme;
+    const status = agyTaskStatus(task);
+    const pids = task.pids.length > 0 ? task.pids : task.orphans;
+    const dot = theme.fg("dim", " · ");
+
+    const viewport = Math.max(1, height - DETAIL_META_LINES);
+    const maxScroll = Math.max(0, detail.lines.length - viewport);
+    detail.scroll = Math.min(Math.max(0, detail.scroll), maxScroll);
+    const end = Math.min(detail.scroll + viewport, detail.lines.length);
+    const visible = detail.lines.slice(detail.scroll, end);
+
+    const position =
+      detail.lines.length > viewport
+        ? theme.fg("text", ` ${detail.scroll + 1}–${end}/${detail.lines.length} `)
+        : "";
+    const separator =
+      theme.fg("border", "─") +
+      position +
+      theme.fg("border", "─".repeat(Math.max(0, width - 1 - visibleWidth(position))));
+
+    const out = [
+      ` ${statusWord(status, theme)}${dot}${theme.fg("muted", pids.length > 0 ? `pid ${pids.join(",")}` : "pid -")}${dot}${theme.fg("muted", `${task.bytes}B`)}`,
+      ` ${theme.fg("dim", task.logPath)}`,
+      separator,
+    ];
+    for (const line of visible) out.push(` ${line}`);
+    return out;
   }
 
   private renderRows(
