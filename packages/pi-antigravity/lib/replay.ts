@@ -32,16 +32,3 @@ export class AgyReplayStore {
     return this.#results.size;
   }
 }
-
-/** One-line bounded summary of recorded agy tool arguments for card display. */
-export function summarizeAgyArgs(input: unknown): string {
-  if (input === undefined || input === null) return "";
-  let json: string;
-  try {
-    json = JSON.stringify(input);
-  } catch {
-    return "";
-  }
-  if (!json || json === "{}" || json === "[]") return "";
-  return json.length > 96 ? `${json.slice(0, 95)}…` : json;
-}

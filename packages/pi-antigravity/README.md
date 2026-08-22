@@ -5,9 +5,8 @@ Use **Google Antigravity** (`agy`) models inside the [pi coding agent](https://p
 ## Highlights
 
 - **Antigravity models in pi's model picker** — `antigravity/gemini-3.7-flash` and friends, with automatic model discovery.
-- **Native pi experience** — agy's tool calls render as normal pi tool cards; response text streams live.
-- **Pi-tool bridge** — agy can call your pi extension tools (subagents, web search, custom tools). The tool really executes in pi, with pi's permissions, hooks, and rendering.
-- **Skill passing** — your global pi Agent Skills become callable tools inside agy turns (`pi__grilling`, `pi__herdr`, …).
+- **Native rendering, not mimicry** — agy's read-only tools (`view_file`, `grep_search`, `find_by_name`, `list_dir`) are re-executed as real pi builtins (`read` / `grep` / `find` / `ls`), so their cards use pi's own renderers and show live, accurate output. Everything else renders through one display-only `antigravity` wrapper.
+- **Skills & MCP bridge** — your global pi Agent Skills become callable tools inside agy turns (`pi__p<pid>__grilling`, …), and pi's MCP servers (via the `pi-mcp-adapter` tools) are reachable from agy with pi's permissions, hooks, and rendering. Per-session tool names keep concurrent pi sessions fully isolated.
 - **Background-task manager** — long-running agy commands are tracked in a dashboard and stoppable with one keystroke (`/agy-tasks`).
 - **Artifact browser** — images and files agy creates are listed and openable via `/agy-artifacts`, with a status-bar hint when new ones appear.
 
@@ -18,9 +17,10 @@ flowchart TB
     subgraph pi["pi coding agent (the UI)"]
         UI["You: chat, tool cards,\npermissions, sessions"]
         Prov["antigravity provider\n(one agy turn per request)"]
-        Bridge["pi-tool bridge\n(local MCP server on 127.0.0.1)"]
+        Native["pi builtins\n(read / grep / find / ls)\nre-execute read-only steps"]
+        Bridge["skills & MCP bridge\n(local MCP server on 127.0.0.1)"]
         Skills["pi Agent Skills"]
-        Tools["pi extension tools\n(subagents, web search, ...)"]
+        Mcp["pi MCP servers\n(pi-mcp-adapter tools)"]
     end
 
     subgraph agy["agy CLI (the agent loop)"]
@@ -29,14 +29,31 @@ flowchart TB
 
     UI <-- "stream events:\ntext, tool cards, usage" --> Prov
     Prov -- "spawn / resume:\nagy --print ... --output-format stream-json" --> Agent
-    Agent -- "wants a pi tool:\ncall pi__<name> (MCP)" --> Bridge
+    Agent -- "read-only step done:\nemit native toolCall" --> Native
+    Prov -- "mutating/specialty step done:\ndisplay-only antigravity card" --> UI
+    Agent -- "wants a skill or pi MCP tool:\ncall pi__p<pid>__<name> (MCP)" --> Bridge
     Bridge -- "route into live turn" --> Prov
     Prov -- "stopReason: toolUse" --> UI
-    UI -- "pi executes the REAL tool" --> Tools
-    Tools -- "result" --> Prov
+    UI -- "pi executes the REAL tool" --> Mcp
+    Mcp -- "result" --> Prov
     Prov -- "result back to agy" --> Bridge
-    Skills -- "global skills become\npi__<skill_name> tools" --> Bridge
+    Skills -- "global skills become\npi__p<pid>__<skill_name> tools" --> Bridge
 ```
+
+**Tool rendering** splits into two paths:
+
+- **Native re-execution:** when agy finishes a read-only step (`view_file`, `list_dir`, `grep_search`, `find_by_name`), the provider emits a toolCall under the real pi builtin name (`read`, `ls`, `grep`, `find`). pi executes its own tool and renders the card with its native renderer — you see live, accurate output (syntax-highlighted reads, match counts), not agy's summary text. Re-running these is safe: they are read-only and unpermissioned. If the builtin is not active in the session, the step falls back to the display card.
+- **Display-only replay:** commands, edits, writes, and agy-specialty tools (web, subagents, image generation, MCP on other servers) must never re-execute — side effects, permission prompts for already-run commands. They end the turn as a tool call for the `antigravity` wrapper tool, whose "execution" just returns the output agy already recorded, rendered as a native-style card.
+
+## Why the `antigravity` tool exists
+
+You will see one registered tool named `antigravity` in `/tools`. It never does work, and no model should ever call it — it has an empty description and no prompt entries on purpose, so it costs nothing in the system prompt. It exists because pi's architecture only understands tool activity through registered tools:
+
+- **Cards:** pi renders a tool card only for a `toolCall` that targets a registered tool.
+- **Streaming:** ending an assistant message with a `toolUse` stop reason is the only way to hand control back to pi mid-turn (so the card renders) and then resume the still-running agy process on pi's next provider call. That loop is what chunks one long agy turn into many live cards.
+- **Transcript:** proper `toolCall` / `toolResult` pairs (agy tool name, recorded output, error, duration) land in the session JSONL instead of prose in the chat.
+
+Its `execute()` just replays output agy already produced: the provider records each completed step under the synthetic toolCall id, and execution returns the stored result. Commands, edits, writes, and agy-specific tools (web, subagents, image generation) must never re-execute — side effects would duplicate and permission prompts would fire for commands agy already ran — which is exactly why this display-only path sits next to native re-execution for read-only tools.
 
 ## Install
 
@@ -51,22 +68,29 @@ Requires the `agy` CLI installed and logged in (v1.1.17+). Override the binary w
 
 ## Features
 
-### Pi-tool bridge
+### Skills & MCP bridge
 
-On session start, the extension runs a small local MCP server and registers it with agy as `pi-bridge-<pid>`. Your active pi tools appear to agy as `pi__<name>`:
+On session start, the extension runs a small local MCP server and registers it with agy as `pi-bridge-<pid>`. Two kinds of pi surface are bridged:
+
+- **Skills** — each global pi skill becomes a `pi__p<pid>__<skill_name>` tool that returns its full `SKILL.md` plus bundled resource paths.
+- **MCP** — tools pi got from `pi-mcp-adapter` (the `mcp`/`mcpScript` gateways and per-server direct tools) are exposed with the same prefix.
+
+agy's MCP registry is **global** while bridge servers are per-pi-session, so concurrent sessions' tools all appear in every agy turn's tools/list. The per-session prefix (`pi__p<pid>__`) makes tool→server routing unambiguous: a tool name maps to exactly one session's bridge, so a call can only ever execute in the session that advertised it — never silently in another. Stale registrations from crashed sessions are pruned at startup. Calls still fail safe: no active turn, unknown tool, or a 480-second timeout returns an error to agy instead of hanging.
+
+An MCP call flows like this:
 
 1. agy calls `pi__<name>` — the bridge routes the call into its live turn.
 2. pi ends the assistant message with a tool call for the **real** pi tool — it renders as a normal card and goes through pi's normal permissions and hooks.
 3. pi executes it, and the result is handed back to the still-running agy turn.
 
-Built-in tools (`read`, `bash`, …) stay hidden because agy has native equivalents. Calls fail safe: no active turn, unknown tool, or a 480-second timeout returns an error to agy instead of hanging.
+Nothing else of pi's surface is bridged: builtins (`read`, `bash`, …) and pi's own machinery (`ask_user`, `todo`, `web_search`, …) stay hidden — agy has native equivalents, and invoking pi-session machinery from inside an agy turn would mutate the wrong session. Calls fail safe: no active turn, unknown tool, or a 480-second timeout returns an error to agy instead of hanging.
 
 ### Skill passing
 
 Your pi skills work inside agy turns:
 
 - **Workspace skills** (`.agents/skills/` in the project) need nothing — agy discovers and activates them natively.
-- **Global skills** (`~/.pi/agent/skills/`, `~/.agents/skills/`) each become their own bridge tool, named after the skill. Calling it returns the skill's full `SKILL.md` plus its bundled files.
+- **Global skills** (`~/.pi/agent/skills/`, `~/.agents/skills/`) are bridged as described above.
 - Skills respect pi's own config: `--no-skills`, `pi config` toggles, `/reload`. Skills marked `disable-model-invocation` are skipped.
 
 ### Background tasks (`/agy-tasks`)
@@ -104,7 +128,6 @@ The dashboard shows name, type, size, and origin (`generated` vs `uploaded`). Pr
 | Flag | Effect |
 | --- | --- |
 | `PI_ANTIGRAVITY_PI_TOOL_BRIDGE=0` | Turn the bridge off. Skills fall back to direct file reads. |
-| `PI_ANTIGRAVITY_EXPOSE_BUILTIN_TOOLS=1` | Also expose pi's built-in tools through the bridge. |
 | `AGY_BINARY=/path/to/agy` | Use a specific agy binary. |
 
 ## Good to know
@@ -115,7 +138,7 @@ The dashboard shows name, type, size, and origin (`generated` vs `uploaded`). Pr
 - **Conversation memory:** lives on agy's side and is reused across turns. It resets when you switch models, change projects, or run `/agy reset` — agy pins conversations to their birth workspace, so reusing one from another project would write into the wrong place.
 - **Thinking level** maps to `agy --effort`: low → `low`, medium → `medium`, high and above → `high`.
 - **Cost display** uses reference Gemini API prices (agy is subscription-billed). Override per model in `~/.pi/agent/models.json` under `providers.antigravity.modelOverrides`.
-- The print interface is text-only; images in context are replaced by an omission note. Model discovery caches for 24h with a bundled fallback.
+- The print interface is text-only; images in context are replaced by an omission note. Model discovery caches live lists for 24h; fallback snapshots (discovery failed or timed out) expire after 5 minutes so live discovery is retried promptly.
 - If an older globally installed copy exists, remove it first: `pi remove npm:@tian.zuo/pi-antigravity`.
 
 ## Development
@@ -124,7 +147,5 @@ The dashboard shows name, type, size, and origin (`generated` vs `uploaded`). Pr
 pnpm --filter @tian.zuo/pi-antigravity run check
 pnpm --filter @tian.zuo/pi-antigravity test
 ```
-
-Design history and probe results: [`docs/pi-tool-bridge-plan.md`](docs/pi-tool-bridge-plan.md).
 
 Reference: [Pi-cursor-sdk](https://github.com/fitchmultz/pi-cursor-sdk)

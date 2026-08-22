@@ -7,6 +7,7 @@ import {
   formatSkillCatalog,
   nonWorkspaceSkills,
   readSkillBundle,
+  skillToolName,
   type SkillLite,
 } from "../lib/skills.ts";
 
@@ -25,6 +26,21 @@ test("formatSkillCatalog lists name, one-liner, and path", () => {
   assert.ok(block.includes("(/skills/grilling/SKILL.md)"));
   assert.ok(block.includes("pi__<skill_name>"));
   assert.ok(!block.includes("read its SKILL.md file directly"));
+});
+
+test("formatSkillCatalog advertises the session's bridge prefix exactly", () => {
+  const block = formatSkillCatalog([SKILL], "bridge", "pi__p4242__");
+  assert.ok(block);
+  assert.ok(block.includes("pi__p4242__<skill_name>"));
+  assert.ok(!block.includes("pi__<skill_name>"));
+});
+
+test("skillToolName sanitizes to MCP-safe characters", () => {
+  assert.equal(skillToolName(SKILL), "grilling");
+  assert.equal(
+    skillToolName({ ...SKILL, name: "pro360 workflow v2!" }),
+    "pro360_workflow_v2_",
+  );
 });
 
 test("formatSkillCatalog direct mode instructs reading the file", () => {

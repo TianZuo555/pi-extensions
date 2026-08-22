@@ -14,7 +14,6 @@ import type {
   ExtensionContext,
   ExtensionUIContext,
   ProviderModelConfig,
-  Theme,
 } from "@earendil-works/pi-coding-agent";
 import { Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
@@ -26,18 +25,21 @@ import { AGY_BINARY } from "./lib/agy-client.ts";
 import {
   AgyPiBridge,
   BRIDGE_SERVER_NAME,
-  type BridgeToolDef,
+  selectBridgedTools,
+  type PiToolInfo,
 } from "./lib/bridge.ts";
 import {
   formatSkillCatalog,
   nonWorkspaceSkills,
   readSkillBundle,
+  skillToolName,
   type SkillLite,
 } from "./lib/skills.ts";
 import {
   CONTEXT_WINDOW,
   FALLBACK_MODELS,
   MAX_TOKENS,
+  modelCacheTtlMs,
   normalizeAgyModelId,
   parseAgyModels,
   pricingForModel,
@@ -46,6 +48,7 @@ import {
 import { AgyReplayStore, type RecordedAgyTool } from "./lib/replay.ts";
 import { findAgyTask, listAgyTasks, stopAgyTask, type AgyTask } from "./lib/tasks.ts";
 import { findAgyArtifact, listAgyArtifacts } from "./lib/artifacts.ts";
+import { WRAPPER_TOOL_DESCRIPTION, WRAPPER_TOOL_NAME } from "./lib/prompt.ts";
 import { openAgyTasksPicker } from "./src/tasks-ui.ts";
 import { openArtifact, openAgyArtifactsPicker } from "./src/artifacts-ui.ts";
 import {
@@ -61,21 +64,12 @@ import {
 } from "./src/runtime.ts";
 
 const MODEL_CACHE_FILE = path.join(piConfigDir("antigravity"), "model-list.json");
-const MODEL_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 const DISCOVERY_TIMEOUT_MS = 15_000;
 
 // --- Pi-tool bridge ---------------------------------------------------------
 
 const BRIDGE_ENABLED = process.env.PI_ANTIGRAVITY_PI_TOOL_BRIDGE !== "0";
-const EXPOSE_BUILTIN_TOOLS = process.env.PI_ANTIGRAVITY_EXPOSE_BUILTIN_TOOLS === "1";
 const MAX_SKILL_TOOL_DESCRIPTION = 200;
-
-/**
- * Built-in pi tools hidden from the bridge by default — agy has native
- * equivalents, and duplicating them bloats agy's prompt and invites it to
- * round-trip work through pi for no gain.
- */
-const HIDDEN_BUILTIN_TOOLS = new Set(["read", "bash", "write", "edit", "grep", "find", "ls"]);
 
 function execAgy(args: string[], timeoutMs = DISCOVERY_TIMEOUT_MS): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -84,6 +78,45 @@ function execAgy(args: string[], timeoutMs = DISCOVERY_TIMEOUT_MS): Promise<stri
       else resolve(stdout);
     });
   });
+}
+
+/**
+ * Remove `pi-bridge-*` MCP registrations whose loopback server is no longer
+ * reachable. Registrations live in agy's GLOBAL config while bridge servers
+ * are per-pi-session: crashed sessions leak registrations forever, and every
+ * live session's tools are merged into every agy turn's tools/list. Pruning
+ * dead entries on startup keeps cross-session pollution to live sessions.
+ */
+async function pruneStaleBridgeRegistrations(): Promise<void> {
+  let list: string;
+  try {
+    list = await execAgy(["mcp", "list"]);
+  } catch {
+    return; // agy unavailable — registration below will warn instead
+  }
+  const stale: string[] = [];
+  for (const line of list.split("\n").slice(1)) {
+    const columns = line.trim().split(/\s+/);
+    const name = columns[0] ?? "";
+    const url = columns[columns.length - 1] ?? "";
+    if (!name.startsWith(`${BRIDGE_SERVER_NAME}-`) || !/^http:\/\/127\.0\.0\.1:\d+\//.test(url)) {
+      continue;
+    }
+    try {
+      await fetch(url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping" }),
+        signal: AbortSignal.timeout(1_500),
+      });
+      // Any HTTP answer (even 403/404) means a server is still listening.
+    } catch {
+      stale.push(name);
+    }
+  }
+  await Promise.all(
+    stale.map((name) => execAgy(["mcp", "remove", name]).catch(() => {})),
+  );
 }
 
 interface ModelCache {
@@ -134,7 +167,7 @@ async function discoverModels(refresh = false): Promise<ModelCache> {
     if (
       cached?.models?.length &&
       cached.fetchedAt &&
-      Date.now() - cached.fetchedAt < MODEL_CACHE_TTL_MS
+      Date.now() - cached.fetchedAt < modelCacheTtlMs(cached.source)
     ) {
       return { ...cached, models: normalizeModels(cached.models) };
     }
@@ -151,9 +184,6 @@ async function discoverModels(refresh = false): Promise<ModelCache> {
   return cache;
 }
 
-const AGY_TOOL_DESCRIPTION =
-  "Replay a recorded Google Antigravity (agy) tool result. The agy agent already ran the tool; calling this only returns the recorded output.";
-
 export default async function antigravityExtension(pi: ExtensionAPI): Promise<void> {
   const runtime = createAntigravityRuntime();
   const service = runtime.runSync(AntigravityRuntime);
@@ -165,6 +195,12 @@ export default async function antigravityExtension(pi: ExtensionAPI): Promise<vo
   const bridge = new AgyPiBridge(`${BRIDGE_SERVER_NAME}-${process.pid}`);
   const bridgeToken = randomUUID();
   bridge.requireToken(bridgeToken);
+  // Session-unique tool prefix: agy's MCP config is global, so concurrent pi
+  // sessions' bridges all appear in every agy turn's tools/list. Namespacing
+  // each session's tools makes tool→server routing unambiguous — a call can
+  // only reach the session that advertised it.
+  const bridgeToolPrefix = `pi__p${process.pid}__`;
+  bridge.setToolPrefix(bridgeToolPrefix);
   bridge.setOnCall((call) => service.pushBridgeCall(call));
 
   // --- Skill passing (Phase 2) ----------------------------------------------
@@ -190,16 +226,15 @@ export default async function antigravityExtension(pi: ExtensionAPI): Promise<vo
       // agy injects workspace .agents/skills itself — only bridge the rest.
       nonWorkspaceSkills(loadedSkills, tasksSessionCwd),
       BRIDGE_ENABLED ? "bridge" : "direct",
+      bridgeToolPrefix,
     );
 
-  /** Publish one bridge tool per global pi skill: `pi__<skill_name>`. */
+  /** Publish one bridge tool per global pi skill: `pi__p<pid>__<skill_name>`. */
   function refreshSkillTools(): void {
     if (!BRIDGE_ENABLED) return;
     bridge.setDynamicTools(
       nonWorkspaceSkills(loadedSkills, tasksSessionCwd).map((skill) => ({
-        // MCP tool names allow [A-Za-z0-9_-]; skill names are directory
-        // names but sanitize anyway.
-        name: skill.name.replace(/[^A-Za-z0-9_-]/g, "_"),
+        name: skillToolName(skill),
         description:
           (skill.description.replace(/\s+/g, " ").trim().slice(0, MAX_SKILL_TOOL_DESCRIPTION) ||
             `pi Agent Skill "${skill.name}"`) +
@@ -213,33 +248,14 @@ export default async function antigravityExtension(pi: ExtensionAPI): Promise<vo
   bridge.setToolSource(() => {
     if (!BRIDGE_ENABLED) return [];
     let activeNames: string[] = [];
-    let allTools: Array<{
-      name: string;
-      description?: string;
-      parameters?: unknown;
-      sourceInfo?: { source?: string };
-    }> = [];
+    let allTools: PiToolInfo[] = [];
     try {
       activeNames = pi.getActiveTools();
-      allTools = pi.getAllTools() as typeof allTools;
+      allTools = pi.getAllTools() as PiToolInfo[];
     } catch {
       return []; // API unavailable (print/RPC edge) — expose nothing.
     }
-    const active = new Set(activeNames);
-    const tools: BridgeToolDef[] = [];
-    for (const tool of allTools) {
-      if (!active.has(tool.name)) continue;
-      if (tool.name === "agy") continue; // display-only replay wrapper
-      const source = tool.sourceInfo?.source;
-      if (
-        !EXPOSE_BUILTIN_TOOLS &&
-        (source === "builtin" || HIDDEN_BUILTIN_TOOLS.has(tool.name))
-      ) {
-        continue;
-      }
-      tools.push({ name: tool.name, description: tool.description ?? "", parameters: tool.parameters });
-    }
-    return tools;
+    return selectBridgedTools(allTools, activeNames);
   });
 
   // Bridge-virtual tools are gone; per-skill tools are published dynamically
@@ -254,6 +270,15 @@ export default async function antigravityExtension(pi: ExtensionAPI): Promise<vo
   let widgetLiveCount = -1;
   let widgetArtifactCount = -1;
   let widgetScanInFlight = false;
+
+  /** Active-tool snapshot for the provider's native re-execution fallback. */
+  const isActiveTool = (name: string): boolean => {
+    try {
+      return pi.getActiveTools().includes(name);
+    } catch {
+      return false; // API unavailable (print/RPC edge) — stay on the wrapper.
+    }
+  };
 
   function setAgyTasksWidget(live: number): void {
     if (!tasksUi || live === widgetLiveCount) return;
@@ -336,12 +361,12 @@ export default async function antigravityExtension(pi: ExtensionAPI): Promise<vo
   }
 
   pi.registerTool({
-    name: "agy",
+    name: WRAPPER_TOOL_NAME,
     label: "antigravity",
-    description: AGY_TOOL_DESCRIPTION,
+    description: WRAPPER_TOOL_DESCRIPTION,
     parameters: Type.Object({
-      tool: Type.String({ description: "Recorded agy tool name" }),
-      input: Type.Unknown({ description: "Recorded agy tool arguments" }),
+      tool: Type.String(),
+      input: Type.Unknown(),
     }),
     async execute(toolCallId, params) {
       const recorded = replay.take(toolCallId);
@@ -402,6 +427,7 @@ export default async function antigravityExtension(pi: ExtensionAPI): Promise<vo
       bridge,
       updateAgyTasksWidget,
       getBootstrapSuffix,
+      isActiveTool,
     ),
   });
 
@@ -419,6 +445,7 @@ export default async function antigravityExtension(pi: ExtensionAPI): Promise<vo
     // agy eagerly connects to MCP servers at startup (verified 2026-08-21).
     if (BRIDGE_ENABLED) {
       try {
+        await pruneStaleBridgeRegistrations();
         await bridge.start();
         await execAgy([
           "mcp", "add", "--type", "http",
@@ -510,6 +537,7 @@ export default async function antigravityExtension(pi: ExtensionAPI): Promise<vo
             bridge,
             updateAgyTasksWidget,
             getBootstrapSuffix,
+            isActiveTool,
           ),
         });
         ctx.ui.notify(

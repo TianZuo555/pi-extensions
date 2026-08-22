@@ -20,10 +20,10 @@
 
 import { randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { WRAPPER_TOOL_NAME } from "./prompt.ts";
 
 export const BRIDGE_SERVER_NAME = "pi-bridge";
 export const BRIDGE_TOOL_PREFIX = "pi__";
-
 /** Per-call cap; must stay below agy's 600s turn timeout so agy can still report the failure. */
 export const BRIDGE_CALL_TIMEOUT_MS = 480_000;
 
@@ -33,6 +33,41 @@ export interface BridgeToolDef {
   description: string;
   /** JSON schema (typebox) for the tool parameters. */
   parameters: unknown;
+}
+
+/** Shape of pi's ToolInfo the bridge selection needs. */
+export interface PiToolInfo {
+  name: string;
+  description?: string;
+  parameters?: unknown;
+  sourceInfo?: { source?: string };
+}
+
+/**
+ * The only pi tools bridged into agy: those pi got from its MCP adapter
+ * (gateway tools like `mcp`/`mcpScript` plus per-server direct tools),
+ * identified by their package source. Everything else of pi's surface —
+ * builtins and extension tools alike (ask_user, web_search, todo, …) — is
+ * pi-session machinery agy must not mutate mid-turn; agy has native
+ * equivalents for files, shell, and web. Skills are bridged separately as
+ * dynamic `pi__<skill_name>` tools.
+ */
+const MCP_ADAPTER_SOURCE = /pi-mcp-adapter/;
+
+/** Select the pi tools eligible for bridging (MCP adapter tools only). */
+export function selectBridgedTools(
+  tools: PiToolInfo[],
+  activeNames: readonly string[],
+): BridgeToolDef[] {
+  const active = new Set(activeNames);
+  const bridged: BridgeToolDef[] = [];
+  for (const tool of tools) {
+    if (!active.has(tool.name)) continue;
+    if (tool.name === WRAPPER_TOOL_NAME) continue; // display-only replay wrapper
+    if (!MCP_ADAPTER_SOURCE.test(tool.sourceInfo?.source ?? "")) continue;
+    bridged.push({ name: tool.name, description: tool.description ?? "", parameters: tool.parameters });
+  }
+  return bridged;
 }
 
 export interface BridgeCallResult {
@@ -51,19 +86,12 @@ type PendingCall = BridgeCall & {
   timer: NodeJS.Timeout;
 };
 
-/**
- * A bridge-virtual tool: handled entirely inside the extension without a
- * pi toolUse round-trip (a local file read needs no hooks, permissions, or
- * rendering).
- */
-interface VirtualTool {
+/** A dynamically-refreshed virtual tool (one per bridged pi skill). */
+interface DynamicTool {
   description: string;
   parameters: unknown;
   handler: (args: Record<string, unknown>) => Promise<BridgeCallResult>;
 }
-
-/** A dynamically-refreshed virtual tool (one per bridged pi skill). */
-type DynamicTool = VirtualTool;
 
 interface JsonRpcRequest {
   id?: number | string | null;
@@ -85,11 +113,18 @@ export class AgyPiBridge {
   #token: string | undefined;
   /** Per-session server name so concurrent pi sessions cannot hijack each other's registration. */
   readonly serverName: string;
+  /**
+   * Tool-name prefix used in tools/list and stripped on routing. Defaults to
+   * `pi__`; sessions set a unique prefix (`pi__p<pid>__`) so that when agy's
+   * GLOBAL MCP config merges several concurrent pi sessions' bridges, every
+   * tool name maps to exactly one server — a call can only route back to the
+   * session that advertised it.
+   */
+  #toolPrefix = BRIDGE_TOOL_PREFIX;
   /** Callback that routes a call into the live agy turn controller. Returns false when no turn is active. */
   #onCall: ((call: BridgeCall) => boolean) | undefined;
   /** Source of the current active-tool snapshot, invoked once per provider request. */
   #toolSource: (() => BridgeToolDef[]) | undefined;
-  #virtual = new Map<string, VirtualTool>();
   /** Replaced wholesale on every skills refresh (one entry per skill). */
   #dynamic = new Map<string, DynamicTool>();
 
@@ -100,6 +135,11 @@ export class AgyPiBridge {
   /** Require `token` in the x-pi-bridge-token header on every request. */
   requireToken(token: string): void {
     this.#token = token;
+  }
+
+  /** Set the per-session tool-name prefix (e.g. `pi__p1234__`). */
+  setToolPrefix(prefix: string): void {
+    this.#toolPrefix = prefix;
   }
 
   setOnCall(onCall: (call: BridgeCall) => boolean): void {
@@ -116,21 +156,10 @@ export class AgyPiBridge {
   }
 
   /**
-   * Register a bridge-virtual tool. Virtual tools are always listed and are
-   * handled in-process instead of being routed into the agy turn.
-   */
-  registerVirtualTool(
-    name: string,
-    definition: { description: string; parameters: unknown },
-    handler: (args: Record<string, unknown>) => Promise<BridgeCallResult>,
-  ): void {
-    this.#virtual.set(name, { ...definition, handler });
-  }
-
-  /**
    * Replace the dynamic tool set (used for per-skill `pi__<skill_name>`
-   * tools). Unlike {@link registerVirtualTool}, the whole set is swapped so
-   * removed skills disappear from tools/list on the next refresh.
+   * tools, handled in-process without a pi toolUse round-trip). The whole
+   * set is swapped so removed skills disappear from tools/list on the next
+   * refresh.
    */
   setDynamicTools(
     tools: Array<{
@@ -141,11 +170,6 @@ export class AgyPiBridge {
     }>,
   ): void {
     this.#dynamic = new Map(tools.map((tool) => [tool.name, { ...tool }]));
-  }
-
-  /** Static + dynamic virtual tools, merged for listing and routing. */
-  #allVirtual(): Map<string, VirtualTool> {
-    return new Map([...this.#virtual, ...this.#dynamic]);
   }
 
   get url(): string | undefined {
@@ -282,14 +306,14 @@ export class AgyPiBridge {
           result: {
             tools: [
               ...this.#tools.map((tool) => ({
-                name: `${BRIDGE_TOOL_PREFIX}${tool.name}`,
+                name: `${this.#toolPrefix}${tool.name}`,
                 description:
                   tool.description ||
                   `pi tool "${tool.name}" bridged into agy by ${BRIDGE_SERVER_NAME}.`,
                 inputSchema: tool.parameters,
               })),
-              ...[...this.#allVirtual()].map(([name, definition]) => ({
-                name: `${BRIDGE_TOOL_PREFIX}${name}`,
+              ...[...this.#dynamic].map(([name, definition]) => ({
+                name: `${this.#toolPrefix}${name}`,
                 description: definition.description,
                 inputSchema: definition.parameters,
               })),
@@ -323,19 +347,17 @@ export class AgyPiBridge {
    * all produce an isError result rather than hanging agy.
    */
   async #routeCall(mcpName: string, args: Record<string, unknown>): Promise<BridgeCallResult> {
-    if (!mcpName.startsWith(BRIDGE_TOOL_PREFIX)) {
-      return { content: `antigravity: unknown tool "${mcpName}" — only pi__* bridge tools exist.`, isError: true };
+    if (!mcpName.startsWith(this.#toolPrefix)) {
+      return { content: `antigravity: unknown tool "${mcpName}" — only ${this.#toolPrefix}* bridge tools exist.`, isError: true };
     }
-    const tool = mcpName.slice(BRIDGE_TOOL_PREFIX.length);
+    const tool = mcpName.slice(this.#toolPrefix.length);
     // Real pi tools win over same-named skills; dynamic (per-skill) tools
-    // come next; static virtual tools last.
+    // are handled in-process.
     if (this.#tools.some((def) => def.name === tool)) {
       return this.#routeToPiTool(tool, args);
     }
     const dynamic = this.#dynamic.get(tool);
     if (dynamic) return dynamic.handler(args);
-    const virtual = this.#virtual.get(tool);
-    if (virtual) return virtual.handler(args);
     return { content: `antigravity: tool "${tool}" is not currently active in pi.`, isError: true };
   }
 

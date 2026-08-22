@@ -29,6 +29,15 @@ const MAX_DESCRIPTION = 120;
 const MAX_SKILL_BODY = 24_000;
 const MAX_RESOURCES = 20;
 
+/**
+ * MCP-safe bridge tool name for a skill (MCP tool names allow
+ * [A-Za-z0-9_-]). Shared by the dynamic tool registration and the bootstrap
+ * catalog so the advertised name always matches the listed one.
+ */
+export function skillToolName(skill: SkillLite): string {
+  return skill.name.replace(/[^A-Za-z0-9_-]/g, "_");
+}
+
 export type SkillCatalogMode = "bridge" | "direct";
 
 /**
@@ -49,11 +58,14 @@ export function nonWorkspaceSkills(skills: SkillLite[], sessionCwd: string | und
 
 /**
  * Format the bootstrap-prompt catalog block. Returns undefined when there
- * are no model-invocable skills, so nothing is injected.
+ * are no model-invocable skills, so nothing is injected. `toolPrefix` is the
+ * session's bridge prefix (see AgyPiBridge) so advertised names match the
+ * tools/list entries exactly.
  */
 export function formatSkillCatalog(
   skills: SkillLite[],
   mode: SkillCatalogMode,
+  toolPrefix = "pi__",
 ): string | undefined {
   const usable = skills.filter((skill) => skill.filePath);
   if (usable.length === 0) return undefined;
@@ -64,7 +76,7 @@ export function formatSkillCatalog(
   });
   const how =
     mode === "bridge"
-      ? "Each skill is exposed as a pi__<skill_name> bridge tool; call that tool to activate the skill."
+      ? `Each skill is exposed as a ${toolPrefix}<skill_name> bridge tool; call that exact tool name to activate the skill.`
       : "To activate a skill, read its SKILL.md file directly.";
   return [
     "## pi Agent Skills",

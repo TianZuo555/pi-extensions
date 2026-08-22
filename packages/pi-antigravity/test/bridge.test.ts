@@ -5,6 +5,7 @@ import {
   BRIDGE_SERVER_NAME,
   BRIDGE_TOOL_PREFIX,
   resolveBridgeResultsFromContext,
+  selectBridgedTools,
 } from "../lib/bridge.ts";
 
 const TOOL_DEFS = [
@@ -139,23 +140,28 @@ test("bridge times out pending calls with an isError result", async () => {
   }
 });
 
-test("bridge-virtual tools are listed and handled in-process", async () => {
+test("dynamic skill tools are listed and handled in-process", async () => {
   const bridge = new AgyPiBridge();
   bridge.setOnCall(() => {
-    throw new Error("virtual tools must not be routed into the agy turn");
+    throw new Error("skill tools must not be routed into the agy turn");
   });
   bridge.setToolSource(() => TOOL_DEFS);
-  bridge.registerVirtualTool(
-    "activate_skill",
-    { description: "Activate a skill.", parameters: { type: "object", properties: {} } },
-    async (args) => ({ content: `activated:${String(args.name)}`, isError: false }),
-  );
+  bridge.setDynamicTools([
+    {
+      name: "activate_skill",
+      description: "Activate a skill.",
+      parameters: { type: "object", properties: {} },
+      handler: async (args) => ({ content: `activated:${String(args.name)}`, isError: false }),
+    },
+  ]);
   await bridge.start();
   try {
     bridge.refreshTools();
     const list = await post(bridge, { jsonrpc: "2.0", id: 8, method: "tools/list" });
     const names = (list.json.result.tools as Array<{ name: string }>).map((tool) => tool.name);
     assert.ok(names.includes(`${BRIDGE_TOOL_PREFIX}activate_skill`));
+    // Real pi tools (from the tool source) are still listed alongside.
+    assert.ok(names.includes(`${BRIDGE_TOOL_PREFIX}commit`));
 
     const res = await post(bridge, {
       jsonrpc: "2.0",
@@ -248,6 +254,64 @@ test("resolveBridgeResultsFromContext resolves matching toolResult messages", as
   }
 });
 
+test("per-session tool prefixes isolate concurrent bridges", async () => {
+  // Two live bridges, as with two concurrent pi sessions. agy's global MCP
+  // config merges both into every turn's tools/list; the per-session prefix
+  // must make routing unambiguous.
+  const a = new AgyPiBridge("pi-bridge-111");
+  const b = new AgyPiBridge("pi-bridge-222");
+  a.setToolPrefix("pi__p111__");
+  b.setToolPrefix("pi__p222__");
+  let routedTo: string | undefined;
+  a.setOnCall((call) => {
+    routedTo = `a:${call.tool}`;
+    setTimeout(() => a.resolveCall(call.id, { content: "from-a", isError: false }), 5);
+    return true;
+  });
+  b.setOnCall((call) => {
+    routedTo = `b:${call.tool}`;
+    setTimeout(() => b.resolveCall(call.id, { content: "from-b", isError: false }), 5);
+    return true;
+  });
+  a.setToolSource(() => TOOL_DEFS);
+  b.setToolSource(() => TOOL_DEFS);
+  await a.start();
+  await b.start();
+  try {
+    a.refreshTools();
+    b.refreshTools();
+
+    const listA = await post(a, { jsonrpc: "2.0", id: 1, method: "tools/list" });
+    const namesA = (listA.json.result.tools as Array<{ name: string }>).map((t) => t.name);
+    assert.deepEqual(namesA, ["pi__p111__commit"]);
+
+    // A's prefixed name routes to A only — even though B serves the same
+    // underlying tool and both have active turns.
+    const res = await post(a, {
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tools/call",
+      params: { name: "pi__p111__commit", arguments: {} },
+    });
+    assert.equal(res.json.result.content[0].text, "from-a");
+    assert.equal(routedTo, "a:commit");
+
+    // A's name is NOT valid on B's bridge: the other session cannot be
+    // reached through it.
+    const wrong = await post(b, {
+      jsonrpc: "2.0",
+      id: 3,
+      method: "tools/call",
+      params: { name: "pi__p111__commit", arguments: {} },
+    });
+    assert.equal(wrong.json.result.isError, true);
+    assert.match(wrong.json.result.content[0].text, /unknown tool/);
+  } finally {
+    await a.close();
+    await b.close();
+  }
+});
+
 test("bridge enforces the shared token when configured", async () => {
   const bridge = new AgyPiBridge("pi-bridge-test");
   bridge.requireToken("secret-token");
@@ -271,4 +335,36 @@ test("bridge enforces the shared token when configured", async () => {
   } finally {
     await bridge.close();
   }
+});
+
+test("selectBridgedTools bridges only MCP adapter tools", () => {
+  const tools = [
+    { name: "read", sourceInfo: { source: "builtin" } },
+    { name: "ask_user", sourceInfo: { source: "npm:@tian.zuo/pi-ask-user" } },
+    { name: "web_search", sourceInfo: { source: "npm:@tian.zuo/pi-web-search" } },
+    { name: "todo", sourceInfo: { source: "npm:@tian.zuo/pi-todo" } },
+    { name: "mcp", sourceInfo: { source: "npm:pi-mcp-adapter" } },
+    { name: "mcpScript", sourceInfo: { source: "npm:pi-mcp-adapter@2" } },
+    { name: "github_search_issues", sourceInfo: { source: "npm:pi-mcp-adapter" } },
+    { name: "antigravity", sourceInfo: { source: "npm:pi-mcp-adapter" } },
+    { name: "orphan", sourceInfo: {} },
+  ].map((tool) => ({
+    ...tool,
+    description: `${tool.name} description`,
+    parameters: { type: "object", properties: {} },
+  }));
+  const active = [
+    "read",
+    "ask_user",
+    "web_search",
+    "todo",
+    "mcp",
+    "mcpScript",
+    "github_search_issues",
+    "antigravity",
+  ];
+  const bridged = selectBridgedTools(tools, active).map((tool) => tool.name);
+  // MCP adapter tools only — no builtins, no pi-session extension tools,
+  // no replay wrapper, no inactive tools, no unknown sources.
+  assert.deepEqual(bridged, ["mcp", "mcpScript", "github_search_issues"]);
 });

@@ -26,6 +26,8 @@ import type { AgyEffort } from "../lib/agy-client.ts";
 import { type AgyPiBridge, resolveBridgeResultsFromContext } from "../lib/bridge.ts";
 import type { AgyUsage } from "../lib/reducer.ts";
 import { AgyReplayStore } from "../lib/replay.ts";
+import { mapAgyToolToNative } from "../lib/native-tools.ts";
+import { WRAPPER_TOOL_NAME } from "../lib/prompt.ts";
 import type { AntigravityRuntimeInstance, AntigravityRuntimeShape } from "./runtime.ts";
 
 interface TextPart {
@@ -133,6 +135,9 @@ export function streamAntigravity(
    * inject the pi skill catalog. Evaluated once per request.
    */
   getBootstrapSuffix?: () => string | undefined,
+  /** Whether a pi tool name is currently active — native re-execution
+   * toolCalls are only emitted for active tools (else the wrapper). */
+  isActiveTool: (name: string) => boolean = () => true,
 ) {
   return (
     model: Model<string>,
@@ -193,7 +198,14 @@ export function streamAntigravity(
         resolveBridgeResultsFromContext(bridge, context.messages);
 
         let usage: AgyUsage | undefined;
-        let open: { id: string; name: string } | undefined;
+        let open:
+          | {
+              id: string;
+              name: string;
+              /** Native re-execution target; undefined → replay wrapper. */
+              native: { tool: string; args: Record<string, unknown> } | undefined;
+            }
+          | undefined;
         let textIndex: number | null = null;
         let textBuffer = "";
 
@@ -223,10 +235,12 @@ export function streamAntigravity(
           if (activity === null) {
             if (open) {
               // The agy stream ended while a tool call was still open.
-              replay.record(open.id, {
-                agyTool: open.name,
-                error: agyIncompleteToolError(open.name),
-              });
+              if (!open.native) {
+                replay.record(open.id, {
+                  agyTool: open.name,
+                  error: agyIncompleteToolError(open.name),
+                });
+              }
               endWithToolUse();
               return;
             }
@@ -241,12 +255,20 @@ export function streamAntigravity(
             case "tool_start": {
               if (isBridgedMcpStep(activity, bridge.serverName)) break;
               closeText();
-              const id = `agy-replay-${++replayCallSeq}`;
+              // Read-only agy tools re-execute natively: emit a toolCall
+              // under the real builtin name so pi renders AND executes it
+              // with its own tool (fresh output, native renderers). Everything
+              // else goes through the display-only wrapper.
+              const native = mapAgyToolToNative(activity.name, activity.args);
+              const effective = native && isActiveTool(native.tool) ? native : undefined;
+              const id = `agy-${effective ? "native" : "replay"}-${++replayCallSeq}`;
               const toolCall = {
                 type: "toolCall" as const,
                 id,
-                name: "agy",
-                arguments: { tool: activity.name, input: activity.args },
+                name: effective ? effective.tool : WRAPPER_TOOL_NAME,
+                arguments: effective
+                  ? effective.args
+                  : { tool: activity.name, input: activity.args },
               };
               output.content.push(toolCall);
               const index = output.content.length - 1;
@@ -257,21 +279,27 @@ export function streamAntigravity(
                 toolCall,
                 partial: output,
               });
-              open = { id, name: activity.name };
+              open = { id, name: activity.name, native: effective };
               break;
             }
             case "tool_done": {
               if (!open || isBridgedMcpStep(activity, bridge.serverName)) break;
-              replay.record(open.id, {
-                agyTool: activity.name,
-                output: activity.output,
-                durationSeconds: activity.durationSeconds,
-              });
+              // Native calls need no recording: pi's real execution produces
+              // the result. Wrapper calls replay the recorded agy output.
+              if (!open.native) {
+                replay.record(open.id, {
+                  agyTool: activity.name,
+                  output: activity.output,
+                  durationSeconds: activity.durationSeconds,
+                });
+              }
               endWithToolUse();
               return;
             }
             case "tool_error": {
               if (!open || isBridgedMcpStep(activity, bridge.serverName)) break;
+              // Errors replay through the wrapper even for natively-mapped
+              // tools: re-executing a step agy failed would only mislead.
               replay.record(open.id, { agyTool: activity.name, error: activity.message });
               endWithToolUse();
               return;
@@ -319,10 +347,12 @@ export function streamAntigravity(
             }
             case "result": {
               if (open) {
-                replay.record(open.id, {
-                  agyTool: open.name,
-                  error: agyIncompleteToolError(open.name, activity.error),
-                });
+                if (!open.native) {
+                  replay.record(open.id, {
+                    agyTool: open.name,
+                    error: agyIncompleteToolError(open.name, activity.error),
+                  });
+                }
                 endWithToolUse();
                 return;
               }

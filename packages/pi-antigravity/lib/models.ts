@@ -72,3 +72,17 @@ export const DEFAULT_PRICING: Record<"flash" | "pro", ModelPricing> = {
 export function pricingForModel(modelId: string): ModelPricing {
   return /pro/i.test(modelId) ? DEFAULT_PRICING.pro : DEFAULT_PRICING.flash;
 }
+
+/** Cache lifetime for a discovery result: live catalogs hold a day. */
+export const LIVE_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+/**
+ * Fallback snapshots hold minutes only: live discovery can lose a race
+ * (observed: `agy models` taking 12s against a 15s timeout) and must be
+ * retried soon instead of sticking for the full day.
+ */
+export const FALLBACK_CACHE_TTL_MS = 5 * 60 * 1000;
+
+/** TTL that applies to a cached model list with the given source. */
+export function modelCacheTtlMs(source: "live" | "fallback" | undefined): number {
+  return source === "fallback" ? FALLBACK_CACHE_TTL_MS : LIVE_CACHE_TTL_MS;
+}

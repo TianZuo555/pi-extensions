@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { AgyReplayStore, summarizeAgyArgs } from "../lib/replay.ts";
+import { AgyReplayStore } from "../lib/replay.ts";
 import { AgyTurnController } from "../lib/turn.ts";
 import type { AgyActivity } from "../lib/reducer.ts";
 
@@ -67,13 +67,4 @@ test("replay store records and consumes results by call id", () => {
   assert.equal(rec?.durationSeconds, 1);
   assert.equal(store.take("c1"), undefined);
   assert.equal(store.size, 0);
-});
-
-test("summarizeAgyArgs produces a bounded one-line summary", () => {
-  assert.equal(summarizeAgyArgs(undefined), "");
-  assert.equal(summarizeAgyArgs({}), "");
-  assert.equal(summarizeAgyArgs({ query: "why did Intel stock drop" }), '{"query":"why did Intel stock drop"}');
-  const long = summarizeAgyArgs({ content: "x".repeat(200) });
-  assert.ok(long.length <= 96);
-  assert.ok(long.endsWith("…"));
 });

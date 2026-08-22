@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { buildAgyArgs, runAgyTurn } from "../lib/agy-client.ts";
+import { agyIncompleteToolError } from "../src/provider.ts";
 import { OK_CAPTURE, REAL_CAPTURE } from "./fixtures.ts";
 
 type FakeChild = {
@@ -95,4 +96,70 @@ test("runAgyTurn rejects when the process dies before a result event", async () 
       }),
     /exited with code 1/,
   );
+});
+
+/**
+ * Composite regression: a background-task turn — agy starts run_command as a
+ * background task, the tool step stays ACTIVE forever, the process exits
+ * without a result event, and a later result-style ERROR arrives. Verifies
+ * the error surface the provider turns into the background-task hint
+ * (agyIncompleteToolError) plus the activity sequence the widget refresh
+ * keys off (onSettled fires after controller failure).
+ */
+test("runAgyTurn surfaces a background-task timeout with a stuck ACTIVE tool step", async () => {
+  const activities: Array<{ type: string; name?: string }> = [];
+  const pushActivity = (event: { type: string; name?: string }) =>
+    activities.push({ type: event.type, name: event.name });
+  const promise = runAgyTurn({
+    prompt: "start a dev server",
+    onActivity: pushActivity as never,
+    spawnOverride: (() =>
+      fakeSpawn(
+        [
+          JSON.stringify({ event: "init", conversation_id: "c-bg-1", init: { cwd: "/tmp", tools: [], permission_mode: "auto" } }),
+          JSON.stringify({
+            event: "step_update",
+            step_update: {
+              conversation_id: "c-bg-1",
+              step_index: 0,
+              state: "ACTIVE",
+              step_type: "tool",
+              tool_name: "run_command",
+              tool_info: { name: "run_command", parameters: { CommandLine: "npm run dev" } },
+            },
+          }),
+          // No DONE, no result: the turn dies while the step is still ACTIVE,
+          // exactly like a command agy backgrounded.
+        ].join("\n") + "\n",
+        1,
+      )) as never,
+  });
+  await assert.rejects(promise, /exited with code 1/);
+
+  // The stuck step produced exactly one tool_start, nothing else.
+  assert.deepEqual(activities, [{ type: "tool_start", name: "run_command" }]);
+
+  // The provider's incomplete-tool translation recognizes this shape.
+  assert.match(
+    agyIncompleteToolError("run_command", "timeout waiting for response"),
+    /background task/,
+  );
+});
+
+/**
+ * Controller-level lifecycle: a failed turn must reject waiters (the
+ * provider re-attach path) so the next request starts fresh instead of
+ * hanging on a dead background-task turn.
+ */
+test("controller rejects waiters after a failed turn", async () => {
+  const { AgyTurnController } = await import("../lib/turn.ts");
+  const controller = new AgyTurnController("p");
+  controller.push({ type: "tool_start", name: "run_command", args: {} });
+  controller.fail(new Error("agy turn failed"));
+  const first = await controller.next();
+  assert.equal(first?.type, "tool_start");
+  await assert.rejects(() => controller.next(), /agy turn failed/);
+  // Post-failure pushes are dropped; next() keeps rejecting.
+  controller.push({ type: "text", delta: "late" });
+  await assert.rejects(() => controller.next(), /agy turn failed/);
 });
