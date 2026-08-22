@@ -5,8 +5,13 @@ import {
   latestUserPrompt,
   mapThinkingToEffort,
   mapUsage,
+  streamAntigravity,
 } from "../src/provider.ts";
-import type { Context } from "@earendil-works/pi-ai";
+import { AgyTurnController } from "../lib/turn.ts";
+import { AgyReplayStore } from "../lib/replay.ts";
+import { AgyPiBridge } from "../lib/bridge.ts";
+import { Effect } from "effect";
+import type { Context, Model } from "@earendil-works/pi-ai";
 
 function contextWith(messages: unknown[]): Context {
   return { messages } as Context;
@@ -85,4 +90,117 @@ test("agyIncompleteToolError explains agy background tasks for run_command", () 
     agyIncompleteToolError("run_command", "permission check failed"),
     "agy tool call did not complete.",
   );
+});
+
+/** Harness for stream-level tests: a turn controller behind a fake runtime. */
+function makeStreamHarness() {
+  const controller = new AgyTurnController("hello");
+  const fakeService = {
+    beginStreamTurn: () => Effect.succeed(controller),
+    finishTurn: Effect.void,
+    pushBridgeCall: () => false,
+    reset: Effect.void,
+    snapshot: Effect.succeed({
+      conversationId: undefined,
+      model: undefined,
+      cwd: undefined,
+      turns: 0,
+    }),
+    close: Effect.void,
+    setSession: () => Effect.void,
+  };
+  const fakeRuntime = { runPromise: () => Promise.resolve(controller) };
+  const streamFn = streamAntigravity(
+    fakeRuntime as any,
+    fakeService as any,
+    new AgyReplayStore(),
+    new AgyPiBridge("test-bridge"),
+  );
+  const model: Model<string> = {
+    id: "gemini-3.7-flash",
+    name: "Gemini 3.7 Flash",
+    provider: "antigravity",
+    api: "antigravity-stream-json",
+    cost: { input: 0.3, output: 2.5, cacheRead: 0.075, cacheWrite: 0.3 },
+  } as any;
+
+  /** Start a turn; resolves with all events once the stream ends. */
+  const collect = async (): Promise<any[]> => {
+    const ctx = contextWith([{ role: "user", content: [{ type: "text", text: "hello" }] }]);
+    const events: any[] = [];
+    for await (const event of streamFn(model, ctx)) events.push(event);
+    return events;
+  };
+  return { controller, collect };
+}
+
+test("streamAntigravity treats result with ERROR status as success when response is present (recovered stream interruption)", async () => {
+  const { controller, collect } = makeStreamHarness();
+  const eventsPromise = collect();
+
+  // Push an ERROR result event that contains a valid response (recovered stream interruption)
+  controller.push({
+    type: "result",
+    status: "ERROR",
+    error: "The stream was interrupted. Please continue the task you were working on.",
+    response: "All custom agent integration features are fully implemented.",
+    usage: { input_tokens: 100, output_tokens: 50, total_tokens: 150 },
+  });
+
+  const events = await eventsPromise;
+  const doneEvent = events.find((e) => e.type === "done");
+  const errorEvent = events.find((e) => e.type === "error");
+
+  assert.ok(doneEvent, "Expected done event when response text is present");
+  assert.equal(errorEvent, undefined, "Expected no error event when response text is present");
+  assert.equal(doneEvent.reason, "stop");
+  assert.equal(doneEvent.message.stopReason, "stop");
+  assert.equal(doneEvent.message.errorMessage, undefined);
+  assert.equal(doneEvent.message.content[0].text, "All custom agent integration features are fully implemented.");
+});
+
+test("streamAntigravity fails turn when result has ERROR status and no response", async () => {
+  const { controller, collect } = makeStreamHarness();
+  const eventsPromise = collect();
+
+  // Push an ERROR result event with empty response (actual failure)
+  controller.push({
+    type: "result",
+    status: "ERROR",
+    error: "permission check failed for command",
+    response: "",
+    usage: { input_tokens: 100, output_tokens: 0, total_tokens: 100 },
+  });
+
+  const events = await eventsPromise;
+  const doneEvent = events.find((e) => e.type === "done");
+  const errorEvent = events.find((e) => e.type === "error");
+
+  assert.equal(doneEvent, undefined);
+  assert.ok(errorEvent, "Expected error event when response is empty");
+  assert.equal(errorEvent.error.stopReason, "error");
+  assert.ok(errorEvent.error.errorMessage.includes("permission check failed"));
+});
+
+test("streamAntigravity fails turn when ERROR is not a recovered interruption, even with response text", async () => {
+  const { controller, collect } = makeStreamHarness();
+  const eventsPromise = collect();
+
+  // Partial text plus an unrelated agy failure must not pass silently.
+  controller.push({
+    type: "result",
+    status: "ERROR",
+    error: "timeout waiting for response",
+    response: "Partial answer before the failure.",
+    usage: { input_tokens: 100, output_tokens: 20, total_tokens: 120 },
+  });
+
+  const events = await eventsPromise;
+  const doneEvent = events.find((e) => e.type === "done");
+  const errorEvent = events.find((e) => e.type === "error");
+
+  assert.equal(doneEvent, undefined);
+  assert.ok(errorEvent, "Expected error event for non-interruption ERROR despite response text");
+  assert.equal(errorEvent.error.stopReason, "error");
+  assert.ok(errorEvent.error.errorMessage.includes("timeout waiting for response"));
 });

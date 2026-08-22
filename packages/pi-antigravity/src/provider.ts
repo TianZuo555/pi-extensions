@@ -78,6 +78,14 @@ export function mapUsage(u: AgyUsage | undefined): AssistantMessage["usage"] {
 const OVERFLOW_PATTERN = /context (length|window|size).*(exceed|limit)|exceeds.*context/i;
 
 /**
+ * agy's own recovery notice: its stream broke mid-turn, agy retried, and the
+ * response was still delivered. Only this error may downgrade an ERROR result
+ * to success (and only with response text present) — any other ERROR stays a
+ * failure so truncated or empty answers never pass silently.
+ */
+const RECOVERED_INTERRUPTION_PATTERN = /stream was interrupted/i;
+
+/**
  * Error recorded for an agy tool call that never reached DONE. agy runs
  * long-lived commands as background tasks (its own manage_task system); in
  * headless print mode the step never completes and the turn ends with
@@ -389,7 +397,17 @@ export function streamAntigravity(
                 closeText();
               }
 
-              if (activity.status === "ERROR") {
+              const hasResponse =
+                Boolean(activity.response?.trim()) ||
+                output.content.some((c) => c.type === "text" && Boolean(c.text.trim()));
+
+              // agy flags auto-recovered stream interruptions as ERROR even
+              // though the full response was delivered; pi aborts the run on
+              // stopReason "error", so complete those turns normally instead.
+              const recovered =
+                hasResponse && RECOVERED_INTERRUPTION_PATTERN.test(activity.error ?? "");
+
+              if (activity.status === "ERROR" && !recovered) {
                 const message = activity.error || "agy reported an error for this turn.";
                 output.stopReason = "error";
                 output.errorMessage = OVERFLOW_PATTERN.test(message)
