@@ -161,6 +161,18 @@ function listAgyModels(): Promise<AgyModelInfo[]> {
   });
 }
 
+function getInitialModelCache(): ModelCache {
+  const cached = readJson<ModelCache | null>(MODEL_CACHE_FILE, null);
+  if (cached?.models?.length) {
+    return { ...cached, models: normalizeModels(cached.models) };
+  }
+  return {
+    fetchedAt: 0,
+    source: "fallback",
+    models: FALLBACK_MODELS,
+  };
+}
+
 async function discoverModels(refresh = false): Promise<ModelCache> {
   if (!refresh) {
     const cached = readJson<ModelCache | null>(MODEL_CACHE_FILE, null);
@@ -184,11 +196,11 @@ async function discoverModels(refresh = false): Promise<ModelCache> {
   return cache;
 }
 
-export default async function antigravityExtension(pi: ExtensionAPI): Promise<void> {
+export default function antigravityExtension(pi: ExtensionAPI): void {
   const runtime = createAntigravityRuntime();
   const service = runtime.runSync(AntigravityRuntime);
   const replay = new AgyReplayStore();
-  const cache = await discoverModels();
+  let currentCache = getInitialModelCache();
 
   // --- Pi-tool bridge setup -------------------------------------------------
 
@@ -414,22 +426,41 @@ export default async function antigravityExtension(pi: ExtensionAPI): Promise<vo
     },
   });
 
-  pi.registerProvider("antigravity", {
-    name: "Google Antigravity (agy)",
-    baseUrl: "agy://local-stream-json",
-    apiKey: "agy-local-session",
-    api: "antigravity-stream-json",
-    models: cache.models.map(toProviderModel),
-    streamSimple: streamAntigravity(
-      runtime,
-      service,
-      replay,
-      bridge,
-      updateAgyTasksWidget,
-      getBootstrapSuffix,
-      isActiveTool,
-    ),
-  });
+  const registerAntigravityProvider = (models: AgyModelInfo[]) => {
+    pi.registerProvider("antigravity", {
+      name: "Google Antigravity (agy)",
+      baseUrl: "agy://local-stream-json",
+      apiKey: "agy-local-session",
+      api: "antigravity-stream-json",
+      models: models.map(toProviderModel),
+      streamSimple: streamAntigravity(
+        runtime,
+        service,
+        replay,
+        bridge,
+        updateAgyTasksWidget,
+        getBootstrapSuffix,
+        isActiveTool,
+      ),
+    });
+  };
+
+  registerAntigravityProvider(currentCache.models);
+
+  // Refresh model catalog non-blockingly in the background when stale or on fallback
+  if (
+    !currentCache.fetchedAt ||
+    Date.now() - currentCache.fetchedAt >= modelCacheTtlMs(currentCache.source)
+  ) {
+    void discoverModels(true)
+      .then((fresh) => {
+        currentCache = fresh;
+        registerAntigravityProvider(fresh.models);
+      })
+      .catch(() => {
+        // Cache is best-effort
+      });
+  }
 
   pi.on("before_agent_start", (event) => {
     captureSkills(event.systemPromptOptions?.skills);
@@ -524,22 +555,8 @@ export default async function antigravityExtension(pi: ExtensionAPI): Promise<vo
       }
       if (sub === "models") {
         const refreshed = await discoverModels(true);
-        pi.registerProvider("antigravity", {
-          name: "Google Antigravity (agy)",
-          baseUrl: "agy://local-stream-json",
-          apiKey: "agy-local-session",
-          api: "antigravity-stream-json",
-          models: refreshed.models.map(toProviderModel),
-          streamSimple: streamAntigravity(
-            runtime,
-            service,
-            replay,
-            bridge,
-            updateAgyTasksWidget,
-            getBootstrapSuffix,
-            isActiveTool,
-          ),
-        });
+        currentCache = refreshed;
+        registerAntigravityProvider(refreshed.models);
         ctx.ui.notify(
           `antigravity: ${refreshed.models.length} models registered (${refreshed.source}).`,
           "info",
@@ -553,7 +570,7 @@ export default async function antigravityExtension(pi: ExtensionAPI): Promise<vo
       const snapshot = await runAntigravity(runtime, service.snapshot);
       const id = snapshot.conversationId ?? "(none — next turn starts fresh)";
       ctx.ui.notify(
-        `antigravity: conversation ${id}\nmodel: ${snapshot.model ?? "unselected"} · turns: ${snapshot.turns} · models: ${cache.models.length} (${cache.source})`,
+        `antigravity: conversation ${id}\nmodel: ${snapshot.model ?? "unselected"} · turns: ${snapshot.turns} · models: ${currentCache.models.length} (${currentCache.source})`,
         "info",
       );
     },
