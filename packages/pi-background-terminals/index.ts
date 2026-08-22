@@ -79,7 +79,6 @@ import {
   type TerminalRuntime,
 } from "./src/runtime.ts";
 import { sanitizeText } from "./src/ui/output-view.ts";
-import { openTerminalPicker } from "./src/ui/ps.ts";
 
 const WIDGET_KEY = "background-terminals";
 const UPDATE_THROTTLE_MS = 100;
@@ -886,6 +885,7 @@ export function createBackgroundTerminalsExtension(
         );
         return;
       }
+      const { openTerminalPicker } = await import("./src/ui/ps.ts");
       await openTerminalPicker(ctx, manager.view);
     },
   });
