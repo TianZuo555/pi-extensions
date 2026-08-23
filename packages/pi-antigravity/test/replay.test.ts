@@ -12,6 +12,7 @@ const done: AgyActivity = {
   output: "results",
   durationSeconds: 4.38,
 };
+const deliveredDone: AgyActivity = { ...done, args: { query: "q" } };
 
 test("controller hands events to waiters in order", async () => {
   const c = new AgyTurnController("p");
@@ -20,7 +21,7 @@ test("controller hands events to waiters in order", async () => {
   c.push(start);
   c.push(done);
   assert.deepEqual(await first, start);
-  assert.deepEqual(await second, done);
+  assert.deepEqual(await second, deliveredDone);
   assert.equal(c.hasPending(), false);
   assert.equal(c.isClosed(), false);
 });
@@ -31,7 +32,7 @@ test("controller buffers events until consumed", async () => {
   c.push(done);
   assert.equal(c.hasPending(), true);
   assert.deepEqual(await c.next(), start);
-  assert.deepEqual(await c.next(), done);
+  assert.deepEqual(await c.next(), deliveredDone);
 });
 
 test("controller close resolves pending waiters with null", async () => {
@@ -55,6 +56,55 @@ test("controller ignores pushes after close", () => {
   c.close();
   c.push(start);
   assert.equal(c.hasPending(), false);
+});
+
+test("controller tracks incomplete tools by step id", () => {
+  const c = new AgyTurnController("p");
+  c.push({ type: "tool_start", stepId: 1, name: "view_file", args: { path: "a" } });
+  c.push({ type: "tool_start", stepId: 2, name: "view_file", args: { path: "b" } });
+  c.push({ type: "tool_done", stepId: 1, name: "view_file", args: { path: "a" } });
+  assert.deepEqual(c.takeIncompleteTools(), [
+    { type: "tool_start", stepId: 2, name: "view_file", args: { path: "b" } },
+  ]);
+  assert.deepEqual(c.takeIncompleteTools(), []);
+});
+
+test("controller carries start arguments into terminal tool events", async () => {
+  const controller = new AgyTurnController("go");
+  controller.push({
+    type: "tool_start",
+    stepId: 4,
+    name: "view_file",
+    args: { AbsolutePath: "/tmp/a.ts", StartLine: 3 },
+  });
+  controller.push({
+    type: "tool_done",
+    stepId: 4,
+    name: "view_file",
+    args: { EndLine: 8 },
+    output: "done",
+  });
+  await controller.next();
+  const done = await controller.next();
+  assert.deepEqual(done, {
+    type: "tool_done",
+    stepId: 4,
+    name: "view_file",
+    args: { AbsolutePath: "/tmp/a.ts", StartLine: 3, EndLine: 8 },
+    output: "done",
+  });
+});
+
+test("controller attributes step usage once and subtracts it from final totals", () => {
+  const c = new AgyTurnController("p");
+  assert.deepEqual(
+    c.claimUsage({ input_tokens: 100, output_tokens: 20, total_tokens: 120 }, false),
+    { input_tokens: 100, output_tokens: 20, total_tokens: 120 },
+  );
+  assert.deepEqual(
+    c.claimUsage({ input_tokens: 260, output_tokens: 40, total_tokens: 300 }, true),
+    { input_tokens: 160, output_tokens: 20, total_tokens: 180 },
+  );
 });
 
 test("replay store records and consumes results by call id", () => {

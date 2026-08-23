@@ -41,10 +41,12 @@ test("reducer folds the real error capture", () => {
 
   const start = outcome.activities.find((a) => a.type === "tool_start");
   assert.ok(start && start.type === "tool_start" && start.name === "view_file");
+  assert.equal(start.stepId, 3);
   assert.deepEqual(start.args, { AbsolutePath: "/tmp/notes/todo.md" });
 
   const done = outcome.activities.find((a) => a.type === "tool_done");
   assert.ok(done && done.type === "tool_done" && done.name === "view_file");
+  assert.equal(done.stepId, 3);
   assert.ok(typeof done.durationSeconds === "number");
   assert.equal(done.output, "55 lines, 2955 bytes");
 

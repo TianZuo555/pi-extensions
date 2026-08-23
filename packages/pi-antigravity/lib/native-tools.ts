@@ -26,6 +26,34 @@ function str(input: Record<string, unknown>, keys: string[]): string | undefined
   return undefined;
 }
 
+function num(input: Record<string, unknown>, keys: string[]): number | undefined {
+  for (const key of keys) {
+    const value = input[key];
+    if (typeof value === "number" && Number.isInteger(value) && value > 0) return value;
+  }
+  return undefined;
+}
+
+function onlyKeys(input: Record<string, unknown>, allowed: readonly string[]): boolean {
+  const accepted = new Set(allowed);
+  return Object.entries(input).every(
+    ([key, value]) => value === undefined || value === null || accepted.has(key),
+  );
+}
+
+const VIEW_PATH_KEYS = [
+  "path",
+  "Path",
+  "AbsolutePath",
+  "absolute_path",
+  "TargetFile",
+  "target_file",
+  "FilePath",
+  "file_path",
+] as const;
+const START_LINE_KEYS = ["StartLine", "start_line", "startLine"] as const;
+const END_LINE_KEYS = ["EndLine", "end_line", "endLine"] as const;
+
 /**
  * Map an agy tool step to a native pi toolCall when re-execution is safe.
  * Returns undefined for everything that must stay on the replay wrapper.
@@ -36,32 +64,46 @@ export function mapAgyToolToNative(
 ): NativeToolCall | undefined {
   switch (tool) {
     case "view_file": {
-      const path = str(args, [
-        "path",
-        "Path",
-        "AbsolutePath",
-        "absolute_path",
-        "TargetFile",
-        "target_file",
-        "FilePath",
-        "file_path",
-      ]);
-      return path ? { tool: "read", args: { path } } : undefined;
+      if (!onlyKeys(args, [...VIEW_PATH_KEYS, ...START_LINE_KEYS, ...END_LINE_KEYS])) {
+        return undefined;
+      }
+      const path = str(args, [...VIEW_PATH_KEYS]);
+      const start = num(args, [...START_LINE_KEYS]);
+      const end = num(args, [...END_LINE_KEYS]);
+      if (!path || (end !== undefined && start === undefined) || (start && end && end < start)) {
+        return undefined;
+      }
+      return {
+        tool: "read",
+        args: {
+          path,
+          ...(start === undefined ? {} : { offset: start }),
+          ...(start === undefined || end === undefined ? {} : { limit: end - start + 1 }),
+        },
+      };
     }
     case "list_dir": {
-      const path = str(args, ["path", "Path", "DirectoryPath", "directory", "Directory"]);
+      const keys = ["path", "Path", "DirectoryPath", "directory", "Directory"];
+      if (!onlyKeys(args, keys)) return undefined;
+      const path = str(args, keys);
       return path ? { tool: "ls", args: { path } } : undefined;
     }
     case "grep_search": {
-      const pattern = str(args, ["query", "Query", "pattern", "Pattern"]);
-      const path = str(args, ["search_path", "SearchPath", "path", "Path"]);
+      const patternKeys = ["query", "Query", "pattern", "Pattern"];
+      const pathKeys = ["search_path", "SearchPath", "path", "Path"];
+      if (!onlyKeys(args, [...patternKeys, ...pathKeys])) return undefined;
+      const pattern = str(args, patternKeys);
+      const path = str(args, pathKeys);
       return pattern
         ? { tool: "grep", args: path ? { pattern, path } : { pattern } }
         : undefined;
     }
     case "find_by_name": {
-      const pattern = str(args, ["pattern", "Pattern", "glob", "name"]);
-      const path = str(args, ["search_directory", "SearchDirectory", "path", "Path", "directory"]);
+      const patternKeys = ["pattern", "Pattern", "glob", "name"];
+      const pathKeys = ["search_directory", "SearchDirectory", "path", "Path", "directory"];
+      if (!onlyKeys(args, [...patternKeys, ...pathKeys])) return undefined;
+      const pattern = str(args, patternKeys);
+      const path = str(args, pathKeys);
       return pattern
         ? { tool: "find", args: path ? { pattern, path } : { pattern } }
         : undefined;

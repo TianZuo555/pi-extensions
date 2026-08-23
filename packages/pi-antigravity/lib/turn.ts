@@ -8,7 +8,7 @@
  * while the agy process continues running underneath.
  */
 
-import type { AgyActivity } from "./reducer.ts";
+import type { AgyActivity, AgyUsage } from "./reducer.ts";
 
 type Waiter = (activity: AgyActivity | null, error: Error | undefined) => void;
 
@@ -18,6 +18,8 @@ export class AgyTurnController {
   #waiters: Waiter[] = [];
   #closed = false;
   #failure: Error | undefined;
+  #incompleteTools = new Map<string, Extract<AgyActivity, { type: "tool_start" }>>();
+  #reportedUsage: AgyUsage = {};
 
   constructor(prompt: string) {
     this.prompt = prompt;
@@ -34,9 +36,36 @@ export class AgyTurnController {
 
   push(activity: AgyActivity): void {
     if (this.#closed) return;
+    let delivered = activity;
+    if (activity.type === "tool_start") {
+      this.#incompleteTools.set(toolStepKey(activity), activity);
+    } else if (activity.type === "tool_done" || activity.type === "tool_error") {
+      const key = toolStepKey(activity);
+      const started = this.#incompleteTools.get(key);
+      if (started) delivered = { ...activity, args: { ...started.args, ...activity.args } };
+      this.#incompleteTools.delete(key);
+    }
     const waiter = this.#waiters.shift();
-    if (waiter) waiter(activity, undefined);
-    else this.#queue.push(activity);
+    if (waiter) waiter(delivered, undefined);
+    else this.#queue.push(delivered);
+  }
+
+  /** Tool starts that never produced a DONE/ERROR event. */
+  takeIncompleteTools(): Array<Extract<AgyActivity, { type: "tool_start" }>> {
+    const tools = [...this.#incompleteTools.values()];
+    this.#incompleteTools.clear();
+    return tools;
+  }
+
+  /**
+   * Attribute usage exactly once across the several pi messages that make up
+   * one agy turn. Step usage is incremental; the result usage is cumulative.
+   */
+  claimUsage(usage: AgyUsage | undefined, final: boolean): AgyUsage | undefined {
+    if (!usage) return undefined;
+    const claimed = final ? subtractUsage(usage, this.#reportedUsage) : { ...usage };
+    this.#reportedUsage = addUsage(this.#reportedUsage, claimed);
+    return claimed;
   }
 
   close(): void {
@@ -78,4 +107,34 @@ export class AgyTurnController {
       });
     });
   }
+}
+
+function toolStepKey(activity: { stepId?: number; name: string }): string {
+  return activity.stepId === undefined ? `name:${activity.name}` : `step:${activity.stepId}`;
+}
+
+const USAGE_KEYS = [
+  "input_tokens",
+  "output_tokens",
+  "thinking_tokens",
+  "cache_read_tokens",
+  "total_tokens",
+] as const;
+
+function addUsage(left: AgyUsage, right: AgyUsage): AgyUsage {
+  const out: AgyUsage = {};
+  for (const key of USAGE_KEYS) {
+    const value = (left[key] ?? 0) + (right[key] ?? 0);
+    if (value > 0 || left[key] !== undefined || right[key] !== undefined) out[key] = value;
+  }
+  return out;
+}
+
+function subtractUsage(total: AgyUsage, reported: AgyUsage): AgyUsage {
+  const out: AgyUsage = {};
+  for (const key of USAGE_KEYS) {
+    if (total[key] === undefined) continue;
+    out[key] = Math.max(0, total[key] - (reported[key] ?? 0));
+  }
+  return out;
 }

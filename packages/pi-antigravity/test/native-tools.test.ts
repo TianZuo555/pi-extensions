@@ -7,6 +7,14 @@ test("maps read-only agy tools to native pi builtin calls", () => {
     tool: "read",
     args: { path: "/tmp/a.ts" },
   });
+  assert.deepEqual(
+    mapAgyToolToNative("view_file", {
+      AbsolutePath: "/tmp/a.ts",
+      StartLine: 10,
+      EndLine: 19,
+    }),
+    { tool: "read", args: { path: "/tmp/a.ts", offset: 10, limit: 10 } },
+  );
   assert.deepEqual(mapAgyToolToNative("list_dir", { Path: "/tmp" }), {
     tool: "ls",
     args: { path: "/tmp" },
@@ -43,4 +51,31 @@ test("returns undefined when a required argument is missing", () => {
   assert.equal(mapAgyToolToNative("grep_search", { SearchPath: "/tmp" }), undefined);
   assert.equal(mapAgyToolToNative("find_by_name", {}), undefined);
   assert.equal(mapAgyToolToNative("list_dir", { path: "  " }), undefined);
+});
+
+test("falls back to replay when native conversion would lose semantics", () => {
+  assert.equal(
+    mapAgyToolToNative("view_file", { AbsolutePath: "/tmp/a.ts", ByteOffset: 100 }),
+    undefined,
+  );
+  assert.equal(
+    mapAgyToolToNative("view_file", { AbsolutePath: "/tmp/a.ts", EndLine: 20 }),
+    undefined,
+  );
+  assert.equal(
+    mapAgyToolToNative("grep_search", {
+      Query: "TODO",
+      SearchPath: "/tmp",
+      CaseSensitive: false,
+    }),
+    undefined,
+  );
+  assert.equal(
+    mapAgyToolToNative("find_by_name", {
+      Pattern: "*.ts",
+      SearchDirectory: "/tmp",
+      MaxResults: 5,
+    }),
+    undefined,
+  );
 });

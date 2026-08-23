@@ -12,9 +12,9 @@ import type { AgyStepUpdate, AgyUsage, ParsedAgyEvent } from "./events.ts";
 import { parseAgyLine } from "./events.ts";
 
 export type AgyActivity =
-  | { type: "tool_start"; name: string; args: Record<string, unknown> }
-  | { type: "tool_done"; name: string; args: Record<string, unknown>; output?: string; durationSeconds?: number }
-  | { type: "tool_error"; name: string; args: Record<string, unknown>; message: string }
+  | { type: "tool_start"; stepId?: number; name: string; args: Record<string, unknown> }
+  | { type: "tool_done"; stepId?: number; name: string; args: Record<string, unknown>; output?: string; durationSeconds?: number }
+  | { type: "tool_error"; stepId?: number; name: string; args: Record<string, unknown>; message: string }
   | {
       /** Synthetic — pushed by the bridge when agy invokes a `pi__*` tool.
       * Never produced by applyEvent. */
@@ -79,12 +79,14 @@ export function applyEvent(outcome: AgyTurnOutcome, event: ParsedAgyEvent): AgyA
         if (step.state === "ACTIVE") {
           activities.push({
             type: "tool_start",
+            stepId: step.step_index,
             name,
             args: step.tool_info?.parameters ?? {},
           });
         } else if (step.state === "DONE") {
           activities.push({
             type: "tool_done",
+            stepId: step.step_index,
             name,
             // agy nests tool output under tool_info on DONE steps.
             output: step.output ?? step.tool_info?.output,
@@ -101,6 +103,7 @@ export function applyEvent(outcome: AgyTurnOutcome, event: ParsedAgyEvent): AgyA
             step.error?.message ?? step.tool_info?.error?.message ?? "tool error";
           activities.push({
             type: "tool_error",
+            stepId: step.step_index,
             name,
             args: step.tool_info?.parameters ?? {},
             message: message.replace(/\s+/g, " ").slice(0, 160),
