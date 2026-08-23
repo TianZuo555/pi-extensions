@@ -1,26 +1,16 @@
 /**
  * ripgrep `--json` stream decoding.
  *
- * rg emits one JSON object per line: begin/match/context/end/summary. Match and
- * context events already carry the surrounding lines, so unlike a naive grep
- * implementation we never re-read the file to build a context block — rg did
- * the work and re-reading would both cost I/O and risk showing a version of the
- * file that changed since the search.
+ * rg emits one JSON object per line. The tool only requests and decodes match
+ * events; begin/end/summary and malformed records are ignored.
  *
  * Text may arrive as `{ text }` or, for invalid UTF-8, as `{ bytes }` (base64).
  */
 
-export interface RgSubmatch {
-  readonly start: number;
-  readonly end: number;
-}
-
 export interface RgLine {
-  readonly kind: "match" | "context";
   readonly path: string;
   readonly lineNumber: number;
   readonly text: string;
-  readonly submatches: readonly RgSubmatch[];
 }
 
 interface RgData {
@@ -57,7 +47,6 @@ export function decodeRgEvent(line: string): RgLine | undefined {
       path?: RgData;
       lines?: RgData;
       line_number?: number;
-      submatches?: Array<{ start?: number; end?: number }>;
     };
   };
   try {
@@ -66,7 +55,7 @@ export function decodeRgEvent(line: string): RgLine | undefined {
     return undefined;
   }
 
-  if (event.type !== "match" && event.type !== "context") return undefined;
+  if (event.type !== "match") return undefined;
   const data = event.data;
   if (!data || typeof data.line_number !== "number") return undefined;
 
@@ -77,18 +66,9 @@ export function decodeRgEvent(line: string): RgLine | undefined {
   // can treat the value as one display line.
   const text = decodeText(data.lines).replace(/\r?\n$/, "").replace(/\r/g, "");
 
-  const submatches = (data.submatches ?? [])
-    .filter(
-      (s): s is { start: number; end: number } =>
-        typeof s.start === "number" && typeof s.end === "number",
-    )
-    .map((s) => ({ start: s.start, end: s.end }));
-
   return {
-    kind: event.type,
     path,
     lineNumber: data.line_number,
     text,
-    submatches,
   };
 }

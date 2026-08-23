@@ -1,7 +1,7 @@
 {
   "name": "@tian.zuo/pi-find",
-  "version": "0.2.1",
-  "description": "ripgrep/fd-backed grep and find tools for the pi coding agent, with a path-constraint DSL, directory pruning, multi-pattern support, and whole-path matching.",
+  "version": "0.3.0",
+  "description": "Simple, bounded ripgrep/fd-backed grep and find tools for the pi coding agent.",
   "type": "module",
   "keywords": [
     "pi",
@@ -41,8 +41,7 @@
     "test": "node --test --experimental-strip-types test/*.test.ts"
   },
   "dependencies": {
-    "effect": "4.0.0-beta.101",
-    "minimatch": "^10.2.6"
+    "effect": "4.0.0-beta.101"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",

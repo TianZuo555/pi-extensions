@@ -15,7 +15,7 @@ export class SearchProcessError extends Data.TaggedError("SearchProcessError")<{
   readonly exitCode?: number;
 }> {}
 
-/** The call itself is malformed, such as an empty or wildcard-only pattern. */
+/** The call itself is malformed, such as an empty pattern or missing path. */
 export class SearchInputError extends Data.TaggedError("SearchInputError")<{
   readonly message: string;
 }> {}

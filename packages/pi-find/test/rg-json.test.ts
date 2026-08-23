@@ -17,15 +17,13 @@ function matchEvent(overrides: Record<string, unknown> = {}): string {
 
 test("decodes a match event", () => {
   const event = decodeRgEvent(matchEvent());
-  assert.equal(event?.kind, "match");
   assert.equal(event?.path, "src/a.ts");
   assert.equal(event?.lineNumber, 7);
   // The trailing newline rg includes must not reach the rendered line.
   assert.equal(event?.text, "const x = 1;");
-  assert.deepEqual(event?.submatches, [{ start: 6, end: 7 }]);
 });
 
-test("decodes a context event", () => {
+test("ignores context events", () => {
   const line = JSON.stringify({
     type: "context",
     data: {
@@ -34,10 +32,7 @@ test("decodes a context event", () => {
       line_number: 6,
     },
   });
-  const event = decodeRgEvent(line);
-  assert.equal(event?.kind, "context");
-  assert.equal(event?.text, "// before");
-  assert.deepEqual(event?.submatches, []);
+  assert.equal(decodeRgEvent(line), undefined);
 });
 
 test("ignores begin, end, and summary events", () => {
@@ -77,11 +72,4 @@ test("decodes base64 bytes for invalid UTF-8 payloads", () => {
 test("strips carriage returns from CRLF files", () => {
   const event = decodeRgEvent(matchEvent({ lines: { text: "const x = 1;\r\n" } }));
   assert.equal(event?.text, "const x = 1;");
-});
-
-test("drops submatches with missing offsets", () => {
-  const event = decodeRgEvent(
-    matchEvent({ submatches: [{ start: 1 }, { start: 2, end: 4 }] }),
-  );
-  assert.deepEqual(event?.submatches, [{ start: 2, end: 4 }]);
 });

@@ -19,7 +19,7 @@ Each extension has its own package and its own README under
 | [pi-usage](packages/pi-usage/README.md) | `/usage`, `/tokens` | Provider account usage (Codex, Copilot, Z.ai, DeepSeek) plus a token/cost dashboard. |
 | [pi-background-terminals](packages/pi-background-terminals/README.md) | `/ps`, overrides tool `bash` | One no-stdin bash path: long commands yield to background and notify once. |
 | [pi-edit-safe](packages/pi-edit-safe/README.md) | overrides tool `edit` | Stricter `edit`: verbatim splice, ambiguity throws, one `edits[]` shape. |
-| [pi-find](packages/pi-find/README.md) | overrides tools `grep`/`find` | Bounded ripgrep/fd search with whole-path matching and exclusions. |
+| [pi-find](packages/pi-find/README.md) | overrides tools `grep`/`find` | Simple, bounded regex and file-glob search. |
 | [pi-subagents](packages/pi-subagents/README.md) | tool `subagent`, `/agents` | Isolated subagent runs with profiles, Herdr pane backend, and worktrees. |
 | [pi-compact-output](packages/pi-compact-output/README.md) | (TUI only) | Compact tool status blocks; Ctrl+O restores full output. |
 | [pi-goal](packages/pi-goal/README.md) | `/goal`, tools `get_goal`/`update_goal` | User-owned, editable objective with evidence-checked bounded continuation. |
