@@ -1,6 +1,6 @@
 {
   "name": "@tian.zuo/pi-antigravity",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "Use Google Antigravity (agy) models inside the pi coding agent via the agy stream-json RPC, with pi as the UI.",
   "type": "module",
   "keywords": [

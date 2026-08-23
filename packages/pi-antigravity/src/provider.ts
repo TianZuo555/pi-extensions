@@ -370,10 +370,12 @@ export function streamAntigravity(
               if (activity.response) {
                 if (textIndex !== null) {
                   // Deltas already streamed this block; snap it to the
-                  // authoritative final text in case of drift.
+                  // authoritative final text in case of drift so both the
+                  // message content and the text_end event agree.
                   if (textBuffer !== activity.response) {
                     const block = output.content[textIndex];
                     if (block.type === "text") block.text = activity.response;
+                    textBuffer = activity.response;
                   }
                   closeText();
                 } else {

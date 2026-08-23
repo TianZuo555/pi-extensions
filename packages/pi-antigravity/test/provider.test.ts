@@ -159,6 +159,30 @@ test("streamAntigravity treats result with ERROR status as success when response
   assert.equal(doneEvent.message.content[0].text, "All custom agent integration features are fully implemented.");
 });
 
+test("streamAntigravity snaps text_end to the authoritative response when deltas drift", async () => {
+  const { controller, collect } = makeStreamHarness();
+  const eventsPromise = collect();
+
+  // Streamed deltas drift from agy's authoritative final response.
+  controller.push({ type: "text", delta: "streamed partial" });
+  controller.push({
+    type: "result",
+    status: "OK",
+    error: undefined,
+    response: "authoritative final text",
+    usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
+  });
+
+  const events = await eventsPromise;
+  const textEnd = events.find((e) => e.type === "text_end");
+  const doneEvent = events.find((e) => e.type === "done");
+
+  assert.ok(textEnd, "Expected a text_end event");
+  assert.equal(textEnd.content, "authoritative final text");
+  assert.ok(doneEvent);
+  assert.equal(doneEvent.message.content[0].text, "authoritative final text");
+});
+
 test("streamAntigravity fails turn when result has ERROR status and no response", async () => {
   const { controller, collect } = makeStreamHarness();
   const eventsPromise = collect();
