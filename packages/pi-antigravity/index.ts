@@ -49,6 +49,7 @@ import { AgyReplayStore, type RecordedAgyTool } from "./lib/replay.ts";
 import { findAgyTask, listAgyTasks, stopAgyTask, type AgyTask } from "./lib/tasks.ts";
 import { findAgyArtifact, listAgyArtifacts } from "./lib/artifacts.ts";
 import { WRAPPER_TOOL_DESCRIPTION, WRAPPER_TOOL_NAME } from "./lib/prompt.ts";
+import { wrapperToolActiveAfterModelSwitch } from "./lib/wrapper-activation.ts";
 import { openAgyTasksPicker } from "./src/tasks-ui.ts";
 import { openArtifact, openAgyArtifactsPicker } from "./src/artifacts-ui.ts";
 import {
@@ -467,7 +468,23 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
     refreshSkillTools();
   });
 
+  // The display-only `antigravity` wrapper tool only matters while an agy
+  // model is active (the provider synthesizes its toolCalls from recorded
+  // agy activity). Keep it out of every other model's tool payload: sync
+  // active-tool state whenever the selected model changes, including the
+  // session's initial restore.
+  const syncWrapperToolActivation = (provider: string | undefined) => {
+    const next = wrapperToolActiveAfterModelSwitch(
+      pi.getActiveTools(),
+      WRAPPER_TOOL_NAME,
+      provider,
+      "antigravity",
+    );
+    if (next) pi.setActiveTools([...next]);
+  };
+
   pi.on("session_start", async (_event, ctx: ExtensionContext) => {
+    syncWrapperToolActivation(ctx.model?.provider);
     await runAntigravity(runtime, service.setSession(ctx.cwd, undefined));
     if (ctx.hasUI) tasksUi = ctx.ui;
     tasksSessionCwd = ctx.cwd;
@@ -491,6 +508,10 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
         );
       }
     }
+  });
+
+  pi.on("model_select", (event) => {
+    syncWrapperToolActivation(event.model?.provider);
   });
 
   pi.on("session_shutdown", async () => {
