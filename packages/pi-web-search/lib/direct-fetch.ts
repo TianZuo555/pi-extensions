@@ -129,6 +129,91 @@ export function htmlToMarkdown(html: string): string {
  */
 const MIN_DEFUDDLE_CONTENT_CHARS = 200;
 
+export type DirectBodyKind = "html" | "text" | "binary";
+
+/**
+ * An HTML document *starts* with a doctype or <html tag. Source code that
+ * merely contains "<html" somewhere (JSX templates, Python strings, Markdown
+ * examples) must not be mistaken for a web page.
+ */
+const HTML_DOCUMENT_START_RE = /^\s*(?:<!doctype\s+html|<html[\s>])/i;
+
+/**
+ * Decide how to treat a response body: convert as HTML, return as text, or
+ * reject as binary.
+ *
+ * The server's Content-Type is authoritative: raw.githubusercontent.com and
+ * similar file hosts serve source files as text/plain, and running the HTML
+ * converter on them would corrupt the code. Content sniffing is only a
+ * last resort for unknown or generic types.
+ */
+export function classifyBody(contentType: string, body: string): DirectBodyKind {
+  const ct = contentType.trim().toLowerCase();
+
+  if (ct.includes("html")) return "html";
+
+  // Known textual content: text/* plus JSON/JS/TS/XML/YAML/TOML/CSV and
+  // structured +json/+xml suffix types (also covers image/svg+xml).
+  if (
+    ct.startsWith("text/") ||
+    ct.includes("json") ||
+    ct.includes("javascript") ||
+    ct.includes("typescript") ||
+    ct.includes("xml") ||
+    ct.includes("yaml") ||
+    ct.includes("toml") ||
+    ct.includes("csv") ||
+    ct.includes("sql")
+  ) {
+    return "text";
+  }
+
+  // Known binary families that can never be useful as model-facing text.
+  if (
+    /^(?:image|audio|video|font)\//.test(ct) ||
+    /(?:pdf|zip|tar|7z|rar|gzip|wasm|exe|dll|class|woff)/.test(ct)
+  ) {
+    return "binary";
+  }
+
+  // Unknown or generic type (missing, octet-stream, ...): sniff. NUL bytes
+  // are a strong binary signal; otherwise only a real HTML document *start*
+  // triggers conversion.
+  const head = body.slice(0, 2000);
+  if (head.includes("\0")) return "binary";
+  return HTML_DOCUMENT_START_RE.test(head) ? "html" : "text";
+}
+
+const BASE64_BODY_RE = /^[A-Za-z0-9+/=\r\n]+$/;
+
+/**
+ * android.googlesource.com (and friends) serve raw file content as base64
+ * behind `?format=TEXT` — with Content-Type text/plain. Decode it back to
+ * the real file body so the model sees source instead of gibberish.
+ *
+ * Strictly validated: only exact *.googlesource.com hosts with the TEXT
+ * format parameter, body fully base64, length a multiple of 4, and the
+ * decoded bytes free of NULs. Anything else returns the body unchanged.
+ */
+export function maybeDecodeBase64Body(url: string, body: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return body;
+  }
+  if (!/(^|\.)googlesource\.com$/.test(parsed.hostname)) return body;
+  if (!/^TEXT$/i.test(parsed.searchParams.get("format") ?? "")) return body;
+
+  const compact = body.replace(/[\r\n]+/g, "");
+  if (compact.length === 0 || compact.length % 4 !== 0) return body;
+  if (!BASE64_BODY_RE.test(compact)) return body;
+
+  const decoded = Buffer.from(compact, "base64");
+  if (decoded.includes(0)) return body;
+  return decoded.toString("utf8");
+}
+
 export async function fetchDirect(
   url: string,
   options: FetchOptions = {},
@@ -160,9 +245,17 @@ export async function fetchDirect(
   const contentType = res.headers.get("content-type") || "";
   const rawBody = await readLimitedText(res, MAX_DIRECT_FETCH_BYTES);
 
-  const isHtml = contentType.includes("html") || /<html/i.test(rawBody.slice(0, 1000));
+  const kind = classifyBody(contentType, rawBody);
+  if (kind === "binary") {
+    throw new Error(
+      `Direct fetch does not support binary content (${contentType || "unknown type"}): ${url}`,
+    );
+  }
+
+  const isHtml = kind === "html";
   let title = isHtml ? extractHtmlTitle(rawBody) : undefined;
   let text = options.raw || !isHtml ? rawBody : htmlToMarkdown(rawBody);
+  if (!isHtml) text = maybeDecodeBase64Body(url, text);
 
   // Prefer real main-content extraction for HTML pages: Defuddle removes nav,
   // sidebars, cookie banners, etc. and returns clean Markdown. Fall back to
