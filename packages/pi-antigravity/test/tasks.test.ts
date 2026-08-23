@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  agyTaskStopPids,
   describeTaskLog,
   findAgyTask,
   parseEtimeMs,
@@ -42,4 +43,10 @@ test("findAgyTask resolves bare numbers and task- prefixed ids", () => {
   assert.equal(findAgyTask(tasks, "3")?.id, "task-3");
   assert.equal(findAgyTask(tasks, "task-17")?.id, "task-17");
   assert.equal(findAgyTask(tasks, "99"), undefined);
+});
+
+test("automatic task cleanup can exclude heuristic orphan matches", () => {
+  const task = { pids: [101], orphans: [202, 101] };
+  assert.deepEqual(agyTaskStopPids(task, false), [101]);
+  assert.deepEqual(agyTaskStopPids(task, true), [101, 202]);
 });

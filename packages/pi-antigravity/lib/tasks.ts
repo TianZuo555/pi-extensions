@@ -199,10 +199,20 @@ function ownPgid(): Promise<number | undefined> {
  * our own process group — an orphan can inherit agy's pgid, which may be the
  * one pi lives in. Returns the number of signals delivered.
  */
-export async function stopAgyTask(task: AgyTask): Promise<number> {
+export function agyTaskStopPids(
+  task: Pick<AgyTask, "pids" | "orphans">,
+  includeOrphans = true,
+): number[] {
+  return [...new Set([...task.pids, ...(includeOrphans ? task.orphans : [])])];
+}
+
+export async function stopAgyTask(
+  task: AgyTask,
+  options: { includeOrphans?: boolean } = {},
+): Promise<number> {
   const mine = await ownPgid();
   let signaled = 0;
-  for (const pid of [...task.pids, ...task.orphans]) {
+  for (const pid of agyTaskStopPids(task, options.includeOrphans ?? true)) {
     const pgid = await pgidOf(pid);
     if (pgid !== undefined && pgid !== mine && pgid !== process.pid) {
       try {
