@@ -3,7 +3,7 @@
  * to pi provider model configs. Effort variants (`-low`/`-medium`/`-high`
  * suffixes) are collapsed into one base model per family; reasoning effort is
  * controlled at turn time from pi's thinking level via `agy --effort`.
- * A bundled fallback snapshot (captured from agy 1.1.17) registers when
+ * A bundled fallback snapshot (captured from agy 1.1.19) registers when
  * discovery cannot run, so /model stays usable.
  */
 
@@ -39,16 +39,21 @@ export function parseAgyModels(text: string): AgyModelInfo[] {
   return models;
 }
 
-/** Fallback snapshot from agy 1.1.17 `agy models` (2026-08-21), base models only. */
+/** Fallback snapshot from agy 1.1.19 `agy models` (2026-08-24), base models only. */
 export const FALLBACK_MODELS: AgyModelInfo[] = [
   { id: "gemini-3.7-flash", name: "Gemini 3.7 Flash" },
   { id: "gemini-3.6-flash", name: "Gemini 3.6 Flash" },
   { id: "gemini-3.5-flash", name: "Gemini 3.5 Flash" },
+  { id: "gemini-3.1-pro", name: "Gemini 3.1 Pro" },
+  { id: "claude-sonnet-4-6", name: "Claude Sonnet 4.6 (Thinking)" },
+  { id: "claude-opus-4-6-thinking", name: "Claude Opus 4.6 (Thinking)" },
+  { id: "gpt-oss-120b", name: "GPT-OSS 120B" },
 ];
 
-/** Placeholder context/output limits — agy does not expose these via CLI. */
-export const CONTEXT_WINDOW = 1_048_576;
-export const MAX_TOKENS = 65_536;
+export interface ModelCapabilities {
+  contextWindow: number;
+  maxTokens: number;
+}
 
 /** USD per million tokens. */
 export interface ModelPricing {
@@ -58,19 +63,53 @@ export interface ModelPricing {
   cacheWrite: number;
 }
 
-/**
- * Reference Gemini API pricing used as the default estimate. agy itself is
- * subscription-billed; these rates only make pi's native cost display show
- * the equivalent API spend.
- */
-export const DEFAULT_PRICING: Record<"flash" | "pro", ModelPricing> = {
-  flash: { input: 0.3, output: 2.5, cacheRead: 0.075, cacheWrite: 0.3 },
-  pro: { input: 1.25, output: 10, cacheRead: 0.31, cacheWrite: 1.25 },
+const ZERO_PRICING: ModelPricing = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
 };
 
-/** Pick the pricing tier for a base model id (pro when the id says so). */
+/**
+ * Public API list prices, used only as a display estimate because agy itself
+ * is subscription-billed. Unknown models deliberately stay at zero rather
+ * than inheriting an unrelated vendor's rate.
+ */
 export function pricingForModel(modelId: string): ModelPricing {
-  return /pro/i.test(modelId) ? DEFAULT_PRICING.pro : DEFAULT_PRICING.flash;
+  if (/^gemini-3\.(?:7|6)-flash$/i.test(modelId)) {
+    return { input: 0.75, output: 3.75, cacheRead: 0.075, cacheWrite: 0.75 };
+  }
+  if (/^gemini-3\.5-flash$/i.test(modelId)) {
+    return { input: 1.5, output: 9, cacheRead: 0.15, cacheWrite: 1.5 };
+  }
+  if (/^gemini-3\.1-pro/i.test(modelId)) {
+    // The <=200k standard tier; pi's cost shape cannot express tiered rates.
+    return { input: 2, output: 12, cacheRead: 0.2, cacheWrite: 2 };
+  }
+  if (/^claude-sonnet-4-6/i.test(modelId)) {
+    return { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 };
+  }
+  if (/^claude-opus-4-6/i.test(modelId)) {
+    return { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 };
+  }
+  return { ...ZERO_PRICING };
+}
+
+/** Vendor-specific limits for models present in agy's current catalog. */
+export function capabilitiesForModel(modelId: string): ModelCapabilities {
+  if (/^gpt-oss-120b/i.test(modelId)) {
+    return { contextWindow: 131_072, maxTokens: 131_072 };
+  }
+  if (/^claude-opus-4-6/i.test(modelId)) {
+    return { contextWindow: 1_000_000, maxTokens: 128_000 };
+  }
+  if (/^claude-sonnet-4-6/i.test(modelId)) {
+    return { contextWindow: 1_000_000, maxTokens: 64_000 };
+  }
+  if (/^gemini-/i.test(modelId)) {
+    return { contextWindow: 1_048_576, maxTokens: 65_536 };
+  }
+  return { contextWindow: 128_000, maxTokens: 32_768 };
 }
 
 /** Cache lifetime for a discovery result: live catalogs hold a day. */

@@ -1,12 +1,12 @@
 # @tian.zuo/pi-antigravity
 
-Use **Google Antigravity** (`agy`) models inside the [pi coding agent](https://pi.dev). pi stays your UI — chat, model picker, tool cards, sessions — while the Gemini agent loop runs underneath through the `agy` CLI.
+Use **Google Antigravity** (`agy`) models inside the [pi coding agent](https://pi.dev). pi stays your UI — chat, model picker, tool cards, sessions — while the selected Antigravity model runs underneath through the `agy` CLI.
 
 ## Highlights
 
 - **Antigravity models in pi's model picker** — `antigravity/gemini-3.7-flash` and friends, with automatic model discovery.
 - **Native rendering, not mimicry** — agy's read-only tools (`view_file`, `grep_search`, `find_by_name`, `list_dir`) are re-executed as real pi builtins (`read` / `grep` / `find` / `ls`), so their cards use pi's own renderers and show live, accurate output. Everything else renders through one display-only `antigravity` wrapper.
-- **Skills & MCP bridge** — your global pi Agent Skills become callable tools inside agy turns (`pi__p<pid>__grilling`, …), and pi's MCP servers (via the `pi-mcp-adapter` tools) are reachable from agy with pi's permissions, hooks, and rendering. Per-session tool names keep concurrent pi sessions fully isolated.
+- **Skills & MCP bridge** — your global pi Agent Skills become callable tools inside agy turns (`pi__p<pid>__skill__grilling`, …), and pi's MCP servers (via the `pi-mcp-adapter` tools) are reachable from agy with pi's permissions, hooks, and rendering. Per-session tool names keep concurrent pi sessions fully isolated.
 - **Background-task manager** — long-running agy commands are tracked in a dashboard and stoppable with one keystroke (`/agy-tasks`).
 - **Artifact browser** — images and files agy creates are listed and openable via `/agy-artifacts`, with a status-bar hint when new ones appear.
 
@@ -24,7 +24,7 @@ flowchart TB
     end
 
     subgraph agy["agy CLI (the agent loop)"]
-        Agent["Gemini agent\n57+ built-in tools"]
+        Agent["Antigravity model\nbuilt-in tools"]
     end
 
     UI <-- "stream events:\ntext, tool cards, usage" --> Prov
@@ -37,7 +37,7 @@ flowchart TB
     UI -- "pi executes the REAL tool" --> Mcp
     Mcp -- "result" --> Prov
     Prov -- "result back to agy" --> Bridge
-    Skills -- "global skills become\npi__p<pid>__<skill_name> tools" --> Bridge
+    Skills -- "global skills become\npi__p<pid>__skill__<name> tools" --> Bridge
 ```
 
 **Tool rendering** splits into two paths:
@@ -72,14 +72,14 @@ Requires the `agy` CLI installed and logged in (v1.1.17+). Override the binary w
 
 On session start, the extension runs a small local MCP server and registers it with agy as `pi-bridge-<pid>`. Two kinds of pi surface are bridged:
 
-- **Skills** — each global pi skill becomes a `pi__p<pid>__<skill_name>` tool that returns its full `SKILL.md` plus bundled resource paths.
+- **Skills** — each global pi skill becomes a `pi__p<pid>__skill__<name>` tool that returns its full `SKILL.md` plus bundled resource paths. The catalog advertises the exact callable name, and sanitized name collisions receive stable suffixes.
 - **MCP** — tools pi got from `pi-mcp-adapter` (the `mcp`/`mcpScript` gateways and per-server direct tools) are exposed with the same prefix.
 
 agy's MCP registry is **global** while bridge servers are per-pi-session, so concurrent sessions' tools all appear in every agy turn's tools/list. The per-session prefix (`pi__p<pid>__`) makes tool→server routing unambiguous: a tool name maps to exactly one session's bridge, so a call can only ever execute in the session that advertised it — never silently in another. Stale registrations from crashed sessions are pruned at startup. Calls still fail safe: no active turn, unknown tool, or a 480-second timeout returns an error to agy instead of hanging.
 
 An MCP call flows like this:
 
-1. agy calls `pi__<name>` — the bridge routes the call into its live turn.
+1. agy calls `pi__p<pid>__<name>` — the bridge routes the call into its live turn.
 2. pi ends the assistant message with a tool call for the **real** pi tool — it renders as a normal card and goes through pi's normal permissions and hooks.
 3. pi executes it, and the result is handed back to the still-running agy turn.
 
@@ -101,7 +101,7 @@ Long-running commands (dev servers, watchers) become agy background tasks. After
 ■ 1 agy background task • /agy-tasks to view
 ```
 
-The dashboard lists every task with pid and status: `enter` opens a scrollable log view, `x` stops it (whole process group), `r` rescans, esc closes. Closing pi stops all live tasks automatically. Non-interactive: `/agy-tasks stop <task-id>|all`.
+The dashboard lists every task with pid and status: `enter` opens a scrollable log view, `x` stops it (whole process group), `r` rescans, esc closes. Closing pi automatically stops tasks whose processes are directly tied to their logs; heuristic orphan matches remain available for an explicit stop, avoiding accidental termination of unrelated processes. Non-interactive: `/agy-tasks stop <task-id>|all`.
 
 ### Artifacts (`/agy-artifacts`)
 
@@ -135,9 +135,9 @@ The dashboard shows name, type, size, and origin (`generated` vs `uploaded`). Pr
 - **Permissions:** `--dangerously-skip-permissions` is always passed. For autonomous agy shell commands, add `{ "permissions": { "allow": ["command(*)"] } }` to `~/.gemini/antigravity-cli/settings.json`. Bridge calls need no extra rules.
 - **Artifact review:** headless runs cannot show agy's review panel, so image generation would abort after creating the file. Set `"artifactReviewMode": "always-proceed"` in the same `settings.json` to let artifacts through (applies to interactive agy too).
 - **Image generation errors:** `generate_image` can hit Google-side 429 rate limits; agy retries and usually succeeds — failed attempts show on the card with the real reason.
-- **Conversation memory:** lives on agy's side and is reused across turns. It resets when you switch models, change projects, or run `/agy reset` — agy pins conversations to their birth workspace, so reusing one from another project would write into the wrong place.
+- **Conversation memory:** lives on agy's side and is reused across turns. Resuming or forking a pi session, selecting another history branch, switching models, or changing projects starts a matching agy conversation and restores the active pi branch into it. `/agy reset` intentionally starts with no restored history.
 - **Thinking level** maps to `agy --effort`: low → `low`, medium → `medium`, high and above → `high`.
-- **Cost display** uses reference Gemini API prices (agy is subscription-billed). Override per model in `~/.pi/agent/models.json` under `providers.antigravity.modelOverrides`.
+- **Cost display** uses model-specific public API reference prices for Gemini and Claude (agy is subscription-billed); open or unknown models stay at zero rather than borrowing another model's price. Override per model in `~/.pi/agent/models.json` under `providers.antigravity.modelOverrides`.
 - The print interface is text-only; images in context are replaced by an omission note. Model discovery caches live lists for 24h; fallback snapshots (discovery failed or timed out) expire after 5 minutes so live discovery is retried promptly.
 - If an older globally installed copy exists, remove it first: `pi remove npm:@tian.zuo/pi-antigravity`.
 

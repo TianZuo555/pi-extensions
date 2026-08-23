@@ -5,6 +5,7 @@ import {
   latestUserPrompt,
   mapThinkingToEffort,
   mapUsage,
+  piHistoryBootstrap,
   streamAntigravity,
 } from "../src/provider.ts";
 import { AgyTurnController } from "../lib/turn.ts";
@@ -40,6 +41,48 @@ test("latestUserPrompt notes omitted images", () => {
 
 test("latestUserPrompt returns empty when there is no user message", () => {
   assert.equal(latestUserPrompt(contextWith([])).prompt, "");
+});
+
+test("piHistoryBootstrap restores the active branch before the current request", () => {
+  const restored = piHistoryBootstrap(contextWith([
+    { role: "user", content: [{ type: "text", text: "Use SQLite." }] },
+    {
+      role: "assistant",
+      content: [
+        { type: "text", text: "I will inspect it." },
+        { type: "toolCall", name: "read", arguments: { path: "db.ts" } },
+      ],
+    },
+    {
+      role: "toolResult",
+      toolName: "read",
+      content: [{ type: "text", text: "export const db = ..." }],
+    },
+    { role: "user", content: [{ type: "text", text: "Continue." }] },
+  ]));
+  assert.ok(restored);
+  assert.match(restored, /Restored pi conversation context/);
+  assert.match(restored, /Use SQLite/);
+  assert.match(restored, /tool call: read/);
+  assert.match(restored, /export const db/);
+  assert.doesNotMatch(restored, /Continue/);
+});
+
+test("piHistoryBootstrap is absent for a first-turn request and bounds old history", () => {
+  assert.equal(
+    piHistoryBootstrap(contextWith([
+      { role: "user", content: [{ type: "text", text: "First request" }] },
+    ])),
+    undefined,
+  );
+  const restored = piHistoryBootstrap(contextWith([
+    { role: "user", content: [{ type: "text", text: "x".repeat(30_000) }] },
+    { role: "assistant", content: [{ type: "text", text: "tail" }] },
+    { role: "user", content: [{ type: "text", text: "now" }] },
+  ]));
+  assert.ok(restored);
+  assert.match(restored, /Earlier history omitted/);
+  assert.ok(restored.length < 25_000);
 });
 
 test("mapUsage maps agy usage fields to pi usage", () => {
@@ -110,10 +153,11 @@ function makeStreamHarness() {
     setSession: () => Effect.void,
   };
   const fakeRuntime = { runPromise: () => Promise.resolve(controller) };
+  const replay = new AgyReplayStore();
   const streamFn = streamAntigravity(
     fakeRuntime as any,
     fakeService as any,
-    new AgyReplayStore(),
+    replay,
     new AgyPiBridge("test-bridge"),
   );
   const model: Model<string> = {
@@ -131,8 +175,84 @@ function makeStreamHarness() {
     for await (const event of streamFn(model, ctx)) events.push(event);
     return events;
   };
-  return { controller, collect };
+  return { controller, collect, replay };
 }
+
+test("streamAntigravity chooses native execution only after a successful agy tool result", async () => {
+  const { controller, collect, replay } = makeStreamHarness();
+  const eventsPromise = collect();
+  controller.push({
+    type: "tool_start",
+    stepId: 1,
+    name: "view_file",
+    args: { AbsolutePath: "/tmp/a.ts" },
+  });
+  controller.push({
+    type: "tool_done",
+    stepId: 1,
+    name: "view_file",
+    args: { AbsolutePath: "/tmp/a.ts" },
+    output: "ok",
+  });
+
+  const events = await eventsPromise;
+  const done = events.find((event) => event.type === "done");
+  const toolCall = done?.message.content.find((part: any) => part.type === "toolCall");
+  assert.equal(toolCall?.name, "read");
+  assert.deepEqual(toolCall?.arguments, { path: "/tmp/a.ts" });
+  assert.equal(replay.size, 0);
+});
+
+test("streamAntigravity replays native-tool errors instead of re-executing them", async () => {
+  const { controller, collect, replay } = makeStreamHarness();
+  const eventsPromise = collect();
+  controller.push({
+    type: "tool_start",
+    stepId: 1,
+    name: "view_file",
+    args: { AbsolutePath: "/missing" },
+  });
+  controller.push({
+    type: "tool_error",
+    stepId: 1,
+    name: "view_file",
+    args: { AbsolutePath: "/missing" },
+    message: "not found",
+  });
+
+  const events = await eventsPromise;
+  const done = events.find((event) => event.type === "done");
+  const toolCall = done?.message.content.find((part: any) => part.type === "toolCall");
+  assert.equal(toolCall?.name, "antigravity");
+  assert.equal(replay.take(toolCall.id)?.error, "not found");
+  assert.equal(replay.size, 0);
+});
+
+test("streamAntigravity reports cumulative agy usage exactly once across tool cards", async () => {
+  const { controller, collect } = makeStreamHarness();
+  for (const activity of [
+    { type: "usage", usage: { input_tokens: 13_712, output_tokens: 264, total_tokens: 13_976 } },
+    { type: "tool_start", stepId: 1, name: "view_file", args: { AbsolutePath: "/tmp/a" } },
+    { type: "tool_done", stepId: 1, name: "view_file", args: { AbsolutePath: "/tmp/a" }, output: "ok" },
+    { type: "tool_start", stepId: 2, name: "run_command", args: { CommandLine: "echo hi" } },
+    { type: "tool_error", stepId: 2, name: "run_command", args: { CommandLine: "echo hi" }, message: "denied" },
+    { type: "result", status: "ERROR", response: "", error: "permission denied", usage: { input_tokens: 44_909, output_tokens: 610, total_tokens: 45_519 } },
+  ] as const) {
+    controller.push(activity);
+  }
+
+  const messages = [];
+  for (let i = 0; i < 3; i++) {
+    const events = await collect();
+    const terminal = events.find((event) => event.type === "done" || event.type === "error");
+    messages.push(terminal.type === "done" ? terminal.message : terminal.error);
+  }
+  assert.deepEqual(messages.map((message) => message.usage.totalTokens), [13_976, 0, 31_543]);
+  assert.equal(
+    messages.reduce((sum, message) => sum + message.usage.totalTokens, 0),
+    45_519,
+  );
+});
 
 test("streamAntigravity treats result with ERROR status as success when response is present (recovered stream interruption)", async () => {
   const { controller, collect } = makeStreamHarness();

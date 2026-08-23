@@ -15,3 +15,16 @@
  */
 export const WRAPPER_TOOL_NAME = "antigravity";
 export const WRAPPER_TOOL_DESCRIPTION = "";
+
+/** Rehydrate a fresh agy conversation from the active branch of a pi session. */
+export function restoredPiContextPrompt(transcript: string): string {
+  return [
+    "## Restored pi conversation context",
+    "",
+    "The agy conversation was restarted because this pi session was resumed, forked, or moved to another history branch. Treat the transcript below as prior conversation context, then answer the current user request that follows it.",
+    "",
+    transcript,
+    "",
+    "## Current user request",
+  ].join("\n");
+}

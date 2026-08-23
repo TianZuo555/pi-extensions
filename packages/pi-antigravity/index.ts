@@ -1,6 +1,6 @@
 // antigravity — use Google Antigravity (agy) models inside the pi coding
 // agent via the agy stream-json RPC. pi stays the UI: model picker, sessions,
-// compaction, and rendering; agy runs the Gemini agent loop underneath with
+// compaction, and rendering; agy runs the selected Antigravity model underneath with
 // --dangerously-skip-permissions always enabled (headless agy turns
 // auto-deny tools that would need a permission prompt otherwise).
 //
@@ -29,16 +29,15 @@ import {
   type PiToolInfo,
 } from "./lib/bridge.ts";
 import {
+  assignSkillToolNames,
   formatSkillCatalog,
   nonWorkspaceSkills,
   readSkillBundle,
-  skillToolName,
   type SkillLite,
 } from "./lib/skills.ts";
 import {
-  CONTEXT_WINDOW,
+  capabilitiesForModel,
   FALLBACK_MODELS,
-  MAX_TOKENS,
   modelCacheTtlMs,
   normalizeAgyModelId,
   parseAgyModels,
@@ -132,14 +131,15 @@ interface ModelCache {
  * providers.antigravity.modelOverrides — pi applies them over registered models.
  */
 function toProviderModel(model: AgyModelInfo): ProviderModelConfig {
+  const capabilities = capabilitiesForModel(model.id);
   return {
     id: model.id,
     name: model.name,
     reasoning: true,
     input: ["text"],
     cost: pricingForModel(model.id),
-    contextWindow: CONTEXT_WINDOW,
-    maxTokens: MAX_TOKENS,
+    contextWindow: capabilities.contextWindow,
+    maxTokens: capabilities.maxTokens,
   };
 }
 
@@ -242,12 +242,12 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
       bridgeToolPrefix,
     );
 
-  /** Publish one bridge tool per global pi skill: `pi__p<pid>__<skill_name>`. */
+  /** Publish one bridge tool per global pi skill: `pi__p<pid>__skill__<name>`. */
   function refreshSkillTools(): void {
     if (!BRIDGE_ENABLED) return;
     bridge.setDynamicTools(
-      nonWorkspaceSkills(loadedSkills, tasksSessionCwd).map((skill) => ({
-        name: skillToolName(skill),
+      assignSkillToolNames(nonWorkspaceSkills(loadedSkills, tasksSessionCwd)).map(({ skill, toolName }) => ({
+        name: toolName,
         description:
           (skill.description.replace(/\s+/g, " ").trim().slice(0, MAX_SKILL_TOOL_DESCRIPTION) ||
             `pi Agent Skill "${skill.name}"`) +
@@ -483,9 +483,12 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
     if (next) pi.setActiveTools([...next]);
   };
 
-  pi.on("session_start", async (_event, ctx: ExtensionContext) => {
+  pi.on("session_start", async (event, ctx: ExtensionContext) => {
     syncWrapperToolActivation(ctx.model?.provider);
-    await runAntigravity(runtime, service.setSession(ctx.cwd, undefined));
+    await runAntigravity(
+      runtime,
+      service.setSession(ctx.cwd, undefined, event.reason !== "new"),
+    );
     if (ctx.hasUI) tasksUi = ctx.ui;
     tasksSessionCwd = ctx.cwd;
     updateAgyTasksWidget();
@@ -514,22 +517,29 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
     syncWrapperToolActivation(event.model?.provider);
   });
 
+  pi.on("session_tree", async (_event, ctx: ExtensionContext) => {
+    // An agy conversation cannot be rewound to match a different pi branch.
+    // Restart it and bootstrap the selected branch on the next provider call.
+    await runAntigravity(runtime, service.setSession(ctx.cwd, undefined, true));
+    setAgyTasksWidget(0);
+    setAgyArtifactsWidget(0);
+  });
+
   pi.on("session_shutdown", async () => {
     // Stop any live agy background tasks so closing pi leaves nothing
-    // running silently. Runs before service.close: the orphan scan needs
-    // the task logs' birth times, and killing agy first turns direct-pid
-    // detections into orphan detections (both are handled, but earlier is
-    // more precise).
+    // running silently. Only processes holding the task log open are certain
+    // enough to stop automatically; heuristic orphan matches stay visible in
+    // /agy-tasks but require an explicit user stop to avoid false positives.
     try {
       const snapshot = await runAntigravity(runtime, service.snapshot);
       if (snapshot.conversationId) {
         const tasks = await listAgyTasks(snapshot.conversationId, {
           sessionCwd: tasksSessionCwd,
         });
-        const live = tasks.filter(
-          (task) => task.pids.length > 0 || task.orphans.length > 0,
+        const live = tasks.filter((task) => task.pids.length > 0);
+        await Promise.all(
+          live.map((task) => stopAgyTask(task, { includeOrphans: false })),
         );
-        await Promise.all(live.map((task) => stopAgyTask(task)));
       }
     } catch {
       // Runtime closed or scan failed; nothing to stop.

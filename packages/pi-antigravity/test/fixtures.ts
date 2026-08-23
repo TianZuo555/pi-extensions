@@ -122,10 +122,14 @@ export const OK_CAPTURE = [
   }),
 ].join("\n");
 
-/** `agy models` output shape (agy 1.1.17). */
+/** `agy models` output shape (agy 1.1.19). */
 export const MODELS_OUTPUT = `Fetching available models...
 gemini-3.7-flash-high\tGemini 3.7 Flash (High)
 gemini-3.7-flash-medium\tGemini 3.7 Flash (Medium)
-gemini-3.7-pro-high\tGemini 3.7 Pro (High)
 gemini-3.6-flash-high\tGemini 3.6 Flash (High)
+gemini-3.5-flash-low\tGemini 3.5 Flash (Low)
+gemini-3.1-pro-high\tGemini 3.1 Pro (High)
+claude-sonnet-4-6\tClaude Sonnet 4.6 (Thinking)
+claude-opus-4-6-thinking\tClaude Opus 4.6 (Thinking)
+gpt-oss-120b-medium\tGPT-OSS 120B (Medium)
 `;

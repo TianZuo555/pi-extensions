@@ -50,6 +50,7 @@ export interface AntigravityRuntimeShape {
   readonly setSession: (
     cwd: string,
     modelId: string | undefined,
+    restoreFromPiContext?: boolean,
   ) => Effect.Effect<void, AntigravityRuntimeClosedError>;
   /**
    * Start a new agy turn or re-attach to the active one. Re-attachment
@@ -58,6 +59,8 @@ export interface AntigravityRuntimeShape {
    */
   readonly beginStreamTurn: (request: {
     readonly prompt: string;
+    /** Active pi-branch history used only when a fresh agy conversation needs restoring. */
+    readonly historyBootstrap?: string;
     /**
      * Extra prompt text appended ONLY when this request spawns a fresh agy
      * process (bootstrap). Ignored on re-attach, and excluded from the
@@ -90,7 +93,9 @@ export class AntigravityRuntime extends Context.Service<
   AntigravityRuntimeShape
 >()("pi-antigravity/AntigravityRuntime") {}
 
-const makeRuntime = Effect.gen(function* () {
+export type AgyTurnRunner = (request: AgyTurnRequest) => Promise<AgyTurnOutcome>;
+
+const makeRuntime = (turnRunner: AgyTurnRunner) => Effect.gen(function* () {
   let conversationId: string | undefined;
   /** The cwd the conversation was created in — agy pins conversations to their workspace. */
   let conversationCwd: string | undefined;
@@ -103,6 +108,15 @@ const makeRuntime = Effect.gen(function* () {
   let active: AgyTurnController | undefined;
   /** Aborts the in-flight agy child process when the runtime closes. */
   let activeTurnAbort: AbortController | undefined;
+  let generation = 0;
+  let restoreHistoryOnNextConversation = false;
+
+  const invalidateActiveTurn = () => {
+    generation += 1;
+    activeTurnAbort?.abort();
+    activeTurnAbort = undefined;
+    active = undefined;
+  };
 
   const ensureOpen: Effect.Effect<void, AntigravityRuntimeClosedError> = Effect.suspend(() =>
     closed
@@ -115,12 +129,19 @@ const makeRuntime = Effect.gen(function* () {
   );
 
   return AntigravityRuntime.of({
-    setSession: (sessionCwd, modelId) =>
+    setSession: (sessionCwd, modelId, restoreFromPiContext = false) =>
       ensureOpen.pipe(
         Effect.andThen(
           Effect.sync(() => {
             cwd = sessionCwd;
             if (modelId !== undefined) model = modelId;
+            if (restoreFromPiContext) {
+              invalidateActiveTurn();
+              conversationId = undefined;
+              conversationCwd = undefined;
+              turns = 0;
+              restoreHistoryOnNextConversation = true;
+            }
           }),
         ),
       ),
@@ -136,7 +157,7 @@ const makeRuntime = Effect.gen(function* () {
             ) {
               return active;
             }
-            active = undefined;
+            if (active) invalidateActiveTurn();
             // agy pins a conversation to the workspace it was created in:
             // resuming it from another directory silently writes into the
             // OLD workspace (verified 2026-08-21) or rejects writes with
@@ -145,8 +166,13 @@ const makeRuntime = Effect.gen(function* () {
             if (conversationId && conversationCwd !== cwd) {
               conversationId = undefined;
               conversationCwd = undefined;
+              restoreHistoryOnNextConversation = true;
             }
-            if (model !== request.modelId) conversationId = undefined;
+            if (model !== undefined && model !== request.modelId) {
+              conversationId = undefined;
+              conversationCwd = undefined;
+              restoreHistoryOnNextConversation = true;
+            }
             model = request.modelId;
             const controller = new AgyTurnController(request.prompt);
             active = controller;
@@ -154,6 +180,7 @@ const makeRuntime = Effect.gen(function* () {
             // the agy child even when pi's signal never fires.
             const turnAbort = new AbortController();
             activeTurnAbort = turnAbort;
+            const turnGeneration = generation;
             if (request.signal) {
               if (request.signal.aborted) turnAbort.abort();
               else
@@ -163,10 +190,15 @@ const makeRuntime = Effect.gen(function* () {
                   { once: true },
                 );
             }
+            const historyBootstrap =
+              !conversationId && restoreHistoryOnNextConversation
+                ? request.historyBootstrap
+                : undefined;
+            restoreHistoryOnNextConversation = false;
             const spawnRequest: AgyTurnRequest = {
-              prompt: request.bootstrapSuffix
-                ? `${request.prompt}\n\n${request.bootstrapSuffix}`
-                : request.prompt,
+              prompt: [historyBootstrap, request.prompt, request.bootstrapSuffix]
+                .filter((part): part is string => Boolean(part))
+                .join("\n\n"),
               conversationId,
               model: request.modelId,
               effort: request.effort,
@@ -174,20 +206,28 @@ const makeRuntime = Effect.gen(function* () {
               timeoutMs: 600_000,
               signal: turnAbort.signal,
               onConversation: (id) => {
+                if (turnGeneration !== generation) return;
                 // Track eagerly — a turn hung on a background task may never
                 // resolve, and /agy-tasks needs the id meanwhile.
                 conversationId = id;
                 conversationCwd = cwd;
               },
-              onActivity: (activity) => controller.push(activity),
+              onActivity: (activity) => {
+                if (turnGeneration === generation) controller.push(activity);
+              },
             };
-            void runAgyTurn(spawnRequest)
+            void turnRunner(spawnRequest)
               .then((outcome: AgyTurnOutcome) => {
+                if (turnGeneration !== generation) {
+                  controller.close();
+                  return;
+                }
                 turns += 1;
                 if (outcome.conversationId) conversationId = outcome.conversationId;
                 controller.close();
               })
               .catch((cause: unknown) => {
+                if (turnGeneration !== generation) return;
                 controller.fail(cause instanceof Error ? cause : new Error(String(cause)));
               });
             return controller;
@@ -208,9 +248,11 @@ const makeRuntime = Effect.gen(function* () {
     reset: ensureOpen.pipe(
       Effect.andThen(
         Effect.sync(() => {
+          invalidateActiveTurn();
           conversationId = undefined;
           conversationCwd = undefined;
           turns = 0;
+          restoreHistoryOnNextConversation = false;
         }),
       ),
     ),
@@ -229,8 +271,7 @@ const makeRuntime = Effect.gen(function* () {
             conversationId = undefined;
             conversationCwd = undefined;
             // Kill any in-flight agy child process immediately.
-            activeTurnAbort?.abort();
-            activeTurnAbort = undefined;
+            invalidateActiveTurn();
           }),
         ),
       ),
@@ -238,13 +279,13 @@ const makeRuntime = Effect.gen(function* () {
   });
 });
 
-export const AntigravityRuntimeLive: Layer.Layer<AntigravityRuntime> = Layer.effect(
-  AntigravityRuntime,
-  makeRuntime,
-);
+const runtimeLayer = (turnRunner: AgyTurnRunner): Layer.Layer<AntigravityRuntime> =>
+  Layer.effect(AntigravityRuntime, makeRuntime(turnRunner));
 
-export function createAntigravityRuntime() {
-  return ManagedRuntime.make(AntigravityRuntimeLive);
+export const AntigravityRuntimeLive: Layer.Layer<AntigravityRuntime> = runtimeLayer(runAgyTurn);
+
+export function createAntigravityRuntime(turnRunner: AgyTurnRunner = runAgyTurn) {
+  return ManagedRuntime.make(runtimeLayer(turnRunner));
 }
 
 export type AntigravityRuntimeInstance = ReturnType<typeof createAntigravityRuntime>;
