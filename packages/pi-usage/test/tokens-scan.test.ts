@@ -123,14 +123,21 @@ function panelHarness(snapshot: ScanResult) {
 
 async function scanLocalUsageFixture(): Promise<ScanResult> {
   const { Effect } = await import("effect");
-  const now = Date.now();
+  // Anchor today's records inside the current LOCAL day. Naive `now - 2h`
+  // offsets cross midnight in early-morning CI runs (GitHub runners are
+  // UTC), which silently drops records from the Today window.
+  const now = new Date();
+  const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const anchor = Math.min(now.getTime(), dayStart.getTime() + 12 * HOUR);
+  const earlyToday = (minute: number, fallback: number) =>
+    Math.max(dayStart.getTime() + minute * 60_000, anchor - fallback * 60_000);
   const root = fixtureDir({
     "--project--": [
-      sessionLine("a", now - 2 * HOUR),
-      sessionLine("b", now - 1 * HOUR),
+      sessionLine("a", earlyToday(1, 10)),
+      sessionLine("b", earlyToday(2, 5)),
     ],
   });
-  const scan = await Effect.runPromise(scanLocalUsage({ sessionsDir: root, sinceMs: now - 30 * 24 * HOUR }));
+  const scan = await Effect.runPromise(scanLocalUsage({ sessionsDir: root, sinceMs: now.getTime() - 30 * 24 * HOUR }));
   fs.rmSync(root, { recursive: true, force: true });
   return scan;
 }
