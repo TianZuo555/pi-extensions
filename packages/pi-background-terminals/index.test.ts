@@ -8,10 +8,6 @@ import { Check } from "typebox/value";
 import backgroundTerminals, {
   createBackgroundTerminalsExtension,
 } from "./index.ts";
-import {
-  EXPLORATION_LIMIT,
-  EXPLORATION_WARNING_AT,
-} from "./src/exploration-budget.ts";
 
 function command(script: string) {
   const encoded = Buffer.from(script).toString("base64");
@@ -342,53 +338,6 @@ test("yield wait schema delegates bounds to manager clamping", async () => {
     assert.equal(Check(schema, { command: "true", yield_time_ms: 120_000 }), true);
     assert.equal(Check(schema, { command: "true", yield_time_ms: -1 }), true);
     assert.equal(Check(schema, { command: "true", yield_time_ms: 1.5 }), false);
-  } finally {
-    await app.shutdown();
-  }
-});
-
-test("shell exploration warns, blocks, and resets for the next agent run", async () => {
-  const app = harness();
-  try {
-    const tool = app.tools.get("bash");
-    for (let count = 1; count <= EXPLORATION_LIMIT; count++) {
-      const result = await tool.execute(
-        `call-inspect-${count}`,
-        { command: "ls >/dev/null", yield_time_ms: 30_000 },
-        undefined,
-        undefined,
-        app.ctx,
-      );
-      if (count === EXPLORATION_WARNING_AT) {
-        assert.match(
-          result.content[0].text,
-          new RegExp(`${EXPLORATION_WARNING_AT}/${EXPLORATION_LIMIT}`),
-        );
-      }
-    }
-
-    const inspectionCommand = "ls >/dev/null";
-    await assert.rejects(
-      tool.execute(
-        "call-inspect-blocked",
-        { command: inspectionCommand, yield_time_ms: 30_000 },
-        undefined,
-        undefined,
-        app.ctx,
-      ),
-      /was not executed.*synthesize/is,
-    );
-
-    for (const handler of app.handlers.get("agent_start") ?? []) {
-      handler({}, app.ctx);
-    }
-    await tool.execute(
-      "call-inspect-after-reset",
-      { command: inspectionCommand, yield_time_ms: 30_000 },
-      undefined,
-      undefined,
-      app.ctx,
-    );
   } finally {
     await app.shutdown();
   }

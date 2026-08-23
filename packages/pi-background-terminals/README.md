@@ -100,10 +100,8 @@ While at least one terminal runs, a one-line widget renders above the editor.
 - **Truthful quick-vs-yielded rendering.** Quick and initial-wait Bash rows show
   a bounded sanitized preview. Only a command that actually yields is rendered
   as a compact background terminal; asynchronous completion rows remain compact.
-- **Fresh-shell guidance and exploration guardrail.** Model guidance points to
-  `working_dir` instead of persistent `cd` assumptions and prefers dedicated
-  inspection tools. Read-only shell exploration warns at 6 calls and blocks
-  after 8 within one agent run.
+- **Fresh-shell guidance.** Model guidance points to `working_dir` instead of
+  persistent `cd` assumptions and prefers dedicated inspection tools.
 - **Loud failure for the two silent mistakes.** Prompt wording only makes a
   misunderstanding less likely, so both contract errors that produce *no* error
   signal are refused before spawning. A command that only mutates the discarded

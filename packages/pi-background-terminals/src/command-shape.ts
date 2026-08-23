@@ -6,10 +6,8 @@
  * is still executing repeats every side effect without ever producing an error.
  * Prompt wording can only make those less likely; these guards make them loud.
  *
- * Deliberately separate from ./exploration-budget.ts. That classifier answers
- * "is this read-only inspection?" and its segment splitting must not change.
- * This one also splits on newlines, because a multi-line script whose first
- * line happens to be `cd` is not a state-only command.
+ * This splitter also splits on newlines, because a multi-line script whose
+ * first line happens to be `cd` is not a state-only command.
  */
 
 import { formatElapsed, type TerminalSnapshot } from "./domain.ts";

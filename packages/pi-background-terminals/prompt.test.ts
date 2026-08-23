@@ -6,7 +6,6 @@ import test from "node:test";
 import type { OutputView, TerminalSnapshot } from "./src/domain.ts";
 import {
   BASH_PARAMETER_DESCRIPTIONS,
-  BASH_PROMPT_GUIDELINES,
   BASH_PROMPT_SNIPPET,
   BASH_TOOL_DESCRIPTION,
   buildBashProgress,
@@ -27,10 +26,6 @@ test("bash metadata states the managed-shell contract concisely", () => {
   assert.match(BASH_TOOL_DESCRIPTION, /yield_time_ms sets the wait/);
   assert.match(BASH_TOOL_DESCRIPTION, /timeout kills the process tree/);
   assert.match(BASH_TOOL_DESCRIPTION, /do not poll/i);
-  // The exploration budget is stated once, in the guidelines; the runtime
-  // warning carries the remediation. It must not creep back into the
-  // description.
-  assert.doesNotMatch(BASH_TOOL_DESCRIPTION, /blocks after/);
   assert.match(BASH_PARAMETER_DESCRIPTIONS.command, /script/);
   assert.match(
     BASH_PARAMETER_DESCRIPTIONS.yieldTimeMs,
@@ -41,8 +36,6 @@ test("bash metadata states the managed-shell contract concisely", () => {
   // The schema carries exclusiveMinimum/maximum for timeout, so prose must not
   // spend tokens repeating them.
   assert.doesNotMatch(BASH_PARAMETER_DESCRIPTIONS.timeout, /maximum/i);
-  assert.equal(BASH_PROMPT_GUIDELINES.length, 1);
-  assert.match(BASH_PROMPT_GUIDELINES[0]!, /blocks after 8/);
   assert.ok(BASH_TOOL_DESCRIPTION.length <= 320);
   assert.ok(BASH_PROMPT_SNIPPET.length <= 50);
   assert.ok(TERMINAL_LOG_READ_TOOL_DESCRIPTION.length <= 120);

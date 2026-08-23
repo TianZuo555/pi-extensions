@@ -45,12 +45,6 @@ import {
   stateOnlyCommandError,
 } from "./src/command-shape.ts";
 import {
-  EXPLORATION_LIMIT,
-  explorationLimitError,
-  explorationWarning,
-  isExploratoryBashCommand,
-} from "./src/exploration-budget.ts";
-import {
   DEFAULT_YIELD_TIME_MS,
   MAX_RUNTIME_TIMEOUT_SECONDS,
   MAX_TERMINAL_LOG_READ_BYTES,
@@ -60,7 +54,6 @@ import {
 } from "./src/manager.ts";
 import {
   BASH_PARAMETER_DESCRIPTIONS,
-  BASH_PROMPT_GUIDELINES,
   BASH_PROMPT_SNIPPET,
   BASH_TOOL_DESCRIPTION,
   buildBashProgress,
@@ -229,15 +222,11 @@ export function createBackgroundTerminalsExtension(
   let sessionContext: ExtensionContext | undefined;
   let ui: ExtensionUIContext | undefined;
   let unsubStatus: (() => void) | undefined;
-  let exploratoryCallCount = 0;
-  const exploratoryToolCalls = new Set<string>();
   let terminalLogReadBytes = 0;
   let terminalLogReadCalls = 0;
   const resultDelivery = createDeferredResultDelivery<TerminalSnapshot>();
 
-  const resetExplorationBudget = () => {
-    exploratoryCallCount = 0;
-    exploratoryToolCalls.clear();
+  const resetTerminalLogBudget = () => {
     terminalLogReadBytes = 0;
     terminalLogReadCalls = 0;
   };
@@ -352,15 +341,14 @@ export function createBackgroundTerminalsExtension(
 
   pi.on("session_start", (_event, ctx) => {
     sessionContext = ctx;
-    resetExplorationBudget();
+    resetTerminalLogBudget();
     if (ctx.hasUI) ui = ctx.ui;
   });
 
-  // One agent run can contain many model/tool turns. Bound repeated shell-based
-  // inspection across that whole run, then reset for the next user/follow-up
-  // run rather than per turn (which would let a two-calls-per-turn loop evade
-  // the guardrail indefinitely).
-  pi.on("agent_start", resetExplorationBudget);
+  // One agent run can contain many model/tool turns. The terminal_log_read
+  // byte/call budget spans the whole run, then resets for the next
+  // user/follow-up run rather than per turn.
+  pi.on("agent_start", resetTerminalLogBudget);
 
   // Drain deferred results when the agent settles: together with the
   // isIdle() fast path above and the Map-keyed delivery (drain clears),
@@ -374,7 +362,7 @@ export function createBackgroundTerminalsExtension(
   // bounded so a wedged process cannot hang shutdown.
   pi.on("session_shutdown", async () => {
     sessionContext = undefined;
-    resetExplorationBudget();
+    resetTerminalLogBudget();
     resultDelivery.clear();
     unsubStatus?.();
     unsubStatus = undefined;
@@ -400,7 +388,6 @@ export function createBackgroundTerminalsExtension(
     label: "bash",
     description: BASH_TOOL_DESCRIPTION,
     promptSnippet: BASH_PROMPT_SNIPPET,
-    promptGuidelines: BASH_PROMPT_GUIDELINES,
     parameters: Type.Object({
       command: Type.String({
         description: BASH_PARAMETER_DESCRIPTIONS.command,
@@ -500,18 +487,6 @@ export function createBackgroundTerminalsExtension(
       // model believe the directory or variable persists into the next call.
       if (isStateOnlyCommand(command)) throw new Error(stateOnlyCommandError());
 
-      let explorationNote: string | undefined;
-      if (isExploratoryBashCommand(command)) {
-        if (!exploratoryToolCalls.has(toolCallId)) {
-          exploratoryToolCalls.add(toolCallId);
-          exploratoryCallCount++;
-        }
-        if (exploratoryCallCount > EXPLORATION_LIMIT) {
-          throw new Error(explorationLimitError());
-        }
-        explorationNote = explorationWarning(exploratoryCallCount);
-      }
-
       if (
         params.timeout !== undefined &&
         (!Number.isFinite(params.timeout) ||
@@ -575,9 +550,6 @@ export function createBackgroundTerminalsExtension(
             ...result,
             content: [
               { type: "text" as const, text: warning },
-              ...(explorationNote
-                ? [{ type: "text" as const, text: explorationNote }]
-                : []),
               ...result.content,
             ],
           };
@@ -705,7 +677,6 @@ export function createBackgroundTerminalsExtension(
       }
 
       let text = buildBashResult(snap);
-      if (explorationNote) text += `\n\n${explorationNote}`;
       if (
         snap.status === "failed" ||
         snap.status === "timed_out" ||

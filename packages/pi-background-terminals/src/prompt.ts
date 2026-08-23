@@ -9,7 +9,6 @@ import {
   truncateTail,
 } from "@earendil-works/pi-coding-agent";
 import { formatElapsed, formatExit, type TerminalSnapshot } from "./domain.ts";
-import { EXPLORATION_LIMIT } from "./exploration-budget.ts";
 import {
   DEFAULT_YIELD_TIME_MS,
   MAX_RUNNING,
@@ -42,10 +41,6 @@ export const BASH_TOOL_DESCRIPTION =
 
 export const BASH_PROMPT_SNIPPET =
   "Run Bash; long commands yield and notify on exit";
-
-export const BASH_PROMPT_GUIDELINES = [
-  `bash blocks after ${EXPLORATION_LIMIT} read-only inspection calls per run.`,
-];
 
 export const BASH_PARAMETER_DESCRIPTIONS = {
   command: "Shell script to run.",

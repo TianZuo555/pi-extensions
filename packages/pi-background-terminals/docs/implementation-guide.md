@@ -56,12 +56,11 @@ title          optional /ps label
 yield_time_ms  optional initial wait; integers clamp to 250–30,000 ms
 ```
 
-The override supplies its own prompt snippet and guidelines because Pi does not
-inherit prompt metadata from built-ins. The guidelines state that every call is
-a fresh shell, direct directory changes through `working_dir`, prefer dedicated
-inspection tools, and disclose the shell-exploration budget. The archive reader
-supplies one prompt snippet but no prompt guidelines, keeping its bounded
-read-only capability discoverable without expanding the global prompt.
+The override supplies its own prompt snippet because Pi does not inherit prompt
+metadata from built-ins. The snippet states that every call is a fresh shell
+with direct directory changes through `working_dir`. The archive reader
+supplies one prompt snippet too, keeping its bounded read-only capability
+discoverable without expanding the global prompt.
 
 The custom call/result renderers show a useful bounded title and preview for
 quick work, then switch to compact id/status rendering only after a real yield.
@@ -129,7 +128,6 @@ immediately. Neither path provides an interactive input surface.
 index.ts                    Pi boundary, bash override, fallback, /ps
 src/command-shape.ts        Pre-spawn guards: state-only and duplicate commands
 src/domain.ts               Snapshot/status/error types
-src/exploration-budget.ts   Read-only shell exploration classifier/guardrail
 src/manager.ts              Effect service and process lifecycle
 src/output.ts               Bounded head+tail stream retention
 src/process-tracker.ts      Synchronous abnormal-exit process-tree safety net
@@ -213,20 +211,6 @@ The returned result has two forms:
 - **Yielded:** status is `running`, the id and captured startup output are
   returned, and later settlement becomes a follow-up.
 
-### Shell exploration guardrail
-
-A narrow classifier recognizes common read-only Bash inspection such as `rg`,
-`grep`, `find`, `ls`, `sed`, and read-only Git queries. It also recognizes those
-commands after the repeated `D=/long/path;` setup pattern. Unknown execution,
-build, and test commands are not counted.
-
-The count spans every model/tool turn in one `agent_start` → `agent_end` run,
-rather than resetting per turn. Calls 6–8 execute but append a model-facing
-instruction to stop broad searching and synthesize. Call 9 is rejected before
-manager resolution or spawn, so it cannot produce side effects. The next agent
-run and every session transition reset the counter. Tool-call ids are counted
-once so framework retries cannot consume the budget twice.
-
 ### Pre-spawn shape guards
 
 `src/command-shape.ts` refuses two call shapes whose failure is otherwise
@@ -234,15 +218,14 @@ invisible to the model, since neither produces an error it could learn from:
 
 - **State-only commands.** Every segment is `cd`, `export`, or a bare
   assignment, so the command cannot outlive its own discarded shell. Checked
-  immediately after the empty-command check, before the exploration budget. The
-  error names `working_dir` and the `cd x && work` combination.
+  immediately after the empty-command check. The error names `working_dir` and
+  the `cd x && work` combination.
 - **Duplicate running commands.** An identical `command` in an identical `cwd`
   is already tracked as `running`. Checked after manager resolution and before
   spawn, so the second copy never starts. A settled twin or another directory is
   a legitimate new run.
 
-Segments split on `&&`, `||`, `;`, `|`, and newlines — deliberately a separate
-splitter from the exploration classifier, whose behaviour must not change.
+Segments split on `&&`, `||`, `;`, `|`, and newlines.
 Redirects and command substitution fail open: they can escape the shell, so
 they are never treated as no-ops.
 
@@ -557,7 +540,7 @@ The package test suite covers:
 - visible quick-command title/output previews versus compact genuinely yielded
   Bash/completion rows;
 - fresh-shell/`working_dir` guidance and work-bearing default titles;
-- shell-exploration warnings, pre-spawn blocking, and next-run reset;
+- pre-spawn blocking and next-run reset for state-only and duplicate commands;
 - hard timeout status and tree termination;
 - Bash-specific syntax on the resolved shell;
 - abort leaving eventual completion deliverable;
