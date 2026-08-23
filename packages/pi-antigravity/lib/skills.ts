@@ -12,7 +12,9 @@
  * turns the same way agy's built-in antigravity_guide skill does.
  */
 
+import { createHash } from "node:crypto";
 import { readdir, readFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 
 /** Minimal shape of pi's loaded skills (from systemPromptOptions.skills). */
@@ -26,7 +28,6 @@ export interface SkillLite {
 }
 
 const MAX_DESCRIPTION = 120;
-const MAX_SKILL_BODY = 24_000;
 const MAX_RESOURCES = 20;
 
 /**
@@ -35,7 +36,29 @@ const MAX_RESOURCES = 20;
  * catalog so the advertised name always matches the listed one.
  */
 export function skillToolName(skill: SkillLite): string {
-  return skill.name.replace(/[^A-Za-z0-9_-]/g, "_");
+  const safe = skill.name.replace(/[^A-Za-z0-9_-]/g, "_") || "unnamed";
+  return `skill__${safe}`;
+}
+
+export interface AssignedSkillTool {
+  skill: SkillLite;
+  toolName: string;
+}
+
+/** Assign stable unique names even when two skill names sanitize identically. */
+export function assignSkillToolNames(skills: SkillLite[]): AssignedSkillTool[] {
+  const unique = skills.filter(
+    (skill, index) => skills.findIndex((candidate) => candidate.filePath === skill.filePath) === index,
+  );
+  const bases = unique.map((skill) => skillToolName(skill));
+  const counts = new Map<string, number>();
+  for (const base of bases) counts.set(base, (counts.get(base) ?? 0) + 1);
+  return unique.map((skill, index) => {
+    const base = bases[index];
+    if ((counts.get(base) ?? 0) === 1) return { skill, toolName: base };
+    const suffix = createHash("sha256").update(skill.filePath).digest("hex").slice(0, 8);
+    return { skill, toolName: `${base}__${suffix}` };
+  });
 }
 
 export type SkillCatalogMode = "bridge" | "direct";
@@ -52,8 +75,22 @@ export type SkillCatalogMode = "bridge" | "direct";
  */
 export function nonWorkspaceSkills(skills: SkillLite[], sessionCwd: string | undefined): SkillLite[] {
   if (!sessionCwd) return skills;
-  const prefix = sessionCwd.endsWith(path.sep) ? sessionCwd : sessionCwd + path.sep;
-  return skills.filter((skill) => !skill.filePath.startsWith(prefix));
+  const resolvedCwd = path.resolve(sessionCwd);
+  const cwdPrefix = resolvedCwd.endsWith(path.sep) ? resolvedCwd : resolvedCwd + path.sep;
+  const home = path.resolve(os.homedir());
+  return skills.filter((skill) => {
+    const filePath = path.resolve(skill.filePath);
+    if (filePath.startsWith(cwdPrefix)) return false;
+    const marker = `${path.sep}.agents${path.sep}skills${path.sep}`;
+    const markerIndex = filePath.indexOf(marker);
+    if (markerIndex < 0) return true;
+    const skillWorkspace = filePath.slice(0, markerIndex) || path.parse(filePath).root;
+    if (path.resolve(skillWorkspace) === home) return true; // ~/.agents/skills is global.
+    return !(
+      resolvedCwd === path.resolve(skillWorkspace) ||
+      resolvedCwd.startsWith(`${path.resolve(skillWorkspace)}${path.sep}`)
+    );
+  });
 }
 
 /**
@@ -69,14 +106,19 @@ export function formatSkillCatalog(
 ): string | undefined {
   const usable = skills.filter((skill) => skill.filePath);
   if (usable.length === 0) return undefined;
-  const lines = usable.map((skill) => {
+  const assignments = assignSkillToolNames(usable);
+  const lines = assignments.map(({ skill, toolName }) => {
     const description =
       skill.description.replace(/\s+/g, " ").trim().slice(0, MAX_DESCRIPTION) || "(no description)";
-    return `- ${skill.name}: ${description} (${skill.filePath})`;
+    const location =
+      mode === "bridge"
+        ? `${skill.filePath}; tool: ${toolPrefix}${toolName}`
+        : skill.filePath;
+    return `- ${skill.name}: ${description} (${location})`;
   });
   const how =
     mode === "bridge"
-      ? `Each skill is exposed as a ${toolPrefix}<skill_name> bridge tool; call that exact tool name to activate the skill.`
+      ? "Call the exact bridge tool shown on each skill entry to activate it."
       : "To activate a skill, read its SKILL.md file directly.";
   return [
     "## pi Agent Skills",
@@ -107,10 +149,6 @@ export async function readSkillBundle(skill: SkillLite): Promise<{
       isError: true,
     };
   }
-  if (body.length > MAX_SKILL_BODY) {
-    body = `${body.slice(0, MAX_SKILL_BODY)}\n\n[… truncated after ${MAX_SKILL_BODY} characters]`;
-  }
-
   const resources: string[] = [];
   try {
     const entries = await readdir(skill.baseDir, { withFileTypes: true });

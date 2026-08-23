@@ -50,7 +50,7 @@ export interface PiToolInfo {
  * builtins and extension tools alike (ask_user, web_search, todo, …) — is
  * pi-session machinery agy must not mutate mid-turn; agy has native
  * equivalents for files, shell, and web. Skills are bridged separately as
- * dynamic `pi__<skill_name>` tools.
+ * dynamic `pi__skill__<name>` tools.
  */
 const MCP_ADAPTER_SOURCE = /pi-mcp-adapter/;
 
@@ -156,7 +156,7 @@ export class AgyPiBridge {
   }
 
   /**
-   * Replace the dynamic tool set (used for per-skill `pi__<skill_name>`
+   * Replace the dynamic tool set (used for per-skill `pi__skill__<name>`
    * tools, handled in-process without a pi toolUse round-trip). The whole
    * set is swapped so removed skills disappear from tools/list on the next
    * refresh.
@@ -305,7 +305,7 @@ export class AgyPiBridge {
           ...base,
           result: {
             tools: [
-              ...this.#tools.map((tool) => ({
+              ...this.#tools.filter((tool) => !this.#dynamic.has(tool.name)).map((tool) => ({
                 name: `${this.#toolPrefix}${tool.name}`,
                 description:
                   tool.description ||
@@ -351,13 +351,11 @@ export class AgyPiBridge {
       return { content: `antigravity: unknown tool "${mcpName}" — only ${this.#toolPrefix}* bridge tools exist.`, isError: true };
     }
     const tool = mcpName.slice(this.#toolPrefix.length);
-    // Real pi tools win over same-named skills; dynamic (per-skill) tools
-    // are handled in-process.
+    const dynamic = this.#dynamic.get(tool);
+    if (dynamic) return dynamic.handler(args);
     if (this.#tools.some((def) => def.name === tool)) {
       return this.#routeToPiTool(tool, args);
     }
-    const dynamic = this.#dynamic.get(tool);
-    if (dynamic) return dynamic.handler(args);
     return { content: `antigravity: tool "${tool}" is not currently active in pi.`, isError: true };
   }
 

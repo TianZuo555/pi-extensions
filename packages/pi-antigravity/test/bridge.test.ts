@@ -242,6 +242,38 @@ test("dynamic per-skill tools replace wholesale and route in-process", async () 
   }
 });
 
+test("dynamic tools replace same-named real tools without duplicate listings", async () => {
+  const bridge = new AgyPiBridge();
+  bridge.setOnCall(() => {
+    throw new Error("shadowed real tool must not be routed");
+  });
+  bridge.setToolSource(() => TOOL_DEFS);
+  bridge.setDynamicTools([
+    {
+      name: "commit",
+      description: "Dynamic replacement.",
+      parameters: { type: "object", properties: {} },
+      handler: async () => ({ content: "dynamic", isError: false }),
+    },
+  ]);
+  await bridge.start();
+  try {
+    bridge.refreshTools();
+    const list = await post(bridge, { jsonrpc: "2.0", id: 13, method: "tools/list" });
+    const names = (list.json.result.tools as Array<{ name: string }>).map((tool) => tool.name);
+    assert.equal(names.filter((name) => name === `${BRIDGE_TOOL_PREFIX}commit`).length, 1);
+    const res = await post(bridge, {
+      jsonrpc: "2.0",
+      id: 14,
+      method: "tools/call",
+      params: { name: `${BRIDGE_TOOL_PREFIX}commit`, arguments: {} },
+    });
+    assert.equal(res.json.result.content[0].text, "dynamic");
+  } finally {
+    await bridge.close();
+  }
+});
+
 test("resolveBridgeResultsFromContext resolves matching toolResult messages", async () => {
   const bridge = await startedBridge((call) => {
     setTimeout(() => {
