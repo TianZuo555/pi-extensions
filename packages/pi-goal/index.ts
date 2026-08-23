@@ -51,8 +51,6 @@ import {
   type GoalRuntimeInstance,
 } from "./src/runtime.ts";
 
-const STATUS_KEY = "pi-goal";
-
 export const EmptyGoalParams = Type.Object({});
 
 export const UpdateGoalParams = Type.Object({
@@ -102,33 +100,12 @@ export default function goalExtension(pi: ExtensionAPI): void {
   const run = <A, E>(effect: Effect.Effect<A, E>): A =>
     runGoalSync(runtime, effect);
 
-  function refreshStatus(ctx: ExtensionContext, goal: Goal | null): void {
-    if (!goal) {
-      ctx.ui.setStatus(STATUS_KEY, undefined);
-      ctx.ui.setWorkingMessage();
-      return;
-    }
-    const budget =
-      goal.tokenBudget === undefined
-        ? formatTokenCount(goal.tokensUsed)
-        : `${formatTokenCount(goal.tokensUsed)}/${formatTokenCount(goal.tokenBudget)}`;
-    const objective = goal.objective.replace(/\s+/g, " ");
-    const preview = objective.length > 48 ? `${objective.slice(0, 48)}…` : objective;
-    ctx.ui.setStatus(
-      STATUS_KEY,
-      `goal ${goal.status} · ${budget} · ${preview}`,
-    );
-    ctx.ui.setWorkingMessage(
-      goal.status === "active" ? `Pursuing goal: ${preview}` : undefined,
-    );
-  }
-
   function notify(ctx: ExtensionContext, message: string, type: "info" | "warning" | "error" = "info"): void {
     ctx.ui.notify(message, type);
   }
 
-  /** Execute the directives a transition produced, in order: persistence and
-   * status refresh first, then notifications, then model-facing messages. */
+  /** Execute the directives a transition produced, in order: persistence
+   * first, then notifications, then model-facing messages. */
   function executeDirectives(ctx: ExtensionContext, directives: readonly GoalDirective[]): void {
     for (const directive of directives) {
       switch (directive.kind) {
@@ -138,7 +115,6 @@ export default function goalExtension(pi: ExtensionAPI): void {
             goal: cloneGoal(directive.goal),
           };
           pi.appendEntry(GOAL_ENTRY_TYPE, data);
-          refreshStatus(ctx, directive.goal);
           break;
         }
         case "notify":
@@ -257,7 +233,6 @@ export default function goalExtension(pi: ExtensionAPI): void {
     }
 
     const goal = run(goalRuntime.goal);
-    refreshStatus(ctx, goal);
     if (
       goal?.status === "active" &&
       (event.reason === "startup" ||
@@ -273,7 +248,6 @@ export default function goalExtension(pi: ExtensionAPI): void {
   pi.on("session_tree", async (_event, ctx) => {
     run(goalRuntime.loadFromBranch(ctx.sessionManager.getBranch() as readonly unknown[]));
     const goal = run(goalRuntime.goal);
-    refreshStatus(ctx, goal);
     if (goal?.status === "active") scheduleContinuation(ctx);
   });
 
@@ -644,12 +618,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
   // close operation marks the runtime closed, so any stale handler invocation
   // after shutdown fails fast with a typed GoalRuntimeClosedError instead of
   // mutating state.
-  pi.on("session_shutdown", async (_event, ctx) => {
-    try {
-      ctx.ui.setStatus(STATUS_KEY, undefined);
-    } catch {
-      // The UI may already be torn down during process shutdown.
-    }
+  pi.on("session_shutdown", async () => {
     try {
       run(goalRuntime.close);
     } catch (error) {

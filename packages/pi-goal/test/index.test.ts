@@ -15,8 +15,6 @@ interface Captured {
   entries: any[];
   messages: any[];
   notifications: Array<{ message: string; type?: string }>;
-  statuses: Map<string, string | undefined>;
-  workingMessage: string | undefined;
   editorValue: string | undefined;
   editorCalls: Array<{ title: string; initial: string }>;
   aborted: number;
@@ -32,15 +30,12 @@ function setup(): Captured {
     entries: [],
     messages: [],
     notifications: [],
-    statuses: new Map(),
-    workingMessage: undefined,
     editorValue: undefined,
     editorCalls: [],
     aborted: 0,
     branch: [],
     ctx: undefined,
   };
-
   let idleResolvers: Array<() => void> = [];
   captured.ctx = {
     idle: true,
@@ -49,12 +44,6 @@ function setup(): Captured {
     hasUI: true,
     cwd: process.cwd(),
     ui: {
-      setStatus(key: string, value: string | undefined) {
-        captured.statuses.set(key, value);
-      },
-      setWorkingMessage(message?: string) {
-        captured.workingMessage = message;
-      },
       notify(message: string, type?: string) {
         captured.notifications.push({ message, type });
       },
@@ -154,8 +143,6 @@ test("goal command persists state, exposes tools, and queues a continuation", as
   assert.equal(captured.entries.length, 1);
   assert.equal(captured.messages.length, 1);
   assert.match(captured.messages[0].message.content, /Run the checkout benchmark/);
-  assert.match(captured.statuses.get("pi-goal")!, /goal active/);
-  assert.equal(captured.workingMessage, "Pursuing goal: Run the checkout benchmark");
 
   const getResult = await captured.tools.get("get_goal").execute(
     "get-1",
@@ -168,16 +155,13 @@ test("goal command persists state, exposes tools, and queues a continuation", as
   assert.match(textFrom(getResult), /5k/);
 });
 
-test("the working loader names the active goal and restores its default otherwise", async () => {
+test("pausing and resuming only changes goal state", async () => {
   const captured = setup();
   await captured.commands.get("goal").handler("Investigate the flaky test", captured.ctx);
-  assert.equal(captured.workingMessage, "Pursuing goal: Investigate the flaky test");
 
   await captured.commands.get("goal").handler("pause", captured.ctx);
-  assert.equal(captured.workingMessage, undefined);
 
   await captured.commands.get("goal").handler("resume", captured.ctx);
-  assert.equal(captured.workingMessage, "Pursuing goal: Investigate the flaky test");
 
   await captured.tools.get("update_goal").execute(
     "complete-1",
@@ -186,7 +170,8 @@ test("the working loader names the active goal and restores its default otherwis
     undefined,
     captured.ctx,
   );
-  assert.equal(captured.workingMessage, undefined);
+  const goal = await goalState(captured);
+  assert.equal(goal.status, "complete");
 });
 
 test("/goal edit opens a prefilled editor and updates the objective in place", async () => {
