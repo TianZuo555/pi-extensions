@@ -32,6 +32,8 @@ export function formatReport(state: ProviderState): string {
   const lines = [header];
   if (report.windows.length === 0) lines.push("  No usage windows reported.");
   for (const window of report.windows) {
+    // A blank line between window rows keeps multi-window reports readable.
+    if (lines.length > 1) lines.push("");
     lines.push(`  ${formatWindow(window)}`);
   }
   for (const note of report.notes) lines.push(`  ${note}`);
@@ -44,6 +46,36 @@ export function formatReports(states: readonly ProviderState[]): string {
     .filter((state) => state.status !== "unconfigured")
     .map(formatReport)
     .join("\n\n");
+}
+
+/**
+ * Collapse the GLM global and China states into one when both were queried
+ * with the same API key (the same account). Keeps the active model's region
+ * when possible so the footer label stays correct, otherwise the first ready
+ * state.
+ */
+export function dedupeZaiStates(
+  states: readonly ProviderState[],
+  activeProviderId: string | undefined,
+  sharedKey: boolean,
+): ProviderState[] {
+  if (!sharedKey) return [...states];
+  const zai = states.find((state) => state.id === ZAI_PROVIDER_ID);
+  const cn = states.find((state) => state.id === ZAI_CN_PROVIDER_ID);
+  if (!zai || !cn) return [...states];
+  const preferred = activeProviderId === ZAI_CN_PROVIDER_ID ? cn : zai;
+  const keep =
+    preferred.status === "ready"
+      ? preferred
+      : zai.status === "ready"
+        ? zai
+        : cn.status === "ready"
+          ? cn
+          : zai;
+  return states.filter(
+    (state) =>
+      (state.id !== ZAI_PROVIDER_ID && state.id !== ZAI_CN_PROVIDER_ID) || state === keep,
+  );
 }
 
 function formatWindow(window: UsageWindow): string {

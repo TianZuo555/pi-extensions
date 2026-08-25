@@ -39,7 +39,7 @@ import {
   resolveZaiCnToken,
   resolveZaiToken,
 } from "./lib/auth.ts";
-import { formatReports, formatStatusline, type ProviderState } from "./lib/format.ts";
+import { dedupeZaiStates, formatReports, formatStatusline, type ProviderState } from "./lib/format.ts";
 import { TokensPanel } from "./lib/tokens-panel.ts";
 import {
   aggregateWindow,
@@ -78,15 +78,10 @@ const CLOSE = "Close";
 const NO_PROVIDER_LOGIN_MESSAGE =
   "No usage provider is configured. Log in to at least one provider with /login to view usage information.";
 
-interface ProviderSpec extends ProviderQuerySpec {
-  statusLabel: string;
-}
-
-const PROVIDERS: ProviderSpec[] = [
+const PROVIDERS: ProviderQuerySpec[] = [
   {
     id: CODEX_PROVIDER_ID,
     name: "OpenAI Codex",
-    statusLabel: "codex",
     configureHint: "sign in with /login and select OpenAI Codex",
     hasLoginInfo: (ctx) => hasProviderLoginInfo(ctx, CODEX_PROVIDER_ID, hasCodexLoginInfo),
     resolve: (ctx) => resolveCodexToken(ctx),
@@ -95,7 +90,6 @@ const PROVIDERS: ProviderSpec[] = [
   {
     id: COPILOT_PROVIDER_ID,
     name: "GitHub Copilot",
-    statusLabel: "copilot",
     configureHint: "sign in with /login and select GitHub Copilot",
     hasLoginInfo: (ctx) =>
       hasProviderLoginInfo(ctx, COPILOT_PROVIDER_ID, hasCopilotLoginInfo),
@@ -105,7 +99,6 @@ const PROVIDERS: ProviderSpec[] = [
   {
     id: ZAI_PROVIDER_ID,
     name: "GLM Coding Plan",
-    statusLabel: "zai",
     configureHint: "set ZAI_API_KEY or sign in with /login and select Z.ai",
     hasLoginInfo: (ctx) => hasProviderLoginInfo(ctx, ZAI_PROVIDER_ID, hasZaiLoginInfo),
     resolve: async () => resolveZaiToken(),
@@ -114,7 +107,6 @@ const PROVIDERS: ProviderSpec[] = [
   {
     id: ZAI_CN_PROVIDER_ID,
     name: "GLM Coding Plan (China)",
-    statusLabel: "zai-cn",
     configureHint:
       "set ZAI_CODING_CN_API_KEY or sign in with /login and select ZAI Coding Plan (China)",
     hasLoginInfo: (ctx) =>
@@ -125,7 +117,6 @@ const PROVIDERS: ProviderSpec[] = [
   {
     id: DEEPSEEK_PROVIDER_ID,
     name: "DeepSeek",
-    statusLabel: "deepseek",
     configureHint: "set DEEPSEEK_API_KEY or sign in with /login and select DeepSeek",
     hasLoginInfo: (ctx) =>
       hasProviderLoginInfo(ctx, DEEPSEEK_PROVIDER_ID, hasDeepSeekLoginInfo),
@@ -166,7 +157,7 @@ export default function usageExtension(pi: ExtensionAPI): void {
 
   const queryProvider = (
     ctx: ExtensionContext,
-    provider: ProviderSpec,
+    provider: ProviderQuerySpec,
     force: boolean,
     signal?: AbortSignal,
   ): Promise<ProviderState> => {
@@ -176,6 +167,20 @@ export default function usageExtension(pi: ExtensionAPI): void {
     return runUsage(usageRuntime, usageService.queryProvider(ctx, provider, force, linked), {
       signal: linked,
     });
+  };
+
+  const activeProviderId = (ctx: ExtensionContext): string | undefined => {
+    const probe = probeModel(ctx);
+    return probe.stale ? undefined : probe.provider;
+  };
+
+  // When the global and China GLM plans are configured with the same API key
+  // they are the same account, so a single result is shown — preferring the
+  // active model's region so the footer keeps the right label.
+  const sharedZaiKey = (): boolean => {
+    const zai = resolveZaiToken();
+    const cn = resolveZaiCnToken();
+    return Boolean(zai && cn && zai.token === cn.token);
   };
 
   const collectStates = (
@@ -188,7 +193,7 @@ export default function usageExtension(pi: ExtensionAPI): void {
       : sessionAbort.signal;
     return runUsage(usageRuntime, usageService.collectStates(ctx, PROVIDERS, force, linked), {
       signal: linked,
-    });
+    }).then((states) => dedupeZaiStates(states, activeProviderId(ctx), sharedZaiKey()));
   };
 
   const publishStatus = async (ctx: ExtensionContext, force: boolean) => {
@@ -204,10 +209,9 @@ export default function usageExtension(pi: ExtensionAPI): void {
     statusBusy = true;
     try {
       const state = await queryProvider(ctx, provider, force);
+      // Errors leave the footer empty; usage details stay in the /usage menu.
       if (state.status === "ready") {
         safeSetStatus(ctx, azureStatus(formatStatusline(state.report)));
-      } else if (state.status === "error") {
-        safeSetStatus(ctx, `${provider.statusLabel} usage error`);
       } else {
         safeSetStatus(ctx, undefined);
       }

@@ -11,14 +11,20 @@ supported provider.
 
 ```text
 OpenAI Codex · Plus
-  Weekly limit:     [████████████░░░░░░░░] 60% left · resets 14:20 on 27 Jul
+  5h limit:         [████████████████░░░░] 78% left · resets 14:20 on 27 Jul
+
+  Weekly limit:     [████████████░░░░░░░░] 60% left · resets 09:00 on 2 Aug
+
 GitHub Copilot · Business
   Premium credits:  [██████░░░░░░░░░░░░░░] 31% left · 7,787 / 25,000 credits
   Quota resets: 2026-08-01
+
 GLM Coding Plan · Lite
   5h tokens:        [████████████░░░░░░░░] 59% left · resets 16:22
+
 GLM Coding Plan (China) · Pro
   5h tokens:        [████████████████░░░░] 82% left · resets 18:05
+
 DeepSeek
   Balance:          ¥27.00
   Topped up: ¥27.00
@@ -92,7 +98,9 @@ queries the domestic BigModel endpoint. If pi has no stored key, it falls back
 to `ZAI_CODING_CN_API_KEY` and then `ZHIPU_API_KEY`. The monitor endpoint uses
 the raw API key in its `Authorization` header (without `Bearer`); its quota
 response has the same shape and percentage/reset semantics as the global
-endpoint.
+endpoint. When both the global and China plans resolve to the same API key,
+`/usage` shows a single result for that account (preferring the active model's
+region, then whichever query succeeded).
 
 For DeepSeek, if pi has no stored key the extension falls back to the
 `DEEPSEEK_API_KEY` environment variable. There is no percentage quota to meter:
