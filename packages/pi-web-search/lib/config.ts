@@ -25,6 +25,7 @@ export const DEFAULT_OPENAI_MODEL = "gpt-5.6-luna";
 export const DEFAULT_OLLAMA_HOST = "http://localhost:11434";
 export const DEFAULT_EXA_API_URL = "https://api.exa.ai";
 export const DEFAULT_FIRECRAWL_API_URL = "https://api.firecrawl.dev/v2";
+export const DEFAULT_TAVILY_API_URL = "https://api.tavily.com";
 
 interface PiAuthEntry {
     type?: string;
@@ -80,6 +81,7 @@ export function readPiAuthData(): PiAuthData {
 export const AUTH_IDS = {
     exa: "websearch-exa",
     firecrawl: "websearch-firecrawl",
+    tavily: "websearch-tavily",
     ollama: "websearch-ollama",
 } as const;
 
@@ -91,7 +93,7 @@ function piAuthKey(id: AuthProviderId): string | undefined {
 
 /** Stored API key for a provider, read from pi's auth.json. */
 export function loadProviderKey(
-    name: "exa" | "firecrawl" | "ollama",
+    name: "exa" | "firecrawl" | "tavily" | "ollama",
 ): string | undefined {
     return piAuthKey(AUTH_IDS[name]);
 }
@@ -161,6 +163,17 @@ function isCodexJwt(token: string): boolean {
     return !!payload?.["https://api.openai.com/auth"];
 }
 
+/**
+ * Auth-entry expiry check. `expires` may be epoch ms (as pi writes today)
+ * or legacy epoch seconds; both must still be in the future. Missing or
+ * zero means no known expiry.
+ */
+function isFreshTimestamp(expires: number | undefined): boolean {
+    if (!expires) return true;
+    const ms = expires > 1e12 ? expires : expires * 1000;
+    return ms > Date.now();
+}
+
 export function resolveOpenAIConfig(
     ctx?: ExtensionContext,
     config = loadStoredConfig(),
@@ -175,85 +188,54 @@ export function resolveOpenAIConfig(
         config.openai?.model?.trim() ||
         DEFAULT_OPENAI_MODEL;
 
-    // 1. Env vars
-    if (process.env.OPENAI_API_KEY?.trim()) {
-        const apiKey = process.env.OPENAI_API_KEY.trim();
-        const isCodex = isCodexJwt(apiKey);
-        const baseUrl =
-            process.env.OPENAI_BASE_URL?.trim() ||
-            config.openai?.baseUrl?.trim() ||
-            (isCodex
-                ? "https://chatgpt.com/backend-api/codex/responses"
-                : "https://api.openai.com/v1/responses");
-        return {
-            apiKey,
-            baseUrl,
-            model,
-            systemPrompt,
-            source: "OPENAI_API_KEY env",
-            isCodexOAuth: isCodex,
-            accountId: extractAccountId(apiKey),
-        };
-    }
+    const customBaseUrl =
+        process.env.OPENAI_BASE_URL?.trim() ||
+        config.openai?.baseUrl?.trim() ||
+        undefined;
 
-    // 2. Config file
-    if (config.openai?.apiKey?.trim()) {
-        const apiKey = config.openai.apiKey.trim();
-        const isCodex = isCodexJwt(apiKey);
-        const baseUrl =
-            config.openai.baseUrl?.trim() ||
-            (isCodex
-                ? "https://chatgpt.com/backend-api/codex/responses"
-                : "https://api.openai.com/v1/responses");
-        return {
-            apiKey,
-            baseUrl,
-            model,
-            systemPrompt,
-            source: "config file",
-            isCodexOAuth: isCodex,
-            accountId: extractAccountId(apiKey),
-        };
-    }
-
-    // 3. Pi's auth.json or modelRegistry
-    const authData = readPiAuthData();
-    const codexEntry = authData["openai-codex"];
-    if (
-        codexEntry?.access &&
-        (!codexEntry.expires || codexEntry.expires * 1000 > Date.now())
-    ) {
-        const token = codexEntry.access;
-        return {
-            apiKey: token,
-            baseUrl:
-                config.openai?.baseUrl?.trim() ||
-                "https://chatgpt.com/backend-api/codex/responses",
-            model,
-            systemPrompt,
-            source: "~/.pi/agent/auth.json (openai-codex)",
-            isCodexOAuth: true,
-            accountId: extractAccountId(token),
-        };
-    }
-
-    const openaiEntry = authData["openai"];
-    if (openaiEntry?.key?.trim()) {
-        const apiKey = openaiEntry.key.trim();
+    const fromKey = (
+        apiKey: string,
+        source: string,
+    ): ResolvedOpenAIConfig => {
         const isCodex = isCodexJwt(apiKey);
         return {
             apiKey,
             baseUrl:
-                config.openai?.baseUrl?.trim() ||
+                customBaseUrl ??
                 (isCodex
                     ? "https://chatgpt.com/backend-api/codex/responses"
                     : "https://api.openai.com/v1/responses"),
             model,
             systemPrompt,
-            source: "~/.pi/agent/auth.json (openai)",
+            source,
             isCodexOAuth: isCodex,
             accountId: extractAccountId(apiKey),
         };
+    };
+
+    // 1. Pi's own logins take priority — reuse the session you already have.
+    const authData = readPiAuthData();
+    const codexEntry = authData["openai-codex"];
+    if (codexEntry?.access && isFreshTimestamp(codexEntry.expires)) {
+        return fromKey(codexEntry.access, "~/.pi/agent/auth.json (openai-codex)");
+    }
+
+    const openaiEntry = authData["openai"];
+    if (openaiEntry?.key?.trim()) {
+        return fromKey(openaiEntry.key.trim(), "~/.pi/agent/auth.json (openai)");
+    }
+
+    // 2. Env vars
+    if (process.env.OPENAI_API_KEY?.trim()) {
+        return fromKey(
+            process.env.OPENAI_API_KEY.trim(),
+            "OPENAI_API_KEY env",
+        );
+    }
+
+    // 3. Config file
+    if (config.openai?.apiKey?.trim()) {
+        return fromKey(config.openai.apiKey.trim(), "config file");
     }
 
     return null;
@@ -305,6 +287,29 @@ export function resolveFirecrawlConfig(
     };
 }
 
+export interface ResolvedTavilyConfig {
+    apiKey: string;
+    baseUrl: string;
+    source: string;
+}
+
+export function resolveTavilyConfig(
+    config = loadStoredConfig(),
+): ResolvedTavilyConfig | null {
+    const envKey = process.env.TAVILY_API_KEY?.trim();
+    const authKey = piAuthKey(AUTH_IDS.tavily);
+    const key = envKey || authKey;
+    if (!key) return null;
+    return {
+        apiKey: key,
+        baseUrl:
+            process.env.TAVILY_BASE_URL?.trim() ||
+            config.tavily?.baseUrl?.trim() ||
+            DEFAULT_TAVILY_API_URL,
+        source: envKey ? "TAVILY_API_KEY env" : "~/.pi/agent/auth.json",
+    };
+}
+
 export interface ResolvedOllamaConfig {
     baseUrl: string;
     apiKey?: string;
@@ -340,6 +345,7 @@ export function getProviderStatuses(ctx?: ExtensionContext): ProviderStatus[] {
     const openai = resolveOpenAIConfig(ctx, config);
     const exa = resolveExaConfig(config);
     const firecrawl = resolveFirecrawlConfig(config);
+    const tavily = resolveTavilyConfig(config);
     const ollama = resolveOllamaConfig(config);
 
     return [
@@ -357,6 +363,13 @@ export function getProviderStatuses(ctx?: ExtensionContext): ProviderStatus[] {
             configured: !!exa,
             source: exa?.source,
             baseUrl: exa?.baseUrl,
+        },
+        {
+            name: "tavily",
+            label: "Tavily",
+            configured: !!tavily,
+            source: tavily?.source,
+            baseUrl: tavily?.baseUrl,
         },
         {
             name: "firecrawl",
@@ -400,6 +413,7 @@ export function resolveFetchProvider(
 export const SEARCH_PROVIDER_ORDER: readonly SearchProviderName[] = [
     "openai",
     "exa",
+    "tavily",
     "firecrawl",
     "ollama",
 ];
@@ -408,6 +422,7 @@ export const SEARCH_PROVIDER_ORDER: readonly SearchProviderName[] = [
 export const FETCH_PROVIDER_ORDER: readonly FetchProviderName[] = [
     "firecrawl",
     "exa",
+    "tavily",
     "ollama",
     "direct",
 ];
@@ -419,6 +434,7 @@ export function availableSearchProviders(
     const list: SearchProviderName[] = [];
     if (resolveOpenAIConfig(undefined, config)) list.push("openai");
     if (resolveExaConfig(config)) list.push("exa");
+    if (resolveTavilyConfig(config)) list.push("tavily");
     if (resolveFirecrawlConfig(config)) list.push("firecrawl");
     list.push("ollama");
     return list;
@@ -431,6 +447,7 @@ export function availableFetchProviders(
     const list: FetchProviderName[] = [];
     if (resolveFirecrawlConfig(config)) list.push("firecrawl");
     if (resolveExaConfig(config)) list.push("exa");
+    if (resolveTavilyConfig(config)) list.push("tavily");
     if (config.ollama || process.env.OLLAMA_HOST?.trim()) list.push("ollama");
     list.push("direct");
     return list;
@@ -440,18 +457,30 @@ function dedupe<T>(items: readonly T[]): T[] {
     return [...new Set(items)];
 }
 
+/** Keep only known provider names from a configured order list. */
+function filterOrder<P extends string>(
+    order: readonly P[] | undefined,
+    valid: readonly P[],
+): P[] {
+    return Array.isArray(order) ? order.filter((p) => valid.includes(p)) : [];
+}
+
 /**
  * Ordered fallback chain for search: the requested/configured provider first,
- * then every other available provider in canonical order. A call walks this
- * list until one provider succeeds.
+ * then the configured `searchOrder` (if any), then every other available
+ * provider in canonical order. A call walks this list until one provider
+ * succeeds.
  */
 export function resolveSearchChain(
     requested?: SearchProviderName,
     config = loadStoredConfig(),
 ): SearchProviderName[] {
     const available = availableSearchProviders(config);
-    const preferred = requested ?? config.searchProvider ?? available[0];
-    return dedupe([preferred, ...available]);
+    const head = requested ?? config.searchProvider;
+    const order = filterOrder(config.searchOrder, SEARCH_PROVIDER_ORDER).filter(
+        (p) => available.includes(p),
+    );
+    return dedupe([...(head ? [head] : []), ...order, ...available]);
 }
 
 /** Ordered fallback chain for fetch (see resolveSearchChain). */
@@ -460,6 +489,9 @@ export function resolveFetchChain(
     config = loadStoredConfig(),
 ): FetchProviderName[] {
     const available = availableFetchProviders(config);
-    const preferred = requested ?? config.fetchProvider ?? available[0];
-    return dedupe([preferred, ...available]);
+    const head = requested ?? config.fetchProvider;
+    const order = filterOrder(config.fetchOrder, FETCH_PROVIDER_ORDER).filter(
+        (p) => available.includes(p),
+    );
+    return dedupe([...(head ? [head] : []), ...order, ...available]);
 }

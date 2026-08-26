@@ -1,5 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { hidePiAuthFile } from "./helpers.ts";
+import type {
+  FetchProviderName,
+  SearchProviderName,
+  WebSearchConfig,
+} from "../lib/types.ts";
 import {
   classifyProviderFailure,
   createWebSearchRuntime,
@@ -18,6 +24,7 @@ const ENV_KEYS = [
   "OPENAI_API_KEY",
   "EXA_API_KEY",
   "FIRECRAWL_API_KEY",
+  "TAVILY_API_KEY",
   "OLLAMA_HOST",
   "OPENAI_BASE_URL",
 ] as const;
@@ -113,10 +120,12 @@ test("classifyProviderFailure distinguishes session, cooldown, and normal failur
 
 test("provider chains put the requested provider first and dedupe", () => {
   const env = snapshotEnv();
+  const restoreFs = hidePiAuthFile();
   try {
     delete process.env.OPENAI_API_KEY;
     delete process.env.EXA_API_KEY;
     delete process.env.FIRECRAWL_API_KEY;
+    delete process.env.TAVILY_API_KEY;
     delete process.env.OLLAMA_HOST;
 
     // Firecrawl becomes "available" purely through its env key.
@@ -149,18 +158,125 @@ test("provider chains put the requested provider first and dedupe", () => {
 
     assert.equal(resolveSearchChain(undefined, cfg)[0], available[0]);
   } finally {
+    restoreFs();
+    restoreEnv(env);
+  }
+});
+
+test("tavily joins search and fetch chains when configured", () => {
+  const env = snapshotEnv();
+  const restoreFs = hidePiAuthFile();
+  try {
+    delete process.env.OPENAI_API_KEY;
+    delete process.env.EXA_API_KEY;
+    delete process.env.FIRECRAWL_API_KEY;
+    delete process.env.TAVILY_API_KEY;
+    delete process.env.OLLAMA_HOST;
+
+    process.env.TAVILY_API_KEY = "tvly-key";
+    const cfg = {};
+
+    // Fetch chains never include OpenAI, so they are fully deterministic.
+    assert.deepEqual(availableFetchProviders(cfg), ["tavily", "direct"]);
+    assert.deepEqual(resolveFetchChain("tavily", cfg), [
+      "tavily",
+      "direct",
+    ]);
+
+    // Search chains may include OpenAI from pi's auth.json; assert
+    // structural properties instead of exact lists.
+    const available = availableSearchProviders(cfg);
+    assert.ok(available.includes("tavily"));
+    assert.equal(
+      available.indexOf("tavily"),
+      available.includes("openai") ? 1 : 0,
+    );
+    assert.equal(available[available.length - 1], "ollama");
+
+    const chain = resolveSearchChain("tavily", cfg);
+    assert.equal(chain[0], "tavily");
+    assert.equal(chain[chain.length - 1], "ollama");
+    assert.equal(new Set(chain).size, chain.length);
+  } finally {
+    restoreFs();
+    restoreEnv(env);
+  }
+});
+
+test("searchOrder and fetchOrder configure the fallback sequence", () => {
+  const env = snapshotEnv();
+  const restoreFs = hidePiAuthFile();
+  try {
+    delete process.env.OPENAI_API_KEY;
+    delete process.env.EXA_API_KEY;
+    delete process.env.FIRECRAWL_API_KEY;
+    delete process.env.TAVILY_API_KEY;
+    delete process.env.OLLAMA_HOST;
+
+    process.env.EXA_API_KEY = "exa-key";
+    process.env.TAVILY_API_KEY = "tvly-key";
+    process.env.FIRECRAWL_API_KEY = "fc-key";
+    const cfg = {
+      searchOrder: ["firecrawl", "tavily"] as SearchProviderName[],
+      fetchOrder: ["direct", "tavily"] as FetchProviderName[],
+    };
+
+    // Unlisted credentialed providers still join the end in canonical order.
+    assert.deepEqual(
+      resolveSearchChain(undefined, cfg),
+      ["firecrawl", "tavily", "exa", "ollama"],
+    );
+    assert.deepEqual(
+      resolveFetchChain(undefined, cfg),
+      ["direct", "tavily", "firecrawl", "exa"],
+    );
+
+    // A requested provider still jumps the queue; the configured order
+    // follows, then the remaining available providers.
+    assert.deepEqual(
+      resolveFetchChain("ollama", cfg),
+      ["ollama", "direct", "tavily", "firecrawl", "exa"],
+    );
+  } finally {
+    restoreFs();
+    restoreEnv(env);
+  }
+});
+
+test("order entries without credentials or with unknown names are dropped", () => {
+  const env = snapshotEnv();
+  const restoreFs = hidePiAuthFile();
+  try {
+    delete process.env.OPENAI_API_KEY;
+    delete process.env.EXA_API_KEY;
+    delete process.env.FIRECRAWL_API_KEY;
+    delete process.env.TAVILY_API_KEY;
+    delete process.env.OLLAMA_HOST;
+
+    process.env.TAVILY_API_KEY = "tvly-key";
+    // Config files arrive as untyped JSON, so bogus names are possible.
+    const cfg = JSON.parse(
+      '{"searchOrder": ["firecrawl", "bogus"], "fetchOrder": ["exa", "bogus"]}',
+    ) as WebSearchConfig;
+
+    assert.deepEqual(resolveSearchChain(undefined, cfg), ["tavily", "ollama"]);
+    assert.deepEqual(resolveFetchChain(undefined, cfg), ["tavily", "direct"]);
+  } finally {
+    restoreFs();
     restoreEnv(env);
   }
 });
 
 test("search: quota-exhausted provider is skipped for the rest of the session", async () => {
   const originalFetch = globalThis.fetch;
+  const restoreFs = hidePiAuthFile();
   const env = snapshotEnv();
   const control: MockControl = { calls: [], firecrawlStatus: 402, exaStatus: 200 };
   try {
     delete process.env.OPENAI_API_KEY;
     process.env.EXA_API_KEY = "exa-key";
     process.env.FIRECRAWL_API_KEY = "fc-key";
+    delete process.env.TAVILY_API_KEY;
     delete process.env.OLLAMA_HOST;
     installFetchMock(control);
 
@@ -199,18 +315,21 @@ test("search: quota-exhausted provider is skipped for the rest of the session", 
     await runtime.dispose();
   } finally {
     globalThis.fetch = originalFetch;
+    restoreFs();
     restoreEnv(env);
   }
 });
 
 test("search: walks the whole chain and reports an aggregated error", async () => {
   const originalFetch = globalThis.fetch;
+  const restoreFs = hidePiAuthFile();
   const env = snapshotEnv();
   const control: MockControl = { calls: [], firecrawlStatus: 402, exaStatus: 402 };
   try {
     delete process.env.OPENAI_API_KEY;
     process.env.EXA_API_KEY = "exa-key";
     process.env.FIRECRAWL_API_KEY = "fc-key";
+    delete process.env.TAVILY_API_KEY;
     delete process.env.OLLAMA_HOST;
     installFetchMock(control);
 
@@ -237,18 +356,21 @@ test("search: walks the whole chain and reports an aggregated error", async () =
     await runtime.dispose();
   } finally {
     globalThis.fetch = originalFetch;
+    restoreFs();
     restoreEnv(env);
   }
 });
 
 test("fetch: falls back through firecrawl -> exa -> direct within one call", async () => {
   const originalFetch = globalThis.fetch;
+  const restoreFs = hidePiAuthFile();
   const env = snapshotEnv();
   const control: MockControl = { calls: [], firecrawlStatus: 402, exaStatus: 402 };
   try {
     delete process.env.OPENAI_API_KEY;
     process.env.EXA_API_KEY = "exa-key";
     process.env.FIRECRAWL_API_KEY = "fc-key";
+    delete process.env.TAVILY_API_KEY;
     delete process.env.OLLAMA_HOST;
 
     globalThis.fetch = (async (input: RequestInfo | URL) => {
@@ -282,6 +404,7 @@ test("fetch: falls back through firecrawl -> exa -> direct within one call", asy
     await runtime.dispose();
   } finally {
     globalThis.fetch = originalFetch;
+    restoreFs();
     restoreEnv(env);
   }
 });

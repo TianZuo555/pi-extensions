@@ -1,7 +1,8 @@
 /**
  * WebSearchRuntime — Effect v4 service for live web search and document fetching.
  *
- * Dispatches to OpenAI (Codex / Responses API), Exa AI, Firecrawl, or Ollama.
+ * Dispatches to OpenAI (Codex / Responses API), Exa AI, Tavily, Firecrawl, or
+ * Ollama.
  * Every call walks an ordered fallback chain: the requested/configured provider
  * is tried first, and on failure the next available provider takes over.
  * Quota-class failures (402/403, out of credits, usage limits) block the
@@ -27,6 +28,7 @@ import { fetchExa, searchExa } from "../lib/exa.ts";
 import { fetchFirecrawl, searchFirecrawl } from "../lib/firecrawl.ts";
 import { fetchOllama, searchOllama } from "../lib/ollama.ts";
 import { searchOpenAI } from "../lib/openai.ts";
+import { fetchTavily, searchTavily } from "../lib/tavily.ts";
 import type {
   FetchOptions,
   FetchProviderName,
@@ -280,6 +282,8 @@ const makeWebSearchRuntime = Effect.gen(function* () {
                 return await searchOpenAI(query, searchOpts, ctx);
               case "exa":
                 return await searchExa(query, searchOpts);
+              case "tavily":
+                return await searchTavily(query, searchOpts);
               case "firecrawl":
                 return await searchFirecrawl(query, searchOpts);
               case "ollama":
@@ -318,6 +322,8 @@ const makeWebSearchRuntime = Effect.gen(function* () {
                 return await fetchFirecrawl(url, fetchOpts);
               case "exa":
                 return await fetchExa(url, fetchOpts);
+              case "tavily":
+                return await fetchTavily(url, fetchOpts);
               case "ollama":
                 return await fetchOllama(url, fetchOpts);
               case "direct":

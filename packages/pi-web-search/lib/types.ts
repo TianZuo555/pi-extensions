@@ -40,8 +40,8 @@ export interface FetchResponse {
   fallbacks?: ProviderFallback[];
 }
 
-export type SearchProviderName = "openai" | "exa" | "firecrawl" | "ollama";
-export type FetchProviderName = "firecrawl" | "exa" | "ollama" | "direct";
+export type SearchProviderName = "openai" | "exa" | "tavily" | "firecrawl" | "ollama";
+export type FetchProviderName = "firecrawl" | "exa" | "tavily" | "ollama" | "direct";
 
 export interface ProviderStatus {
   name: string;
@@ -55,6 +55,12 @@ export interface ProviderStatus {
 export interface WebSearchConfig {
   searchProvider?: SearchProviderName;
   fetchProvider?: FetchProviderName;
+  /** Explicit search fallback priority; credentialed providers not listed
+   * here still join the end of the chain in canonical order. */
+  searchOrder?: SearchProviderName[];
+  /** Explicit fetch fallback priority; credentialed providers not listed
+   * here still join the end of the chain in canonical order. */
+  fetchOrder?: FetchProviderName[];
   openai?: {
     apiKey?: string;
     baseUrl?: string;
@@ -65,6 +71,9 @@ export interface WebSearchConfig {
     baseUrl?: string;
   };
   firecrawl?: {
+    baseUrl?: string;
+  };
+  tavily?: {
     baseUrl?: string;
   };
   ollama?: {

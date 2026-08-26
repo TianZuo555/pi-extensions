@@ -4,6 +4,7 @@ import { searchExa, fetchExa } from "../lib/exa.ts";
 import { searchFirecrawl, fetchFirecrawl } from "../lib/firecrawl.ts";
 import { searchOllama, fetchOllama } from "../lib/ollama.ts";
 import { searchOpenAI } from "../lib/openai.ts";
+import { searchTavily, fetchTavily } from "../lib/tavily.ts";
 
 test("searchOpenAI parses JSON Responses API output with citations", async () => {
   const originalFetch = globalThis.fetch;
@@ -171,6 +172,65 @@ test("searchFirecrawl and fetchFirecrawl handle Firecrawl API responses", async 
   } finally {
     globalThis.fetch = originalFetch;
     process.env.FIRECRAWL_API_KEY = originalKey;
+  }
+});
+
+test("searchTavily and fetchTavily handle Tavily API responses", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalKey = process.env.TAVILY_API_KEY;
+
+  try {
+    process.env.TAVILY_API_KEY = "tvly-key";
+
+    globalThis.fetch = async (input, init) => {
+      const urlStr = String(input);
+      if (urlStr.includes("/search")) {
+        const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+        assert.equal(body.include_answer, true);
+        return new Response(
+          JSON.stringify({
+            query: "test tavily",
+            answer: "Tavily synthesized answer",
+            results: [
+              {
+                title: "Tavily Doc",
+                url: "https://example.com/tavily-doc",
+                content: "Tavily search snippet",
+              },
+            ],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      if (urlStr.includes("/extract")) {
+        return new Response(
+          JSON.stringify({
+            results: [
+              {
+                url: "https://example.com/tavily-doc",
+                raw_content: "# Extracted Markdown\n\nBody content",
+              },
+            ],
+          }),
+          { status: 200, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      return new Response("Not found", { status: 404 });
+    };
+
+    const searchRes = await searchTavily("test tavily");
+    assert.equal(searchRes.provider, "tavily");
+    assert.equal(searchRes.results.length, 1);
+    assert.equal(searchRes.results[0].url, "https://example.com/tavily-doc");
+    assert.equal(searchRes.results[0].snippet, "Tavily search snippet");
+    assert.equal(searchRes.answer, "Tavily synthesized answer");
+
+    const fetchRes = await fetchTavily("https://example.com/tavily-doc");
+    assert.equal(fetchRes.provider, "tavily");
+    assert.match(fetchRes.text, /# Extracted Markdown/);
+  } finally {
+    globalThis.fetch = originalFetch;
+    process.env.TAVILY_API_KEY = originalKey;
   }
 });
 

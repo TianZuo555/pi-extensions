@@ -1,5 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
+  AUTH_IDS,
   loadProviderKey,
   loadStoredConfig,
   saveStoredConfig,
@@ -20,6 +21,15 @@ function maskKey(key: string | undefined): string {
   return key.length <= 8 ? "••••" : `${key.slice(0, 4)}…${key.slice(-4)}`;
 }
 
+/** Providers whose only credential is a single API key + its env var. */
+const KEY_PROVIDERS = {
+  exa: "EXA_API_KEY",
+  firecrawl: "FIRECRAWL_API_KEY",
+  tavily: "TAVILY_API_KEY",
+} as const;
+
+type KeyProvider = keyof typeof KEY_PROVIDERS;
+
 /**
  * Provider status line in pi's login-list style:
  *   exa       ✓ env: EXA_API_KEY
@@ -28,33 +38,35 @@ function maskKey(key: string | undefined): string {
  * Configured providers are rendered green.
  */
 function providerLine(
-  name: "exa" | "firecrawl" | "ollama",
+  name: KeyProvider | "ollama",
   config: WebSearchConfig,
 ): string {
   const label = name.padEnd(10);
+  if (name !== "ollama") {
+    const envName = KEY_PROVIDERS[name];
+    if (process.env[envName]?.trim()) {
+      return GREEN + `${label}✓ env: ${envName}` + RESET;
+    }
+    const stored = loadProviderKey(name);
+    return stored
+      ? GREEN + `${label}✓ auth: ${maskKey(stored)}` + RESET
+      : `${label}• unconfigured`;
+  }
   const envKey =
-    name === "exa" ? process.env.EXA_API_KEY?.trim()
-    : name === "firecrawl" ? process.env.FIRECRAWL_API_KEY?.trim()
-    : (process.env.OLLAMA_HOST?.trim() || process.env.OLLAMA_API_KEY?.trim());
+    process.env.OLLAMA_HOST?.trim() || process.env.OLLAMA_API_KEY?.trim();
   if (envKey) {
-    const envName =
-      name === "exa" ? "EXA_API_KEY"
-      : name === "firecrawl" ? "FIRECRAWL_API_KEY"
-      : process.env.OLLAMA_HOST?.trim() ? "OLLAMA_HOST" : "OLLAMA_API_KEY";
+    const envName = process.env.OLLAMA_HOST?.trim()
+      ? "OLLAMA_HOST"
+      : "OLLAMA_API_KEY";
     return GREEN + `${label}✓ env: ${envName}` + RESET;
   }
   const stored = loadProviderKey(name);
-  if (name === "ollama") {
-    if (!stored && !config.ollama?.baseUrl) {
-      return `${label}• unconfigured (default localhost:11434)`;
-    }
-    const url = config.ollama?.baseUrl ?? OLLAMA_DEFAULT_URL;
-    const key = stored ? ` · key: ${maskKey(stored)}` : "";
-    return GREEN + `${label}✓ auth: ${url}${key}` + RESET;
+  if (!stored && !config.ollama?.baseUrl) {
+    return `${label}• unconfigured (default localhost:11434)`;
   }
-  return stored
-    ? GREEN + `${label}✓ auth: ${maskKey(stored)}` + RESET
-    : `${label}• unconfigured`;
+  const url = config.ollama?.baseUrl ?? OLLAMA_DEFAULT_URL;
+  const key = stored ? ` · key: ${maskKey(stored)}` : "";
+  return GREEN + `${label}✓ auth: ${url}${key}` + RESET;
 }
 
 export default function webSearchExtension(pi: ExtensionAPI): void {
@@ -65,11 +77,11 @@ export default function webSearchExtension(pi: ExtensionAPI): void {
 
   pi.registerCommand("websearch-auth", {
     description:
-      "Configure web search providers: Exa / Firecrawl / Ollama API keys (stored in pi auth)",
+      "Configure web search providers: Exa / Firecrawl / Tavily / Ollama API keys (stored in pi auth)",
     handler: async (_args, ctx) => {
       if (!ctx.hasUI) {
         ctx.ui.notify(
-          "/websearch-auth needs an interactive session — set EXA_API_KEY / FIRECRAWL_API_KEY / OLLAMA_API_KEY instead",
+          "/websearch-auth needs an interactive session — set EXA_API_KEY / FIRECRAWL_API_KEY / TAVILY_API_KEY / OLLAMA_API_KEY instead",
           "warning",
         );
         return;
@@ -79,21 +91,22 @@ export default function webSearchExtension(pi: ExtensionAPI): void {
       const provider = await ctx.ui.select("Configure provider:", [
         providerLine("exa", config),
         providerLine("firecrawl", config),
+        providerLine("tavily", config),
         providerLine("ollama", config),
       ]);
       if (!provider) return;
       // Lines may start with a green ANSI code; match on the provider name.
-      const name = (["exa", "firecrawl", "ollama"] as const).find((n) =>
-        provider.includes(n),
+      const name = (["exa", "firecrawl", "tavily", "ollama"] as const).find(
+        (n) => provider.includes(n),
       )!;
 
-      if (name === "exa" || name === "firecrawl") {
+      if (name !== "ollama") {
         const key = await ctx.ui.input(
           `${name} API key (empty = remove, esc = cancel):`,
           maskKey(loadProviderKey(name)),
         );
         if (key === undefined) return; // cancelled
-        writePiAuthKey(name === "exa" ? "websearch-exa" : "websearch-firecrawl", key.trim() || undefined);
+        writePiAuthKey(AUTH_IDS[name], key.trim() || undefined);
       } else {
         const urlInput = (
           await ctx.ui.input(
