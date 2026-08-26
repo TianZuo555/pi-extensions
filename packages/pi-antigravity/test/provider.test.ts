@@ -176,15 +176,60 @@ function makeStreamHarness() {
     cost: { input: 0.3, output: 2.5, cacheRead: 0.075, cacheWrite: 0.3 },
   } as any;
 
+  const createStream = () => {
+    const ctx = contextWith([{ role: "user", content: [{ type: "text", text: "hello" }] }]);
+    return streamFn(model, ctx);
+  };
   /** Start a turn; resolves with all events once the stream ends. */
   const collect = async (): Promise<any[]> => {
-    const ctx = contextWith([{ role: "user", content: [{ type: "text", text: "hello" }] }]);
     const events: any[] = [];
-    for await (const event of streamFn(model, ctx)) events.push(event);
+    for await (const event of createStream()) events.push(event);
     return events;
   };
-  return { controller, collect, replay };
+  return { controller, collect, createStream, replay };
 }
+
+test("streamAntigravity renders a pending bash card on run_command ACTIVE", async () => {
+  const { controller, createStream, replay } = makeStreamHarness();
+  const iterator = createStream()[Symbol.asyncIterator]();
+  assert.equal((await iterator.next()).value.type, "start");
+
+  controller.push({
+    type: "tool_start",
+    stepId: 7,
+    name: "run_command",
+    args: { CommandLine: "sleep 8" },
+  });
+  const started = (await iterator.next()).value;
+  assert.equal(started.type, "toolcall_start");
+  const pending = started.partial.content[started.contentIndex];
+  assert.equal(pending.name, "antigravity");
+  assert.deepEqual(pending.arguments, {
+    tool: "run_command",
+    input: { CommandLine: "sleep 8" },
+  });
+  assert.equal(replay.size, 0, "result is not replayable before agy finishes");
+
+  controller.push({
+    type: "tool_done",
+    stepId: 7,
+    name: "run_command",
+    args: { CommandLine: "sleep 8" },
+    output: "done",
+    durationSeconds: 8,
+  });
+  const terminalEvents: any[] = [];
+  while (true) {
+    const next = await iterator.next();
+    if (next.done) break;
+    terminalEvents.push(next.value);
+  }
+  const ended = terminalEvents.find((event) => event.type === "toolcall_end");
+  const done = terminalEvents.find((event) => event.type === "done");
+  assert.equal(ended.toolCall.id, pending.id);
+  assert.equal(done.reason, "toolUse");
+  assert.equal(replay.take(pending.id)?.output, "done");
+});
 
 test("streamAntigravity chooses native execution only after a successful agy tool result", async () => {
   const { controller, collect, replay } = makeStreamHarness();

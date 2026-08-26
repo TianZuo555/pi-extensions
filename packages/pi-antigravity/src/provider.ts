@@ -5,11 +5,12 @@
  * agy streams response text (reasoning included — agy writes it inline as
  * markdown) as text_delta continuation chunks on agent_response steps; these
  * stream live into pi's text channel. agy tool steps render as native pi
- * tool cards: when a tool step completes, the provider records the result in
- * the replay store and ends the assistant message with stopReason
- * "toolUse", so pi renders the card, executes the display-only `agy`
- * wrapper tool, and re-invokes this adapter — which re-attaches to the
- * still-running agy turn via the runtime's turn controller.
+ * tool cards: display-only steps emit a pending card on ACTIVE, then the
+ * provider records their result on completion and ends the assistant message
+ * with stopReason "toolUse". pi executes the replay-only `agy` wrapper and
+ * re-invokes this adapter, which re-attaches to the still-running agy turn via
+ * the runtime's turn controller. Native read-only steps still wait for DONE
+ * so failed reads are never re-executed as successful pi tools.
  */
 
 import {
@@ -24,7 +25,7 @@ import {
 } from "@earendil-works/pi-ai";
 import type { AgyEffort } from "../lib/agy-client.ts";
 import { type AgyPiBridge, resolveBridgeResultsFromContext } from "../lib/bridge.ts";
-import type { AgyUsage } from "../lib/reducer.ts";
+import type { AgyActivity, AgyUsage } from "../lib/reducer.ts";
 import { AgyReplayStore } from "../lib/replay.ts";
 import { mapAgyToolToNative } from "../lib/native-tools.ts";
 import { restoredPiContextPrompt, WRAPPER_TOOL_NAME } from "../lib/prompt.ts";
@@ -174,6 +175,10 @@ export function mapThinkingToEffort(level: ThinkingLevel | undefined): AgyEffort
 
 let replayCallSeq = 0;
 
+function agyToolStepKey(activity: { stepId?: number; name: string }): string {
+  return activity.stepId === undefined ? `name:${activity.name}` : `step:${activity.stepId}`;
+}
+
 /**
  * True for agy `call_mcp_tool` steps that target our own bridge server.
  * Those calls surface as synthetic bridge_call activities (emitted as the
@@ -205,6 +210,9 @@ export function streamAntigravity(
   /** Whether a pi tool name is currently active — native re-execution
    * toolCalls are only emitted for active tools (else the wrapper). */
   isActiveTool: (name: string) => boolean = () => true,
+  /** Live activity side channel for task/artifact UI that must not wait for
+   * the provider message to settle. */
+  onActivity?: (activity: AgyActivity) => void,
 ) {
   return (
     model: Model<string>,
@@ -269,6 +277,17 @@ export function streamAntigravity(
         let usage: AgyUsage | undefined;
         let textIndex: number | null = null;
         let textBuffer = "";
+        type PendingReplayTool = {
+          id: string;
+          index: number;
+          toolCall: {
+            type: "toolCall";
+            id: string;
+            name: string;
+            arguments: { tool: string; input: Record<string, unknown> };
+          };
+        };
+        const pendingReplayTools = new Map<string, PendingReplayTool>();
 
         const closeText = () => {
           if (textIndex === null) return;
@@ -296,12 +315,71 @@ export function streamAntigravity(
           stream.end();
         };
 
+        /**
+         * Start display-only tools as soon as agy reports ACTIVE. This makes
+         * `run_command` render as a pending bash card before a `sleep`, test,
+         * or server command finishes. Native read-only calls still wait for
+         * DONE because a failed agy read must replay its error, not re-run.
+         */
+        const emitStartedReplayTool = (
+          activity: Extract<AgyActivity, { type: "tool_start" }>,
+        ): void => {
+          const key = agyToolStepKey(activity);
+          if (pendingReplayTools.has(key)) return;
+          const native = mapAgyToolToNative(activity.name, activity.args);
+          if (native && isActiveTool(native.tool)) return;
+          const id = `agy-replay-${++replayCallSeq}`;
+          const toolCall = {
+            type: "toolCall" as const,
+            id,
+            name: WRAPPER_TOOL_NAME,
+            arguments: { tool: activity.name, input: activity.args },
+          };
+          output.content.push(toolCall);
+          const index = output.content.length - 1;
+          pendingReplayTools.set(key, { id, index, toolCall });
+          stream.push({ type: "toolcall_start", contentIndex: index, partial: output });
+        };
+
+        const recordReplayResult = (
+          id: string,
+          activity:
+            | Extract<AgyActivity, { type: "tool_done" }>
+            | Extract<AgyActivity, { type: "tool_error" }>,
+        ) => {
+          replay.record(
+            id,
+            activity.type === "tool_error"
+              ? { agyTool: activity.name, error: activity.message }
+              : {
+                  agyTool: activity.name,
+                  output: activity.output,
+                  durationSeconds: activity.durationSeconds,
+                },
+          );
+        };
+
         const emitFinishedTool = (
           activity:
             | Extract<Awaited<ReturnType<typeof controller.next>>, { type: "tool_done" }>
             | Extract<Awaited<ReturnType<typeof controller.next>>, { type: "tool_error" }>,
         ) => {
           closeText();
+          const key = agyToolStepKey(activity);
+          const pending = pendingReplayTools.get(key);
+          if (pending) {
+            pending.toolCall.arguments = { tool: activity.name, input: activity.args };
+            recordReplayResult(pending.id, activity);
+            stream.push({
+              type: "toolcall_end",
+              contentIndex: pending.index,
+              toolCall: pending.toolCall,
+              partial: output,
+            });
+            pendingReplayTools.delete(key);
+            return;
+          }
+
           // The tool name cannot change after toolcall_start. Wait for the
           // terminal event before choosing native execution so agy failures
           // always replay their real error instead of being re-executed.
@@ -319,18 +397,7 @@ export function streamAntigravity(
               ? effective.args
               : { tool: activity.name, input: activity.args },
           };
-          if (!effective) {
-            replay.record(
-              id,
-              activity.type === "tool_error"
-                ? { agyTool: activity.name, error: activity.message }
-                : {
-                    agyTool: activity.name,
-                    output: activity.output,
-                    durationSeconds: activity.durationSeconds,
-                  },
-            );
-          }
+          if (!effective) recordReplayResult(id, activity);
           output.content.push(toolCall);
           const index = output.content.length - 1;
           stream.push({ type: "toolcall_start", contentIndex: index, partial: output });
@@ -347,28 +414,57 @@ export function streamAntigravity(
             .takeIncompleteTools()
             .filter((activity) => !isBridgedMcpStep(activity, bridge.serverName));
           for (const activity of incomplete) {
-            const id = `agy-replay-${++replayCallSeq}`;
+            const key = agyToolStepKey(activity);
+            const pending = pendingReplayTools.get(key);
+            const id = pending?.id ?? `agy-replay-${++replayCallSeq}`;
             replay.record(id, {
               agyTool: activity.name,
               error: agyIncompleteToolError(activity.name, resultError),
             });
-            const toolCall = {
+            const toolCall = pending?.toolCall ?? {
               type: "toolCall" as const,
               id,
               name: WRAPPER_TOOL_NAME,
               arguments: { tool: activity.name, input: activity.args },
             };
-            output.content.push(toolCall);
-            const index = output.content.length - 1;
-            stream.push({ type: "toolcall_start", contentIndex: index, partial: output });
+            toolCall.arguments = { tool: activity.name, input: activity.args };
+            const index = pending?.index ?? output.content.length;
+            if (!pending) {
+              output.content.push(toolCall);
+              stream.push({ type: "toolcall_start", contentIndex: index, partial: output });
+            }
             stream.push({
               type: "toolcall_end",
               contentIndex: index,
               toolCall,
               partial: output,
             });
+            pendingReplayTools.delete(key);
           }
           return incomplete.length;
+        };
+
+        /**
+         * A bridged pi tool must execute immediately or agy blocks waiting for
+         * its result. If another agy command is still ACTIVE, close its live
+         * card as "running" before yielding to pi; its eventual terminal event
+         * will render a separate completion card after re-attachment.
+         */
+        const closePendingForBridge = () => {
+          for (const [key, pending] of pendingReplayTools) {
+            const tool = pending.toolCall.arguments.tool;
+            replay.record(pending.id, {
+              agyTool: tool,
+              output: "Started and still running. Track live status and output with /agy-tasks.",
+            });
+            stream.push({
+              type: "toolcall_end",
+              contentIndex: pending.index,
+              toolCall: pending.toolCall,
+              partial: output,
+            });
+            pendingReplayTools.delete(key);
+          }
         };
 
         while (true) {
@@ -381,6 +477,11 @@ export function streamAntigravity(
             throw new Error("agy turn ended without a result event.");
           }
 
+          try {
+            onActivity?.(activity);
+          } catch {
+            // UI side channels are best-effort and must never fail the turn.
+          }
           switch (activity.type) {
             case "usage": {
               usage = activity.usage;
@@ -389,25 +490,33 @@ export function streamAntigravity(
             case "tool_start": {
               if (isBridgedMcpStep(activity, bridge.serverName)) break;
               closeText();
+              emitStartedReplayTool(activity);
               break;
             }
             case "tool_done": {
               if (isBridgedMcpStep(activity, bridge.serverName)) break;
               emitFinishedTool(activity);
-              endWithToolUse();
-              return;
+              if (pendingReplayTools.size === 0) {
+                endWithToolUse();
+                return;
+              }
+              break;
             }
             case "tool_error": {
               if (isBridgedMcpStep(activity, bridge.serverName)) break;
               emitFinishedTool(activity);
-              endWithToolUse();
-              return;
+              if (pendingReplayTools.size === 0) {
+                endWithToolUse();
+                return;
+              }
+              break;
             }
             case "bridge_call": {
               // agy invoked a pi tool through the bridge: end this message
               // with a toolUse for the REAL pi tool so pi executes it with
               // full ownership (hooks, permissions, rendering, abort).
               closeText();
+              closePendingForBridge();
               const toolCall = {
                 type: "toolCall" as const,
                 id: activity.id,
