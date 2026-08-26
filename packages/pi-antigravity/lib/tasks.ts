@@ -9,8 +9,8 @@
  *
  * - Listing: one log file per task; the first meaningful line usually shows
  *   the command.
- * - Liveness: a running task holds its log file open, so `lsof -t <log>`
- *   yields the live pid(s). No pids means the task already exited.
+ * - Liveness: a running task holds its log file open, so one batched `lsof`
+ *   scan maps logs to live pid(s). No pids means the task already exited.
  * - Stopping: SIGTERM the process, preferring the whole process group so
  *   wrappers like `npm start` take their children down too.
  */
@@ -40,10 +40,6 @@ export interface AgyTask {
 
 export function agyBrainDir(): string {
   return path.join(os.homedir(), ".gemini", "antigravity-cli", "brain");
-}
-
-function tasksDir(conversationId: string): string {
-  return path.join(agyBrainDir(), conversationId, ".system_generated", "tasks");
 }
 
 /** Extract unique positive pids from `lsof -t` output. */
@@ -81,23 +77,90 @@ export function parseEtimeMs(etime: string): number {
 
 function execText(command: string, args: string[]): Promise<string> {
   return new Promise((resolve) => {
-    execFile(command, args, { timeout: 5_000 }, (error, stdout) => {
-      resolve(error ? "" : String(stdout));
+    execFile(command, args, { timeout: 5_000 }, (_error, stdout) => {
+      // `lsof` exits 1 when it found no files. Preserve any stdout it did
+      // produce instead of coupling parsing to the command's exit status.
+      resolve(String(stdout ?? ""));
     });
   });
 }
 
+/** Numeric newest-first ordering (`task-12.log` before `task-9.log`). */
+export function compareAgyTaskLogNames(left: string, right: string): number {
+  const leftMatch = left.match(/^task-(\d+)\.log$/);
+  const rightMatch = right.match(/^task-(\d+)\.log$/);
+  if (leftMatch && rightMatch) {
+    return Number.parseInt(rightMatch[1], 10) - Number.parseInt(leftMatch[1], 10);
+  }
+  return right.localeCompare(left, undefined, { numeric: true });
+}
+
 /**
- * Find a task's orphaned processes: re-parented (ppid 1), sitting in the
- * session cwd, and started within a small window of the log's creation.
+ * Parse one batched `lsof -Fpn` result into task-log → holder pids. Matching
+ * by basename is safe because every input log is a direct child of one task
+ * directory, and avoids macOS `/var` → `/private/var` canonicalization drift.
+ */
+export function parseTaskLogHolders(
+  output: string,
+  ownPid = process.pid,
+): Map<string, number[]> {
+  const holders = new Map<string, Set<number>>();
+  let pid: number | undefined;
+  for (const line of output.split("\n")) {
+    if (line.startsWith("p")) {
+      const parsed = Number.parseInt(line.slice(1), 10);
+      pid = Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+      continue;
+    }
+    if (!line.startsWith("n") || pid === undefined || pid === ownPid) continue;
+    const name = path.basename(line.slice(1));
+    const values = holders.get(name) ?? new Set<number>();
+    values.add(pid);
+    holders.set(name, values);
+  }
+  return new Map([...holders].map(([name, pids]) => [name, [...pids]]));
+}
+
+/** Inspect every log in one process, before this process opens any log. */
+async function taskLogHolders(logPaths: string[]): Promise<Map<string, number[]>> {
+  if (logPaths.length === 0) return new Map();
+  const output = await execText("lsof", ["-nP", "-Fpn", "--", ...logPaths]);
+  return parseTaskLogHolders(output);
+}
+
+interface TaskBirth {
+  name: string;
+  birthMs: number;
+}
+
+/** Parse pid → cwd from `lsof -Fpn -d cwd`. */
+function parseProcessCwds(output: string): Map<number, string> {
+  const cwds = new Map<number, string>();
+  let pid: number | undefined;
+  for (const line of output.split("\n")) {
+    if (line.startsWith("p")) {
+      const parsed = Number.parseInt(line.slice(1), 10);
+      pid = Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+    } else if (line.startsWith("n") && pid !== undefined) {
+      cwds.set(pid, line.slice(1));
+    }
+  }
+  return cwds;
+}
+
+/**
+ * Find orphan candidates once per scan, then assign each process to the
+ * nearest task birth time. The old per-log implementation ran a full `ps`
+ * and one or more `lsof` processes for every historical task.
  */
 async function scanOrphans(
   sessionCwd: string,
-  birthMs: number,
-): Promise<number[]> {
+  tasks: TaskBirth[],
+): Promise<Map<string, number[]>> {
+  if (tasks.length === 0) return new Map();
   const psOut = await execText("ps", ["-axo", "pid=,ppid=,etime="]);
   const now = Date.now();
-  const candidates: number[] = [];
+  const candidates: Array<{ pid: number; startMs: number }> = [];
   for (const line of psOut.split("\n")) {
     const match = line.trim().match(/^(\d+)\s+(\d+)\s+(\S+)$/);
     if (!match) continue;
@@ -105,25 +168,41 @@ async function scanOrphans(
     const ppid = Number.parseInt(match[2], 10);
     if (ppid !== 1 || pid === process.pid) continue;
     const startMs = now - parseEtimeMs(match[3]);
-    if (!Number.isFinite(startMs) || Math.abs(startMs - birthMs) > 15_000) continue;
-    candidates.push(pid);
-  }
-  const orphans: number[] = [];
-  for (const pid of candidates) {
-    const lsofOut = await execText("lsof", ["-a", "-p", String(pid), "-d", "cwd", "-Fn"]);
-    if (lsofOut.split("\n").some((entry) => entry.startsWith("n") && entry.slice(1) === sessionCwd)) {
-      orphans.push(pid);
+    if (
+      !Number.isFinite(startMs) ||
+      !tasks.some((task) => Math.abs(startMs - task.birthMs) <= 15_000)
+    ) {
+      continue;
     }
+    candidates.push({ pid, startMs });
+  }
+  if (candidates.length === 0) return new Map();
+
+  const cwdOutput = await execText("lsof", [
+    "-a",
+    "-nP",
+    "-d",
+    "cwd",
+    "-p",
+    candidates.map(({ pid }) => pid).join(","),
+    "-Fpn",
+  ]);
+  const processCwds = parseProcessCwds(cwdOutput);
+  const canonicalCwd = await fs.realpath(sessionCwd).catch(() => path.resolve(sessionCwd));
+  const orphans = new Map<string, number[]>();
+  for (const candidate of candidates) {
+    const candidateCwd = processCwds.get(candidate.pid);
+    if (candidateCwd !== canonicalCwd && candidateCwd !== path.resolve(sessionCwd)) continue;
+    const nearest = tasks.reduce((best, task) =>
+      Math.abs(candidate.startMs - task.birthMs) < Math.abs(candidate.startMs - best.birthMs)
+        ? task
+        : best,
+    );
+    const values = orphans.get(nearest.name) ?? [];
+    values.push(candidate.pid);
+    orphans.set(nearest.name, values);
   }
   return orphans;
-}
-
-async function lsofPids(logPath: string): Promise<number[]> {
-  return new Promise((resolve) => {
-    execFile("lsof", ["-t", "--", logPath], { timeout: 5_000 }, (error, stdout) => {
-      resolve(error ? [] : parseLsofPids(String(stdout)));
-    });
-  });
 }
 
 /** List every background task recorded for an agy conversation. */
@@ -138,30 +217,43 @@ export async function listAgyTasks(
   } catch {
     return [];
   }
-  const logs = entries.filter((name) => /^task-.+\.log$/.test(name)).sort();
-  return Promise.all(
-    logs.map(async (name): Promise<AgyTask> => {
+  const logs = entries
+    .filter((name) => /^task-.+\.log$/.test(name))
+    .sort(compareAgyTaskLogNames);
+  const metadata = await Promise.all(
+    logs.map(async (name) => {
       const logPath = path.join(dir, name);
-      const [stat, content, pids] = await Promise.all([
-        fs.stat(logPath),
-        fs.readFile(logPath, "utf8").catch(() => ""),
-        lsofPids(logPath),
-      ]);
-      const birthMs = stat.birthtimeMs || stat.mtimeMs;
-      const orphans =
-        pids.length === 0 && options.sessionCwd
-          ? await scanOrphans(options.sessionCwd, birthMs)
-          : [];
+      const stat = await fs.stat(logPath);
       return {
-        id: name.replace(/\.log$/, ""),
+        name,
         logPath,
-        pids,
-        orphans,
-        description: describeTaskLog(content),
-        bytes: stat.size,
+        stat,
+        birthMs: stat.birthtimeMs || stat.mtimeMs,
       };
     }),
   );
+
+  // Liveness must be sampled before readFile opens the logs. Running both in
+  // one Promise.all made lsof randomly identify pi itself as every task's pid.
+  const holders = await taskLogHolders(metadata.map(({ logPath }) => logPath));
+  const orphanTasks = metadata
+    .filter(({ name }) => (holders.get(name)?.length ?? 0) === 0)
+    .map(({ name, birthMs }) => ({ name, birthMs }));
+  const [contents, orphans] = await Promise.all([
+    Promise.all(metadata.map(({ logPath }) => fs.readFile(logPath, "utf8").catch(() => ""))),
+    options.sessionCwd
+      ? scanOrphans(options.sessionCwd, orphanTasks)
+      : Promise.resolve(new Map<string, number[]>()),
+  ]);
+
+  return metadata.map(({ name, logPath, stat }, index): AgyTask => ({
+    id: name.replace(/\.log$/, ""),
+    logPath,
+    pids: holders.get(name) ?? [],
+    orphans: orphans.get(name) ?? [],
+    description: describeTaskLog(contents[index]),
+    bytes: stat.size,
+  }));
 }
 
 /** Resolve a task reference ("3", "task-3") against listed tasks. */
@@ -202,8 +294,11 @@ function ownPgid(): Promise<number | undefined> {
 export function agyTaskStopPids(
   task: Pick<AgyTask, "pids" | "orphans">,
   includeOrphans = true,
+  ownPid = process.pid,
 ): number[] {
-  return [...new Set([...task.pids, ...(includeOrphans ? task.orphans : [])])];
+  return [...new Set([...task.pids, ...(includeOrphans ? task.orphans : [])])].filter(
+    (pid) => pid !== ownPid,
+  );
 }
 
 export async function stopAgyTask(

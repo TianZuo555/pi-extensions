@@ -142,6 +142,8 @@ interface AgyTaskDetailView {
 
 /** Detail body lines above the log viewport: status, log path, separator. */
 const DETAIL_META_LINES = 3;
+/** Live task/process changes should appear without requiring the user to press r. */
+const LIVE_REFRESH_MS = 1_000;
 
 export class AgyTasksDashboard implements Component {
   private tui: TUI;
@@ -153,7 +155,9 @@ export class AgyTasksDashboard implements Component {
 
   private closed = false;
   private busy = false;
+  private liveRefreshInFlight = false;
   private detail: AgyTaskDetailView | null = null;
+  private liveRefreshTimer: ReturnType<typeof setInterval>;
 
   constructor(
     tui: TUI,
@@ -169,16 +173,24 @@ export class AgyTasksDashboard implements Component {
     this.model = model;
     this.selection = selection;
     this.done = done;
+    this.liveRefreshTimer = setInterval(() => void this.refreshLiveData(), LIVE_REFRESH_MS);
+    this.liveRefreshTimer.unref?.();
+  }
+
+  private stopLiveRefresh() {
+    clearInterval(this.liveRefreshTimer);
   }
 
   private close() {
     if (this.closed) return;
     this.closed = true;
+    this.stopLiveRefresh();
     this.done(null);
   }
 
   dispose(): void {
     this.closed = true;
+    this.stopLiveRefresh();
   }
 
   invalidate(): void {
@@ -286,6 +298,37 @@ export class AgyTasksDashboard implements Component {
     }
   }
 
+  /**
+   * Quiet background refresh for both the task list and an open log. If the
+   * user was following the tail, keep following it as new output arrives.
+   */
+  private async refreshLiveData(): Promise<void> {
+    if (this.closed || this.busy || this.liveRefreshInFlight) return;
+    this.liveRefreshInFlight = true;
+    try {
+      const detail = this.detail;
+      const oldMaxScroll = detail
+        ? Math.max(0, detail.lines.length - this.detailViewportHeight())
+        : 0;
+      const wasAtEnd = detail ? detail.scroll >= oldMaxScroll : false;
+      await this.model.refresh();
+      if (detail) {
+        const task = this.model.getTasks().find((entry) => entry.id === detail.taskId);
+        if (task) {
+          detail.lines = agyTaskLogLines(await this.model.readLog(task));
+          if (wasAtEnd) detail.scroll = Number.MAX_SAFE_INTEGER;
+        } else {
+          this.detail = null;
+        }
+      }
+    } catch {
+      // A transient filesystem/process scan failure keeps the last snapshot.
+    } finally {
+      this.liveRefreshInFlight = false;
+      if (!this.closed) this.tui.requestRender();
+    }
+  }
+
   private async openDetail(task: AgyTask): Promise<void> {
     this.busy = true;
     this.tui.requestRender();
@@ -300,7 +343,7 @@ export class AgyTasksDashboard implements Component {
 
   private async reloadDetail(): Promise<void> {
     const detail = this.detail;
-    if (!detail) return;
+    if (!detail || this.liveRefreshInFlight) return;
     this.busy = true;
     try {
       await this.model.refresh();
@@ -314,6 +357,7 @@ export class AgyTasksDashboard implements Component {
   }
 
   private async rescan(): Promise<void> {
+    if (this.liveRefreshInFlight) return;
     this.busy = true;
     try {
       await this.model.refresh();

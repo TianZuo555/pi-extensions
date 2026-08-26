@@ -44,6 +44,7 @@ import {
   pricingForModel,
   type AgyModelInfo,
 } from "./lib/models.ts";
+import type { AgyActivity } from "./lib/reducer.ts";
 import { AgyReplayStore, type RecordedAgyTool } from "./lib/replay.ts";
 import { findAgyTask, listAgyTasks, stopAgyTask, type AgyTask } from "./lib/tasks.ts";
 import { findAgyArtifact, listAgyArtifacts } from "./lib/artifacts.ts";
@@ -283,6 +284,10 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
   let widgetLiveCount = -1;
   let widgetArtifactCount = -1;
   let widgetScanInFlight = false;
+  let widgetScanQueued = false;
+  let agyAgentActive = false;
+  let widgetPollTimer: ReturnType<typeof setInterval> | undefined;
+  const WIDGET_POLL_MS = 2_000;
 
   /** Active-tool snapshot for the provider's native re-execution fallback. */
   const isActiveTool = (name: string): boolean => {
@@ -343,9 +348,24 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
     }
   }
 
-  /** Rescan the conversation's task logs and refresh the status-bar hint. */
+  function reconcileWidgetPolling(): void {
+    const shouldPoll = Boolean(tasksUi && (agyAgentActive || widgetLiveCount > 0));
+    if (shouldPoll && !widgetPollTimer) {
+      widgetPollTimer = setInterval(updateAgyTasksWidget, WIDGET_POLL_MS);
+      widgetPollTimer.unref?.();
+    } else if (!shouldPoll && widgetPollTimer) {
+      clearInterval(widgetPollTimer);
+      widgetPollTimer = undefined;
+    }
+  }
+
+  /** Rescan task state independently from agy's provider stream. */
   function updateAgyTasksWidget(): void {
-    if (!tasksUi || widgetScanInFlight) return;
+    if (!tasksUi) return;
+    if (widgetScanInFlight) {
+      widgetScanQueued = true;
+      return;
+    }
     widgetScanInFlight = true;
     void (async () => {
       try {
@@ -369,8 +389,32 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
         // Runtime closed or scan failed; leave the widget as-is.
       } finally {
         widgetScanInFlight = false;
+        if (widgetScanQueued) {
+          widgetScanQueued = false;
+          queueMicrotask(updateAgyTasksWidget);
+        } else {
+          reconcileWidgetPolling();
+        }
       }
     })();
+  }
+
+  function handleAgyActivity(activity: AgyActivity): void {
+    if (
+      (activity.type === "tool_start" ||
+        activity.type === "tool_done" ||
+        activity.type === "tool_error") &&
+      (activity.name === "run_command" || activity.name === "schedule")
+    ) {
+      // ACTIVE arrives before a sleeping command completes. Start the
+      // independent filesystem scan now instead of waiting for onSettled,
+      // then retry once in case the task log and holder fd are still racing.
+      updateAgyTasksWidget();
+      if (activity.type === "tool_start") {
+        const retry = setTimeout(updateAgyTasksWidget, 500);
+        retry.unref?.();
+      }
+    }
   }
 
   pi.registerTool({
@@ -442,6 +486,7 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
         updateAgyTasksWidget,
         getBootstrapSuffix,
         isActiveTool,
+        handleAgyActivity,
       ),
     });
   };
@@ -466,6 +511,23 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
   pi.on("before_agent_start", (event) => {
     captureSkills(event.systemPromptOptions?.skills);
     refreshSkillTools();
+  });
+
+  // The agy stream reports tool starts immediately, but its DONE event can be
+  // delayed by a sleeping command. Poll the independent filesystem task
+  // source while the agent or any discovered task is live, then stop when
+  // both are idle. This keeps the widget current without a permanent timer.
+  pi.on("agent_start", (_event, ctx) => {
+    if (ctx.model?.provider !== "antigravity") return;
+    agyAgentActive = true;
+    updateAgyTasksWidget();
+    reconcileWidgetPolling();
+  });
+
+  pi.on("agent_settled", (_event, ctx) => {
+    if (ctx.model?.provider !== "antigravity" && !agyAgentActive) return;
+    agyAgentActive = false;
+    updateAgyTasksWidget();
   });
 
   // The display-only `antigravity` wrapper tool only matters while an agy
@@ -526,6 +588,10 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("session_shutdown", async () => {
+    agyAgentActive = false;
+    if (widgetPollTimer) clearInterval(widgetPollTimer);
+    widgetPollTimer = undefined;
+    widgetScanQueued = false;
     // Stop any live agy background tasks so closing pi leaves nothing
     // running silently. Only processes holding the task log open are certain
     // enough to stop automatically; heuristic orphan matches stay visible in
@@ -568,6 +634,7 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
     tasksUi = undefined;
     widgetLiveCount = -1;
     widgetArtifactCount = -1;
+    widgetScanInFlight = false;
     try {
       await runtime.dispose();
     } catch {

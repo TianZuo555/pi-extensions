@@ -95,13 +95,13 @@ Your pi skills work inside agy turns:
 
 ### Background tasks (`/agy-tasks`)
 
-Long-running commands (dev servers, watchers) become agy background tasks. After each turn a hint appears above the editor:
+Long-running commands (dev servers, watchers) become agy background tasks. A hint appears above the editor as soon as the task is detected, without waiting for the agy turn or command to finish:
 
 ```text
 ■ 1 agy background task • /agy-tasks to view
 ```
 
-The dashboard lists every task with pid and status: `enter` opens a scrollable log view, `x` stops it (whole process group), `r` rescans, esc closes. Closing pi automatically stops tasks whose processes are directly tied to their logs; heuristic orphan matches remain available for an explicit stop, avoiding accidental termination of unrelated processes. Non-interactive: `/agy-tasks stop <task-id>|all`.
+The dashboard lists newest tasks first with pid and status: `enter` opens a live, scrollable log view, `x` stops it (whole process group), `r` forces a rescan, esc closes. Task state and open logs refresh automatically. Closing pi automatically stops tasks whose processes are directly tied to their logs; heuristic orphan matches remain available for an explicit stop, avoiding accidental termination of unrelated processes. Non-interactive: `/agy-tasks stop <task-id>|all`.
 
 ### Artifacts (`/agy-artifacts`)
 
