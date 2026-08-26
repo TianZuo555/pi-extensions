@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
   agyIncompleteToolError,
+  isSummarizationRequest,
   latestUserPrompt,
   mapThinkingToEffort,
   mapUsage,
@@ -104,6 +105,13 @@ test("mapUsage defaults to zeros without usage", () => {
   const usage = mapUsage(undefined);
   assert.equal(usage.input, 0);
   assert.equal(usage.totalTokens, 0);
+});
+
+test("isSummarizationRequest recognizes pi compaction prompts only", () => {
+  assert.ok(isSummarizationRequest("<conversation>\nuser: hi\n</conversation>\n\nSummarize…"));
+  // Ordinary prompts — including ones that merely mention the tag — bill normally.
+  assert.ok(!isSummarizationRequest("fix the <conversation> parser"));
+  assert.ok(!isSummarizationRequest("Summarize this conversation"));
 });
 
 test("mapThinkingToEffort maps pi thinking levels to agy effort", () => {

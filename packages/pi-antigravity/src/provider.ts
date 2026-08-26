@@ -121,6 +121,19 @@ export function mapUsage(u: AgyUsage | undefined): AssistantMessage["usage"] {
   };
 }
 
+/**
+ * pi's compaction and branch summarization arrive as standalone requests
+ * whose only user message is `<conversation>\n…</conversation>\n\n` plus
+ * instructions. The agy turn that summarizes it reports the transcript's
+ * cached re-reads as usage (observed: 456k context churning 23M cache-read
+ * tokens), and agy is subscription-billed anyway — so the resulting
+ * per-token dollar figure is fictional. Report no usage for these requests
+ * so the `[compaction]` card never shows an inflated bill.
+ */
+export function isSummarizationRequest(prompt: string): boolean {
+  return prompt.startsWith("<conversation>\n");
+}
+
 const OVERFLOW_PATTERN = /context (length|window|size).*(exceed|limit)|exceeds.*context/i;
 
 /**
@@ -235,6 +248,7 @@ export function streamAntigravity(
         if (!prompt) {
           throw new Error("antigravity: no user text found in the request context.");
         }
+        const unbillable = isSummarizationRequest(prompt);
 
         const controller = await runtime.runPromise(
           service.beginStreamTurn({
@@ -268,10 +282,15 @@ export function streamAntigravity(
           textBuffer = "";
         };
 
+        const attachUsage = (u: AgyUsage | undefined, final: boolean) => {
+          if (unbillable) return; // summarization turns carry no billable usage
+          output.usage = mapUsage(controller.claimUsage(u, final));
+          calculateCost(model, output.usage);
+        };
+
         const endWithToolUse = () => {
           closeText();
-          output.usage = mapUsage(controller.claimUsage(usage, false));
-          calculateCost(model, output.usage);
+          attachUsage(usage, false);
           output.stopReason = "toolUse";
           stream.push({ type: "done", reason: "toolUse", message: output });
           stream.end();
@@ -430,8 +449,7 @@ export function streamAntigravity(
                 endWithToolUse();
                 return;
               }
-              output.usage = mapUsage(controller.claimUsage(activity.usage, true));
-              calculateCost(model, output.usage);
+              attachUsage(activity.usage, true);
 
               if (activity.response) {
                 if (textIndex !== null) {
