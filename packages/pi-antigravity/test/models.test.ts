@@ -54,19 +54,20 @@ test("pricingForModel uses vendor-specific reference rates and no cross-vendor f
   });
 });
 
-test("capabilitiesForModel returns model-family limits", () => {
+test("capabilitiesForModel clamps big vendor windows to the agy ceiling", () => {
   assert.deepEqual(capabilitiesForModel("gemini-3.7-flash"), {
-    contextWindow: 1_048_576,
+    contextWindow: 185_000,
     maxTokens: 65_536,
   });
   assert.deepEqual(capabilitiesForModel("claude-sonnet-4-6"), {
-    contextWindow: 1_000_000,
+    contextWindow: 185_000,
     maxTokens: 64_000,
   });
   assert.deepEqual(capabilitiesForModel("claude-opus-4-6-thinking"), {
-    contextWindow: 1_000_000,
+    contextWindow: 185_000,
     maxTokens: 128_000,
   });
+  // Already under the ceiling: vendor limits pass through unchanged.
   assert.deepEqual(capabilitiesForModel("gpt-oss-120b"), {
     contextWindow: 131_072,
     maxTokens: 131_072,
