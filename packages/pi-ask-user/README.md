@@ -9,8 +9,10 @@ pi install npm:@tian.zuo/pi-ask-user
 Registers an `ask_user` tool. The model can supply 1–5 questions with 2–5
 options each. Questions and option descriptions wrap across as many lines as
 needed instead of being truncated. Every question accepts one selection and
-also gets a free-form **Other** option. A model-supplied Other-style option is
-refused rather than shown twice: the
+also gets a free-form **Other** option. The model is instructed to order each
+question's options with its recommendation first, and the selected answer is
+marked with a `→` arrow — single-selection list style, not a checkbox. A
+model-supplied Other-style option is refused rather than shown twice: the
 duplicate would otherwise reach the user with nothing reporting it back.
 
 Interactive controls:

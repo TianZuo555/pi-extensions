@@ -34,10 +34,11 @@ test("ask_user metadata stays concise and non-redundant", () => {
   const tool = registeredTool();
   const guidelines = tool.promptGuidelines ?? [];
 
-  assert.equal(guidelines.length, 2);
+  assert.equal(guidelines.length, 3);
   assert.match(guidelines[0]!, /ask_user instead of plain text/);
   assert.match(guidelines[1]!, /Batch/);
   assert.match(guidelines[1]!, /dependent follow-ups/);
+  assert.match(guidelines[2]!, /recommend/);
   assert.match(tool.description, /custom answer/);
   assert.match(tool.description, /dismiss/);
   assert.doesNotMatch(tool.description, /[12]-5/);
@@ -49,7 +50,7 @@ test("ask_user metadata stays concise and non-redundant", () => {
   }).length +
     (tool.promptSnippet?.length ?? 0) +
     guidelines.reduce((total, guideline) => total + guideline.length, 0);
-  assert.ok(modelChars <= 1_025, `prompt budget exceeded: ${modelChars} chars`);
+  assert.ok(modelChars <= 1_100, `prompt budget exceeded: ${modelChars} chars`);
 });
 
 test("ask_user schema carries bounds and localized guidance", () => {
@@ -66,6 +67,7 @@ test("ask_user schema carries bounds and localized guidance", () => {
   assert.equal(questions?.maxItems, 5);
   assert.equal(options?.minItems, 2);
   assert.equal(options?.maxItems, 5);
+  assert.match(options?.description ?? "", /recommendation first/);
   assert.match(options?.description ?? "", /Other is added automatically/);
   assert.match(options?.description ?? "", /do not include it/);
   assert.match(optionLabel?.description ?? "", /Concise/);

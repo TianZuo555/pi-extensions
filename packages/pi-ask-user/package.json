@@ -1,6 +1,6 @@
 {
   "name": "@tian.zuo/pi-ask-user",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Ask the user one or more fully described multiple-choice questions from the pi coding agent.",
   "type": "module",
   "keywords": [

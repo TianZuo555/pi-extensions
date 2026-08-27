@@ -162,7 +162,7 @@ function optionDialogLabel(
   index: number,
 ): string {
   const description = option.description ? ` — ${option.description}` : "";
-  return `[ ] ${index + 1}. ${option.label}${description}`;
+  return `${index + 1}. ${option.label}${description}`;
 }
 
 async function askQuestionWithDialogs(
@@ -172,7 +172,7 @@ async function askQuestionWithDialogs(
   signal: AbortSignal | undefined,
 ): Promise<AskUserAnswer | null> {
   const labels = question.options.map(optionDialogLabel);
-  labels.push(`[ ] ${question.options.length + 1}. ${OTHER_LABEL}`);
+  labels.push(`${question.options.length + 1}. ${OTHER_LABEL}`);
 
   const selected = await ctx.ui.select(
     `${questionIndex + 1}. ${question.question}`,

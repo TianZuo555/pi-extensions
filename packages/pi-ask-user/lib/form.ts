@@ -399,8 +399,10 @@ export class AskUserForm implements Component, Focusable {
         ? Boolean(answer.customAnswer)
         : answer.optionIndex === optionIndex;
       const cursor = focused ? this.theme.fg("accent", "› ") : "  ";
-      const checkbox = checked ? this.theme.fg("success", "[x] ") : this.theme.fg("muted", "[ ] ");
-      const prefix = `${cursor}${checkbox}`;
+      // Arrow marks the single selection (pi-native list style); brackets
+      // would read as a multi-select checkbox.
+      const selection = checked ? this.theme.fg("success", "→ ") : "  ";
+      const prefix = `${cursor}${selection}`;
       const label = isOther ? OTHER_LABEL : option.label;
       const description = isOther
         ? answer.customAnswer ?? OTHER_DESCRIPTION

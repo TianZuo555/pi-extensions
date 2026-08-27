@@ -9,7 +9,8 @@ export const ASK_USER_PARAMETER_DESCRIPTIONS = {
   optionDescription:
     "Context, constraints, or trade-offs; may use multiple sentences.",
   question: "Question shown to the user.",
-  options: "Answer options. Other is added automatically; do not include it.",
+  options:
+    "Answer options, recommendation first. Other is added automatically; do not include it.",
   questions: "Questions shown together.",
 };
 
@@ -25,6 +26,7 @@ export const ASK_USER_PROMPT_SNIPPET =
 export const ASK_USER_PROMPT_GUIDELINES = [
   "Use ask_user instead of plain text when likely answers can be listed.",
   "Batch questions that can be answered together; ask dependent follow-ups later.",
+  "Put the option you recommend first in every question.",
 ];
 
 /** Outcome of an ask_user interaction. */

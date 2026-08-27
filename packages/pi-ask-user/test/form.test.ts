@@ -86,7 +86,8 @@ test("long questions and option descriptions wrap without clipping", () => {
   assert.ok(lines.every((line) => visibleWidth(line) <= 42));
   assert.match(lines.join("\n"), /QUESTION_END/);
   assert.match(lines.join("\n"), /DESCRIPTION_END/);
-  assert.match(lines.join("\n"), /› \[ \] Redis/);
+  assert.match(lines.join("\n"), /› {3}Redis/);
+  assert.doesNotMatch(lines.join("\n"), /\[/);
   assert.match(lines.join("\n"), /Space select/);
 });
 
@@ -110,11 +111,12 @@ test("left and right preserve answers while space selects and enter submits", ()
   form.handleInput("left");
 
   const firstQuestionAgain = form.render(80).join("\n");
-  assert.match(firstQuestionAgain, /\[x\] Staging/);
+  assert.match(firstQuestionAgain, /→ Staging/);
+  assert.doesNotMatch(firstQuestionAgain, /\[/);
   assert.match(firstQuestionAgain, /Question 1 of 2 · 2 answered/);
 
   form.handleInput("enter"); // next, preserving the second question's cursor/answer
-  assert.match(form.render(80).join("\n"), /\[x\] Integration/);
+  assert.match(form.render(80).join("\n"), /→ Integration/);
   form.handleInput("enter"); // submit
 
   assert.deepEqual(getResult(), {
@@ -169,7 +171,7 @@ test("Other accepts an inline custom answer before form submission", () => {
   form.handleInput("\r");
 
   assert.equal(getResult(), undefined);
-  assert.match(form.render(80).join("\n"), /\[x\] Other — Use the database directly/);
+  assert.match(form.render(80).join("\n"), /→ Other — Use the database directly/);
 
   form.handleInput("enter");
   assert.deepEqual(getResult()?.answers[0].choice, {
