@@ -1,6 +1,10 @@
 packages:
   - "packages/*"
 
+# Run package scripts through pnpm's bash-like shell so POSIX syntax such as
+# `FOO=1 node ...` also works on Windows (CI runs the test matrix there).
+shellEmulator: true
+
 overrides:
   brace-expansion: ^5.0.8
   "@earendil-works/pi-ai": ^0.84.2
