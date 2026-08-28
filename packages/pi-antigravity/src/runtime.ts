@@ -55,7 +55,7 @@ export interface AntigravityRuntimeShape {
      */
     readonly bootstrapSuffix?: string;
     readonly modelId: string;
-    readonly effort: "low" | "medium" | "high";
+    readonly effort?: "low" | "medium" | "high";
     readonly signal?: AbortSignal;
   }) => Effect.Effect<AgyTurnController, AntigravityRuntimeClosedError>;
   /** Clear the active controller once a provider turn reached a terminal state. */

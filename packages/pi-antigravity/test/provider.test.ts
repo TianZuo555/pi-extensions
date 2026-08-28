@@ -131,7 +131,7 @@ test("isSummarizationRequest recognizes pi compaction prompts only", () => {
 });
 
 test("mapThinkingToEffort maps pi thinking levels to agy effort", () => {
-  assert.equal(mapThinkingToEffort(undefined), "high");
+  assert.equal(mapThinkingToEffort(undefined), undefined);
   assert.equal(mapThinkingToEffort("minimal"), "low");
   assert.equal(mapThinkingToEffort("low"), "low");
   assert.equal(mapThinkingToEffort("medium"), "medium");

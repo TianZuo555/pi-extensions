@@ -166,11 +166,12 @@ export function agyIncompleteToolError(tool: string, resultError?: string): stri
   return "agy tool call did not complete.";
 }
 
-/** Map pi's thinking level to agy's `--effort` (low|medium|high). */
-export function mapThinkingToEffort(level: ThinkingLevel | undefined): AgyEffort {
+/** Map an explicit pi thinking level to agy's `--effort` (low|medium|high). */
+export function mapThinkingToEffort(level: ThinkingLevel | undefined): AgyEffort | undefined {
+  if (level === undefined) return undefined;
   if (level === "low" || level === "minimal") return "low";
   if (level === "medium") return "medium";
-  return "high"; // high, xhigh, max, and undefined default
+  return "high"; // high, xhigh, and max
 }
 
 let replayCallSeq = 0;

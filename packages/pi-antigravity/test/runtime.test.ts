@@ -31,12 +31,12 @@ test("runtime restores the selected pi branch only when starting a fresh convers
         historyBootstrap: "RESTORED PI BRANCH",
         bootstrapSuffix: "SKILL CATALOG",
         modelId: "gemini-3.7-flash",
-        effort: "medium",
       }),
     );
     assert.equal(await first.next(), null);
     assert.equal(requests[0].prompt, "RESTORED PI BRANCH\n\ncurrent request\n\nSKILL CATALOG");
     assert.equal(requests[0].conversationId, undefined);
+    assert.equal(requests[0].effort, undefined);
 
     await runAntigravity(runtime, service.finishTurn);
     const second = await runAntigravity(
