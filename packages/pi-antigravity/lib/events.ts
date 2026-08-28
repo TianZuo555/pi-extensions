@@ -54,7 +54,20 @@ export interface AgyStepUpdate {
   error?: AgyToolError;
 }
 
-export type AgyResultStatus = "OK" | "ERROR" | string;
+/**
+ * Terminal result status. agy 1.1.22 reports `SUCCESS`; older builds reported
+ * `OK`. `FAILURE`, `CANCELLED`, and `TIMEOUT` also exist in the binary. Kept
+ * open-ended so an unseen status parses rather than throwing — the reducer
+ * treats anything not explicitly successful as a failure.
+ */
+export type AgyResultStatus =
+  | "SUCCESS"
+  | "OK"
+  | "ERROR"
+  | "FAILURE"
+  | "CANCELLED"
+  | "TIMEOUT"
+  | (string & {});
 
 /** Terminal event of every stream: final text, status, and cumulative usage. */
 export interface AgyResult {

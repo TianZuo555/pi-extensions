@@ -2,11 +2,14 @@
  * streamSimple adapter — runs one agy turn per pi request and translates the
  * reduced outcome into pi AssistantMessageEvents.
  *
- * agy streams response text (reasoning included — agy writes it inline as
- * markdown) as text_delta continuation chunks on agent_response steps; these
- * stream live into pi's text channel. agy tool steps render as native pi
- * tool cards: display-only steps emit a pending card on ACTIVE, then the
- * provider records their result on completion and ends the assistant message
+ * agy streams response text — the visible answer only — as text_delta
+ * continuation chunks on agent_response steps; these stream live into pi's
+ * text channel. Thought text is never exposed by agy's print-mode
+ * stream-json protocol (thinking_tokens counts in usage are the only
+ * reasoning trace), so each answer is preceded by a synthesized summary
+ * thinking block. agy tool steps render as native pi tool cards: display-only
+ * steps emit a pending card on ACTIVE, then the provider records their result
+ * on completion and ends the assistant message
  * with stopReason "toolUse". pi executes the replay-only `agy` wrapper and
  * re-invokes this adapter, which re-attaches to the still-running agy turn via
  * the runtime's turn controller. Native read-only steps still wait for DONE
@@ -115,6 +118,9 @@ export function mapUsage(u: AgyUsage | undefined): AssistantMessage["usage"] {
   return {
     input: u?.input_tokens ?? 0,
     output: u?.output_tokens ?? 0,
+    // agy never streams thought text (print mode exposes counts only);
+    // report thinking_tokens as the reasoning subset of output regardless.
+    reasoning: u?.thinking_tokens,
     cacheRead: u?.cache_read_tokens ?? 0,
     cacheWrite: 0,
     totalTokens: u?.total_tokens ?? 0,
@@ -207,8 +213,8 @@ export function streamAntigravity(
    * background task may have been created. */
   onSettled?: () => void,
   /**
-   * Extra prompt text for bootstrap sends (fresh agy process) — used to
-   * inject the pi skill catalog. Evaluated once per request.
+   * Extra prompt text for bootstrap sends (fresh agy conversation). Bridge
+   * mode returns nothing; direct mode (bridge off) injects skill file paths.
    */
   getBootstrapSuffix?: () => string | undefined,
   /** Whether a pi tool name is currently active — native re-execution
@@ -281,6 +287,14 @@ export function streamAntigravity(
         let usage: AgyUsage | undefined;
         let textIndex: number | null = null;
         let textBuffer = "";
+        /**
+         * Thinking slot reserved ahead of the current text run, still awaiting
+         * its token count. `contentIndex` is announced once and never moves:
+         * pi's delta-only consumers (`--mode json`, streamProxy, extensions
+         * reading `assistantMessageEvent`) rebuild content from indices alone,
+         * so a block can never be spliced in after the fact.
+         */
+        let thoughtIndex: number | null = null;
         type PendingReplayTool = {
           id: string;
           index: number;
@@ -293,7 +307,25 @@ export function streamAntigravity(
         };
         const pendingReplayTools = new Map<string, PendingReplayTool>();
 
+        /**
+         * Close a reserved thinking slot that never received a token count
+         * (non-thinking models report `thinking_tokens: 0`). The empty block
+         * stays in `content` because announced indices are immutable; pi's
+         * renderer trims and skips blank thinking blocks, so it shows nothing.
+         */
+        const closeUnfilledThought = () => {
+          if (thoughtIndex === null) return;
+          stream.push({
+            type: "thinking_end",
+            contentIndex: thoughtIndex,
+            content: "",
+            partial: output,
+          });
+          thoughtIndex = null;
+        };
+
         const closeText = () => {
+          closeUnfilledThought();
           if (textIndex === null) return;
           stream.push({
             type: "text_end",
@@ -469,6 +501,60 @@ export function streamAntigravity(
           }
         };
 
+        /**
+         * Reserve the thinking slot that precedes a text run, returning its
+         * index.
+         *
+         * agy only reports `thinking_tokens` on the response step's DONE event
+         * — after that step's text deltas — so the summary cannot be emitted in
+         * document order. Claiming the index up front keeps the marker above
+         * the answer it introduces (like agy's own collapsed line) while the
+         * event stream stays append-only.
+         */
+        const reserveThought = (): number => {
+          if (thoughtIndex !== null) return thoughtIndex;
+          output.content.push({ type: "thinking", thinking: "" });
+          thoughtIndex = output.content.length - 1;
+          stream.push({ type: "thinking_start", contentIndex: thoughtIndex, partial: output });
+          return thoughtIndex;
+        };
+
+        /**
+         * agy's interactive TUI collapses hidden reasoning into one line
+         * ("Thought for 3s, 289 tokens"). Print mode never streams thought
+         * text, so synthesize the same summary into the reserved slot once the
+         * response step reports its token count. The step duration covers
+         * thinking plus writing — the closest signal agy exposes to its own
+         * thought timer. A thought-only segment (no text this response) has no
+         * reservation, so it appends its own block.
+         */
+        const emitThoughtMarker = (activity: Extract<AgyActivity, { type: "thought" }>): void => {
+          const seconds =
+            activity.durationSeconds === undefined
+              ? undefined
+              : Math.max(1, Math.round(activity.durationSeconds));
+          const summary =
+            seconds === undefined
+              ? `Thought ${activity.tokens} tokens`
+              : `Thought for ${seconds}s, ${activity.tokens} tokens`;
+          const index = reserveThought();
+          const block = output.content[index];
+          if (block.type === "thinking") block.thinking = summary;
+          stream.push({
+            type: "thinking_delta",
+            contentIndex: index,
+            delta: summary,
+            partial: output,
+          });
+          stream.push({
+            type: "thinking_end",
+            contentIndex: index,
+            content: summary,
+            partial: output,
+          });
+          thoughtIndex = null;
+        };
+
         while (true) {
           const activity = await controller.next();
           if (activity === null) {
@@ -487,6 +573,10 @@ export function streamAntigravity(
           switch (activity.type) {
             case "usage": {
               usage = activity.usage;
+              break;
+            }
+            case "thought": {
+              emitThoughtMarker(activity);
               break;
             }
             case "tool_start": {
@@ -539,6 +629,9 @@ export function streamAntigravity(
             }
             case "text": {
               if (textIndex === null) {
+                // Reserve the thought slot BEFORE the text block so the
+                // summary can still land above the answer at DONE.
+                reserveThought();
                 output.content.push({ type: "text", text: "" });
                 textIndex = output.content.length - 1;
                 textBuffer = "";
@@ -564,16 +657,33 @@ export function streamAntigravity(
 
               if (activity.response) {
                 if (textIndex !== null) {
-                  // Deltas already streamed this block; snap it to the
-                  // authoritative final text in case of drift so both the
-                  // message content and the text_end event agree.
+                  // Deltas already streamed this block. agy's authoritative
+                  // response is normally the concatenation of those deltas, so
+                  // drift means a dropped tail: emit the missing suffix as a
+                  // real delta, keeping delta-only consumers in sync with
+                  // `partial` rather than silently rewriting the block.
                   if (textBuffer !== activity.response) {
                     const block = output.content[textIndex];
-                    if (block.type === "text") block.text = activity.response;
-                    textBuffer = activity.response;
+                    if (activity.response.startsWith(textBuffer)) {
+                      const suffix = activity.response.slice(textBuffer.length);
+                      if (block.type === "text") block.text = activity.response;
+                      textBuffer = activity.response;
+                      stream.push({
+                        type: "text_delta",
+                        contentIndex: textIndex,
+                        delta: suffix,
+                        partial: output,
+                      });
+                    } else {
+                      // True divergence (never observed): streamed text cannot
+                      // be retracted through deltas, so keep what consumers
+                      // already saw and let text_end confirm it.
+                      if (block.type === "text") block.text = textBuffer;
+                    }
                   }
                   closeText();
                 } else {
+                  closeUnfilledThought();
                   output.content.push({ type: "text", text: activity.response });
                   const idx = output.content.length - 1;
                   stream.push({ type: "text_start", contentIndex: idx, partial: output });

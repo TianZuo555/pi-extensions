@@ -90,6 +90,77 @@ test("reducer folds a successful turn", () => {
   assert.equal(text, "Hello from agy!");
 });
 
+test("reducer normalizes the SUCCESS result status of agy >= 1.1.22", () => {
+  const outcome = reduceAgyStream(
+    JSON.stringify({ event: "result", result: { status: "SUCCESS", response: "hi" } }),
+  );
+  assert.equal(outcome.status, "OK");
+  assert.equal(outcome.response, "hi");
+});
+
+test("reducer fails closed on non-success result statuses", () => {
+  // agy ships FAILURE, CANCELLED, and TIMEOUT alongside ERROR. None of them
+  // may be rendered as a normal answer, even when response text is present.
+  for (const status of ["ERROR", "FAILURE", "CANCELLED", "TIMEOUT", "WAT"]) {
+    const outcome = reduceAgyStream(
+      JSON.stringify({ event: "result", result: { status, response: "partial answer" } }),
+    );
+    assert.equal(outcome.status, "ERROR", `expected ${status} to fail the turn`);
+  }
+});
+
+test("reducer emits a thought marker for response steps that burned thinking tokens", () => {
+  const outcome = reduceAgyStream(
+    [
+      JSON.stringify({
+        event: "step_update",
+        step_update: {
+          step_index: 1,
+          state: "DONE",
+          step_type: "agent_response",
+          text_delta: "answer",
+          duration_seconds: 3.4,
+          usage: { input_tokens: 100, output_tokens: 50, thinking_tokens: 289, total_tokens: 150 },
+        },
+      }),
+    ].join("\n"),
+  );
+  const thought = outcome.activities.find((a) => a.type === "thought");
+  assert.ok(thought && thought.type === "thought");
+  assert.equal(thought.tokens, 289);
+  assert.equal(thought.durationSeconds, 3.4);
+});
+
+test("reducer emits no thought marker without thinking tokens", () => {
+  const outcome = reduceAgyStream(
+    [
+      // ACTIVE step with usage only — no DONE, no duration yet.
+      JSON.stringify({
+        event: "step_update",
+        step_update: {
+          step_index: 1,
+          state: "ACTIVE",
+          step_type: "agent_response",
+          text_delta: "partial",
+          usage: { input_tokens: 100, output_tokens: 10, thinking_tokens: 5, total_tokens: 110 },
+        },
+      }),
+      // DONE with zero thinking tokens (non-thinking model).
+      JSON.stringify({
+        event: "step_update",
+        step_update: {
+          step_index: 1,
+          state: "DONE",
+          step_type: "agent_response",
+          duration_seconds: 2,
+          usage: { input_tokens: 100, output_tokens: 50, thinking_tokens: 0, total_tokens: 150 },
+        },
+      }),
+    ].join("\n"),
+  );
+  assert.ok(!outcome.activities.some((a) => a.type === "thought"));
+});
+
 test("applyEvent streams activity events incrementally", () => {
   const outcome = newTurnOutcome();
   const seen = [];

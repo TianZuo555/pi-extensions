@@ -1,11 +1,11 @@
 /**
  * Turn reducer — folds parsed agy stream events into provider-facing state.
  *
- * agy emits no assistant-text deltas: `agent_response` steps complete with
- * usage only, and the final text arrives once in the terminal `result` event.
- * Tool steps stream live (ACTIVE -> DONE/ERROR) and are surfaced as
- * structured {@link AgyActivity} events the provider renders as native pi
- * tool cards.
+ * agy streams assistant text deltas on `agent_response` steps (the visible
+ * answer — thought text is never exposed by print mode) and the final text
+ * also arrives in the terminal `result` event. Tool steps stream live
+ * (ACTIVE -> DONE/ERROR) and are surfaced as structured {@link AgyActivity}
+ * events the provider renders as native pi tool cards.
  */
 
 import type { AgyUsage, ParsedAgyEvent } from "./events.ts";
@@ -37,10 +37,19 @@ export type AgyActivity =
       args: Record<string, unknown>;
     }
   | { type: "text"; delta: string }
+  | {
+      /** agy's own collapsed reasoning line — thought text is never streamed,
+       * only its token count (and the response step's duration) are. */
+      type: "thought";
+      tokens: number;
+      durationSeconds?: number;
+    }
   | { type: "usage"; usage: AgyUsage }
   | {
+      /** Terminal status, already normalized: anything agy did not explicitly
+       * report as successful arrives as "ERROR". */
       type: "result";
-      status: "OK" | "ERROR" | "UNKNOWN";
+      status: "OK" | "ERROR";
       response: string;
       error: string | undefined;
       usage: AgyUsage | undefined;
@@ -49,6 +58,7 @@ export type AgyActivity =
 export interface AgyTurnOutcome {
   /** Conversation id for `--conversation` resume; set by init/result. */
   conversationId: string | undefined;
+  /** "UNKNOWN" until the result event lands; then "OK" or "ERROR". */
   status: "OK" | "ERROR" | "UNKNOWN";
   /** Final assistant text (empty until the result event). */
   response: string;
@@ -122,9 +132,10 @@ export function applyEvent(outcome: AgyTurnOutcome, event: ParsedAgyEvent): AgyA
           });
         }
       } else if (step.step_type === "agent_response") {
-        // agent_response steps stream the response (reasoning included — agy
-        // writes it inline as markdown) as continuation chunks on ACTIVE
-        // steps plus a final chunk on DONE.
+        // agent_response steps stream the visible answer text as continuation
+        // chunks on ACTIVE steps plus a final chunk on DONE. agy never exposes
+        // thought text in print mode; thinking_tokens in usage is the only
+        // reasoning trace.
         if (typeof step.text_delta === "string" && step.text_delta) {
           activities.push({ type: "text", delta: step.text_delta });
         }
@@ -132,6 +143,15 @@ export function applyEvent(outcome: AgyTurnOutcome, event: ParsedAgyEvent): AgyA
           // Running per-response usage; the result event carries the totals.
           outcome.usage = step.usage;
           activities.push({ type: "usage", usage: step.usage });
+          const thoughtTokens = step.usage.thinking_tokens;
+          if (step.state === "DONE" && typeof thoughtTokens === "number" && thoughtTokens > 0) {
+            activities.push({
+              type: "thought",
+              tokens: thoughtTokens,
+              durationSeconds:
+                typeof step.duration_seconds === "number" ? step.duration_seconds : undefined,
+            });
+          }
         }
       }
       break;
@@ -140,8 +160,11 @@ export function applyEvent(outcome: AgyTurnOutcome, event: ParsedAgyEvent): AgyA
       const result = event.result;
       outcome.finished = true;
       outcome.conversationId = result.conversation_id ?? outcome.conversationId;
-      outcome.status =
-        result.status === "OK" || result.status === "ERROR" ? result.status : "UNKNOWN";
+      // Fail closed: only an explicitly successful status completes the turn.
+      // agy >= 1.1.22 reports SUCCESS (older builds: OK); FAILURE, CANCELLED,
+      // and TIMEOUT all exist too, and an unrecognized status must never be
+      // rendered as a normal answer.
+      outcome.status = result.status === "SUCCESS" || result.status === "OK" ? "OK" : "ERROR";
       outcome.response = result.response ?? "";
       outcome.error = result.error;
       outcome.usage = result.usage ?? outcome.usage;

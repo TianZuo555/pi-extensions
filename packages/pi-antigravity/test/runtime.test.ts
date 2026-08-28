@@ -44,6 +44,9 @@ test("runtime restores the selected pi branch only when starting a fresh convers
       service.beginStreamTurn({
         prompt: "follow-up",
         historyBootstrap: "MUST NOT BE REPEATED",
+        // Direct-mode extras still come from the provider every request; the
+        // runtime must keep them off conversation resumes.
+        bootstrapSuffix: "SKILL CATALOG",
         modelId: "gemini-3.7-flash",
         effort: "medium",
       }),
@@ -58,12 +61,17 @@ test("runtime restores the selected pi branch only when starting a fresh convers
       service.beginStreamTurn({
         prompt: "after model switch",
         historyBootstrap: "RESTORED AFTER SWITCH",
+        bootstrapSuffix: "SKILL CATALOG",
         modelId: "claude-sonnet-4-6",
         effort: "high",
       }),
     );
     assert.equal(await switched.next(), null);
-    assert.equal(requests[2].prompt, "RESTORED AFTER SWITCH\n\nafter model switch");
+    // Model switch starts a fresh conversation — extras ride again.
+    assert.equal(
+      requests[2].prompt,
+      "RESTORED AFTER SWITCH\n\nafter model switch\n\nSKILL CATALOG",
+    );
     assert.equal(requests[2].conversationId, undefined);
   } finally {
     await runtime.dispose();

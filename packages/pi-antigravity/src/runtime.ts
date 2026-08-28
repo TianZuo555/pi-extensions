@@ -49,9 +49,11 @@ export interface AntigravityRuntimeShape {
     /** Active pi-branch history used only when a fresh agy conversation needs restoring. */
     readonly historyBootstrap?: string;
     /**
-     * Extra prompt text appended ONLY when this request spawns a fresh agy
-     * process (bootstrap). Ignored on re-attach, and excluded from the
-     * re-attach prompt match, which uses the base prompt.
+     * Extra prompt text appended ONLY when this request starts a fresh agy
+     * conversation (bootstrap). agy keeps full conversation history, so
+     * re-sending it on `--conversation` resumes would duplicate the block on
+     * every user turn. Ignored on re-attach, and excluded from the re-attach
+     * prompt match, which uses the base prompt.
      */
     readonly bootstrapSuffix?: string;
     readonly modelId: string;
@@ -179,8 +181,15 @@ const makeRuntime = (turnRunner: AgyTurnRunner) =>
                   ? request.historyBootstrap
                   : undefined;
               restoreHistoryOnNextConversation = false;
+              // Extra bootstrap text (direct-mode skill paths) rides only
+              // the first turn of a conversation. Bridge mode leaves this
+              // empty: activate_skill's schema enum is the catalog, and
+              // tools/list is rebuilt on every agy spawn — including after
+              // pi compaction — so re-appending would only stack prompt
+              // junk the way the old per-turn catalog did.
+              const bootstrapSuffix = conversationId ? undefined : request.bootstrapSuffix;
               const spawnRequest: AgyTurnRequest = {
-                prompt: [historyBootstrap, request.prompt, request.bootstrapSuffix]
+                prompt: [historyBootstrap, request.prompt, bootstrapSuffix]
                   .filter((part): part is string => Boolean(part))
                   .join("\n\n"),
                 conversationId,
