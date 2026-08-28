@@ -559,8 +559,12 @@ test("kill terminates the whole process tree (grandchildren die)", async () => {
   });
 });
 
-test("a shell exit with inherited pipes open settles naturally and reaps descendants", async () => {
+test("a shell exit with inherited pipes open settles naturally and reaps descendants", async (t) => {
   await withManager(async (manager, runtime) => {
+    if (process.platform === "win32" && !manager.windowsJobSupport.available) {
+      t.skip(manager.windowsJobSupport.reason);
+      return;
+    }
     const snap = await runTool(
       runtime,
       manager.start({
@@ -593,8 +597,12 @@ test("a shell exit with inherited pipes open settles naturally and reaps descend
   });
 });
 
-test("kill preserves a natural exit observed before the signal point", async () => {
+test("kill preserves a natural exit observed before the signal point", async (t) => {
   await withManager(async (manager, runtime) => {
+    if (process.platform === "win32" && !manager.windowsJobSupport.available) {
+      t.skip(manager.windowsJobSupport.reason);
+      return;
+    }
     const snap = await runTool(
       runtime,
       manager.start({

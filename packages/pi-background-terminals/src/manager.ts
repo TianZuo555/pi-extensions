@@ -12,7 +12,7 @@
  * and issue fire-and-forget kills without touching the Effect runtime.
  */
 
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -63,6 +63,39 @@ const SETTLE_GRACE_MS = 1_000;
 const SPILL_FLUSH_TIMEOUT_MS = 1_500;
 const ERROR_TEXT_MAX_LENGTH = 4_096;
 const WIN32_CHILD_PATH = fileURLToPath(new URL("./win32-child.mjs", import.meta.url));
+
+export interface WindowsJobSupport {
+  readonly available: boolean;
+  readonly reason?: string;
+}
+
+let windowsJobSupportPromise: Promise<WindowsJobSupport> | undefined;
+
+async function detectWindowsJobSupport(): Promise<WindowsJobSupport> {
+  if (process.platform !== "win32") return { available: false, reason: "not running on Windows" };
+  const job = await createChildJob();
+  if (!job) return { available: false, reason: "native Job Object creation is unavailable" };
+  try {
+    const probe = spawnSync(process.execPath, [WIN32_CHILD_PATH, "--probe", job.name], {
+      encoding: "utf8",
+      stdio: ["ignore", "ignore", "pipe"],
+      timeout: 10_000,
+      windowsHide: true,
+    });
+    if (probe.status === 0) return { available: true };
+    const reason = probe.stderr.trim() || probe.error?.message || `launcher exited ${probe.status}`;
+    return { available: false, reason };
+  } catch (error) {
+    return { available: false, reason: boundedError(error) };
+  } finally {
+    job.close();
+  }
+}
+
+function getWindowsJobSupport() {
+  windowsJobSupportPromise ??= detectWindowsJobSupport();
+  return windowsJobSupportPromise;
+}
 
 function bounded(text: string) {
   return text.slice(0, ERROR_TEXT_MAX_LENGTH);
@@ -240,6 +273,8 @@ export interface TerminalManagerShape {
   /** Tracked terminals ordered by creation time, newest first. */
   readonly list: Effect.Effect<ReadonlyArray<TerminalSnapshot>>;
   readonly disposeAll: Effect.Effect<void>;
+  /** Whether this host permits the nested Job Object used by Windows cleanup. */
+  readonly windowsJobSupport: WindowsJobSupport;
   readonly view: TerminalReadModel;
 }
 
@@ -366,6 +401,7 @@ const makeManager = Effect.gen(function* () {
   // Warm the Windows job-object surface before the first terminal needs a
   // pre-created job (POSIX resolves immediately without loading Koffi).
   yield* Effect.promise(preloadChildJobSupport);
+  const windowsJobSupport = yield* Effect.promise(getWindowsJobSupport);
   // Scoped detached forker for sync contexts (read-model kills, process-event
   // settlement, pruning). Completed fibers remove themselves; manager scope
   // close interrupts any work that outlives the bounded disposeAll wait.
@@ -707,8 +743,9 @@ const makeManager = Effect.gen(function* () {
         // Create the Windows kill switch before any process in the command
         // tree exists. The launcher joins it before spawning the real shell,
         // eliminating the post-spawn assignment race from issue #5.
-        const childJob =
-          process.platform === "win32" ? yield* Effect.promise(createChildJob) : undefined;
+        const childJob = windowsJobSupport.available
+          ? yield* Effect.promise(createChildJob)
+          : undefined;
         if (childJob) detachedChildren.trackJob(childJob);
 
         const child = yield* Effect.try({
@@ -1251,6 +1288,7 @@ const makeManager = Effect.gen(function* () {
     kill,
     list: Effect.sync(listNewestFirst),
     disposeAll,
+    windowsJobSupport,
     view,
   });
 });

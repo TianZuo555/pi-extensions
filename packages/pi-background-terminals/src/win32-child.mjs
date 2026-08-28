@@ -30,7 +30,9 @@ function closeHandle(close, handle) {
 }
 
 function joinJob(name) {
-  if (process.platform !== "win32" || !name) return false;
+  if (process.platform !== "win32" || !name) {
+    return { ok: false, reason: "not running on Windows or missing job name" };
+  }
   try {
     const lib = koffi.load("kernel32.dll");
     const handle = koffi.pointer(koffi.opaque());
@@ -49,19 +51,26 @@ function joinJob(name) {
       handle,
     ]);
     const close = lib.func("__stdcall", "CloseHandle", "int32_t", [handle]);
+    const getLastError = lib.func("__stdcall", "GetLastError", "uint32_t", []);
 
     const job = openJobObjectW(JOB_OBJECT_ASSIGN_PROCESS, false, name);
-    if (!job) return false;
+    if (!job) return { ok: false, reason: `OpenJobObjectW error ${getLastError()}` };
     let currentProcess;
     try {
       currentProcess = openProcess(PROCESS_TERMINATE | PROCESS_SET_QUOTA, false, process.pid);
-      return Boolean(currentProcess && assignProcessToJobObject(job, currentProcess));
+      if (!currentProcess) {
+        return { ok: false, reason: `OpenProcess error ${getLastError()}` };
+      }
+      if (!assignProcessToJobObject(job, currentProcess)) {
+        return { ok: false, reason: `AssignProcessToJobObject error ${getLastError()}` };
+      }
+      return { ok: true };
     } finally {
       if (currentProcess) closeHandle(close, currentProcess);
       closeHandle(close, job);
     }
-  } catch {
-    return false;
+  } catch (error) {
+    return { ok: false, reason: error instanceof Error ? error.message : String(error) };
   }
 }
 
@@ -86,8 +95,11 @@ async function readConfiguration() {
   }
 }
 
-const jobName = process.argv[2];
-if (!joinJob(jobName)) fail("could not join the process Job Object");
+const probe = process.argv[2] === "--probe";
+const jobName = probe ? process.argv[3] : process.argv[2];
+const joined = joinJob(jobName);
+if (!joined.ok) fail(`could not join the process Job Object: ${joined.reason}`);
+if (probe) process.exit(0);
 
 // No command process exists before job membership is established.
 const configuration = await readConfiguration();

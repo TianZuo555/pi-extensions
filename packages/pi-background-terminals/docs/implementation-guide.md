@@ -434,8 +434,11 @@ them. Before spawning anything, the manager creates a named Job Object with
 launcher, which joins itself to that job before it is allowed to spawn Bash.
 Bash and every descendant inherit membership from process creation onward;
 there is no window where a fast shell can launch an untracked child before a
-post-spawn assignment. If native job creation is unavailable, startup degrades
-to the previous direct-spawn/taskkill path.
+post-spawn assignment. Manager startup probes the complete create → launcher
+join path once. If native job creation is unavailable, or an outer host Job
+Object (for example a restrictive CI runner) forbids nesting, terminals degrade
+to the previous direct-spawn/taskkill path without starting a command during
+the probe.
 
 Termination is:
 
