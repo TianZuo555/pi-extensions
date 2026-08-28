@@ -24,6 +24,7 @@ import path from "node:path";
 import { piConfigDir, readJson, writeJson } from "./lib/config.ts";
 import { AGY_BINARY } from "./lib/agy-client.ts";
 import { installAgyDeathHooks, killAgyTree, trackAgyChild, untrackAgyChild } from "./lib/agy-children.ts";
+import { pruneBridgeMcpCache, removeMcpCacheEntry } from "./lib/mcp-cache.ts";
 import {
   AgyPiBridge,
   BRIDGE_SERVER_NAME,
@@ -130,6 +131,9 @@ function execAgy(args: string[], timeoutMs = DISCOVERY_TIMEOUT_MS): Promise<stri
  * are per-pi-session: crashed sessions leak registrations forever, and every
  * live session's tools are merged into every agy turn's tools/list. Pruning
  * dead entries on startup keeps cross-session pollution to live sessions.
+ * agy also caches tool manifests on disk per server
+ * (`~/.gemini/antigravity-cli/mcp/<name>/`) and never evicts them, so the
+ * same sweep prunes cache entries with no live server left.
  */
 async function pruneStaleBridgeRegistrations(): Promise<void> {
   let list: string;
@@ -139,6 +143,7 @@ async function pruneStaleBridgeRegistrations(): Promise<void> {
     return; // agy unavailable — registration below will warn instead
   }
   const stale: string[] = [];
+  const live: string[] = [];
   for (const line of list.split("\n").slice(1)) {
     const columns = line.trim().split(/\s+/);
     const name = columns[0] ?? "";
@@ -154,11 +159,16 @@ async function pruneStaleBridgeRegistrations(): Promise<void> {
         signal: AbortSignal.timeout(1_500),
       });
       // Any HTTP answer (even 403/404) means a server is still listening.
+      live.push(name);
     } catch {
       stale.push(name);
     }
   }
   await Promise.all(stale.map((name) => execAgy(["mcp", "remove", name]).catch(() => {})));
+  // `agy mcp remove` deregisters but leaves the on-disk manifest cache
+  // behind; entries whose registration is already gone never reappear in
+  // `agy mcp list`, so prune the cache against the live set here.
+  await pruneBridgeMcpCache({ liveServers: live });
 }
 
 interface ModelCache {
@@ -669,6 +679,8 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
       } catch {
         // Registration may already be gone.
       }
+      // Deregistration does not evict agy's on-disk manifest cache.
+      await removeMcpCacheEntry(bridge.serverName);
       await bridge.close();
     }
     try {
