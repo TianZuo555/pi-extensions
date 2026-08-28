@@ -53,11 +53,11 @@ function joinJob(name) {
     const close = lib.func("__stdcall", "CloseHandle", "int32_t", [handle]);
     const getLastError = lib.func("__stdcall", "GetLastError", "uint32_t", []);
 
-    const job = openJobObjectW(JOB_OBJECT_ASSIGN_PROCESS, false, name);
+    const job = openJobObjectW(JOB_OBJECT_ASSIGN_PROCESS, 0, name);
     if (!job) return { ok: false, reason: `OpenJobObjectW error ${getLastError()}` };
     let currentProcess;
     try {
-      currentProcess = openProcess(PROCESS_TERMINATE | PROCESS_SET_QUOTA, false, process.pid);
+      currentProcess = openProcess(PROCESS_TERMINATE | PROCESS_SET_QUOTA, 0, process.pid);
       if (!currentProcess) {
         return { ok: false, reason: `OpenProcess error ${getLastError()}` };
       }

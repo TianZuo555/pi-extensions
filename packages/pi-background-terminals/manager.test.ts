@@ -520,9 +520,11 @@ test("kill terminates the whole process tree (grandchildren die)", async () => {
       manager.start({
         // The child prints its own native pid (Bash's $! is an MSYS pid on
         // Windows), then the shell waits forever so the tree stays alive.
-        command: `node -e 'const fs = require("node:fs"); const file = ${JSON.stringify(sentinel)}; console.log("child:" + process.pid); let n = 0; fs.writeFileSync(file, String(n)); setInterval(() => fs.writeFileSync(file, String(++n)), 25)' & wait`,
+        command:
+          'node -e \'const fs = require("node:fs"); const file = process.env.BT_TREE_SENTINEL; let n = 0; fs.writeFileSync(file, String(n)); console.log("child:" + process.pid); setInterval(() => fs.writeFileSync(file, String(++n)), 25)\' & wait',
         title: "tree",
         cwd,
+        env: { ...process.env, BT_TREE_SENTINEL: sentinel },
       }),
     );
 
