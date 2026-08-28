@@ -14,6 +14,13 @@ import {
   type BridgeHello,
 } from "../src/runtime.ts";
 
+/**
+ * The bridge transport is a Unix domain socket. Windows has no UDS support in
+ * Node (it would need named pipes), so `listen` fails with EACCES there; skip
+ * the transport tests instead of pretending the extension runs on Windows.
+ */
+const posixOnly = process.platform === "win32" ? { skip: "requires Unix domain sockets" } : {};
+
 interface TestServer {
   readonly dir: string;
   readonly socketPath: string;
@@ -75,7 +82,7 @@ function withAgentDir<T>(agentDir: string, fn: () => Promise<T>): Promise<T> {
   });
 }
 
-test("discover finds related servers and ignores unrelated cwd", async () => {
+test("discover finds related servers and ignores unrelated cwd", posixOnly, async () => {
   const workspace = join(tmpdir(), `bridge-ws-${Date.now()}`);
   const testServer = await startTestServer(workspace);
   try {
@@ -98,7 +105,7 @@ test("discover finds related servers and ignores unrelated cwd", async () => {
   }
 });
 
-test("discover skips registries whose socket is gone", async () => {
+test("discover skips registries whose socket is gone", posixOnly, async () => {
   const workspace = join(tmpdir(), `bridge-ws-${Date.now()}`);
   const testServer = await startTestServer(workspace);
   try {
@@ -115,7 +122,7 @@ test("discover skips registries whose socket is gone", async () => {
   }
 });
 
-test("connect resolves on welcome and delivers prefill callbacks", async () => {
+test("connect resolves on welcome and delivers prefill callbacks", posixOnly, async () => {
   const workspace = join(tmpdir(), `bridge-ws-${Date.now()}`);
   const testServer = await startTestServer(workspace);
   const hello = makeHello(join(workspace, "pkg"));
@@ -186,7 +193,7 @@ test("connect resolves on welcome and delivers prefill callbacks", async () => {
   }
 });
 
-test("reject fails connect with BridgeRejectedError", async () => {
+test("reject fails connect with BridgeRejectedError", posixOnly, async () => {
   const workspace = join(tmpdir(), `bridge-ws-${Date.now()}`);
   const testServer = await startTestServer(workspace);
   const hello = makeHello(workspace);
@@ -239,7 +246,7 @@ test("reject fails connect with BridgeRejectedError", async () => {
   }
 });
 
-test("detached suppresses retry", async () => {
+test("detached suppresses retry", posixOnly, async () => {
   const workspace = join(tmpdir(), `bridge-ws-${Date.now()}`);
   const testServer = await startTestServer(workspace);
   const hello = makeHello(workspace);
@@ -311,7 +318,7 @@ test("detached suppresses retry", async () => {
   }
 });
 
-test("disconnect writes bye frame", async () => {
+test("disconnect writes bye frame", posixOnly, async () => {
   const workspace = join(tmpdir(), `bridge-ws-${Date.now()}`);
   const testServer = await startTestServer(workspace);
   const hello = makeHello(workspace);
@@ -374,7 +381,7 @@ test("disconnect writes bye frame", async () => {
   }
 });
 
-test("reattaches after an unexpected close", async () => {
+test("reattaches after an unexpected close", posixOnly, async () => {
   const workspace = join(tmpdir(), `bridge-ws-${Date.now()}`);
   const testServer = await startTestServer(workspace);
   const hello = makeHello(workspace);
@@ -447,7 +454,7 @@ test("reattaches after an unexpected close", async () => {
   }
 });
 
-test("calls onLost when every retry fails", async () => {
+test("calls onLost when every retry fails", posixOnly, async () => {
   const workspace = join(tmpdir(), `bridge-ws-${Date.now()}`);
   const testServer = await startTestServer(workspace);
   const registryPath = join(testServer.dir, "vscode-bridge", `${process.pid}.json`);
