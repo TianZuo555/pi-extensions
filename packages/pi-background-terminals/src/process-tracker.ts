@@ -42,6 +42,8 @@ export interface DetachedChildTracker {
    * exited), so the sweep closes jobs before falling back to pid sweeps.
    */
   trackJob(job: ChildJobHandle): void;
+  /** Stop retaining a job after its idempotent handle has been closed. */
+  untrackJob(job: ChildJobHandle): void;
   /** Remove the process listener and synchronously kill any residual trees. */
   dispose(): void;
 }
@@ -78,9 +80,10 @@ export function createDetachedChildTracker(): DetachedChildTracker {
       pids.delete(pid);
     },
     trackJob(job) {
-      // Entries settle (closing their own job) long before a crash sweep;
-      // double-close is a no-op, so settled jobs may remain in the set.
       if (!disposed) jobs.add(job);
+    },
+    untrackJob(job) {
+      jobs.delete(job);
     },
     dispose() {
       if (disposed) return;

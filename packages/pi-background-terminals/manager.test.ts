@@ -130,6 +130,25 @@ test("process exit safety net kills managed process groups", async () => {
   }
 });
 
+test("Windows job FFI survives Pi-style module reloads", {
+  skip: process.platform !== "win32",
+}, async () => {
+  const firstModuleUrl = new URL(`./src/win32-job.ts?reload=${Date.now()}-first`, import.meta.url);
+  const first = await import(firstModuleUrl.href);
+  const firstJob = await first.createChildJob();
+  assert.ok(firstJob, "first module instance created a job");
+  firstJob.close();
+
+  const secondModuleUrl = new URL(
+    `./src/win32-job.ts?reload=${Date.now()}-second`,
+    import.meta.url,
+  );
+  const second = await import(secondModuleUrl.href);
+  const secondJob = await second.createChildJob();
+  assert.ok(secondJob, "reloaded module instance created a job");
+  secondJob.close();
+});
+
 test("happy path: stdout and stderr captured separately, settles done, hook fires once unconsumed", async () => {
   await withManager(async (manager, runtime) => {
     const settled: Array<{ id: string; status: string; consumed: boolean }> = [];
@@ -499,9 +518,9 @@ test("kill terminates the whole process tree (grandchildren die)", async () => {
     const snap = await runTool(
       runtime,
       manager.start({
-        // sh spawns node in the background and prints the grandchild pid,
-        // then waits forever so the group stays alive.
-        command: `node -e 'const fs = require("node:fs"); const file = ${JSON.stringify(sentinel)}; let n = 0; fs.writeFileSync(file, String(n)); setInterval(() => fs.writeFileSync(file, String(++n)), 25)' & echo "child:$!"; wait`,
+        // The child prints its own native pid (Bash's $! is an MSYS pid on
+        // Windows), then the shell waits forever so the tree stays alive.
+        command: `node -e 'const fs = require("node:fs"); const file = ${JSON.stringify(sentinel)}; console.log("child:" + process.pid); let n = 0; fs.writeFileSync(file, String(n)); setInterval(() => fs.writeFileSync(file, String(++n)), 25)' & wait`,
         title: "tree",
         cwd,
       }),
@@ -545,7 +564,7 @@ test("a shell exit with inherited pipes open settles naturally and reaps descend
     const snap = await runTool(
       runtime,
       manager.start({
-        command: `node -e "setInterval(()=>{},1e3)" & echo "child:$!"; exit 0`,
+        command: `node -e "console.log('child:' + process.pid); setInterval(()=>{},1e3)" & exit 0`,
         title: "exited-shell",
         cwd,
       }),
@@ -579,7 +598,7 @@ test("kill preserves a natural exit observed before the signal point", async () 
     const snap = await runTool(
       runtime,
       manager.start({
-        command: `node -e "setInterval(()=>{},1e3)" & echo "child:$!"; exit 0`,
+        command: `node -e "console.log('child:' + process.pid); setInterval(()=>{},1e3)" & exit 0`,
         title: "natural-race",
         cwd,
       }),
@@ -984,7 +1003,7 @@ test("terminal_log_read pages a multi-byte archive without corrupting it", async
       runtime,
       manager.start({
         command: nodeCmd(
-          'for (let i = 0; i < 4000; i++) console.log(`行\${i}:${"漢".repeat(20)}🚀`);',
+          'for (let i = 0; i < 4000; i++) console.log(`行${i}:${"漢".repeat(20)}🚀`);',
         ),
         title: "utf8-archive",
         cwd,

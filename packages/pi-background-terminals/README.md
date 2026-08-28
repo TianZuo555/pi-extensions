@@ -135,14 +135,15 @@ While at least one terminal runs, a one-line widget renders above the editor.
 - **No interactive stdin.** Normal commands see EOF. The legacy WSL Bash
   transport may receive the script over stdin, but that pipe is closed
   immediately and cannot be used interactively.
-- **Process-tree termination.** POSIX children use their own process group;
-  Windows assigns each terminal to a dedicated Job Object
-  (`KILL_ON_JOB_CLOSE`) so closing it reliably reaps the whole tree —
-  including descendants that outlive the shell and keep the stdio pipes
-  open — with `taskkill /T` as the graceful first attempt. Shutdown and hard
-  timeouts send SIGTERM and escalate to SIGKILL after two seconds. A
-  synchronous process-exit tracker also kills managed trees when a Pi crash
-  bypasses normal extension cleanup.
+- **Process-tree termination.** POSIX children use their own process group.
+  On Windows the manager creates a dedicated Job Object before starting a
+  terminal, and a pre-shell launcher joins it before Bash can run; every
+  descendant therefore inherits `KILL_ON_JOB_CLOSE` membership without an
+  assignment race. Closing the handle reliably reaps descendants that outlive
+  the shell and keep stdio pipes open, with `taskkill /T` as the first attempt.
+  Shutdown and hard timeouts send SIGTERM and escalate to SIGKILL after two
+  seconds. A synchronous process-exit tracker also kills managed trees when a
+  Pi crash bypasses normal extension cleanup.
 - **Session scoped.** `/new`, `/resume`, `/fork`, `/reload`, and quit terminate
   every process tree and remove the remaining spill directory.
 

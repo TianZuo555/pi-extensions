@@ -16,6 +16,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import { getShellConfig } from "@earendil-works/pi-coding-agent";
 import { Context, Deferred, Effect, Exit, FiberSet, Layer, Scope } from "effect";
 import {
@@ -29,7 +30,7 @@ import {
 } from "./domain.ts";
 import { OutputBuffer } from "./output.ts";
 import { createDetachedChildTracker } from "./process-tracker.ts";
-import { assignChildJob, preloadChildJobSupport, type ChildJobHandle } from "./win32-job.ts";
+import { createChildJob, preloadChildJobSupport, type ChildJobHandle } from "./win32-job.ts";
 import { codePointStart, completeCodePointEnd } from "./utf8.ts";
 
 export const MAX_RUNNING = 8;
@@ -61,6 +62,7 @@ const SETTLE_GRACE_MS = 1_000;
  * scope-close bound, so teardown remains bounded end to end. */
 const SPILL_FLUSH_TIMEOUT_MS = 1_500;
 const ERROR_TEXT_MAX_LENGTH = 4_096;
+const WIN32_CHILD_PATH = fileURLToPath(new URL("./win32-child.mjs", import.meta.url));
 
 function bounded(text: string) {
   return text.slice(0, ERROR_TEXT_MAX_LENGTH);
@@ -361,8 +363,8 @@ function terminateChild(
 // --- Implementation --------------------------------------------------------------
 
 const makeManager = Effect.gen(function* () {
-  // Warm the Windows job-object surface now so per-terminal assignment runs
-  // synchronously in the same tick as each spawn (POSIX: resolves at once).
+  // Warm the Windows job-object surface before the first terminal needs a
+  // pre-created job (POSIX resolves immediately without loading Koffi).
   yield* Effect.promise(preloadChildJobSupport);
   // Scoped detached forker for sync contexts (read-model kills, process-event
   // settlement, pruning). Completed fibers remove themselves; manager scope
@@ -561,6 +563,7 @@ const makeManager = Effect.gen(function* () {
     // The tree is final: close the Windows job so detached descendants that
     // no PID path can reach are reaped now rather than at Pi exit.
     entry.childJob?.close();
+    if (entry.childJob) detachedChildren.untrackJob(entry.childJob);
     notify(s.id);
     try {
       // During teardown, don't queue results into a shutting-down session.
@@ -701,40 +704,66 @@ const makeManager = Effect.gen(function* () {
               fallbackSafe: true,
             }),
         });
+        // Create the Windows kill switch before any process in the command
+        // tree exists. The launcher joins it before spawning the real shell,
+        // eliminating the post-spawn assignment race from issue #5.
+        const childJob =
+          process.platform === "win32" ? yield* Effect.promise(createChildJob) : undefined;
+        if (childJob) detachedChildren.trackJob(childJob);
+
         const child = yield* Effect.try({
           try: () => {
-            const spawned = spawn(invocation.shell, invocation.args, {
-              cwd: options.cwd,
-              env: options.env ?? process.env,
-              // No interactive stdin. The sole exception is legacy WSL Bash's
-              // one-shot script transport, which is closed immediately below.
-              stdio: [invocation.commandInput === undefined ? "ignore" : "pipe", "pipe", "pipe"],
-              // Own process group on POSIX → group kill takes the whole tree.
-              detached: process.platform !== "win32",
-              windowsHide: true,
-            });
-            if (invocation.commandInput !== undefined) {
-              spawned.stdin?.on("error", () => {});
+            const env = options.env ?? process.env;
+            const spawned = childJob
+              ? spawn(process.execPath, [WIN32_CHILD_PATH, childJob.name], {
+                  cwd: options.cwd,
+                  env,
+                  // One-shot JSON launch configuration; the requested shell
+                  // still receives no interactive stdin.
+                  stdio: ["pipe", "pipe", "pipe"],
+                  detached: false,
+                  windowsHide: true,
+                })
+              : spawn(invocation.shell, invocation.args, {
+                  cwd: options.cwd,
+                  env,
+                  // No interactive stdin. The sole exception is legacy WSL
+                  // Bash's one-shot script transport, closed immediately.
+                  stdio: [
+                    invocation.commandInput === undefined ? "ignore" : "pipe",
+                    "pipe",
+                    "pipe",
+                  ],
+                  // Own process group on POSIX → group kill takes the tree.
+                  detached: process.platform !== "win32",
+                  windowsHide: true,
+                });
+            spawned.stdin?.on("error", () => {});
+            if (childJob) {
+              spawned.stdin?.end(
+                JSON.stringify({
+                  shell: invocation.shell,
+                  args: invocation.args,
+                  commandInput: invocation.commandInput,
+                }),
+              );
+            } else if (invocation.commandInput !== undefined) {
               spawned.stdin?.end(invocation.commandInput);
             }
             return spawned;
           },
-          catch: (error) =>
-            new SpawnError({
+          catch: (error) => {
+            childJob?.close();
+            if (childJob) detachedChildren.untrackJob(childJob);
+            return new SpawnError({
               message: boundedError(error),
               fallbackSafe: true,
-            }),
+            });
+          },
         });
 
         const childPid = child.pid;
         if (childPid) detachedChildren.track(childPid);
-        // Assign the tree to a dedicated Windows job in the same tick as the
-        // spawn, before the shell can create descendants. Never fails start:
-        // cleanup falls back to the PID-based paths when unavailable.
-        const childJob = childPid
-          ? yield* Effect.promise(() => assignChildJob(childPid))
-          : undefined;
-        if (childJob) detachedChildren.trackJob(childJob);
 
         const id = `bt-${++counter}`;
         const entryRef = () => entries.get(id);
@@ -884,6 +913,7 @@ const makeManager = Effect.gen(function* () {
               // job terminates any descendant still holding stdio pipes —
               // PID-based kills cannot reach the re-parented survivors.
               entry.childJob?.close();
+              if (entry.childJob) detachedChildren.untrackJob(entry.childJob);
               if (childPid) detachedChildren.untrack(childPid);
             }),
           ),
