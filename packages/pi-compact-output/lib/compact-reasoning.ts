@@ -1,10 +1,5 @@
 import type { Component } from "@earendil-works/pi-tui";
-import {
-  Spacer,
-  truncateToWidth,
-  visibleWidth,
-  wrapTextWithAnsi,
-} from "@earendil-works/pi-tui";
+import { Spacer, truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { SPINNER_FRAMES, SPINNER_INTERVAL_MS } from "./compact-status.ts";
 import { capUntrustedText, lastSanitizedLines } from "./sanitize-text.ts";
 
@@ -16,10 +11,12 @@ const BOLD_REASONING_LINE = /^\s*\*\*(.*?)\*\*\s*$/u;
  * This only changes the presentation copy; the assistant message remains raw.
  */
 export function normalizeReasoningText(thinking: string): string {
-  const lines = capUntrustedText(thinking).split(/\r?\n/u).map((line) => {
-    const match = BOLD_REASONING_LINE.exec(line);
-    return match ? match[1]?.trim() ?? "" : line;
-  });
+  const lines = capUntrustedText(thinking)
+    .split(/\r?\n/u)
+    .map((line) => {
+      const match = BOLD_REASONING_LINE.exec(line);
+      return match ? (match[1]?.trim() ?? "") : line;
+    });
 
   const firstContent = lines.findIndex((line) => line.trim().length > 0);
   let lastContent = -1;
@@ -67,11 +64,7 @@ function formatReasonLine(text: string, width: number): string {
   return theme.italic(theme.fg("thinkingText", truncated));
 }
 
-function thinkingLines(
-  thinking: string,
-  expanded: boolean,
-  lineCount: number,
-): string[] {
+function thinkingLines(thinking: string, expanded: boolean, lineCount: number): string[] {
   const capped = normalizeReasoningText(thinking);
   if (expanded) {
     // Keep explicit blank lines in the expanded view so paragraph breaks in
@@ -176,14 +169,12 @@ export class CompactReasoningComponent implements Component {
     const accent = (text: string) => (theme ? theme.fg("accent", text) : text);
     const success = (text: string) => (theme ? theme.fg("success", text) : text);
 
-    const status = this.streaming
-      ? accent(SPINNER_FRAMES[this.frame] ?? "")
-      : success("✓");
+    const status = this.streaming ? accent(SPINNER_FRAMES[this.frame] ?? "") : success("✓");
     const label = ` Reasoning ${status} `;
     const innerWidth = Math.max(1, safeWidth - 2);
     const topDashes = Math.max(0, innerWidth - visibleWidth(label));
     const top = truncateToWidth(
-      border("╭") + label + border("─".repeat(topDashes) + "╮"),
+      border("╭") + label + border(`${"─".repeat(topDashes)}╮`),
       safeWidth,
     );
 
@@ -196,10 +187,7 @@ export class CompactReasoningComponent implements Component {
       );
     });
 
-    const bottom = truncateToWidth(
-      border("╰") + border("─".repeat(innerWidth) + "╯"),
-      safeWidth,
-    );
+    const bottom = truncateToWidth(border("╰") + border(`${"─".repeat(innerWidth)}╯`), safeWidth);
 
     const topSpacer = new Spacer(1);
     const bottomSpacer = new Spacer(1);

@@ -1,9 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type {
-  ExtensionAPI,
-  Theme,
-} from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import todoExtension from "../index.ts";
 
@@ -17,9 +14,7 @@ interface WidgetComponent {
 
 test("todo widget truncates every ANSI-styled line to the render width", async () => {
   let tool: TodoTool | undefined;
-  let widgetFactory:
-    | ((tui: unknown, theme: Theme) => WidgetComponent)
-    | undefined;
+  let widgetFactory: ((tui: unknown, theme: Theme) => WidgetComponent) | undefined;
 
   todoExtension({
     on: () => {},

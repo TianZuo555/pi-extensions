@@ -31,11 +31,7 @@ test("goal state resets usage when a new objective is created", () => {
 
 test("editing an objective preserves identity, accounting, and stopped states", () => {
   const created = createGoal("Original objective", 1_000, 100, "goal-edit");
-  const accounted = addGoalUsage(
-    created,
-    { tokens: 250, seconds: 12 },
-    150,
-  );
+  const accounted = addGoalUsage(created, { tokens: 250, seconds: 12 }, 150);
   const paused = setGoalStatus(accounted, "paused", 175, "user");
   const edited = editGoalObjective(paused, "  Revised objective  ", 200);
 
@@ -56,16 +52,10 @@ test("editing an objective preserves identity, accounting, and stopped states", 
   );
 
   for (const status of ["blocked", "usage-limited"] as const) {
-    assert.equal(
-      editGoalObjective(setGoalStatus(accounted, status), "Revised").status,
-      status,
-    );
+    assert.equal(editGoalObjective(setGoalStatus(accounted, status), "Revised").status, status);
   }
   for (const status of ["complete", "budget-limited"] as const) {
-    assert.equal(
-      editGoalObjective(setGoalStatus(accounted, status), "Revised").status,
-      "active",
-    );
+    assert.equal(editGoalObjective(setGoalStatus(accounted, status), "Revised").status, "active");
   }
 });
 
@@ -111,9 +101,16 @@ test("zero or invalid totals fall back to component usage; positive totals win",
 });
 
 test("budget-limited without a budget is not a valid persisted combination", () => {
-  const limited = { ...createGoal("No budget", undefined, 100, "goal-7"), status: "budget-limited" as const };
+  const limited = {
+    ...createGoal("No budget", undefined, 100, "goal-7"),
+    status: "budget-limited" as const,
+  };
   assert.equal(normalizeGoal(limited), undefined);
-  const budgeted = addGoalUsage(createGoal("Has budget", 100, 100, "goal-8"), { tokens: 100, seconds: 0 }, 200);
+  const budgeted = addGoalUsage(
+    createGoal("Has budget", 100, 100, "goal-8"),
+    { tokens: 100, seconds: 0 },
+    200,
+  );
   const normalized = normalizeGoal(budgeted);
   assert.equal(normalized?.status, "budget-limited");
   assert.equal(normalized?.tokenBudget, 100);

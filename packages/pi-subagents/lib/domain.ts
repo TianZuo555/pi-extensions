@@ -3,13 +3,7 @@
 import type { ChildSemanticReport } from "./run-report.ts";
 import type { WorktreeDelivery } from "./worktree.ts";
 
-export const BUILTIN_PROFILE_NAMES = [
-  "scout",
-  "planner",
-  "reviewer",
-  "oracle",
-  "worker",
-] as const;
+export const BUILTIN_PROFILE_NAMES = ["scout", "planner", "reviewer", "oracle", "worker"] as const;
 
 export type BuiltinProfileName = (typeof BUILTIN_PROFILE_NAMES)[number];
 
@@ -21,11 +15,7 @@ export type ProfileSource = "builtin" | "user" | "project";
 
 export type WorkspacePolicy = "shared-readonly" | "shared-write" | "worktree";
 
-export type RunTerminalStatus =
-  | "completed"
-  | "failed"
-  | "cancelled"
-  | "timed_out";
+export type RunTerminalStatus = "completed" | "failed" | "cancelled" | "timed_out";
 
 export type RunLifecycleStatus = RunTerminalStatus | "running";
 
@@ -178,7 +168,7 @@ export function truncateText(text: string, maxCodeUnits: number): string {
 export function truncateUtf8(text: string, maxBytes: number): string {
   if (Buffer.byteLength(text, "utf8") <= maxBytes) return text;
   const markerBytes = Buffer.byteLength(TRUNCATION_MARKER, "utf8");
-  let budget = maxBytes - markerBytes;
+  const budget = maxBytes - markerBytes;
   if (budget < 1) return TRUNCATION_MARKER;
   let end = text.length;
   while (end > 0 && Buffer.byteLength(text.slice(0, end), "utf8") > budget) {

@@ -1,10 +1,5 @@
 import assert from "node:assert/strict";
-import {
-  mkdirSync,
-  mkdtempSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { after, before, test } from "node:test";
@@ -39,10 +34,7 @@ before(() => {
   writeFileSync(path.join(root, "ignored.ts"), "ignored needle\n");
   writeFileSync(path.join(root, ".env"), "API_KEY=secret-needle\n");
   writeFileSync(path.join(root, ".secret.ts"), "hidden needle\n");
-  writeFileSync(
-    path.join(root, ".github", "workflows", "publish.yml"),
-    "name: hidden-needle\n",
-  );
+  writeFileSync(path.join(root, ".github", "workflows", "publish.yml"), "name: hidden-needle\n");
   writeFileSync(path.join(root, "long.txt"), `needle ${"x".repeat(900)}\n`);
   runtime = createSearchRuntime();
 });
@@ -53,29 +45,27 @@ after(async () => {
 });
 
 async function grep(
-  request: Pick<GrepRequest, "pattern"> & Partial<Omit<GrepRequest, "pattern" | "cwd">> & {
-    cwd?: string;
-  },
+  request: Pick<GrepRequest, "pattern"> &
+    Partial<Omit<GrepRequest, "pattern" | "cwd">> & {
+      cwd?: string;
+    },
 ) {
   const service = runtime.runSync(SearchRuntime);
-  return runSearch(
-    runtime,
-    service.grep({ ...request, cwd: request.cwd ?? root }),
-    { signal: request.signal },
-  );
+  return runSearch(runtime, service.grep({ ...request, cwd: request.cwd ?? root }), {
+    signal: request.signal,
+  });
 }
 
 async function find(
-  request: Pick<FindRequest, "pattern"> & Partial<Omit<FindRequest, "pattern" | "cwd">> & {
-    cwd?: string;
-  },
+  request: Pick<FindRequest, "pattern"> &
+    Partial<Omit<FindRequest, "pattern" | "cwd">> & {
+      cwd?: string;
+    },
 ) {
   const service = runtime.runSync(SearchRuntime);
-  return runSearch(
-    runtime,
-    service.find({ ...request, cwd: request.cwd ?? root }),
-    { signal: request.signal },
-  );
+  return runSearch(runtime, service.find({ ...request, cwd: request.cwd ?? root }), {
+    signal: request.signal,
+  });
 }
 
 test("grep uses a case-sensitive regex", { skip: !hasRg }, async () => {
@@ -104,8 +94,14 @@ test("grep path is one file or directory and glob filters file names", {
   assert.ok(typescript.matches.some((match) => match.path === "src/deep/test.ts"));
 
   const ignored = await grep({ pattern: "needle", glob: "*.ts" });
-  assert.equal(ignored.matches.some((match) => match.path === "ignored.ts"), false);
-  assert.equal(ignored.matches.some((match) => match.path === ".secret.ts"), false);
+  assert.equal(
+    ignored.matches.some((match) => match.path === "ignored.ts"),
+    false,
+  );
+  assert.equal(
+    ignored.matches.some((match) => match.path === ".secret.ts"),
+    false,
+  );
 });
 
 test("grep skips hidden and ignored files by default", { skip: !hasRg }, async () => {
@@ -122,12 +118,16 @@ test("grep searches an explicitly named hidden path", { skip: !hasRg }, async ()
     path: ".github",
     glob: "*.yml",
   });
-  assert.deepEqual(directory.matches.map((match) => match.path), [
-    ".github/workflows/publish.yml",
-  ]);
+  assert.deepEqual(
+    directory.matches.map((match) => match.path),
+    [".github/workflows/publish.yml"],
+  );
 
   const file = await grep({ pattern: "secret-needle", path: ".env" });
-  assert.deepEqual(file.matches.map((match) => match.path), [".env"]);
+  assert.deepEqual(
+    file.matches.map((match) => match.path),
+    [".env"],
+  );
 });
 
 test("grep clips long lines", { skip: !hasRg }, async () => {
@@ -208,10 +208,7 @@ test("searches are abortable", { skip: !hasRg }, async () => {
 });
 
 test("engine arguments contain only the fixed simple behavior", () => {
-  const rg = buildRgArgs(
-    { pattern: "needle", path: "src", glob: "*.ts", cwd: root },
-    root,
-  );
+  const rg = buildRgArgs({ pattern: "needle", path: "src", glob: "*.ts", cwd: root }, root);
   assert.ok(rg.includes("--regexp"));
   assert.ok(rg.includes("--type-add"));
   assert.ok(rg.includes("pifind:*.ts"));

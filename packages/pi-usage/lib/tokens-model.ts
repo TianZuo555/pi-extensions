@@ -133,7 +133,9 @@ export function aggregateWindow(
   const range = windowRange(key, now);
   // Keep every day in the window (empty ones included) so the day chart stays
   // continuous; totals are unaffected because empty days contribute zero.
-  const days = windowDayKeys(range, now).map((dateKey) => dayIndex.get(dateKey) ?? emptyDay(dateKey, now));
+  const days = windowDayKeys(range, now).map(
+    (dateKey) => dayIndex.get(dateKey) ?? emptyDay(dateKey, now),
+  );
 
   const totals = {
     key,
@@ -220,10 +222,7 @@ export function buildDayIndex(records: readonly UsageRecord[]): Map<string, DayU
 }
 
 /** 24 local-hour buckets for one dateKey (the 1d window chart). */
-export function buildHourBuckets(
-  dateKey: string,
-  records: readonly UsageRecord[],
-): HourUsage[] {
+export function buildHourBuckets(dateKey: string, records: readonly UsageRecord[]): HourUsage[] {
   const buckets: HourUsage[] = Array.from({ length: 24 }, (_, hour) => ({
     hour,
     totalTokens: 0,
@@ -249,7 +248,9 @@ export function topModels(
   limit: number,
 ): Array<[string, ModelUsage]> {
   return [...models.entries()]
-    .sort((a, b) => (metric === "cost" ? b[1].costUSD - a[1].costUSD : b[1].totalTokens - a[1].totalTokens))
+    .sort((a, b) =>
+      metric === "cost" ? b[1].costUSD - a[1].costUSD : b[1].totalTokens - a[1].totalTokens,
+    )
     .slice(0, limit);
 }
 

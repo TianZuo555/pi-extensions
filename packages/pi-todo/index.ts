@@ -10,11 +10,7 @@
 // Quick try:  pi -e ./packages/pi-todo
 
 import { StringEnum } from "@earendil-works/pi-ai";
-import type {
-  ExtensionAPI,
-  ExtensionContext,
-  Theme,
-} from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import { Text, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { Type, type Static } from "typebox";
 import {
@@ -23,10 +19,7 @@ import {
   TODO_PROMPT_SNIPPET,
   TODO_TOOL_DESCRIPTION,
 } from "./lib/prompt.ts";
-import {
-  statsFor,
-  type TodoItem,
-} from "./lib/state.ts";
+import { statsFor, type TodoItem } from "./lib/state.ts";
 import {
   createTodoRuntime,
   runTodo,
@@ -90,8 +83,7 @@ export default function todoExtension(pi: ExtensionAPI): void {
       (_tui, theme: Theme) => ({
         render: (width: number) =>
           [
-            theme.fg("accent", " Todos ") +
-              theme.fg("muted", `${completed}/${total}`),
+            theme.fg("accent", " Todos ") + theme.fg("muted", `${completed}/${total}`),
             ...snapshot.map((todo) => {
               const label =
                 todo.status === "completed"
@@ -101,11 +93,7 @@ export default function todoExtension(pi: ExtensionAPI): void {
                     : todo.title;
               return `  ${STATUS_ICON[todo.status]} ${theme.fg("accent", `${todo.id}.`)} ${label}`;
             }),
-          ].map((line) =>
-            visibleWidth(line) <= width
-              ? line
-              : truncateToWidth(line, width),
-          ),
+          ].map((line) => (visibleWidth(line) <= width ? line : truncateToWidth(line, width))),
         invalidate: () => {},
       }),
       { placement: "aboveEditor" },
@@ -196,10 +184,7 @@ export default function todoExtension(pi: ExtensionAPI): void {
       await renderWidget(ctx);
       const todos = await runTodo(runtime, todoService.getTodos);
       const { total, completed } = statsFor(todos);
-      ctx.ui.notify(
-        total === 0 ? "No todos." : `${completed}/${total} todos completed.`,
-        "info",
-      );
+      ctx.ui.notify(total === 0 ? "No todos." : `${completed}/${total} todos completed.`, "info");
     },
   });
 }

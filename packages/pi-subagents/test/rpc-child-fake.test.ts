@@ -14,9 +14,10 @@ const FIXTURE = path.join(
   "fake-rpc-child.mjs",
 );
 
-const fakeModel = { provider: "openai", id: "gpt-4.1-mini" } as import("@earendil-works/pi-ai").Model<
-  import("@earendil-works/pi-ai").Api
->;
+const fakeModel = {
+  provider: "openai",
+  id: "gpt-4.1-mini",
+} as import("@earendil-works/pi-ai").Model<import("@earendil-works/pi-ai").Api>;
 
 function isolatedAgentDir(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-fake-"));
@@ -74,7 +75,9 @@ describe("RpcChild structured reports via fake child", () => {
     });
     assert.equal(failed.status, "completed");
     assert.equal(
-      failed.semanticReport?.kind === "structured" ? failed.semanticReport.report.status : undefined,
+      failed.semanticReport?.kind === "structured"
+        ? failed.semanticReport.report.status
+        : undefined,
       "failed",
     );
 

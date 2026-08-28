@@ -32,10 +32,7 @@ async function pathExists(path: string): Promise<boolean> {
 test("temporary path checks reject sibling directories with the same prefix", () => {
   const root = join(parse(process.cwd()).root, "tmp");
   assert.equal(isPathWithin(root, join(root, "pi-clipboard-image.png")), true);
-  assert.equal(
-    isPathWithin(root, join(`${root}-outside`, "pi-clipboard-image.png")),
-    false,
-  );
+  assert.equal(isPathWithin(root, join(`${root}-outside`, "pi-clipboard-image.png")), false);
 });
 
 function isClosedError(error: unknown): boolean {
@@ -211,7 +208,10 @@ test("ImageCacheRuntime close waits for in-flight mutations and rejects post-clo
 
   await runImageCache(runtime, cache.init(sessionId));
 
-  const mutationOutcomePromise = runImageCache(runtime, cache.cacheBytes(PNG_BYTES, "image/png")).then(
+  const mutationOutcomePromise = runImageCache(
+    runtime,
+    cache.cacheBytes(PNG_BYTES, "image/png"),
+  ).then(
     () => ({ ok: true as const }),
     (error: unknown) => ({ ok: false as const, error }),
   );
@@ -241,7 +241,10 @@ test("ImageCacheRuntime rolls back orphan files when close interrupts post-write
 
   await runImageCache(runtime, cache.init(sessionId));
 
-  const mutationOutcomePromise = runImageCache(runtime, cache.cacheBytes(PNG_BYTES, "image/png")).then(
+  const mutationOutcomePromise = runImageCache(
+    runtime,
+    cache.cacheBytes(PNG_BYTES, "image/png"),
+  ).then(
     () => ({ ok: true as const }),
     (error: unknown) => ({ ok: false as const, error }),
   );
@@ -273,7 +276,10 @@ test("ImageCacheRuntime close rejects mutations started after admission stops", 
 
   await runImageCache(runtime, cache.init(sessionId));
 
-  const inFlightOutcomePromise = runImageCache(runtime, cache.cacheBytes(PNG_BYTES, "image/png")).then(
+  const inFlightOutcomePromise = runImageCache(
+    runtime,
+    cache.cacheBytes(PNG_BYTES, "image/png"),
+  ).then(
     () => ({ ok: true as const }),
     (error: unknown) => ({ ok: false as const, error }),
   );

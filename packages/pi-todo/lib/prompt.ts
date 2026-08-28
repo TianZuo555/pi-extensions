@@ -3,8 +3,7 @@
  * non-overlapping; detailed recovery belongs in on-demand result messages.
  */
 
-export const TODO_TOOL_DESCRIPTION =
-  "Track multi-step work in a shared todo list.";
+export const TODO_TOOL_DESCRIPTION = "Track multi-step work in a shared todo list.";
 export const TODO_PROMPT_SNIPPET = "Track multi-step work";
 
 export const TODO_PROMPT_GUIDELINES = [

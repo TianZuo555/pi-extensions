@@ -79,7 +79,8 @@ export async function executeSearch(
   ctx: ExtensionContext,
   runtime?: WebSearchRuntimeInstance | (() => WebSearchRuntimeInstance),
 ): Promise<{ text: string; details: WebSearchDetails }> {
-  const searchRuntime = typeof runtime === "function" ? runtime() : (runtime ?? createWebSearchRuntime());
+  const searchRuntime =
+    typeof runtime === "function" ? runtime() : (runtime ?? createWebSearchRuntime());
   const searchService = searchRuntime.runSync(WebSearchRuntime);
 
   const searchOptions: SearchOptions = {
@@ -89,12 +90,7 @@ export async function executeSearch(
 
   const response: SearchResponse = await runWebSearch(
     searchRuntime,
-    searchService.search(
-      params.query,
-      searchOptions,
-      undefined,
-      ctx,
-    ),
+    searchService.search(params.query, searchOptions, undefined, ctx),
     { signal },
   );
 
@@ -134,16 +130,13 @@ export async function executeFetch(
   signal: AbortSignal | undefined,
   runtime?: WebSearchRuntimeInstance | (() => WebSearchRuntimeInstance),
 ): Promise<{ text: string; details: WebFetchDetails }> {
-  const searchRuntime = typeof runtime === "function" ? runtime() : (runtime ?? createWebSearchRuntime());
+  const searchRuntime =
+    typeof runtime === "function" ? runtime() : (runtime ?? createWebSearchRuntime());
   const searchService = searchRuntime.runSync(WebSearchRuntime);
 
   const response: FetchResponse = await runWebSearch(
     searchRuntime,
-    searchService.fetch(
-      params.url,
-      { signal, raw: params.raw },
-      undefined,
-    ),
+    searchService.fetch(params.url, { signal, raw: params.raw }, undefined),
     { signal },
   );
 
@@ -189,9 +182,7 @@ export function registerTools(
 
     renderCall(args: WebSearchInput, theme: Theme) {
       const queryStr = `"${args.query}"`;
-      const line =
-        theme.fg("toolTitle", theme.bold("web_search ")) +
-        theme.fg("accent", queryStr);
+      const line = theme.fg("toolTitle", theme.bold("web_search ")) + theme.fg("accent", queryStr);
       return new Text(line, 0, 0);
     },
 
@@ -202,10 +193,7 @@ export function registerTools(
       }
 
       const fallbackStr = details.fallbackFrom?.length
-        ? theme.fg(
-            "warning",
-            ` (fallback from ${details.fallbackFrom.join(" → ")})`,
-          )
+        ? theme.fg("warning", ` (fallback from ${details.fallbackFrom.join(" → ")})`)
         : "";
       const summary =
         theme.fg("success", "✓ ") +
@@ -246,9 +234,7 @@ export function registerTools(
     },
 
     renderCall(args: WebFetchInput, theme: Theme) {
-      const line =
-        theme.fg("toolTitle", theme.bold("web_fetch ")) +
-        theme.fg("accent", args.url);
+      const line = theme.fg("toolTitle", theme.bold("web_fetch ")) + theme.fg("accent", args.url);
       return new Text(line, 0, 0);
     },
 
@@ -261,10 +247,7 @@ export function registerTools(
       const kb = (details.bytes / 1024).toFixed(1);
       const titleStr = details.title ? ` (${details.title})` : "";
       const fallbackStr = details.fallbackFrom?.length
-        ? theme.fg(
-            "warning",
-            ` (fallback from ${details.fallbackFrom.join(" → ")})`,
-          )
+        ? theme.fg("warning", ` (fallback from ${details.fallbackFrom.join(" → ")})`)
         : "";
       const summary =
         theme.fg("success", "✓ ") +
@@ -275,10 +258,7 @@ export function registerTools(
         return new Text(summary, 0, 0);
       }
 
-      const lines = [
-        summary,
-        `  ${theme.fg("accent", "URL:")} ${theme.fg("dim", details.url)}`,
-      ];
+      const lines = [summary, `  ${theme.fg("accent", "URL:")} ${theme.fg("dim", details.url)}`];
       return new Text(lines.join("\n"), 0, 0);
     },
   });

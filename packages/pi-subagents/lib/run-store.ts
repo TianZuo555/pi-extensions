@@ -1,9 +1,4 @@
-import type {
-  RunLifecycleStatus,
-  RunMode,
-  RunRecord,
-  SubagentRunResult,
-} from "./domain.ts";
+import type { RunMode, RunRecord, SubagentRunResult } from "./domain.ts";
 
 export class RunStore {
   private runs = new Map<string, RunRecord>();

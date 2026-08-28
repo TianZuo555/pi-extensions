@@ -6,7 +6,6 @@
 // in a central, machine-local registry keyed by git root, so each repo
 // remembers its own set without touching global settings or the repo's .pi/.
 
-import path from "node:path";
 import type {
   ExtensionAPI,
   ExtensionCommandContext,
@@ -54,14 +53,8 @@ function isDisabled(disabled: DisabledSkills | undefined, name: string): boolean
   return disabled.includes(name);
 }
 
-function normalizeDisabled(
-  disabledNames: Set<string>,
-  visibleSkillsList: Skill[],
-): DisabledSkills {
-  if (
-    visibleSkillsList.length > 0 &&
-    visibleSkillsList.every((s) => disabledNames.has(s.name))
-  ) {
+function normalizeDisabled(disabledNames: Set<string>, visibleSkillsList: Skill[]): DisabledSkills {
+  if (visibleSkillsList.length > 0 && visibleSkillsList.every((s) => disabledNames.has(s.name))) {
     return ALL;
   }
   return [...disabledNames].sort();
@@ -138,21 +131,13 @@ class SkillToggleList extends Container {
     const t = this.theme;
 
     lines.push(t.bold(t.fg("accent", `repo-skills · ${this.repoName}`)));
-    lines.push(
-      t.fg(
-        "muted",
-        "Space toggle · 'a' all on/off · Enter save · Esc cancel",
-      ),
-    );
+    lines.push(t.fg("muted", "Space toggle · 'a' all on/off · Enter save · Esc cancel"));
     lines.push("");
 
     const visibleRows = 12;
     const start = Math.max(
       0,
-      Math.min(
-        this.selectedIndex - Math.floor(visibleRows / 2),
-        this.skills.length - visibleRows,
-      ),
+      Math.min(this.selectedIndex - Math.floor(visibleRows / 2), this.skills.length - visibleRows),
     );
     const end = Math.min(start + visibleRows, this.skills.length);
 
@@ -177,8 +162,7 @@ class SkillToggleList extends Container {
     }
 
     if (this.keybindings.matches(data, "up") || data === "\x1b[A") {
-      this.selectedIndex =
-        (this.selectedIndex - 1 + this.skills.length) % this.skills.length;
+      this.selectedIndex = (this.selectedIndex - 1 + this.skills.length) % this.skills.length;
       this.rebuildUI();
       return true;
     }
@@ -199,11 +183,7 @@ class SkillToggleList extends Container {
       return true;
     }
 
-    if (
-      this.keybindings.matches(data, "select") ||
-      data === "\r" ||
-      data === "\n"
-    ) {
+    if (this.keybindings.matches(data, "select") || data === "\r" || data === "\n") {
       this.done(normalizeDisabled(this.disabledNames, this.skills));
       return true;
     }
@@ -238,7 +218,7 @@ async function interactiveToggle(
   const sorted = [...all].sort((a, b) => a.name.localeCompare(b.name));
   const current = (await runRepoSkills(runtime, service.getRepoSkills(ctx.cwd)))?.disabled;
 
-  const custom = (ctx.ui as { custom?: Function }).custom;
+  const custom = (ctx.ui as { custom?: (...args: unknown[]) => unknown }).custom;
   if (typeof custom !== "function") {
     return { message: "Interactive toggle requires TUI mode.", level: "warning" };
   }
@@ -306,9 +286,7 @@ async function runAction(
   }
 
   const current = (await runRepoSkills(runtime, service.getRepoSkills(ctx.cwd)))?.disabled;
-  const disabledNames = new Set<string>(
-    current === ALL ? all.map((s) => s.name) : (current ?? []),
-  );
+  const disabledNames = new Set<string>(current === ALL ? all.map((s) => s.name) : (current ?? []));
   if (action === "disable") disabledNames.add(target);
   else disabledNames.delete(target);
 
@@ -330,7 +308,7 @@ function notify(ctx: ExtensionContext, result: ActionResult): void {
 
 export default function repoSkillsExtension(pi: ExtensionAPI): void {
   const runtime = createRepoSkillsRuntime();
-  const service = runtime.runSync(RepoSkillsRuntime);
+  const _service = runtime.runSync(RepoSkillsRuntime);
 
   pi.on("before_agent_start", (event, ctx) => {
     const all = event.systemPromptOptions.skills ?? [];
@@ -339,7 +317,7 @@ export default function repoSkillsExtension(pi: ExtensionAPI): void {
     const config = readJson<RepoSkillsConfig>(CONFIG_FILE, { version: 1, repos: {} });
     const meta = getRepoMeta(ctx.cwd);
     const entry = config.repos?.[meta.key];
-    if (!entry || !entry.disabled || (entry.disabled !== ALL && entry.disabled.length === 0)) {
+    if (!entry?.disabled || (entry.disabled !== ALL && entry.disabled.length === 0)) {
       return;
     }
 
@@ -347,9 +325,7 @@ export default function repoSkillsExtension(pi: ExtensionAPI): void {
     if (!oldBlock) return;
 
     const enabled =
-      entry.disabled === ALL
-        ? []
-        : all.filter((s) => !isDisabled(entry.disabled, s.name));
+      entry.disabled === ALL ? [] : all.filter((s) => !isDisabled(entry.disabled, s.name));
     const newBlock = formatSkillsForPrompt(enabled);
     if (!event.systemPrompt.includes(oldBlock)) return;
 

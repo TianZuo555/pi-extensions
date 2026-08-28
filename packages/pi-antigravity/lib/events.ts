@@ -37,12 +37,7 @@ export interface AgyToolInfo {
 }
 
 export type AgyStepState = "ACTIVE" | "DONE" | "ERROR" | string;
-export type AgyStepType =
-  | "user_input"
-  | "checkpoint"
-  | "agent_response"
-  | "tool"
-  | (string & {});
+export type AgyStepType = "user_input" | "checkpoint" | "agent_response" | "tool" | (string & {});
 
 export interface AgyStepUpdate {
   conversation_id?: string;
@@ -111,11 +106,7 @@ export function parseAgyLine(line: string): ParsedAgyEvent {
       init: rec.init as AgyInit,
     };
   }
-  if (
-    rec.event === "step_update" &&
-    rec.step_update &&
-    typeof rec.step_update === "object"
-  ) {
+  if (rec.event === "step_update" && rec.step_update && typeof rec.step_update === "object") {
     return { kind: "step", step: rec.step_update as AgyStepUpdate };
   }
   if (rec.event === "result" && rec.result && typeof rec.result === "object") {

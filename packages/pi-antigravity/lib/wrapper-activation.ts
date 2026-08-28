@@ -18,7 +18,5 @@ export function wrapperToolActiveAfterModelSwitch(
   const want = provider === wrapperProvider;
   const has = activeTools.includes(wrapperTool);
   if (want === has) return undefined;
-  return want
-    ? [...activeTools, wrapperTool]
-    : activeTools.filter((name) => name !== wrapperTool);
+  return want ? [...activeTools, wrapperTool] : activeTools.filter((name) => name !== wrapperTool);
 }

@@ -1,11 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { TodoItem } from "../lib/state.ts";
-import {
-  createTodoRuntime,
-  runTodo,
-  TodoRuntime,
-} from "../src/runtime.ts";
+import { createTodoRuntime, runTodo, TodoRuntime } from "../src/runtime.ts";
 
 test("TodoRuntime write and read lifecycle", async () => {
   const runtime = createTodoRuntime();
@@ -74,9 +70,7 @@ test("TodoRuntime reconstructs branch state", async () => {
   const runtime = createTodoRuntime();
   const service = runtime.runSync(TodoRuntime);
 
-  const todos: TodoItem[] = [
-    { id: 10, title: "Branch restored task", status: "in-progress" },
-  ];
+  const todos: TodoItem[] = [{ id: 10, title: "Branch restored task", status: "in-progress" }];
 
   const branch = [
     {

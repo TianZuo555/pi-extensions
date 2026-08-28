@@ -1,11 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { hideStoredConfig } from "./helpers.ts";
-import {
-  createWebSearchRuntime,
-  runWebSearch,
-  WebSearchRuntime,
-} from "../src/runtime.ts";
+import { createWebSearchRuntime, runWebSearch, WebSearchRuntime } from "../src/runtime.ts";
 
 test("WebSearchRuntime search dispatches to resolved provider and returns results", async () => {
   const originalFetch = globalThis.fetch;
@@ -94,16 +90,22 @@ test("WebSearchRuntime fetch handles fallback to direct fetch when scraper fails
       if (urlStr.includes("firecrawl.dev")) {
         return new Response("Scraper rate limited", { status: 429 });
       }
-      return new Response("<html><head><title>Direct Page</title></head><body><h1>Fallback Direct</h1><p>Body</p></body></html>", {
-        status: 200,
-        headers: { "Content-Type": "text/html" },
-      });
+      return new Response(
+        "<html><head><title>Direct Page</title></head><body><h1>Fallback Direct</h1><p>Body</p></body></html>",
+        {
+          status: 200,
+          headers: { "Content-Type": "text/html" },
+        },
+      );
     };
 
     const runtime = createWebSearchRuntime();
     const service = runtime.runSync(WebSearchRuntime);
 
-    const res = await runWebSearch(runtime, service.fetch("https://example.com/article", {}, "firecrawl"));
+    const res = await runWebSearch(
+      runtime,
+      service.fetch("https://example.com/article", {}, "firecrawl"),
+    );
     assert.equal(res.provider, "direct");
     assert.equal(res.title, "Direct Page");
     assert.match(res.text, /# Fallback Direct/);
@@ -130,11 +132,9 @@ test("WebSearchRuntime handles abort signals gracefully", async () => {
 
   await assert.rejects(
     async () => {
-      await runWebSearch(
-        runtime,
-        service.fetch("https://example.com/aborted"),
-        { signal: controller.signal },
-      );
+      await runWebSearch(runtime, service.fetch("https://example.com/aborted"), {
+        signal: controller.signal,
+      });
     },
     (err: Error) => {
       return err.name === "AbortError" || err.message.includes("aborted");

@@ -2,11 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { hidePiAuthFile } from "./helpers.ts";
 import { searchExa, fetchExa } from "../lib/exa.ts";
-import {
-  resetFirecrawlKeylessState,
-  searchFirecrawl,
-  fetchFirecrawl,
-} from "../lib/firecrawl.ts";
+import { resetFirecrawlKeylessState, searchFirecrawl, fetchFirecrawl } from "../lib/firecrawl.ts";
 import { searchMonid, fetchMonid, getMonidWallet, listMonidRuns } from "../lib/monid.ts";
 import { searchOllama, fetchOllama } from "../lib/ollama.ts";
 import { searchOpenAI } from "../lib/openai.ts";
@@ -81,7 +77,7 @@ test("searchExa and fetchExa handle Exa API responses", async () => {
   try {
     process.env.EXA_API_KEY = "exa-key";
 
-    globalThis.fetch = async (input, init) => {
+    globalThis.fetch = async (input, _init) => {
       const urlStr = String(input);
       if (urlStr.includes("/search")) {
         return new Response(
@@ -497,10 +493,8 @@ test("searchMonid and fetchMonid handle Monid (TinyFish) run responses", async (
     globalThis.fetch = async (input, init) => {
       const urlStr = String(input);
       assert.ok(urlStr.startsWith("https://api.monid.ai/v1/run"));
-      assert.equal(
-        (init?.headers as Record<string, string>).Authorization,
-        "Bearer monid_live_test",
-      );
+      const headers = (init?.headers ?? {}) as Record<string, string>;
+      assert.equal(headers.Authorization, "Bearer monid_live_test");
       const body = JSON.parse(String(init?.body)) as {
         provider: string;
         endpoint: string;

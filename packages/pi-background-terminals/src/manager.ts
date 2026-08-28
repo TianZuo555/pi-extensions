@@ -17,15 +17,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { getShellConfig } from "@earendil-works/pi-coding-agent";
-import {
-  Context,
-  Deferred,
-  Effect,
-  Exit,
-  FiberSet,
-  Layer,
-  Scope,
-} from "effect";
+import { Context, Deferred, Effect, Exit, FiberSet, Layer, Scope } from "effect";
 import {
   ConcurrencyLimitError,
   formatExit,
@@ -221,17 +213,13 @@ export interface TerminalReadModel {
    * Register the settle hook. `consumed` is true when a manager operation is
    * returning that same final state, so it must not also become a follow-up.
    */
-  setOnSettled(
-    hook: ((snap: TerminalSnapshot, consumed: boolean) => void) | undefined,
-  ): void;
+  setOnSettled(hook: ((snap: TerminalSnapshot, consumed: boolean) => void) | undefined): void;
 }
 
 // --- Service --------------------------------------------------------------------
 
 export interface TerminalManagerShape {
-  start(
-    options: StartOptions,
-  ): Effect.Effect<TerminalSnapshot, SpawnError | ConcurrencyLimitError>;
+  start(options: StartOptions): Effect.Effect<TerminalSnapshot, SpawnError | ConcurrencyLimitError>;
   waitForSettlement(
     id: string,
     timeoutMs: number,
@@ -239,10 +227,7 @@ export interface TerminalManagerShape {
   status(id: string): Effect.Effect<TerminalSnapshot, UnknownTerminalError>;
   readLog(
     request: TerminalLogReadRequest,
-  ): Effect.Effect<
-    TerminalLogReadResult,
-    UnknownTerminalError | TerminalLogUnavailableError
-  >;
+  ): Effect.Effect<TerminalLogReadResult, UnknownTerminalError | TerminalLogUnavailableError>;
   /** Kill running terminals; resolves only after they have settled. */
   kill(ids: ReadonlyArray<string>): Effect.Effect<ReadonlyArray<KillResult>>;
   /** Tracked terminals ordered by creation time, newest first. */
@@ -251,10 +236,9 @@ export interface TerminalManagerShape {
   readonly view: TerminalReadModel;
 }
 
-export class TerminalManager extends Context.Service<
-  TerminalManager,
-  TerminalManagerShape
->()("background-terminals/TerminalManager") {}
+export class TerminalManager extends Context.Service<TerminalManager, TerminalManagerShape>()(
+  "background-terminals/TerminalManager",
+) {}
 
 // --- Process helpers ------------------------------------------------------------
 
@@ -279,12 +263,7 @@ function killTree(child: ChildProcess, signal: NodeJS.Signals) {
     try {
       const killer = spawn(
         "taskkill",
-        [
-          "/pid",
-          String(child.pid),
-          "/T",
-          ...(signal === "SIGKILL" ? ["/F"] : []),
-        ],
+        ["/pid", String(child.pid), "/T", ...(signal === "SIGKILL" ? ["/F"] : [])],
         { stdio: "ignore", windowsHide: true },
       );
       killer.once("error", () => {
@@ -339,11 +318,7 @@ function awaitChildClose(child: ChildProcess, closed: () => boolean) {
 /** SIGTERM → deadline → SIGKILL; waits for stdio closure rather than only the
  * shell's exit because descendants can keep the inherited pipes and process
  * group alive after the shell itself is gone. */
-function terminateChild(
-  child: ChildProcess,
-  closed: () => boolean,
-  onSignal: () => void,
-) {
+function terminateChild(child: ChildProcess, closed: () => boolean, onSignal: () => void) {
   return Effect.suspend(() => {
     if (closed()) return Effect.void;
     return Effect.gen(function* () {
@@ -357,10 +332,7 @@ function terminateChild(
       );
       if (closed()) return;
       yield* Effect.sync(() => killTree(child, "SIGKILL"));
-      yield* awaitChildClose(child, closed).pipe(
-        Effect.timeout(500),
-        Effect.ignore,
-      );
+      yield* awaitChildClose(child, closed).pipe(Effect.timeout(500), Effect.ignore);
     });
   });
 }
@@ -381,10 +353,7 @@ const makeManager = Effect.gen(function* () {
   const entries = new Map<string, Entry>();
   /** Small immutable tombstones preserve truthful kill reports if pruning
    * races the tool boundary after an id was validated. */
-  const settledHistory = new Map<
-    string,
-    Pick<KillResult, "title" | "status" | "exit">
-  >();
+  const settledHistory = new Map<string, Pick<KillResult, "title" | "status" | "exit">>();
   /** Metadata-only records for archives removed by the retention cap. Like
    * settledHistory, this is bounded; it never retains a filesystem path. */
   const archiveTombstones = new Map<string, ArchiveTombstone>();
@@ -398,8 +367,7 @@ const makeManager = Effect.gen(function* () {
   let reserved = 0;
   let disposed = false;
   let spillDir: string | undefined | null;
-  let onSettled:
-    ((snap: TerminalSnapshot, consumed: boolean) => void) | undefined;
+  let onSettled: ((snap: TerminalSnapshot, consumed: boolean) => void) | undefined;
 
   const notify = (id?: string) => {
     for (const listener of [...listeners]) {
@@ -434,16 +402,11 @@ const makeManager = Effect.gen(function* () {
     }
   };
 
-  const closeEntryScope = (entry: Entry) =>
-    Scope.close(entry.scope, Exit.void).pipe(Effect.ignore);
+  const closeEntryScope = (entry: Entry) => Scope.close(entry.scope, Exit.void).pipe(Effect.ignore);
 
-  const streamTombstone = (
-    entry: Entry,
-    stream: TerminalLogStream,
-  ): ArchiveTombstoneStream => ({
+  const streamTombstone = (entry: Entry, stream: TerminalLogStream): ArchiveTombstoneStream => ({
     archived: entry.spillPaths.some(
-      (candidate) =>
-        path.basename(candidate) === spillFileName(entry.snapshot.id, stream),
+      (candidate) => path.basename(candidate) === spillFileName(entry.snapshot.id, stream),
     ),
   });
 
@@ -482,10 +445,7 @@ const makeManager = Effect.gen(function* () {
   const pruneSettled = () => {
     if (entries.size <= MAX_TRACKED) return;
     const candidates = [...entries.values()]
-      .filter(
-        (e) =>
-          e.snapshot.status !== "running" && !killInterest.has(e.snapshot.id),
-      )
+      .filter((e) => e.snapshot.status !== "running" && !killInterest.has(e.snapshot.id))
       .sort(
         (a, b) =>
           (a.snapshot.settledAt ?? a.snapshot.createdAt) -
@@ -496,18 +456,14 @@ const makeManager = Effect.gen(function* () {
       // Make the expired-ref fact visible before the async unlink starts.
       rememberPrunedArchive(entry);
       entries.delete(entry.snapshot.id);
-      runCleanup(
-        closeEntryScope(entry).pipe(Effect.andThen(removeEntrySpills(entry))),
-      );
+      runCleanup(closeEntryScope(entry).pipe(Effect.andThen(removeEntrySpills(entry))));
     }
   };
 
   const markArchiveCompleteness = (entry: Entry) => {
     const complete = entry.stdioClosed;
-    entry.stdoutBuf.archiveComplete =
-      complete && entry.stdoutBuf.spillPath !== undefined;
-    entry.stderrBuf.archiveComplete =
-      complete && entry.stderrBuf.spillPath !== undefined;
+    entry.stdoutBuf.archiveComplete = complete && entry.stdoutBuf.spillPath !== undefined;
+    entry.stderrBuf.archiveComplete = complete && entry.stderrBuf.spillPath !== undefined;
   };
 
   /** End all spill streams; resolves when their buffers are flushed to disk
@@ -576,8 +532,7 @@ const makeManager = Effect.gen(function* () {
     // the yield/settle race wins owns the result without a duplicate follow-up.
     const waiters = settlementWaiters.get(s.id);
     for (const waiter of waiters ?? []) waiter.consumed = true;
-    const consumed =
-      (killInterest.get(s.id) ?? 0) > 0 || (waiters?.size ?? 0) > 0;
+    const consumed = (killInterest.get(s.id) ?? 0) > 0 || (waiters?.size ?? 0) > 0;
     Deferred.doneUnsafe(entry.settled, Effect.void);
     notify(s.id);
     try {
@@ -596,11 +551,7 @@ const makeManager = Effect.gen(function* () {
   const settleAfterFlush = (entry: Entry) => {
     if (entry.settling || entry.snapshot.status !== "running") return;
     entry.settling = true;
-    runCleanup(
-      flushSpillStreams(entry).pipe(
-        Effect.andThen(Effect.sync(() => settle(entry))),
-      ),
-    );
+    runCleanup(flushSpillStreams(entry).pipe(Effect.andThen(Effect.sync(() => settle(entry)))));
   };
 
   const scheduleExitCleanup = (entry: Entry) => {
@@ -611,10 +562,7 @@ const makeManager = Effect.gen(function* () {
         Effect.andThen(
           Effect.suspend(() =>
             entry.snapshot.status === "running" && !entry.stdioClosed
-              ? closeEntryScope(entry).pipe(
-                  Effect.timeout(STOP_TIMEOUT_MS),
-                  Effect.ignore,
-                )
+              ? closeEntryScope(entry).pipe(Effect.timeout(STOP_TIMEOUT_MS), Effect.ignore)
               : Effect.void,
           ),
         ),
@@ -658,8 +606,7 @@ const makeManager = Effect.gen(function* () {
         resumeSource();
         const current = entry();
         if (current) {
-          const buf =
-            stream === "stdout" ? current.stdoutBuf : current.stderrBuf;
+          const buf = stream === "stdout" ? current.stdoutBuf : current.stderrBuf;
           buf.spillPath = undefined;
           current.snapshot.errorText ??= bounded(
             `Full-log spill failed: ${boundedSpillError(error, spillPath)}`,
@@ -678,8 +625,7 @@ const makeManager = Effect.gen(function* () {
             capped = true;
             const current = entry();
             if (current) {
-              const buf =
-                stream === "stdout" ? current.stdoutBuf : current.stderrBuf;
+              const buf = stream === "stdout" ? current.stdoutBuf : current.stderrBuf;
               buf.spillPath = undefined;
               current.snapshot.errorText ??= bounded(
                 `${stream} full-log spill reached the ${MAX_SPILL_BYTES_PER_STREAM}-byte safety limit`,
@@ -702,31 +648,26 @@ const makeManager = Effect.gen(function* () {
     Effect.gen(function* () {
       // Reserve synchronously (before the first yield inside doStart) so
       // parallel tool calls cannot race past the cap.
-      yield* Effect.suspend(
-        (): Effect.Effect<void, SpawnError | ConcurrencyLimitError> => {
-          if (disposed) {
-            return new SpawnError({
-              message: "Background terminal manager is shutting down.",
-              fallbackSafe: false,
-            });
-          }
-          if (runningCount() + reserved >= MAX_RUNNING) {
-            return new ConcurrencyLimitError({
-              message: `Max ${MAX_RUNNING} background terminals can run concurrently. Stop one from /ps before starting another.`,
-            });
-          }
-          reserved++;
-          return Effect.void;
-        },
-      );
+      yield* Effect.suspend((): Effect.Effect<void, SpawnError | ConcurrencyLimitError> => {
+        if (disposed) {
+          return new SpawnError({
+            message: "Background terminal manager is shutting down.",
+            fallbackSafe: false,
+          });
+        }
+        if (runningCount() + reserved >= MAX_RUNNING) {
+          return new ConcurrencyLimitError({
+            message: `Max ${MAX_RUNNING} background terminals can run concurrently. Stop one from /ps before starting another.`,
+          });
+        }
+        reserved++;
+        return Effect.void;
+      });
 
       const doStart = Effect.gen(function* () {
         const invocation = yield* Effect.try({
           try: () =>
-            shellInvocation(
-              options.executionCommand ?? options.command,
-              options.shellPath,
-            ),
+            shellInvocation(options.executionCommand ?? options.command, options.shellPath),
           catch: (error) =>
             new SpawnError({
               message: boundedError(error),
@@ -740,11 +681,7 @@ const makeManager = Effect.gen(function* () {
               env: options.env ?? process.env,
               // No interactive stdin. The sole exception is legacy WSL Bash's
               // one-shot script transport, which is closed immediately below.
-              stdio: [
-                invocation.commandInput === undefined ? "ignore" : "pipe",
-                "pipe",
-                "pipe",
-              ],
+              stdio: [invocation.commandInput === undefined ? "ignore" : "pipe", "pipe", "pipe"],
               // Own process group on POSIX → group kill takes the whole tree.
               detached: process.platform !== "win32",
               windowsHide: true,
@@ -767,12 +704,8 @@ const makeManager = Effect.gen(function* () {
 
         const id = `bt-${++counter}`;
         const entryRef = () => entries.get(id);
-        const stdoutSpill = makeSpill(entryRef, id, "stdout", () =>
-          child.stdout?.resume(),
-        );
-        const stderrSpill = makeSpill(entryRef, id, "stderr", () =>
-          child.stderr?.resume(),
-        );
+        const stdoutSpill = makeSpill(entryRef, id, "stdout", () => child.stdout?.resume());
+        const stderrSpill = makeSpill(entryRef, id, "stderr", () => child.stderr?.resume());
         const stdoutBuf = new OutputBuffer(
           RETAINED_PER_STREAM,
           stdoutSpill?.write,
@@ -885,8 +818,7 @@ const makeManager = Effect.gen(function* () {
                 child,
                 () => entry.stdioClosed,
                 () => {
-                  entry.killSignaled ||=
-                    !entry.exited && entry.snapshot.status === "running";
+                  entry.killSignaled ||= !entry.exited && entry.snapshot.status === "running";
                 },
               );
               // Give the natural close→flush→settle path a bounded grace,
@@ -937,15 +869,9 @@ const makeManager = Effect.gen(function* () {
             // but must not rewrite the truthful final status.
             entry.timedOut ||= !entry.exited;
             if (entry.timedOut) {
-              entry.snapshot.errorText ??=
-                `Command exceeded its ${options.timeoutMs}-ms runtime timeout`;
+              entry.snapshot.errorText ??= `Command exceeded its ${options.timeoutMs}-ms runtime timeout`;
             }
-            runCleanup(
-              closeEntryScope(entry).pipe(
-                Effect.timeout(STOP_TIMEOUT_MS),
-                Effect.ignore,
-              ),
-            );
+            runCleanup(closeEntryScope(entry).pipe(Effect.timeout(STOP_TIMEOUT_MS), Effect.ignore));
           }, options.timeoutMs);
           entry.timeoutHandle.unref();
         }
@@ -968,75 +894,66 @@ const makeManager = Effect.gen(function* () {
     });
 
   const waitForSettlement = (id: string, timeoutMs: number) =>
-    Effect.suspend(
-      (): Effect.Effect<SettlementWaitResult, UnknownTerminalError> => {
-        const entry = entries.get(id);
-        if (!entry) {
-          const known = [...entries.keys()];
-          return new UnknownTerminalError({
-            message: `Unknown terminal id "${id}". Known: ${known.join(", ") || "none"}.`,
-          });
-        }
-        if (entry.snapshot.status !== "running") {
-          return Effect.succeed({
-            snapshot: entry.snapshot as TerminalSnapshot,
-            settled: true,
-          });
-        }
-
-        const waiter = { consumed: false };
-        const removeWaiter = () => {
-          const current = settlementWaiters.get(id);
-          current?.delete(waiter);
-          if (current?.size === 0) settlementWaiters.delete(id);
-        };
-        const finish = Effect.sync((): SettlementWaitResult => {
-          // This synchronous removal linearizes timeout vs settle: a later
-          // settle sees no waiter and is therefore delivered as a follow-up.
-          removeWaiter();
-          return {
-            snapshot: entry.snapshot as TerminalSnapshot,
-            settled:
-              waiter.consumed || entry.snapshot.status !== "running",
-          };
+    Effect.suspend((): Effect.Effect<SettlementWaitResult, UnknownTerminalError> => {
+      const entry = entries.get(id);
+      if (!entry) {
+        const known = [...entries.keys()];
+        return new UnknownTerminalError({
+          message: `Unknown terminal id "${id}". Known: ${known.join(", ") || "none"}.`,
         });
-        const waitMs = Math.max(
-          MIN_YIELD_TIME_MS,
-          Math.min(MAX_YIELD_TIME_MS, timeoutMs),
-        );
+      }
+      if (entry.snapshot.status !== "running") {
+        return Effect.succeed({
+          snapshot: entry.snapshot as TerminalSnapshot,
+          settled: true,
+        });
+      }
 
-        return Effect.sync(() => {
-          let waiters = settlementWaiters.get(id);
-          if (!waiters) {
-            waiters = new Set();
-            settlementWaiters.set(id, waiters);
-          }
-          waiters.add(waiter);
-        }).pipe(
-          Effect.andThen(
-            Effect.raceFirst(
-              Deferred.await(entry.settled),
-              Effect.sleep(waitMs),
-            ).pipe(Effect.andThen(finish)),
+      const waiter = { consumed: false };
+      const removeWaiter = () => {
+        const current = settlementWaiters.get(id);
+        current?.delete(waiter);
+        if (current?.size === 0) settlementWaiters.delete(id);
+      };
+      const finish = Effect.sync((): SettlementWaitResult => {
+        // This synchronous removal linearizes timeout vs settle: a later
+        // settle sees no waiter and is therefore delivered as a follow-up.
+        removeWaiter();
+        return {
+          snapshot: entry.snapshot as TerminalSnapshot,
+          settled: waiter.consumed || entry.snapshot.status !== "running",
+        };
+      });
+      const waitMs = Math.max(MIN_YIELD_TIME_MS, Math.min(MAX_YIELD_TIME_MS, timeoutMs));
+
+      return Effect.sync(() => {
+        let waiters = settlementWaiters.get(id);
+        if (!waiters) {
+          waiters = new Set();
+          settlementWaiters.set(id, waiters);
+        }
+        waiters.add(waiter);
+      }).pipe(
+        Effect.andThen(
+          Effect.raceFirst(Deferred.await(entry.settled), Effect.sleep(waitMs)).pipe(
+            Effect.andThen(finish),
           ),
-          Effect.ensuring(Effect.sync(removeWaiter)),
-        );
-      },
-    );
+        ),
+        Effect.ensuring(Effect.sync(removeWaiter)),
+      );
+    });
 
   const status = (id: string) =>
-    Effect.suspend(
-      (): Effect.Effect<TerminalSnapshot, UnknownTerminalError> => {
-        const entry = entries.get(id);
-        if (!entry) {
-          const known = [...entries.keys()];
-          return new UnknownTerminalError({
-            message: `Unknown terminal id "${id}". Known: ${known.join(", ") || "none"}.`,
-          });
-        }
-        return Effect.succeed(entry.snapshot as TerminalSnapshot);
-      },
-    );
+    Effect.suspend((): Effect.Effect<TerminalSnapshot, UnknownTerminalError> => {
+      const entry = entries.get(id);
+      if (!entry) {
+        const known = [...entries.keys()];
+        return new UnknownTerminalError({
+          message: `Unknown terminal id "${id}". Known: ${known.join(", ") || "none"}.`,
+        });
+      }
+      return Effect.succeed(entry.snapshot as TerminalSnapshot);
+    });
 
   const readLog = (request: TerminalLogReadRequest) =>
     Effect.suspend(
@@ -1056,16 +973,14 @@ const makeManager = Effect.gen(function* () {
               });
             }
             return new TerminalLogUnavailableError({
-              message:
-                `Archive ${request.id}:${request.stream} is unavailable; its output was small enough that the terminal result already contains all of it.`,
+              message: `Archive ${request.id}:${request.stream} is unavailable; its output was small enough that the terminal result already contains all of it.`,
             });
           }
           return new UnknownTerminalError({
             message: `Unknown terminal id "${request.id}"; no terminal with that id is tracked in this session.`,
           });
         }
-        const buffer =
-          request.stream === "stdout" ? entry.stdoutBuf : entry.stderrBuf;
+        const buffer = request.stream === "stdout" ? entry.stdoutBuf : entry.stderrBuf;
         const spillPath = buffer.spillPath;
         if (!spillPath) {
           return new TerminalLogUnavailableError({
@@ -1104,8 +1019,7 @@ const makeManager = Effect.gen(function* () {
             // Only trim a split trailing sequence when the rest of it is
             // already on disk. At EOF there is nothing to stitch to, and a
             // window too small to hold one code point must still advance.
-            const bytes =
-              atEof || complete === 0 ? body : body.subarray(0, complete);
+            const bytes = atEof || complete === 0 ? body : body.subarray(0, complete);
             const readOffset = start + leading;
             return {
               id: request.id,
@@ -1135,12 +1049,7 @@ const makeManager = Effect.gen(function* () {
   const killEntry = (entry: Entry) =>
     Effect.sync(() => {
       if (entry.snapshot.status !== "running") return;
-      runCleanup(
-        closeEntryScope(entry).pipe(
-          Effect.timeout(STOP_TIMEOUT_MS),
-          Effect.ignore,
-        ),
-      );
+      runCleanup(closeEntryScope(entry).pipe(Effect.timeout(STOP_TIMEOUT_MS), Effect.ignore));
     });
 
   const kill = (ids: ReadonlyArray<string>) =>
@@ -1152,9 +1061,7 @@ const makeManager = Effect.gen(function* () {
           .filter((entry): entry is Entry => entry !== undefined)
           .map((entry) => [entry.snapshot.id, entry]),
       );
-      const running = [...byId.values()].filter(
-        (entry) => entry.snapshot.status === "running",
-      );
+      const running = [...byId.values()].filter((entry) => entry.snapshot.status === "running");
       const runningIds = running.map((entry) => entry.snapshot.id);
       // Mark consumed before signaling so this kill's settlements are not
       // ALSO queued as automatic follow-up messages to the model.
@@ -1166,11 +1073,10 @@ const makeManager = Effect.gen(function* () {
         // Every caller waits on the entries that were running when its kill
         // began. Deferred completion cannot be missed and supports concurrent
         // overlapping/multi-id kill calls.
-        yield* Effect.forEach(
-          running,
-          (entry) => Deferred.await(entry.settled),
-          { concurrency: "unbounded", discard: true },
-        );
+        yield* Effect.forEach(running, (entry) => Deferred.await(entry.settled), {
+          concurrency: "unbounded",
+          discard: true,
+        });
         // Capture the report BEFORE the ensuring below releases interest and
         // prunes — a just-settled entry must not vanish out from under it.
         return unique.map((id): KillResult => {
@@ -1186,9 +1092,7 @@ const makeManager = Effect.gen(function* () {
             // A natural exit can win the race with our SIGTERM; report what
             // actually happened rather than claiming the kill did it.
             killed: wasRunning && status === "killed",
-            exit: snapshot
-              ? formatExit(snapshot)
-              : (history?.exit ?? "unknown"),
+            exit: snapshot ? formatExit(snapshot) : (history?.exit ?? "unknown"),
           };
         });
       });
@@ -1214,20 +1118,13 @@ const makeManager = Effect.gen(function* () {
     }
     yield* Effect.forEach(
       all,
-      (entry) =>
-        closeEntryScope(entry).pipe(
-          Effect.timeout(STOP_TIMEOUT_MS),
-          Effect.ignore,
-        ),
+      (entry) => closeEntryScope(entry).pipe(Effect.timeout(STOP_TIMEOUT_MS), Effect.ignore),
       { concurrency: "unbounded" },
     );
     // Detached kill/prune/flush work is scoped to the manager. Wait for it
     // within the shutdown bound; the FiberSet finalizer interrupts anything
     // still live when the manager scope closes, so cleanup cannot leak.
-    yield* FiberSet.awaitEmpty(cleanupFibers).pipe(
-      Effect.timeout(STOP_TIMEOUT_MS),
-      Effect.ignore,
-    );
+    yield* FiberSet.awaitEmpty(cleanupFibers).pipe(Effect.timeout(STOP_TIMEOUT_MS), Effect.ignore);
     yield* Effect.sync(() => {
       // Tombstones are session-scoped metadata; disposal must not retain them.
       archiveTombstones.clear();
@@ -1238,8 +1135,7 @@ const makeManager = Effect.gen(function* () {
     yield* Effect.sync(() => notify());
   });
 
-  const listNewestFirst = () =>
-    Array.from(entries.values(), (entry) => entry.snapshot).reverse();
+  const listNewestFirst = () => Array.from(entries.values(), (entry) => entry.snapshot).reverse();
 
   const view: TerminalReadModel = {
     list: listNewestFirst,

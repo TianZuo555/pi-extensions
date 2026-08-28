@@ -19,14 +19,14 @@ test("maps read-only agy tools to native pi builtin calls", () => {
     tool: "ls",
     args: { path: "/tmp" },
   });
-  assert.deepEqual(
-    mapAgyToolToNative("grep_search", { Query: "TODO", SearchPath: "/tmp" }),
-    { tool: "grep", args: { pattern: "TODO", path: "/tmp" } },
-  );
-  assert.deepEqual(
-    mapAgyToolToNative("find_by_name", { pattern: "*.test.ts" }),
-    { tool: "find", args: { pattern: "*.test.ts" } },
-  );
+  assert.deepEqual(mapAgyToolToNative("grep_search", { Query: "TODO", SearchPath: "/tmp" }), {
+    tool: "grep",
+    args: { pattern: "TODO", path: "/tmp" },
+  });
+  assert.deepEqual(mapAgyToolToNative("find_by_name", { pattern: "*.test.ts" }), {
+    tool: "find",
+    args: { pattern: "*.test.ts" },
+  });
 });
 
 test("never maps mutating or specialty tools", () => {

@@ -43,11 +43,12 @@ test("ask_user metadata stays concise and non-redundant", () => {
   assert.match(tool.description, /dismiss/);
   assert.doesNotMatch(tool.description, /[12]-5/);
 
-  const modelChars = JSON.stringify({
-    name: tool.name,
-    description: tool.description,
-    parameters: tool.parameters,
-  }).length +
+  const modelChars =
+    JSON.stringify({
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.parameters,
+    }).length +
     (tool.promptSnippet?.length ?? 0) +
     guidelines.reduce((total, guideline) => total + guideline.length, 0);
   assert.ok(modelChars <= 1_100, `prompt budget exceeded: ${modelChars} chars`);

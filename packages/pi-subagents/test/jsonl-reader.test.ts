@@ -18,12 +18,12 @@ async function collectLines(chunks: Array<string | Buffer>): Promise<string[]> {
 describe("attachJsonlReader", () => {
   it("splits on LF only", async () => {
     const lines = await collectLines(['{"a":1}\n{"b":2}\n']);
-    assert.deepEqual(lines, ["{\"a\":1}", "{\"b\":2}"]);
+    assert.deepEqual(lines, ['{"a":1}', '{"b":2}']);
   });
 
   it("strips trailing CR from CRLF", async () => {
     const lines = await collectLines(['{"a":1}\r\n']);
-    assert.deepEqual(lines, ["{\"a\":1}"]);
+    assert.deepEqual(lines, ['{"a":1}']);
   });
 
   it("does not split on U+2028 inside a line", async () => {

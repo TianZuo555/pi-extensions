@@ -4,17 +4,11 @@
  */
 
 import type { Goal } from "./state.ts";
-import {
-  formatDuration,
-  formatTokenCount,
-  remainingTokens,
-} from "./state.ts";
+import { formatDuration, formatTokenCount, remainingTokens } from "./state.ts";
 
-export const GET_GOAL_DESCRIPTION =
-  "Get the current thread goal, status, and usage.";
+export const GET_GOAL_DESCRIPTION = "Get the current thread goal, status, and usage.";
 
-export const UPDATE_GOAL_DESCRIPTION =
-  "Record the current goal's terminal outcome.";
+export const UPDATE_GOAL_DESCRIPTION = "Record the current goal's terminal outcome.";
 
 export const GOAL_PROMPT_SNIPPET = "Inspect a persistent thread goal";
 

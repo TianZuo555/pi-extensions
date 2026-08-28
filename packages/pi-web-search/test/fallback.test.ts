@@ -1,11 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { hidePiAuthFile } from "./helpers.ts";
-import type {
-  FetchProviderName,
-  SearchProviderName,
-  WebSearchConfig,
-} from "../lib/types.ts";
+import type { FetchProviderName, SearchProviderName, WebSearchConfig } from "../lib/types.ts";
 import {
   classifyProviderFailure,
   createWebSearchRuntime,
@@ -57,33 +53,36 @@ function installFetchMock(control: MockControl): void {
     const url = String(input);
     control.calls.push(url);
     if (url.includes("firecrawl.dev")) {
-      return new Response(
-        JSON.stringify({ success: false, error: "out of credits" }),
-        { status: control.firecrawlStatus },
-      );
+      return new Response(JSON.stringify({ success: false, error: "out of credits" }), {
+        status: control.firecrawlStatus,
+      });
     }
     if (url.includes("api.exa.ai")) {
       if (control.exaStatus !== 200) {
-        return new Response(
-          JSON.stringify({ error: "exa failed" }),
-          { status: control.exaStatus },
-        );
+        return new Response(JSON.stringify({ error: "exa failed" }), { status: control.exaStatus });
       }
       const isFetch = url.includes("/contents");
       return new Response(
         JSON.stringify(
           isFetch
-            ? { results: [{ url: "https://exa.example/doc", title: "Exa Doc", text: "Exa fetched content" }] }
-            : { results: [{ title: "Exa Result", url: "https://exa.example/doc", text: "Exa snippet" }] },
+            ? {
+                results: [
+                  { url: "https://exa.example/doc", title: "Exa Doc", text: "Exa fetched content" },
+                ],
+              }
+            : {
+                results: [
+                  { title: "Exa Result", url: "https://exa.example/doc", text: "Exa snippet" },
+                ],
+              },
         ),
         { status: 200, headers: { "Content-Type": "application/json" } },
       );
     }
     if (url.includes("api.openai.com") || url.includes("chatgpt.com")) {
-      return new Response(
-        JSON.stringify({ error: { message: "You exceeded your usage limit" } }),
-        { status: 402 },
-      );
+      return new Response(JSON.stringify({ error: { message: "You exceeded your usage limit" } }), {
+        status: 402,
+      });
     }
     if (url.includes("11434")) {
       return new Response("not found", { status: 404 });
@@ -112,10 +111,7 @@ test("classifyProviderFailure distinguishes session, cooldown, and normal failur
     "cooldown",
   );
   assert.equal(classifyProviderFailure("rate limit hit, slow down"), "cooldown");
-  assert.equal(
-    classifyProviderFailure("fetch failed ECONNREFUSED 127.0.0.1:11434"),
-    null,
-  );
+  assert.equal(classifyProviderFailure("fetch failed ECONNREFUSED 127.0.0.1:11434"), null);
   assert.equal(classifyProviderFailure("Ollama web_search endpoint not found"), null);
   assert.equal(RATE_LIMIT_COOLDOWN_MS, 120_000);
 });
@@ -137,15 +133,8 @@ test("provider chains put the requested provider first and dedupe", () => {
 
     // Fetch chains never include OpenAI, so they are fully deterministic.
     assert.deepEqual(availableFetchProviders(cfg), ["firecrawl", "direct"]);
-    assert.deepEqual(resolveFetchChain("ollama", cfg), [
-      "ollama",
-      "firecrawl",
-      "direct",
-    ]);
-    assert.deepEqual(resolveFetchChain(undefined, cfg), [
-      "firecrawl",
-      "direct",
-    ]);
+    assert.deepEqual(resolveFetchChain("ollama", cfg), ["ollama", "firecrawl", "direct"]);
+    assert.deepEqual(resolveFetchChain(undefined, cfg), ["firecrawl", "direct"]);
 
     // Search chains may additionally include OpenAI when pi's auth.json has
     // credentials, so assert structural properties instead of exact lists.
@@ -184,26 +173,15 @@ test("tavily joins search and fetch chains when configured", () => {
     // Keyless firecrawl is always available unless opted out; the available
     // list follows the canonical order, resolveFetchChain puts the requested
     // provider first.
-    assert.deepEqual(availableFetchProviders(cfg), [
-      "firecrawl",
-      "tavily",
-      "direct",
-    ]);
-    assert.deepEqual(resolveFetchChain("tavily", cfg), [
-      "tavily",
-      "firecrawl",
-      "direct",
-    ]);
+    assert.deepEqual(availableFetchProviders(cfg), ["firecrawl", "tavily", "direct"]);
+    assert.deepEqual(resolveFetchChain("tavily", cfg), ["tavily", "firecrawl", "direct"]);
 
     // Search chains may include OpenAI from pi's auth.json; firecrawl (keyless)
     // always leads, ollama/monid trail.
     const available = availableSearchProviders(cfg);
     assert.ok(available.includes("tavily"));
     assert.equal(available[0], "firecrawl");
-    assert.equal(
-      available.indexOf("tavily"),
-      available.includes("openai") ? 2 : 1,
-    );
+    assert.equal(available.indexOf("tavily"), available.includes("openai") ? 2 : 1);
     assert.equal(available[available.length - 1], "ollama");
 
     const chain = resolveSearchChain("tavily", cfg);
@@ -236,21 +214,18 @@ test("searchOrder and fetchOrder configure the fallback sequence", () => {
     };
 
     // Unlisted credentialed providers still join the end in canonical order.
-    assert.deepEqual(
-      resolveSearchChain(undefined, cfg),
-      ["firecrawl", "tavily", "exa", "ollama"],
-    );
-    assert.deepEqual(
-      resolveFetchChain(undefined, cfg),
-      ["direct", "tavily", "firecrawl", "exa"],
-    );
+    assert.deepEqual(resolveSearchChain(undefined, cfg), ["firecrawl", "tavily", "exa", "ollama"]);
+    assert.deepEqual(resolveFetchChain(undefined, cfg), ["direct", "tavily", "firecrawl", "exa"]);
 
     // A requested provider still jumps the queue; the configured order
     // follows, then the remaining available providers.
-    assert.deepEqual(
-      resolveFetchChain("ollama", cfg),
-      ["ollama", "direct", "tavily", "firecrawl", "exa"],
-    );
+    assert.deepEqual(resolveFetchChain("ollama", cfg), [
+      "ollama",
+      "direct",
+      "tavily",
+      "firecrawl",
+      "exa",
+    ]);
   } finally {
     restoreFs();
     restoreEnv(env);
@@ -277,16 +252,8 @@ test("order entries without credentials or with unknown names are dropped", () =
     // exa is listed in fetchOrder but has no credentials, so it is dropped;
     // the chain is the remaining available providers in canonical order
     // (keyless firecrawl included).
-    assert.deepEqual(resolveSearchChain(undefined, cfg), [
-      "firecrawl",
-      "tavily",
-      "ollama",
-    ]);
-    assert.deepEqual(resolveFetchChain(undefined, cfg), [
-      "firecrawl",
-      "tavily",
-      "direct",
-    ]);
+    assert.deepEqual(resolveSearchChain(undefined, cfg), ["firecrawl", "tavily", "ollama"]);
+    assert.deepEqual(resolveFetchChain(undefined, cfg), ["firecrawl", "tavily", "direct"]);
   } finally {
     restoreFs();
     restoreEnv(env);
@@ -353,16 +320,9 @@ test("search: quota-exhausted provider is skipped for the rest of the session", 
     const service = runtime.runSync(WebSearchRuntime);
 
     // First call: firecrawl answers 402 -> falls back to exa within the call.
-    const first = await runWebSearch(
-      runtime,
-      service.search("fallback test", {}, "firecrawl"),
-    );
+    const first = await runWebSearch(runtime, service.search("fallback test", {}, "firecrawl"));
     assert.equal(first.provider, "exa");
-    assert.ok(
-      first.fallbacks?.some(
-        (f) => f.provider === "firecrawl" && f.reason.includes("402"),
-      ),
-    );
+    assert.ok(first.fallbacks?.some((f) => f.provider === "firecrawl" && f.reason.includes("402")));
     const callsAfterFirst = firecrawlCalls(control);
     assert.ok(callsAfterFirst >= 1);
 
@@ -419,8 +379,7 @@ test("search: walks the whole chain and reports an aggregated error", async () =
       async () => {
         await runWebSearch(runtime, service.search("q", {}, "firecrawl"));
       },
-      (err: Error) =>
-        /ollama/i.test(err.message) && !/firecrawl/i.test(err.message),
+      (err: Error) => /ollama/i.test(err.message) && !/firecrawl/i.test(err.message),
     );
 
     await runtime.dispose();

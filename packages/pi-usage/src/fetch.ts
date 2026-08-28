@@ -44,14 +44,7 @@ export function fetchProviderJsonEffect(
   retryCount: number,
   secret: string,
 ): Effect.Effect<Record<string, unknown>, ProviderQueryError | Error> {
-  const once = fetchProviderJsonOnceEffect(
-    url,
-    token,
-    extraHeaders,
-    signal,
-    timeoutMs,
-    secret,
-  );
+  const once = fetchProviderJsonOnceEffect(url, token, extraHeaders, signal, timeoutMs, secret);
   if (retryCount <= 0) return once;
   const policy = Schedule.addDelay(Schedule.recurs(retryCount), () =>
     Effect.succeed(Duration.millis(RETRY_DELAY_MS)),
@@ -93,7 +86,9 @@ function fetchProviderJsonOnceEffect(
       effectSignal.removeEventListener("abort", onEffectAbort);
     };
 
-    const finish = (outcome: Effect.Effect<Record<string, unknown>, ProviderQueryError | Error>) => {
+    const finish = (
+      outcome: Effect.Effect<Record<string, unknown>, ProviderQueryError | Error>,
+    ) => {
       if (settled) return;
       settled = true;
       cleanup();

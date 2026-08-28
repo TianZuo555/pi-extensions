@@ -68,14 +68,19 @@ function splitNulSeparatedPaths(value: string): string[] {
 }
 
 export function findForbiddenStagedPaths(paths: readonly string[]): string[] {
-  return [...new Set(
-    paths.filter((filePath) =>
-      filePath.split("/").some((component) => FORBIDDEN_STAGED_PATH_COMPONENTS.has(component)),
+  return [
+    ...new Set(
+      paths.filter((filePath) =>
+        filePath.split("/").some((component) => FORBIDDEN_STAGED_PATH_COMPONENTS.has(component)),
+      ),
     ),
-  )].sort();
+  ].sort();
 }
 
-export function truncateUtf8(value: string, maxBytes: number): {
+export function truncateUtf8(
+  value: string,
+  maxBytes: number,
+): {
   text: string;
   totalBytes: number;
   omittedBytes: number;
@@ -159,7 +164,9 @@ export async function hasUnstagedChanges(repository: GitRepository): Promise<boo
     ["status", "--porcelain=v1", "--untracked-files=normal", "--"],
     "Reading Git status",
   );
-  return output.split("\n").some((line) => line.length >= 2 && (line[0] === "?" || line[1] !== " "));
+  return output
+    .split("\n")
+    .some((line) => line.length >= 2 && (line[0] === "?" || line[1] !== " "));
 }
 
 export async function ensureNoUnmergedEntries(repository: GitRepository): Promise<void> {
@@ -183,10 +190,7 @@ export async function stageAllChanges(repository: GitRepository): Promise<void> 
 }
 
 async function hasStagedChanges(repository: GitRepository): Promise<boolean> {
-  const result = await runGit(
-    repository,
-    ["diff", "--cached", "--quiet", "--exit-code", "--"],
-  );
+  const result = await runGit(repository, ["diff", "--cached", "--quiet", "--exit-code", "--"]);
   if (result.code === 0) return false;
   if (result.code === 1) return true;
   throw new Error(describeGitFailure("Checking staged changes", result));
@@ -280,7 +284,11 @@ export async function readStagedSnapshot(
   const fingerprint = await readFingerprint(repository);
   const [branch, nameStatus, stat, patch, recentCommitSubjects] = await Promise.all([
     readBranch(repository),
-    runGitOrThrow(repository, [...DIFF_BASE_ARGS, "--name-status", "--"], "Reading staged file list"),
+    runGitOrThrow(
+      repository,
+      [...DIFF_BASE_ARGS, "--name-status", "--"],
+      "Reading staged file list",
+    ),
     runGitOrThrow(repository, [...DIFF_BASE_ARGS, "--stat", "--"], "Reading staged diff stat"),
     runGitOrThrow(repository, [...DIFF_BASE_ARGS, "--patch", "--"], "Reading staged patch"),
     readRecentSubjects(repository),
@@ -361,12 +369,7 @@ async function currentBranchHasUpstream(
 ): Promise<boolean> {
   const result = await runGit(
     repository,
-    [
-      "rev-parse",
-      "--verify",
-      "--quiet",
-      "@{upstream}",
-    ],
+    ["rev-parse", "--verify", "--quiet", "@{upstream}"],
     READ_TIMEOUT_MS,
     signal,
   );

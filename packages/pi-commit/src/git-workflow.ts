@@ -34,7 +34,11 @@ export class GitWorkflowError extends Data.TaggedError("GitWorkflowError")<{
 
 export type PlannedCommitResult =
   | { readonly status: "success"; readonly summaries: readonly string[] }
-  | { readonly status: "error"; readonly error: GitWorkflowError; readonly summaries: readonly string[] };
+  | {
+      readonly status: "error";
+      readonly error: GitWorkflowError;
+      readonly summaries: readonly string[];
+    };
 
 type PlannedCommitErrorResult = Extract<PlannedCommitResult, { readonly status: "error" }>;
 
@@ -83,11 +87,15 @@ export function readStagedSnapshotEffect(
   return tryGit("Reading staged snapshot", () => readStagedSnapshot(repository, maxPatchBytes));
 }
 
-export function ensureCleanIndexEffect(repository: GitRepository): Effect.Effect<void, GitWorkflowError> {
+export function ensureCleanIndexEffect(
+  repository: GitRepository,
+): Effect.Effect<void, GitWorkflowError> {
   return tryGit("Checking merge conflicts", () => ensureNoUnmergedEntries(repository));
 }
 
-export function stageAllChangesEffect(repository: GitRepository): Effect.Effect<void, GitWorkflowError> {
+export function stageAllChangesEffect(
+  repository: GitRepository,
+): Effect.Effect<void, GitWorkflowError> {
   return tryGit("Staging all changes", () => stageAllChanges(repository));
 }
 
@@ -140,7 +148,9 @@ export function plannedCommitPreflightEffect(
     const unstaged = yield* tryGit("Reading Git status", () => hasUnstagedChanges(repository));
     if (unstaged) {
       return plannedCommitError(
-        gitError("The working tree changed while reviewing the commit plan. Run /commit-all again."),
+        gitError(
+          "The working tree changed while reviewing the commit plan. Run /commit-all again.",
+        ),
         [],
       );
     }
@@ -173,7 +183,9 @@ export function commitSinglePlannedGroupEffect(
 ): Effect.Effect<PlannedCommitStepResult, never> {
   return Effect.gen(function* () {
     if (index > 0) {
-      const unexpectedPaths = yield* tryGit("Reading staged paths", () => readStagedPaths(repository));
+      const unexpectedPaths = yield* tryGit("Reading staged paths", () =>
+        readStagedPaths(repository),
+      );
       if (unexpectedPaths.length > 0) {
         return {
           kind: "failure",

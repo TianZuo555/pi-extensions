@@ -1,9 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {
-  WebFetchParams,
-  WebSearchParams,
-} from "../lib/tools.ts";
+import { WebFetchParams, WebSearchParams } from "../lib/tools.ts";
 import {
   DEFAULT_OPENAI_SYSTEM_PROMPT,
   WEB_FETCH_PROMPT_SNIPPET,

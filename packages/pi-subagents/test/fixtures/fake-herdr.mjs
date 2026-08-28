@@ -157,8 +157,7 @@ if (cmd === "pane" && sub === "process-info" && rest[0] === "--pane") {
       process_info: {
         shell_pid: shellPid,
         foreground_process_group_id: fgPgid,
-        foreground_processes:
-          fgPgid === shellPid ? [{ name: "fish" }] : [{ name: "sleep" }],
+        foreground_processes: fgPgid === shellPid ? [{ name: "fish" }] : [{ name: "sleep" }],
       },
     }),
   );
@@ -194,8 +193,7 @@ if (cmd === "agent" && sub === "read") {
     writeStdout(process.env.FAKE_HERDR_VISIBLE_TEXT ?? "staged prompt snippet visible\n");
   } else {
     writeStdout(
-      process.env.FAKE_HERDR_TRANSCRIPT ??
-        "\u001b[31m\u250c box \u001b[0mraw agent text\n",
+      process.env.FAKE_HERDR_TRANSCRIPT ?? "\u001b[31m\u250c box \u001b[0mraw agent text\n",
     );
   }
   process.exit(0);

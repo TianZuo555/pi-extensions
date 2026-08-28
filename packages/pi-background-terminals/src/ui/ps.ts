@@ -66,21 +66,18 @@ function statusWord(snap: TerminalSnapshot, theme: Theme) {
 
 export type TerminalDetailTab = "info" | "stdout" | "stderr";
 export const DEFAULT_TERMINAL_DETAIL_TAB: TerminalDetailTab = "info";
-const TERMINAL_DETAIL_TABS: readonly TerminalDetailTab[] = [
-  "info",
-  "stdout",
-  "stderr",
-];
+const TERMINAL_DETAIL_TABS: readonly TerminalDetailTab[] = ["info", "stdout", "stderr"];
 
 export function cycleTerminalDetailTab(
   current: TerminalDetailTab,
   direction: 1 | -1 = 1,
 ): TerminalDetailTab {
   const index = TERMINAL_DETAIL_TABS.indexOf(current);
-  return TERMINAL_DETAIL_TABS[
-    (index + direction + TERMINAL_DETAIL_TABS.length) %
-      TERMINAL_DETAIL_TABS.length
-  ] ?? DEFAULT_TERMINAL_DETAIL_TAB;
+  return (
+    TERMINAL_DETAIL_TABS[
+      (index + direction + TERMINAL_DETAIL_TABS.length) % TERMINAL_DETAIL_TABS.length
+    ] ?? DEFAULT_TERMINAL_DETAIL_TAB
+  );
 }
 
 /** Output-free invocation metadata used by the default detail tab. */
@@ -108,10 +105,7 @@ export function buildTerminalInvocationInfo(snap: TerminalSnapshot): string {
 
 // --- Entry point ---------------------------------------------------------------
 
-export async function openTerminalPicker(
-  ctx: ExtensionCommandContext,
-  view: TerminalReadModel,
-) {
+export async function openTerminalPicker(ctx: ExtensionCommandContext, view: TerminalReadModel) {
   const selection: DashboardSelection = { index: 0 };
 
   while (true) {
@@ -155,16 +149,11 @@ export function reconcileDashboardSelection(
   selection: DashboardSelection,
   terminals: ReadonlyArray<Pick<TerminalSnapshot, "id">>,
 ) {
-  const stableIndex = selection.id
-    ? terminals.findIndex((snap) => snap.id === selection.id)
-    : -1;
+  const stableIndex = selection.id ? terminals.findIndex((snap) => snap.id === selection.id) : -1;
   selection.index =
     stableIndex >= 0
       ? stableIndex
-      : Math.min(
-          Math.max(0, selection.index),
-          Math.max(0, terminals.length - 1),
-        );
+      : Math.min(Math.max(0, selection.index), Math.max(0, terminals.length - 1));
   selection.id = terminals[selection.index]?.id;
 }
 
@@ -234,8 +223,7 @@ class TerminalDashboard implements Component {
     }
     if (this.keybindings.matches(data, "tui.select.up") || data === "k") {
       if (terminals.length > 0) {
-        this.selection.index =
-          (this.selection.index - 1 + terminals.length) % terminals.length;
+        this.selection.index = (this.selection.index - 1 + terminals.length) % terminals.length;
         this.selection.id = terminals[this.selection.index]?.id;
         this.tui.requestRender();
       }
@@ -263,9 +251,7 @@ class TerminalDashboard implements Component {
 
   private borderSegment(width: number, title: string): string {
     const theme = this.theme;
-    const label = title
-      ? ` ${truncateToWidth(title, Math.max(0, width - 3))} `
-      : "";
+    const label = title ? ` ${truncateToWidth(title, Math.max(0, width - 3))} ` : "";
     const labelWidth = visibleWidth(label);
     return (
       theme.fg("border", "─") +
@@ -294,26 +280,15 @@ class TerminalDashboard implements Component {
       "muted",
       `${terminals.length} terminal${terminals.length === 1 ? "" : "s"}`,
     );
-    const headerPad = Math.max(
-      1,
-      width - visibleWidth(headerLeft) - visibleWidth(headerRight) - 4,
-    );
-    lines.push(
-      truncateToWidth(
-        `  ${headerLeft}${" ".repeat(headerPad)}${headerRight}  `,
-        width,
-      ),
-    );
+    const headerPad = Math.max(1, width - visibleWidth(headerLeft) - visibleWidth(headerRight) - 4);
+    lines.push(truncateToWidth(`  ${headerLeft}${" ".repeat(headerPad)}${headerRight}  `, width));
 
     // Top border with panel title
     const running = terminals.filter((s) => s.status === "running").length;
     lines.push(
       truncateToWidth(
         theme.fg("border", "╭") +
-          this.borderSegment(
-            innerWidth,
-            `terminals · ${running} running / ${terminals.length}`,
-          ) +
+          this.borderSegment(innerWidth, `terminals · ${running} running / ${terminals.length}`) +
           theme.fg("border", "╮"),
         width,
       ),
@@ -324,10 +299,7 @@ class TerminalDashboard implements Component {
     const rowLines = this.renderRows(terminals, innerWidth, bodyHeight);
     for (let i = 0; i < bodyHeight; i++) {
       lines.push(
-        truncateToWidth(
-          divider + this.pad(rowLines[i] ?? "", innerWidth) + divider,
-          width,
-        ),
+        truncateToWidth(divider + this.pad(rowLines[i] ?? "", innerWidth) + divider, width),
       );
     }
 
@@ -390,9 +362,7 @@ class TerminalDashboard implements Component {
       const rightParts = [
         theme.fg("muted", `pid ${snap.pid ?? "?"}`),
         theme.fg("muted", formatElapsed(snap)),
-        snap.status === "running"
-          ? statusWord(snap, theme)
-          : theme.fg("muted", formatExit(snap)),
+        snap.status === "running" ? statusWord(snap, theme) : theme.fg("muted", formatExit(snap)),
       ];
       const right = `${rightParts.join(dot)} `;
 
@@ -494,9 +464,7 @@ class TerminalDetailView implements Component {
     const existing = this.sources.get(stream);
     if (existing?.path === view.spillPath) return existing;
     existing?.dispose();
-    const source = createSpillSource(view.spillPath, () =>
-      this.scheduleRender(),
-    );
+    const source = createSpillSource(view.spillPath, () => this.scheduleRender());
     this.sources.set(stream, source);
     return source;
   }
@@ -601,18 +569,11 @@ class TerminalDetailView implements Component {
       this.close();
       return;
     }
-    if (
-      data === "t" ||
-      data === "l" ||
-      this.keybindings.matches(data, "tui.editor.cursorRight")
-    ) {
+    if (data === "t" || data === "l" || this.keybindings.matches(data, "tui.editor.cursorRight")) {
       this.switchTab(cycleTerminalDetailTab(this.tab, 1));
       return;
     }
-    if (
-      data === "h" ||
-      this.keybindings.matches(data, "tui.editor.cursorLeft")
-    ) {
+    if (data === "h" || this.keybindings.matches(data, "tui.editor.cursorLeft")) {
       this.switchTab(cycleTerminalDetailTab(this.tab, -1));
       return;
     }
@@ -627,10 +588,7 @@ class TerminalDetailView implements Component {
       this.tui.requestRender();
       return;
     }
-    if (
-      this.keybindings.matches(data, "tui.editor.cursorDown") ||
-      data === "j"
-    ) {
+    if (this.keybindings.matches(data, "tui.editor.cursorDown") || data === "j") {
       const wasAtBottom = this.scrollOffset === 0;
       this.scrollOffset = Math.max(0, this.scrollOffset - OUTPUT_SCROLL_STEP);
       if (this.scrollOffset === 0) this.reachedBottom(wasAtBottom);
@@ -645,10 +603,7 @@ class TerminalDetailView implements Component {
     }
     if (this.keybindings.matches(data, "tui.editor.pageDown")) {
       const wasAtBottom = this.scrollOffset === 0;
-      this.scrollOffset = Math.max(
-        0,
-        this.scrollOffset - this.viewportHeight(),
-      );
+      this.scrollOffset = Math.max(0, this.scrollOffset - this.viewportHeight());
       if (this.scrollOffset === 0) this.reachedBottom(wasAtBottom);
       this.tui.requestRender();
       return;
@@ -692,13 +647,8 @@ class TerminalDetailView implements Component {
     const header =
       `${statusGlyph(snap, theme)} ` +
       theme.fg("accent", theme.bold(`${snap.id} · ${oneLine(snap.title)}`)) +
-      theme.fg(
-        "muted",
-        ` · ${snap.status} · ${formatElapsed(snap)} · pid ${snap.pid ?? "?"}`,
-      ) +
-      (snap.status !== "running"
-        ? theme.fg("muted", ` · ${formatExit(snap)}`)
-        : "");
+      theme.fg("muted", ` · ${snap.status} · ${formatElapsed(snap)} · pid ${snap.pid ?? "?"}`) +
+      (snap.status !== "running" ? theme.fg("muted", ` · ${formatExit(snap)}`) : "");
     lines.push(truncateToWidth(header, width));
     lines.push(border);
 
@@ -708,24 +658,16 @@ class TerminalDetailView implements Component {
     const active = this.tab;
     const source = this.activeSource(snap);
     const spill = source?.state();
-    const useSpill =
-      spill !== undefined && spill.error === undefined && spill.text.length > 0;
+    const useSpill = spill !== undefined && spill.error === undefined && spill.text.length > 0;
     const tab = (name: TerminalDetailTab) => {
-      const label = name === "info"
-        ? "Info"
-        : `${name} (${formatSize(snap[name].totalBytes)})`;
-      return name === active
-        ? theme.fg("accent", theme.bold(label))
-        : theme.fg("dim", label);
+      const label = name === "info" ? "Info" : `${name} (${formatSize(snap[name].totalBytes)})`;
+      return name === active ? theme.fg("accent", theme.bold(label)) : theme.fg("dim", label);
     };
     lines.push(
       truncateToWidth(
         `  ${tab("info")}${theme.fg("dim", " | ")}${tab("stdout")}${theme.fg("dim", " | ")}${tab("stderr")}${theme.fg("dim", "  — t/←/→ to switch")}` +
           (useSpill
-            ? theme.fg(
-                "dim",
-                this.following ? "  · full log (live)" : "  · full log",
-              )
+            ? theme.fg("dim", this.following ? "  · full log (live)" : "  · full log")
             : ""),
         width,
       ),
@@ -753,18 +695,11 @@ class TerminalDetailView implements Component {
         // totalBytes is a monotonically increasing proxy for a source version.
         // Namespacing prevents retained/spill windows from sharing stale wraps.
         useSpill ? `spill:${spill.version}` : `mem:${buffer.totalBytes}`;
-      output = this.lineCache.get(
-        useSpill ? spill.text : buffer.text,
-        version,
-        width - 2,
-      );
+      output = this.lineCache.get(useSpill ? spill.text : buffer.text, version, width - 2);
 
       if (snap.errorText) {
         noteRows.push(
-          truncateToWidth(
-            theme.fg("error", `error: ${oneLine(snap.errorText)}`),
-            width,
-          ),
+          truncateToWidth(theme.fg("error", `error: ${oneLine(snap.errorText)}`), width),
         );
       }
       if (useSpill) {
@@ -776,12 +711,7 @@ class TerminalDetailView implements Component {
         if (earlier > 0) parts.push(`${formatSize(earlier)} earlier ↑`);
         if (later > 0) parts.push(`${formatSize(later)} later ↓`);
         parts.push(buffer.spillPath ?? "");
-        noteRows.push(
-          truncateToWidth(
-            theme.fg("dim", parts.filter(Boolean).join(" · ")),
-            width,
-          ),
-        );
+        noteRows.push(truncateToWidth(theme.fg("dim", parts.filter(Boolean).join(" · ")), width));
       } else if (spill?.error !== undefined) {
         noteRows.push(
           truncateToWidth(
@@ -820,10 +750,7 @@ class TerminalDetailView implements Component {
     if (visible.length === 0) {
       body.push(
         truncateToWidth(
-          theme.fg(
-            "dim",
-            active === "info" ? "(no invocation metadata)" : `(no ${active} yet)`,
-          ),
+          theme.fg("dim", active === "info" ? "(no invocation metadata)" : `(no ${active} yet)`),
           width,
         ),
       );
@@ -835,10 +762,7 @@ class TerminalDetailView implements Component {
 
     if (this.scrollOffset > 0) {
       body.push(
-        truncateToWidth(
-          theme.fg("dim", `... ${this.scrollOffset} lines below · ↓/pgdn`),
-          width,
-        ),
+        truncateToWidth(theme.fg("dim", `... ${this.scrollOffset} lines below · ↓/pgdn`), width),
       );
     }
     while (body.length < viewport) body.push("");

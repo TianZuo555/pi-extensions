@@ -1,10 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {
-  findHunkForNewLine,
-  hunkNewRange,
-  parseHunks,
-} from "../lib/hunks.ts";
+import { findHunkForNewLine, hunkNewRange, parseHunks } from "../lib/hunks.ts";
 
 const SAMPLE_PATCH = `diff --git a/src/foo.ts b/src/foo.ts
 index 123..456 100644

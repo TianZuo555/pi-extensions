@@ -105,7 +105,10 @@ test("usage preflight accepts pi and extension-local login information", () => {
       },
     },
   };
-  assert.equal(hasProviderLoginInfo(staleContext, "test-provider", () => true), true);
+  assert.equal(
+    hasProviderLoginInfo(staleContext, "test-provider", () => true),
+    true,
+  );
   assert.equal(hasProviderLoginInfo(staleContext, "test-provider"), false);
 });
 
@@ -208,10 +211,7 @@ test("Codex usage does not retry authentication failures", async (t) => {
     return jsonResponse({ detail: "invalid token" }, 401, "Unauthorized");
   };
 
-  await assert.rejects(
-    queryCodexUsage("test-token", undefined, 50, 1),
-    /401 Unauthorized/,
-  );
+  await assert.rejects(queryCodexUsage("test-token", undefined, 50, 1), /401 Unauthorized/);
   assert.equal(calls, 1);
 });
 
@@ -383,10 +383,7 @@ test("DeepSeek usage errors on a balance-less response", async (t) => {
   });
   globalThis.fetch = async () => jsonResponse({ is_available: true, balance_infos: [] });
 
-  await assert.rejects(
-    queryDeepSeekUsage("test-key", undefined, 50, 0),
-    /no displayable data/,
-  );
+  await assert.rejects(queryDeepSeekUsage("test-key", undefined, 50, 0), /no displayable data/);
 });
 
 test("Z.ai usage treats percentage as used and converts ms resets to seconds", async (t) => {

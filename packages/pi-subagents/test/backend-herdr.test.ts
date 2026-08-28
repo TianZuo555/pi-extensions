@@ -6,10 +6,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 import { HerdrSubagentBackend } from "../lib/backend-herdr.ts";
-import {
-  resetHerdrCapabilityCache,
-  setHerdrBinaryPathForTests,
-} from "../lib/herdr/capability.ts";
+import { resetHerdrCapabilityCache, setHerdrBinaryPathForTests } from "../lib/herdr/capability.ts";
 import type { BackendRunInput } from "../lib/backend.ts";
 import type { ProfileDefinition } from "../lib/domain.ts";
 import { reportPathFor } from "../lib/report-file.ts";
@@ -64,7 +61,7 @@ function baseProfile(overrides: Partial<ProfileDefinition> = {}): ProfileDefinit
 }
 
 function runInput(
-  artifactRoot: string,
+  _artifactRoot: string,
   overrides: Partial<BackendRunInput> & { profile?: ProfileDefinition } = {},
 ): BackendRunInput {
   const controller = new AbortController();
@@ -372,9 +369,7 @@ describe("HerdrSubagentBackend", () => {
         },
         async () => {
           const backend = new HerdrSubagentBackend(artifactRoot, fakeCliOptions());
-          const output = await backend.run(
-            runInput(artifactRoot, { timeoutMs: 50 }),
-          );
+          const output = await backend.run(runInput(artifactRoot, { timeoutMs: 50 }));
           assert.equal(output.settled, false);
           assert.match(output.error ?? "", /timed out/i);
           assert.match(fs.readFileSync(sendKeysLog, "utf8"), /esc/);
@@ -440,12 +435,15 @@ describe("HerdrSubagentBackend", () => {
     const artifactRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pi-herdr-artifact-"));
     const closeLog = path.join(os.tmpdir(), `herdr-close-log-${process.pid}`);
     try {
-      await withEnv({ FAKE_HERDR_REPORT_MODE: "missing", FAKE_HERDR_CLOSE_LOG: closeLog }, async () => {
-        const backend = new HerdrSubagentBackend(artifactRoot, fakeCliOptions());
-        await backend.run(runInput(artifactRoot));
-        await backend.dispose();
-        assert.match(fs.readFileSync(closeLog, "utf8"), /pane-split-1/);
-      });
+      await withEnv(
+        { FAKE_HERDR_REPORT_MODE: "missing", FAKE_HERDR_CLOSE_LOG: closeLog },
+        async () => {
+          const backend = new HerdrSubagentBackend(artifactRoot, fakeCliOptions());
+          await backend.run(runInput(artifactRoot));
+          await backend.dispose();
+          assert.match(fs.readFileSync(closeLog, "utf8"), /pane-split-1/);
+        },
+      );
     } finally {
       fs.rmSync(closeLog, { force: true });
       fs.rmSync(artifactRoot, { recursive: true, force: true });

@@ -272,13 +272,5 @@ test("resolveMonidConfig respects MONID_API_KEY environment variable", () => {
 test("getProviderStatuses lists all 7 supported providers", () => {
   const statuses = getProviderStatuses();
   const names = statuses.map((s) => s.name);
-  assert.deepEqual(names, [
-    "openai",
-    "exa",
-    "tavily",
-    "firecrawl",
-    "monid",
-    "ollama",
-    "direct",
-  ]);
+  assert.deepEqual(names, ["openai", "exa", "tavily", "firecrawl", "monid", "ollama", "direct"]);
 });

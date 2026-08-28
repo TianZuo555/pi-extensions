@@ -37,7 +37,12 @@ export const EXT_BY_MIME: Record<string, string> = {
   "image/heif": "heif",
 };
 
-export const MODEL_SUPPORTED_MIMES = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"]);
+export const MODEL_SUPPORTED_MIMES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+]);
 
 /**
  * Matches any absolute-looking path to a `pi-clipboard-*` temp file that pi
@@ -61,7 +66,9 @@ export function normalizeMimeType(mimeType: string): string {
 
 export function detectMimeType(filePath: string, bytes: Buffer): string | undefined {
   if (bytes.length >= 12) {
-    if (bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) {
+    if (
+      bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+    ) {
       return "image/png";
     }
     if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
@@ -71,7 +78,10 @@ export function detectMimeType(filePath: string, bytes: Buffer): string | undefi
     if (head6 === "GIF87a" || head6 === "GIF89a") {
       return "image/gif";
     }
-    if (bytes.subarray(0, 4).toString("ascii") === "RIFF" && bytes.subarray(8, 12).toString("ascii") === "WEBP") {
+    if (
+      bytes.subarray(0, 4).toString("ascii") === "RIFF" &&
+      bytes.subarray(8, 12).toString("ascii") === "WEBP"
+    ) {
       return "image/webp";
     }
     if (

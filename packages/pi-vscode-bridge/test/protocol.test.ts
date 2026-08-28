@@ -47,7 +47,7 @@ test("createFrameSplitter preserves U+2028 inside JSON strings", () => {
 
 test("createFrameSplitter ignores blank lines", () => {
   const split = createFrameSplitter();
-  const lines = split("\n\n" + encodeFrame({ type: "bye", reason: "shutdown" }) + "\n");
+  const lines = split(`\n\n${encodeFrame({ type: "bye", reason: "shutdown" })}\n`);
   assert.equal(lines.length, 1);
 });
 
@@ -88,8 +88,5 @@ test("isPathInside compares normalized segments", () => {
 test("isPathInside handles case-insensitive Windows paths", () => {
   assert.equal(isPathInside("C:\\Repo", "c:\\repo\\src\\file.ts"), true);
   assert.equal(isPathInside("C:\\Repo", "C:\\Repository\\file.ts"), false);
-  assert.equal(
-    isPathInside("\\\\server\\share", "\\\\SERVER\\SHARE\\folder"),
-    true,
-  );
+  assert.equal(isPathInside("\\\\server\\share", "\\\\SERVER\\SHARE\\folder"), true);
 });

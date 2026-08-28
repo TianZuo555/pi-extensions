@@ -5,15 +5,7 @@
 
 import path from "node:path";
 import type { Skill } from "@earendil-works/pi-coding-agent";
-import {
-  Cause,
-  Context,
-  Effect,
-  Exit,
-  Layer,
-  ManagedRuntime,
-  Result,
-} from "effect";
+import { Cause, Context, Effect, Exit, Layer, ManagedRuntime, Result } from "effect";
 import {
   getRepoMeta as getRepoMetaHelper,
   piConfigDir,
@@ -47,9 +39,7 @@ export function isDisabled(disabled: DisabledSkills | undefined, name: string): 
 
 export interface RepoSkillsRuntimeShape {
   readonly loadConfig: Effect.Effect<RepoSkillsConfig>;
-  readonly saveConfig: (
-    config: RepoSkillsConfig,
-  ) => Effect.Effect<void, RepoSkillsConfigError>;
+  readonly saveConfig: (config: RepoSkillsConfig) => Effect.Effect<void, RepoSkillsConfigError>;
   readonly getRepoMeta: (cwd: string) => Effect.Effect<RepoMeta>;
   readonly getRepoSkills: (cwd: string) => Effect.Effect<RepoSkillsEntry | undefined>;
   readonly setRepoSkills: (
@@ -68,10 +58,9 @@ export interface RepoSkillsRuntimeShape {
   ) => Effect.Effect<{ enabled: Skill[]; disabledCount: number }>;
 }
 
-export class RepoSkillsRuntime extends Context.Service<
-  RepoSkillsRuntime,
-  RepoSkillsRuntimeShape
->()("pi-repo-skills/RepoSkillsRuntime") {}
+export class RepoSkillsRuntime extends Context.Service<RepoSkillsRuntime, RepoSkillsRuntimeShape>()(
+  "pi-repo-skills/RepoSkillsRuntime",
+) {}
 
 const makeRepoSkillsRuntime = Effect.sync(() => {
   const loadConfig: Effect.Effect<RepoSkillsConfig> = Effect.sync(() => {
@@ -79,9 +68,7 @@ const makeRepoSkillsRuntime = Effect.sync(() => {
     return { version: 1, repos: data.repos ?? {} };
   });
 
-  const saveConfig = (
-    config: RepoSkillsConfig,
-  ): Effect.Effect<void, RepoSkillsConfigError> =>
+  const saveConfig = (config: RepoSkillsConfig): Effect.Effect<void, RepoSkillsConfigError> =>
     Effect.try({
       try: () => writeJson(CONFIG_FILE, config),
       catch: (err) =>
@@ -139,20 +126,19 @@ const makeRepoSkillsRuntime = Effect.sync(() => {
       return { removed: true, repoName: meta.name };
     });
 
-  const listRepos: Effect.Effect<
-    Array<{ path: string; name: string; disabled: DisabledSkills }>
-  > = Effect.gen(function* () {
-    const config = yield* loadConfig;
-    const entries: Array<{ path: string; name: string; disabled: DisabledSkills }> = [];
-    for (const [repoPath, entry] of Object.entries(config.repos ?? {})) {
-      entries.push({
-        path: repoPath,
-        name: entry.name || path.basename(repoPath),
-        disabled: entry.disabled,
-      });
-    }
-    return entries;
-  });
+  const listRepos: Effect.Effect<Array<{ path: string; name: string; disabled: DisabledSkills }>> =
+    Effect.gen(function* () {
+      const config = yield* loadConfig;
+      const entries: Array<{ path: string; name: string; disabled: DisabledSkills }> = [];
+      for (const [repoPath, entry] of Object.entries(config.repos ?? {})) {
+        entries.push({
+          path: repoPath,
+          name: entry.name || path.basename(repoPath),
+          disabled: entry.disabled,
+        });
+      }
+      return entries;
+    });
 
   const filterSkills = (
     skills: Skill[],
@@ -160,7 +146,7 @@ const makeRepoSkillsRuntime = Effect.sync(() => {
   ): Effect.Effect<{ enabled: Skill[]; disabledCount: number }> =>
     Effect.gen(function* () {
       const entry = yield* getRepoSkills(cwd);
-      if (!entry || !entry.disabled) {
+      if (!entry?.disabled) {
         return { enabled: skills, disabledCount: 0 };
       }
       const enabled = skills.filter((s) => !isDisabled(entry.disabled, s.name));

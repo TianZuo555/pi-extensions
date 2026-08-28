@@ -1,9 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {
-  EmptyGoalParams,
-  UpdateGoalParams,
-} from "../index.ts";
+import { EmptyGoalParams, UpdateGoalParams } from "../index.ts";
 import {
   buildContinuationPrompt,
   buildGoalContextMessage,
@@ -41,10 +38,7 @@ test("goal tool metadata stays concise and non-redundant", () => {
       parameters: UpdateGoalParams,
     },
   ]).length;
-  assert.ok(
-    metadataChars <= 500,
-    `goal metadata budget exceeded: ${metadataChars} chars`,
-  );
+  assert.ok(metadataChars <= 500, `goal metadata budget exceeded: ${metadataChars} chars`);
 });
 
 test("update_goal schema carries localized guidance", () => {

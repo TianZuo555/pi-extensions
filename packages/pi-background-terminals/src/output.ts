@@ -75,10 +75,7 @@ export class OutputBuffer {
     headRetainedBytes = Math.floor(maxRetainedBytes / 8),
   ) {
     this.maxRetainedBytes = Math.max(0, maxRetainedBytes);
-    this.headBudget = Math.min(
-      this.maxRetainedBytes,
-      Math.max(0, headRetainedBytes),
-    );
+    this.headBudget = Math.min(this.maxRetainedBytes, Math.max(0, headRetainedBytes));
     this.tailBudget = this.maxRetainedBytes - this.headBudget;
     this.spill = spill;
     this.headSealed = this.headBudget === 0;
@@ -147,18 +144,11 @@ export class OutputBuffer {
 
     const head = Buffer.concat(this.headChunks, this.headBytes).toString("utf8");
     const tail = Buffer.concat(this.tailChunks, this.tailBytes).toString("utf8");
-    const truncatedBytes = Math.max(
-      0,
-      this.totalBytes - this.headBytes - this.tailBytes,
-    );
+    const truncatedBytes = Math.max(0, this.totalBytes - this.headBytes - this.tailBytes);
     const text =
       truncatedBytes === 0
         ? `${head}${tail}`
-        : [
-            head,
-            `... ${truncatedBytes} bytes omitted ...`,
-            tail,
-          ]
+        : [head, `... ${truncatedBytes} bytes omitted ...`, tail]
             .filter((part) => part.length > 0)
             .join("\n");
 

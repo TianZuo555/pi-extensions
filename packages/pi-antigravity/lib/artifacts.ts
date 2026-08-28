@@ -51,10 +51,7 @@ function mediaTypeFor(name: string): AgyArtifact["mediaType"] {
   return MEDIA_TYPES[name.split(".").pop()?.toLowerCase() ?? ""] ?? "other";
 }
 
-async function listDir(
-  dir: string,
-  kind: AgyArtifact["kind"],
-): Promise<AgyArtifact[]> {
+async function listDir(dir: string, kind: AgyArtifact["kind"]): Promise<AgyArtifact[]> {
   let entries: string[];
   try {
     entries = await fs.readdir(dir);
@@ -93,10 +90,7 @@ export async function listAgyArtifacts(
 }
 
 /** Resolve an artifact reference by exact name or unique prefix. */
-export function findAgyArtifact(
-  artifacts: AgyArtifact[],
-  ref: string,
-): AgyArtifact | undefined {
+export function findAgyArtifact(artifacts: AgyArtifact[], ref: string): AgyArtifact | undefined {
   const needle = ref.trim().toLowerCase();
   const exact = artifacts.find((artifact) => artifact.name.toLowerCase() === needle);
   if (exact) return exact;

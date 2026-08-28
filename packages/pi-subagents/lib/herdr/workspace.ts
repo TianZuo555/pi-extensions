@@ -40,21 +40,22 @@ export function pickSplitDirection(width: number): SplitDirection {
 export function currentLayout(options?: HerdrCliOptions): Effect.Effect<HerdrLayout, HerdrError> {
   return herdrJson(["pane", "layout", "--current"], options).pipe(
     Effect.map((result) => {
-      const layout = (result as {
-        layout?: {
-          panes?: unknown[];
-          area?: { width?: number; height?: number; x?: number; y?: number };
-          workspace_id?: string;
-        };
-      }).layout;
+      const layout = (
+        result as {
+          layout?: {
+            panes?: unknown[];
+            area?: { width?: number; height?: number; x?: number; y?: number };
+            workspace_id?: string;
+          };
+        }
+      ).layout;
       const area = layout?.area ?? {};
       const width = Number(area.width ?? 0);
       return {
         panes: layout?.panes ?? [],
         area,
         direction: pickSplitDirection(width),
-        workspaceId:
-          typeof layout?.workspace_id === "string" ? layout.workspace_id : undefined,
+        workspaceId: typeof layout?.workspace_id === "string" ? layout.workspace_id : undefined,
       };
     }),
   );
@@ -92,9 +93,11 @@ export function splitPane(
 }
 
 function shellLooksReady(result: unknown): boolean {
-  const info = (result as {
-    process_info?: { shell_pid?: number; foreground_process_group_id?: number };
-  }).process_info;
+  const info = (
+    result as {
+      process_info?: { shell_pid?: number; foreground_process_group_id?: number };
+    }
+  ).process_info;
   if (!info) return false;
   const shellPid = info.shell_pid;
   const fgPgid = info.foreground_process_group_id;
@@ -126,7 +129,10 @@ export function waitForShell(
   });
 }
 
-export function closePane(paneId: string, options?: HerdrCliOptions): Effect.Effect<void, HerdrError> {
+export function closePane(
+  paneId: string,
+  options?: HerdrCliOptions,
+): Effect.Effect<void, HerdrError> {
   return herdrJson(["pane", "close", paneId], options).pipe(Effect.asVoid);
 }
 
@@ -192,7 +198,10 @@ export function closeHerdrWorkspace(
   return herdrJson(["workspace", "close", workspaceId], options).pipe(Effect.asVoid);
 }
 
-export function focusPane(paneId: string, options?: HerdrCliOptions): Effect.Effect<void, HerdrError> {
+export function focusPane(
+  paneId: string,
+  options?: HerdrCliOptions,
+): Effect.Effect<void, HerdrError> {
   return herdrJson(["pane", "focus", paneId], options).pipe(Effect.asVoid);
 }
 

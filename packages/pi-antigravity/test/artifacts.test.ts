@@ -3,11 +3,7 @@ import { test } from "node:test";
 import { mkdir, mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import {
-  findAgyArtifact,
-  listAgyArtifacts,
-  type AgyArtifact,
-} from "../lib/artifacts.ts";
+import { findAgyArtifact, listAgyArtifacts, type AgyArtifact } from "../lib/artifacts.ts";
 
 const CONV = "conv-1";
 

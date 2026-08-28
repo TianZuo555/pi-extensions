@@ -64,7 +64,9 @@ export function decodeRgEvent(line: string): RgLine | undefined {
 
   // rg keeps the trailing newline on `lines`; strip it and any CR so callers
   // can treat the value as one display line.
-  const text = decodeText(data.lines).replace(/\r?\n$/, "").replace(/\r/g, "");
+  const text = decodeText(data.lines)
+    .replace(/\r?\n$/, "")
+    .replace(/\r/g, "");
 
   return {
     path,

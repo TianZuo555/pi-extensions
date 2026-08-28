@@ -15,7 +15,12 @@ export const REAL_CAPTURE = [
   }),
   JSON.stringify({
     event: "step_update",
-    step_update: { conversation_id: CONVERSATION_ID, step_index: 0, state: "DONE", step_type: "user_input" },
+    step_update: {
+      conversation_id: CONVERSATION_ID,
+      step_index: 0,
+      state: "DONE",
+      step_type: "user_input",
+    },
   }),
   JSON.stringify({
     event: "step_update",
@@ -25,7 +30,13 @@ export const REAL_CAPTURE = [
       state: "DONE",
       step_type: "agent_response",
       duration_seconds: 1.761,
-      usage: { input_tokens: 13712, output_tokens: 264, thinking_tokens: 191, cache_read_tokens: 0, total_tokens: 13976 },
+      usage: {
+        input_tokens: 13712,
+        output_tokens: 264,
+        thinking_tokens: 191,
+        cache_read_tokens: 0,
+        total_tokens: 13976,
+      },
     },
   }),
   JSON.stringify({
@@ -85,29 +96,74 @@ export const REAL_CAPTURE = [
       error: 'permission check failed for command "echo hi": user denied permission',
       duration_seconds: 8.014562,
       num_turns: 1,
-      usage: { input_tokens: 44909, output_tokens: 610, thinking_tokens: 395, cache_read_tokens: 0, total_tokens: 45519 },
+      usage: {
+        input_tokens: 44909,
+        output_tokens: 610,
+        thinking_tokens: 395,
+        cache_read_tokens: 0,
+        total_tokens: 45519,
+      },
     },
   }),
 ].join("\n");
 
 /** Synthetic successful turn with streaming tool activity and final text. */
 export const OK_CAPTURE = [
-  JSON.stringify({ event: "init", conversation_id: "c-ok-1", init: { cwd: "/tmp", tools: [], permission_mode: "auto" } }),
   JSON.stringify({
-    event: "step_update",
-    step_update: { conversation_id: "c-ok-1", step_index: 1, state: "ACTIVE", step_type: "tool", tool_name: "list_dir", tool_info: { name: "list_dir", parameters: { Path: "/tmp" } } },
+    event: "init",
+    conversation_id: "c-ok-1",
+    init: { cwd: "/tmp", tools: [], permission_mode: "auto" },
   }),
   JSON.stringify({
     event: "step_update",
-    step_update: { conversation_id: "c-ok-1", step_index: 1, state: "DONE", step_type: "tool", tool_name: "list_dir", duration_seconds: 0.1, output: "3 entries" },
+    step_update: {
+      conversation_id: "c-ok-1",
+      step_index: 1,
+      state: "ACTIVE",
+      step_type: "tool",
+      tool_name: "list_dir",
+      tool_info: { name: "list_dir", parameters: { Path: "/tmp" } },
+    },
   }),
   JSON.stringify({
     event: "step_update",
-    step_update: { conversation_id: "c-ok-1", step_index: 2, state: "ACTIVE", step_type: "agent_response", text_delta: "Hello " },
+    step_update: {
+      conversation_id: "c-ok-1",
+      step_index: 1,
+      state: "DONE",
+      step_type: "tool",
+      tool_name: "list_dir",
+      duration_seconds: 0.1,
+      output: "3 entries",
+    },
   }),
   JSON.stringify({
     event: "step_update",
-    step_update: { conversation_id: "c-ok-1", step_index: 2, state: "DONE", step_type: "agent_response", text_delta: "from agy!", duration_seconds: 0.4, usage: { input_tokens: 100, output_tokens: 20, thinking_tokens: 5, cache_read_tokens: 0, total_tokens: 120 } },
+    step_update: {
+      conversation_id: "c-ok-1",
+      step_index: 2,
+      state: "ACTIVE",
+      step_type: "agent_response",
+      text_delta: "Hello ",
+    },
+  }),
+  JSON.stringify({
+    event: "step_update",
+    step_update: {
+      conversation_id: "c-ok-1",
+      step_index: 2,
+      state: "DONE",
+      step_type: "agent_response",
+      text_delta: "from agy!",
+      duration_seconds: 0.4,
+      usage: {
+        input_tokens: 100,
+        output_tokens: 20,
+        thinking_tokens: 5,
+        cache_read_tokens: 0,
+        total_tokens: 120,
+      },
+    },
   }),
   JSON.stringify({
     event: "result",
@@ -117,7 +173,13 @@ export const OK_CAPTURE = [
       response: "Hello from agy!",
       duration_seconds: 2.5,
       num_turns: 1,
-      usage: { input_tokens: 100, output_tokens: 20, thinking_tokens: 5, cache_read_tokens: 0, total_tokens: 120 },
+      usage: {
+        input_tokens: 100,
+        output_tokens: 20,
+        thinking_tokens: 5,
+        cache_read_tokens: 0,
+        total_tokens: 120,
+      },
     },
   }),
 ].join("\n");

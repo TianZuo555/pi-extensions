@@ -1,18 +1,10 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type {
-  ExtensionAPI,
-  KeybindingsManager,
-  Theme,
-} from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, KeybindingsManager, Theme } from "@earendil-works/pi-coding-agent";
 import type { TUI } from "@earendil-works/pi-tui";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import askUser, { type AskUserInput } from "../index.ts";
-import {
-  AskUserForm,
-  type AskUserQuestion,
-  type AskUserSubmission,
-} from "../lib/form.ts";
+import { AskUserForm, type AskUserQuestion, type AskUserSubmission } from "../lib/form.ts";
 import { buildAskUserResultMessage } from "../lib/prompt.ts";
 
 function createTheme(): Theme {
@@ -33,8 +25,7 @@ function createKeybindings(): KeybindingsManager {
     "tui.editor.cursorRight": ["right"],
   };
   return {
-    matches: (data: string, keybinding: string) =>
-      bindings[keybinding]?.includes(data) ?? false,
+    matches: (data: string, keybinding: string) => bindings[keybinding]?.includes(data) ?? false,
   } as KeybindingsManager;
 }
 
@@ -46,15 +37,9 @@ function createForm(questions: AskUserQuestion[]) {
       renders++;
     },
   } as unknown as TUI;
-  const form = new AskUserForm(
-    tui,
-    createTheme(),
-    createKeybindings(),
-    questions,
-    (submission) => {
-      result = submission;
-    },
-  );
+  const form = new AskUserForm(tui, createTheme(), createKeybindings(), questions, (submission) => {
+    result = submission;
+  });
   return {
     form,
     getResult: () => result,
@@ -191,9 +176,7 @@ test("enter refuses to advance an unanswered question and renders guidance", () 
 });
 
 test("legacy single-question arguments upgrade to questions[]", () => {
-  let registered:
-    | { prepareArguments?: (args: unknown) => AskUserInput }
-    | undefined;
+  let registered: { prepareArguments?: (args: unknown) => AskUserInput } | undefined;
   const pi = {
     registerTool: (tool: unknown) => {
       registered = tool as { prepareArguments?: (args: unknown) => AskUserInput };
@@ -233,8 +216,5 @@ test("result text reports every selected and custom answer", () => {
     ],
   });
 
-  assert.equal(
-    text,
-    "Question 1: selected option 1: Redis\nQuestion 2: wrote: Keep it local",
-  );
+  assert.equal(text, "Question 1: selected option 1: Redis\nQuestion 2: wrote: Keep it local");
 });

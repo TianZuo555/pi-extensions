@@ -11,7 +11,10 @@ export interface JsonlReader {
 }
 
 export function attachJsonlReader(
-  stream: { on(event: "data", listener: (chunk: Buffer) => void): void; on(event: "end", listener: () => void): void },
+  stream: {
+    on(event: "data", listener: (chunk: Buffer) => void): void;
+    on(event: "end", listener: () => void): void;
+  },
   onLine: (line: string) => void,
 ): void {
   const decoder = new StringDecoder("utf8");

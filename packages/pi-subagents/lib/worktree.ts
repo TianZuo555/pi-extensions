@@ -156,7 +156,9 @@ export function getRunArtifactDir(artifactRoot: string, runId: string): string {
   return join(artifactRoot, "runs", runId);
 }
 
-function resolveWorktreeRoots(cwd: string): { repoRoot: string; subdir: string; branch: string } | undefined {
+function resolveWorktreeRoots(
+  cwd: string,
+): { repoRoot: string; subdir: string; branch: string } | undefined {
   const inside = safeGitSync(["rev-parse", "--is-inside-work-tree"], cwd);
   if (!inside.ok) return undefined;
 
@@ -184,7 +186,10 @@ export function createWorktree(cwd: string, runId: string): WorktreeInfo | undef
   const suffix = randomUUID().slice(0, 8);
   const worktreePath = join(tmpdir(), `pi-subagent-${runId}-${suffix}`);
 
-  const added = safeGitSync(["worktree", "add", "--detach", worktreePath, head.out], roots.repoRoot);
+  const added = safeGitSync(
+    ["worktree", "add", "--detach", worktreePath, head.out],
+    roots.repoRoot,
+  );
   if (!added.ok) return undefined;
 
   return {
@@ -222,9 +227,7 @@ async function currentHeadSha(worktree: WorktreeInfo): Promise<GitResult> {
   return safeGit(["rev-parse", "HEAD"], worktree.workPath);
 }
 
-type PorcelainStatus =
-  | { ok: true; dirty: boolean }
-  | { ok: false; error: string };
+type PorcelainStatus = { ok: true; dirty: boolean } | { ok: false; error: string };
 
 async function readPorcelainStatus(worktree: WorktreeInfo): Promise<PorcelainStatus> {
   const status = await safeGit(["status", "--porcelain"], worktree.workPath);

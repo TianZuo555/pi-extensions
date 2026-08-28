@@ -83,7 +83,9 @@ function configuredSettings(
   const model = section.model;
   if (model !== undefined) {
     if (typeof model !== "string" || model.trim().length === 0) {
-      warnings.push(`${source} ${COMMIT_SETTINGS_KEY}.model must be a non-empty provider/model string`);
+      warnings.push(
+        `${source} ${COMMIT_SETTINGS_KEY}.model must be a non-empty provider/model string`,
+      );
     } else {
       try {
         configured.model = parseModelReference(model);

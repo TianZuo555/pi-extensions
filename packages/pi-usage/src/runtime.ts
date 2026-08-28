@@ -120,9 +120,7 @@ const makeUsageRuntime = Effect.gen(function* () {
       return readyState(provider, report);
     }).pipe(
       Effect.catch((error) => Effect.succeed(errorState(provider, errorMessage(error)))),
-      Effect.catchDefect((defect) =>
-        Effect.succeed(errorState(provider, errorMessage(defect))),
-      ),
+      Effect.catchDefect((defect) => Effect.succeed(errorState(provider, errorMessage(defect)))),
     );
 
   /** Wait on a shared in-flight result; caller abort cancels only this wait. */
@@ -179,15 +177,18 @@ const makeUsageRuntime = Effect.gen(function* () {
           const pending = snapshot.inFlight.get(provider.id);
           if (pending) return yield* awaitInFlight(pending, signal);
 
-          const joinOrStart = yield* SynchronizedRef.modify(ref, (state): [InFlightAction, UsageRuntimeState] => {
-            const existing = state.inFlight.get(provider.id);
-            if (existing) {
-              return [{ kind: "join", deferred: existing }, state];
-            }
-            const nextDeferred = Deferred.makeUnsafe<ProviderState>();
-            state.inFlight.set(provider.id, nextDeferred);
-            return [{ kind: "start", deferred: nextDeferred }, state];
-          });
+          const joinOrStart = yield* SynchronizedRef.modify(
+            ref,
+            (state): [InFlightAction, UsageRuntimeState] => {
+              const existing = state.inFlight.get(provider.id);
+              if (existing) {
+                return [{ kind: "join", deferred: existing }, state];
+              }
+              const nextDeferred = Deferred.makeUnsafe<ProviderState>();
+              state.inFlight.set(provider.id, nextDeferred);
+              return [{ kind: "start", deferred: nextDeferred }, state];
+            },
+          );
 
           if (joinOrStart.kind === "join") {
             return yield* awaitInFlight(joinOrStart.deferred, signal);
@@ -236,9 +237,7 @@ const makeUsageRuntime = Effect.gen(function* () {
         Effect.all(
           providers.map((provider) => queryProvider(ctx, provider, force, signal)),
           { concurrency: "unbounded" },
-        ).pipe(
-          Effect.map((states) => states.filter((state) => state.status !== "unconfigured")),
-        ),
+        ).pipe(Effect.map((states) => states.filter((state) => state.status !== "unconfigured"))),
       ),
     );
 

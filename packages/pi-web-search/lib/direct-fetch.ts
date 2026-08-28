@@ -27,7 +27,10 @@ async function readLimitedText(response: Response, maxBytes: number): Promise<st
     reader.releaseLock();
   }
 
-  let text = Buffer.concat(chunks.map((chunk) => Buffer.from(chunk)), total).toString("utf8");
+  let text = Buffer.concat(
+    chunks.map((chunk) => Buffer.from(chunk)),
+    total,
+  ).toString("utf8");
   while (Buffer.byteLength(text, "utf8") > maxBytes) text = text.slice(0, -1);
   return text;
 }
@@ -42,9 +45,7 @@ export function decodeHtmlEntities(html: string): string {
     .replace(/&amp;/g, "&")
     .replace(/&nbsp;/g, " ")
     .replace(/&#(\d+);/g, (_, num) => String.fromCharCode(parseInt(num, 10)))
-    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) =>
-      String.fromCharCode(parseInt(hex, 16)),
-    );
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
 }
 
 export function extractHtmlTitle(html: string): string | undefined {
@@ -72,23 +73,38 @@ export function htmlToMarkdown(html: string): string {
   text = text.replace(/<svg\b[^<]*(?:(?!<\/svg>)<[^<]*)*<\/svg>/gi, "");
 
   // Preformatted blocks
-  text = text.replace(/<pre\b[^>]*><code\b[^>]*>([\s\S]*?)<\/code><\/pre>/gi, (_, code) => `\n\`\`\`\n${decodeHtmlEntities(code)}\n\`\`\`\n`);
-  text = text.replace(/<pre\b[^>]*>([\s\S]*?)<\/pre>/gi, (_, code) => `\n\`\`\`\n${decodeHtmlEntities(code)}\n\`\`\`\n`);
-  text = text.replace(/<code\b[^>]*>([\s\S]*?)<\/code>/gi, (_, code) => `\`${decodeHtmlEntities(code)}\``);
+  text = text.replace(
+    /<pre\b[^>]*><code\b[^>]*>([\s\S]*?)<\/code><\/pre>/gi,
+    (_, code) => `\n\`\`\`\n${decodeHtmlEntities(code)}\n\`\`\`\n`,
+  );
+  text = text.replace(
+    /<pre\b[^>]*>([\s\S]*?)<\/pre>/gi,
+    (_, code) => `\n\`\`\`\n${decodeHtmlEntities(code)}\n\`\`\`\n`,
+  );
+  text = text.replace(
+    /<code\b[^>]*>([\s\S]*?)<\/code>/gi,
+    (_, code) => `\`${decodeHtmlEntities(code)}\``,
+  );
 
   // Headings
   text = text.replace(/<h1\b[^>]*>([\s\S]*?)<\/h1>/gi, (_, c) => `\n\n# ${c.trim()}\n\n`);
   text = text.replace(/<h2\b[^>]*>([\s\S]*?)<\/h2>/gi, (_, c) => `\n\n## ${c.trim()}\n\n`);
   text = text.replace(/<h3\b[^>]*>([\s\S]*?)<\/h3>/gi, (_, c) => `\n\n### ${c.trim()}\n\n`);
-  text = text.replace(/<h[4-6]\b[^>]*>([\s\S]*?)<\/h[4-6]>/gi, (_, c) => `\n\n#### ${c.trim()}\n\n`);
+  text = text.replace(
+    /<h[4-6]\b[^>]*>([\s\S]*?)<\/h[4-6]>/gi,
+    (_, c) => `\n\n#### ${c.trim()}\n\n`,
+  );
 
   // Links: <a href="url">text</a> -> [text](url)
-  text = text.replace(/<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi, (_, href, content) => {
-    const cleanContent = content.replace(/<[^>]+>/g, "").trim();
-    if (!cleanContent || cleanContent === href) return href;
-    if (href.startsWith("javascript:") || href.startsWith("#")) return cleanContent;
-    return `[${cleanContent}](${href})`;
-  });
+  text = text.replace(
+    /<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi,
+    (_, href, content) => {
+      const cleanContent = content.replace(/<[^>]+>/g, "").trim();
+      if (!cleanContent || cleanContent === href) return href;
+      if (href.startsWith("javascript:") || href.startsWith("#")) return cleanContent;
+      return `[${cleanContent}](${href})`;
+    },
+  );
 
   // Paragraphs and breaks
   text = text.replace(/<p\b[^>]*>/gi, "\n\n");
@@ -214,10 +230,7 @@ export function maybeDecodeBase64Body(url: string, body: string): string {
   return decoded.toString("utf8");
 }
 
-export async function fetchDirect(
-  url: string,
-  options: FetchOptions = {},
-): Promise<FetchResponse> {
+export async function fetchDirect(url: string, options: FetchOptions = {}): Promise<FetchResponse> {
   const parsedUrl = new URL(url);
   if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
     throw new Error(`Direct fetch only supports http and https URLs: ${url}`);

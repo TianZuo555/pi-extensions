@@ -31,16 +31,7 @@ export function completeCodePointEnd(buf: Buffer) {
   }
   if (index < 0) return buf.length;
   const lead = buf[index];
-  const needed =
-    lead < 0x80
-      ? 1
-      : lead >= 0xf0
-        ? 4
-        : lead >= 0xe0
-          ? 3
-          : lead >= 0xc0
-            ? 2
-            : 0;
+  const needed = lead < 0x80 ? 1 : lead >= 0xf0 ? 4 : lead >= 0xe0 ? 3 : lead >= 0xc0 ? 2 : 0;
   // A stray continuation byte is not a truncated sequence; leave it in place
   // rather than trimming an unbounded tail of invalid bytes.
   if (needed === 0) return buf.length;

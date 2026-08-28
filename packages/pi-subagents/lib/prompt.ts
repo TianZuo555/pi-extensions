@@ -1,4 +1,9 @@
-import { CONTEXT_MAX_LENGTH, TASK_MAX_LENGTH, truncateText, type ProfileDefinition } from "./domain.ts";
+import {
+  CONTEXT_MAX_LENGTH,
+  TASK_MAX_LENGTH,
+  truncateText,
+  type ProfileDefinition,
+} from "./domain.ts";
 import { buildHandoffInstructions } from "./report-file.ts";
 
 export const SUBAGENT_TOOL_DESCRIPTION = `Delegate a bounded task to a subagent in an isolated Pi RPC child process.
@@ -68,11 +73,7 @@ export function buildInteractivePrompt(
   if (profile.systemPrompt.trim()) {
     parts.push(profile.systemPrompt.trim());
   }
-  parts.push(
-    `# Subagent task (${profile.name})`,
-    "",
-    truncateText(task.trim(), TASK_MAX_LENGTH),
-  );
+  parts.push(`# Subagent task (${profile.name})`, "", truncateText(task.trim(), TASK_MAX_LENGTH));
   if (context?.trim()) {
     parts.push("", "## Context from parent", truncateText(context.trim(), CONTEXT_MAX_LENGTH));
   }

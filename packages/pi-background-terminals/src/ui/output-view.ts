@@ -43,8 +43,7 @@ export function buildOutputLines(text: string, width: number) {
     // Carriage-return progress lines (npm, cargo): keep only the final state.
     const segments = raw.split("\r");
     const finalSegment = segments.at(-1) ?? "";
-    const lastSegment =
-      finalSegment || [...segments].reverse().find((segment) => segment) || "";
+    const lastSegment = finalSegment || [...segments].reverse().find((segment) => segment) || "";
     const clean = sanitizeText(lastSegment);
     if (clean.length === 0) {
       out.push("");

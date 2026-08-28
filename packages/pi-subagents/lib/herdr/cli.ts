@@ -62,12 +62,8 @@ function resolveArgs(args: string[], options?: HerdrCliOptions): string[] {
   return prefix.length ? [...prefix, ...args] : args;
 }
 
-function execHerdr(
-  command: string,
-  args: string[],
-  timeoutMs?: number,
-): Promise<HerdrExecResult> {
-  return new Promise((resolve, reject) => {
+function execHerdr(command: string, args: string[], timeoutMs?: number): Promise<HerdrExecResult> {
+  return new Promise((resolve, _reject) => {
     execFile(
       command,
       args,
@@ -99,8 +95,7 @@ function runHerdrEffect(
   options?: HerdrCliOptions,
 ): Effect.Effect<HerdrExecResult, HerdrCommandError> {
   return Effect.tryPromise({
-    try: () =>
-      execHerdr(resolveCommand(options), resolveArgs(args, options), options?.timeoutMs),
+    try: () => execHerdr(resolveCommand(options), resolveArgs(args, options), options?.timeoutMs),
     catch: (cause) =>
       new HerdrCommandError({
         message: cause instanceof Error ? cause.message : String(cause),
@@ -251,8 +246,7 @@ export function stripAnsi(text: string): string {
 export function resolveExecutableOnPath(name: string): string | undefined {
   const pathEnv = process.env.PATH ?? "";
   const separator = process.platform === "win32" ? ";" : ":";
-  const extensions =
-    process.platform === "win32" ? [".exe", ".cmd", ".bat", ".com", ""] : [""];
+  const extensions = process.platform === "win32" ? [".exe", ".cmd", ".bat", ".com", ""] : [""];
 
   for (const dir of pathEnv.split(separator)) {
     if (!dir) continue;

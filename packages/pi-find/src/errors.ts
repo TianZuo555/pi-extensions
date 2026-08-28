@@ -1,9 +1,7 @@
 import { Data } from "effect";
 
 /** The rg or fd binary could not be located or started. */
-export class SearchToolMissingError extends Data.TaggedError(
-  "SearchToolMissingError",
-)<{
+export class SearchToolMissingError extends Data.TaggedError("SearchToolMissingError")<{
   readonly message: string;
   readonly tool: "rg" | "fd";
 }> {}

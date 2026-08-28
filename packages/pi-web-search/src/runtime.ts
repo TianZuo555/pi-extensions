@@ -39,10 +39,7 @@ import type {
   SearchProviderName,
   SearchResponse,
 } from "../lib/types.ts";
-import {
-  WebSearchApiError,
-  type WebSearchError,
-} from "./errors.ts";
+import { WebSearchApiError, type WebSearchError } from "./errors.ts";
 
 /** How long a rate-limited (429) provider is skipped before retrying it. */
 export const RATE_LIMIT_COOLDOWN_MS = 120_000;
@@ -64,9 +61,7 @@ const SESSION_FAILURE_MARKERS = [
  * invalid key, plan limits) disable the provider for the whole session;
  * "cooldown" failures (429 rate limits) only disable it briefly.
  */
-export function classifyProviderFailure(
-  message: string,
-): ProviderFailureClass | null {
+export function classifyProviderFailure(message: string): ProviderFailureClass | null {
   const m = message.toLowerCase();
   if (/\b429\b/.test(m) || m.includes("rate limit") || m.includes("too many requests")) {
     return "cooldown";
@@ -134,23 +129,18 @@ export interface WebSearchRuntimeShape {
   ) => Effect.Effect<FetchResponse, WebSearchError>;
 
   /** Providers currently skipped by the session fallback, with reasons. */
-  readonly providerHealth: Effect.Effect<
-    ReadonlyArray<ProviderHealthEntry>
-  >;
+  readonly providerHealth: Effect.Effect<ReadonlyArray<ProviderHealthEntry>>;
 
   /** Per-provider session usage counters (see /websearch-usage). */
   readonly usage: Effect.Effect<ReadonlyArray<ProviderUsageEntry>>;
 }
 
-export class WebSearchRuntime extends Context.Service<
-  WebSearchRuntime,
-  WebSearchRuntimeShape
->()("pi-web-search/WebSearchRuntime") {}
+export class WebSearchRuntime extends Context.Service<WebSearchRuntime, WebSearchRuntimeShape>()(
+  "pi-web-search/WebSearchRuntime",
+) {}
 
 const makeWebSearchRuntime = Effect.gen(function* () {
-  const healthRef = yield* SynchronizedRef.make(
-    new Map<string, ProviderBlock>(),
-  );
+  const healthRef = yield* SynchronizedRef.make(new Map<string, ProviderBlock>());
 
   /** Session usage counters keyed by `${kind}:${provider}`. */
   const usage = new Map<string, ProviderUsageEntry>();
@@ -179,9 +169,7 @@ const makeWebSearchRuntime = Effect.gen(function* () {
 
   const usageSnapshot = (): ReadonlyArray<ProviderUsageEntry> =>
     [...usage.values()].sort((a, b) =>
-      a.kind === b.kind
-        ? a.provider.localeCompare(b.provider)
-        : a.kind.localeCompare(b.kind),
+      a.kind === b.kind ? a.provider.localeCompare(b.provider) : a.kind.localeCompare(b.kind),
     );
 
   const recordBlock = (provider: string, failure: ProviderAttemptFailure) =>
@@ -189,9 +177,7 @@ const makeWebSearchRuntime = Effect.gen(function* () {
       const failureClass = classifyProviderFailure(failure.message);
       if (!failureClass) return health;
       const until =
-        failureClass === "session"
-          ? Number.POSITIVE_INFINITY
-          : Date.now() + RATE_LIMIT_COOLDOWN_MS;
+        failureClass === "session" ? Number.POSITIVE_INFINITY : Date.now() + RATE_LIMIT_COOLDOWN_MS;
       const next = new Map(health);
       next.set(provider, { reason: failure.message.slice(0, 160), until });
       return next;
@@ -205,9 +191,9 @@ const makeWebSearchRuntime = Effect.gen(function* () {
       return next;
     });
 
-  const providerHealth: Effect.Effect<
-    ReadonlyArray<ProviderHealthEntry>
-  > = SynchronizedRef.get(healthRef).pipe(
+  const providerHealth: Effect.Effect<ReadonlyArray<ProviderHealthEntry>> = SynchronizedRef.get(
+    healthRef,
+  ).pipe(
     Effect.map((health) => {
       const now = Date.now();
       return [...health.entries()]
@@ -341,9 +327,7 @@ const makeWebSearchRuntime = Effect.gen(function* () {
               case "ollama":
                 return await searchOllama(query, searchOpts);
               default:
-                throw new Error(
-                  `Unsupported search provider: ${provider as string}`,
-                );
+                throw new Error(`Unsupported search provider: ${provider as string}`);
             }
           },
           catch: (err): ProviderAttemptFailure => ({
@@ -359,41 +343,36 @@ const makeWebSearchRuntime = Effect.gen(function* () {
     options: FetchOptions = {},
     requestedProvider?: FetchProviderName,
   ): Effect.Effect<FetchResponse, WebSearchError> =>
-    runProviderChain(
-      "fetch",
-      resolveFetchChain(requestedProvider),
-      (provider: FetchProviderName) =>
-        Effect.tryPromise({
-          try: async (signal) => {
-            const fetchOpts: FetchOptions = {
-              ...options,
-              signal: combineSignals(options.signal, signal),
-            };
-            switch (provider) {
-              case "firecrawl":
-                return await fetchFirecrawl(url, fetchOpts);
-              case "exa":
-                return await fetchExa(url, fetchOpts);
-              case "tavily":
-                return await fetchTavily(url, fetchOpts);
-              case "monid":
-                return await fetchMonid(url, fetchOpts);
-              case "ollama":
-                return await fetchOllama(url, fetchOpts);
-              case "direct":
-                return await fetchDirect(url, fetchOpts);
-              default:
-                throw new Error(
-                  `Unsupported fetch provider: ${provider as string}`,
-                );
-            }
-          },
-          catch: (err): ProviderAttemptFailure => ({
-            provider,
-            message: err instanceof Error ? err.message : String(err),
-            userAborted: isUserAbort(err, options.signal),
-          }),
+    runProviderChain("fetch", resolveFetchChain(requestedProvider), (provider: FetchProviderName) =>
+      Effect.tryPromise({
+        try: async (signal) => {
+          const fetchOpts: FetchOptions = {
+            ...options,
+            signal: combineSignals(options.signal, signal),
+          };
+          switch (provider) {
+            case "firecrawl":
+              return await fetchFirecrawl(url, fetchOpts);
+            case "exa":
+              return await fetchExa(url, fetchOpts);
+            case "tavily":
+              return await fetchTavily(url, fetchOpts);
+            case "monid":
+              return await fetchMonid(url, fetchOpts);
+            case "ollama":
+              return await fetchOllama(url, fetchOpts);
+            case "direct":
+              return await fetchDirect(url, fetchOpts);
+            default:
+              throw new Error(`Unsupported fetch provider: ${provider as string}`);
+          }
+        },
+        catch: (err): ProviderAttemptFailure => ({
+          provider,
+          message: err instanceof Error ? err.message : String(err),
+          userAborted: isUserAbort(err, options.signal),
         }),
+      }),
     );
 
   return WebSearchRuntime.of({

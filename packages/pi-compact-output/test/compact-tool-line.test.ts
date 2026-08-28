@@ -64,15 +64,24 @@ test("widths 120, 20, and 1 never overflow", () => {
   for (const width of [120, 20, 1]) {
     const lines = buildCompactToolLine(source, width);
     assert.ok(lines.length >= 1 && lines.length <= 3);
-    assert.ok(lines.every((line) => visibleWidth(line) <= width), `width ${width}: ${lines.join(" | ")}`);
+    assert.ok(
+      lines.every((line) => visibleWidth(line) <= width),
+      `width ${width}: ${lines.join(" | ")}`,
+    );
   }
 });
 
 test("pending, success, and error markers are correct", () => {
   const pending = buildCompactToolLine(internals({ isPartial: true }), 80)[0];
-  const success = buildCompactToolLine(internals({ isPartial: false, result: { isError: false, content: [] } }), 80)[0];
+  const success = buildCompactToolLine(
+    internals({ isPartial: false, result: { isError: false, content: [] } }),
+    80,
+  )[0];
   const error = buildCompactToolLine(
-    internals({ isPartial: false, result: { isError: true, content: [{ type: "text", text: "boom" }] } }),
+    internals({
+      isPartial: false,
+      result: { isError: true, content: [{ type: "text", text: "boom" }] },
+    }),
     80,
   )[0];
   assert.match(pending, /^⠋ /);
@@ -87,7 +96,10 @@ test("error includes a bounded first error line when space permits", () => {
   const line = buildCompactToolLine(
     internals({
       callRendererComponent: new FakeComponent(["edit packages/foo.ts"]),
-      result: { isError: true, content: [{ type: "text", text: "oldText not found\nmore detail" }] },
+      result: {
+        isError: true,
+        content: [{ type: "text", text: "oldText not found\nmore detail" }],
+      },
     }),
     120,
   )[0];
@@ -165,10 +177,7 @@ test("result fill respects narrow widths", () => {
 
 test("tool line count is configurable", () => {
   const fourLines = new FakeComponent(["one", "two", "three", "four"]);
-  const full = buildCompactToolLine(
-    internals({ callRendererComponent: fourLines }),
-    120,
-  );
+  const full = buildCompactToolLine(internals({ callRendererComponent: fourLines }), 120);
   assert.equal(full.length, 3, "defaults to three lines");
 
   const two = buildCompactToolLine(
@@ -198,14 +207,8 @@ test("unknown-tool fallback does not stringify a secret argument", () => {
 });
 
 test("FFF-style grep/find fallbacks include pattern and path", () => {
-  assert.match(
-    fallbackToolSummary("grep", { pattern: "foo", path: "src" }),
-    /grep foo in src/,
-  );
-  assert.match(
-    fallbackToolSummary("ffgrep", { pattern: "foo", path: "src" }),
-    /grep foo in src/,
-  );
+  assert.match(fallbackToolSummary("grep", { pattern: "foo", path: "src" }), /grep foo in src/);
+  assert.match(fallbackToolSummary("ffgrep", { pattern: "foo", path: "src" }), /grep foo in src/);
   assert.match(
     fallbackToolSummary("find", { pattern: "*.ts", path: "packages" }),
     /find \*\.ts in packages/,

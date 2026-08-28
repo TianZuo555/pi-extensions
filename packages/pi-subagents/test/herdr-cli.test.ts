@@ -17,7 +17,12 @@ import {
   resetHerdrCapabilityCache,
   setHerdrBinaryPathForTests,
 } from "../lib/herdr/capability.ts";
-import { currentLayout, pickSplitDirection, readAgent, waitForShell } from "../lib/herdr/workspace.ts";
+import {
+  currentLayout,
+  pickSplitDirection,
+  readAgent,
+  waitForShell,
+} from "../lib/herdr/workspace.ts";
 
 const FIXTURE = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -65,10 +70,7 @@ describe("herdr cli", () => {
   it("maps failure envelope to HerdrApiError with code preserved", async () => {
     await withEnv({ FAKE_HERDR_API_ERROR: "agent_pane_not_found" }, async () => {
       await assert.rejects(
-        () =>
-          Effect.runPromise(
-            herdrJson(["agent", "start", "sa-test"], fakeCliOptions()),
-          ),
+        () => Effect.runPromise(herdrJson(["agent", "start", "sa-test"], fakeCliOptions())),
         (error: unknown) => {
           assert.ok(error instanceof HerdrApiError);
           assert.equal(error.code, "agent_pane_not_found");
@@ -86,10 +88,7 @@ describe("herdr cli", () => {
           () => Effect.runPromise(herdrJson(["agent", "start", "sa-test"], fakeCliOptions())),
           (error: unknown) => {
             assert.ok(error instanceof HerdrCommandError);
-            assert.equal(
-              error.message,
-              "unsupported interactive agent kind: notarealkind",
-            );
+            assert.equal(error.message, "unsupported interactive agent kind: notarealkind");
             return true;
           },
         );
@@ -99,7 +98,10 @@ describe("herdr cli", () => {
 
   it("herdrText returns raw stdout verbatim and never JSON-parses it", async () => {
     const raw = await Effect.runPromise(
-      herdrText(["agent", "read", "sa-test", "--source", "recent-unwrapped", "--lines", "80"], fakeCliOptions()),
+      herdrText(
+        ["agent", "read", "sa-test", "--source", "recent-unwrapped", "--lines", "80"],
+        fakeCliOptions(),
+      ),
     );
     assert.match(raw, /\u001b\[31m/);
     assert.match(raw, /raw agent text/);

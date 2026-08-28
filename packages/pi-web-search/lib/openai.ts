@@ -69,7 +69,10 @@ function extractSnippetAround(text: string, start: unknown, end: unknown): strin
   if (typeof start !== "number" || typeof end !== "number" || !text) return "";
   const before = Math.max(0, start - 100);
   const after = Math.min(text.length, end + 100);
-  const snippet = text.slice(before, after).replace(/\[([^\]]*)\]\([^)]*\)/g, "$1").trim();
+  const snippet = text
+    .slice(before, after)
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .trim();
   return snippet.length > 300 ? `${snippet.slice(0, 297)}...` : snippet;
 }
 
@@ -96,29 +99,47 @@ function extractSearchResults(output: unknown[], numResults: number | undefined)
   const seenUrls = new Set<string>();
 
   for (const item of output) {
-    if (!item || typeof item !== "object" || (item as { type?: unknown }).type !== "message") continue;
+    if (!item || typeof item !== "object" || (item as { type?: unknown }).type !== "message")
+      continue;
     const content = (item as { content?: unknown }).content;
     if (!Array.isArray(content)) continue;
     for (const part of content) {
       if (!part || typeof part !== "object") continue;
-      const text = typeof (part as { text?: unknown }).text === "string" ? (part as { text: string }).text : "";
+      const text =
+        typeof (part as { text?: unknown }).text === "string"
+          ? (part as { text: string }).text
+          : "";
       const annotations = (part as { annotations?: unknown }).annotations;
       if (!Array.isArray(annotations)) continue;
       for (const annotation of annotations) {
-        if (!annotation || typeof annotation !== "object" || (annotation as { type?: unknown }).type !== "url_citation") continue;
+        if (
+          !annotation ||
+          typeof annotation !== "object" ||
+          (annotation as { type?: unknown }).type !== "url_citation"
+        )
+          continue;
         addResult(
           results,
           seenUrls,
           (annotation as { url?: unknown }).url,
           (annotation as { title?: unknown }).title,
-          extractSnippetAround(text, (annotation as { start_index?: unknown }).start_index, (annotation as { end_index?: unknown }).end_index),
+          extractSnippetAround(
+            text,
+            (annotation as { start_index?: unknown }).start_index,
+            (annotation as { end_index?: unknown }).end_index,
+          ),
         );
       }
     }
   }
 
   for (const item of output) {
-    if (!item || typeof item !== "object" || (item as { type?: unknown }).type !== "web_search_call") continue;
+    if (
+      !item ||
+      typeof item !== "object" ||
+      (item as { type?: unknown }).type !== "web_search_call"
+    )
+      continue;
     const value = item as { action?: unknown; sources?: unknown; results?: unknown };
     const actionSources =
       value.action && typeof value.action === "object"
@@ -130,7 +151,12 @@ function extractSearchResults(output: unknown[], numResults: number | undefined)
       for (const source of group) {
         if (!source || typeof source !== "object") continue;
         const record = source as Record<string, unknown>;
-        addResult(results, seenUrls, record.url ?? record.source_website_url, record.title ?? record.caption);
+        addResult(
+          results,
+          seenUrls,
+          record.url ?? record.source_website_url,
+          record.title ?? record.caption,
+        );
       }
     }
   }
@@ -144,12 +170,16 @@ function extractSearchResults(output: unknown[], numResults: number | undefined)
 function extractAnswer(output: unknown[]): string {
   const parts: string[] = [];
   for (const item of output) {
-    if (!item || typeof item !== "object" || (item as { type?: unknown }).type !== "message") continue;
+    if (!item || typeof item !== "object" || (item as { type?: unknown }).type !== "message")
+      continue;
     const content = (item as { content?: unknown }).content;
     if (!Array.isArray(content)) continue;
     for (const part of content) {
       if (!part || typeof part !== "object") continue;
-      const text = typeof (part as { text?: unknown }).text === "string" ? (part as { text: string }).text : "";
+      const text =
+        typeof (part as { text?: unknown }).text === "string"
+          ? (part as { text: string }).text
+          : "";
       if (text) parts.push(text);
     }
   }
@@ -195,7 +225,11 @@ async function parseOpenAIResponse(response: Response): Promise<{ output: unknow
     }
   }
 
-  if (completedResponse && Array.isArray(completedResponse.output) && completedResponse.output.length > 0) {
+  if (
+    completedResponse &&
+    Array.isArray(completedResponse.output) &&
+    completedResponse.output.length > 0
+  ) {
     return { output: completedResponse.output };
   }
   if (outputItems.length > 0) {

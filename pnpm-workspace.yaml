@@ -12,5 +12,6 @@ overrides:
 # pnpm 11 denies dependency build scripts unless explicitly allowed here.
 allowBuilds:
   "@google/genai": true
+  lefthook: true
   msgpackr-extract: true
   protobufjs: true

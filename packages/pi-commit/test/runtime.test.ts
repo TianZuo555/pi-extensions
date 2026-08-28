@@ -43,7 +43,7 @@ const mockSnapshot = {
 
 test("runCommit throws AbortError on runtime interruption", async () => {
   const runtime = createCommitRuntime();
-  const commit = runtime.runSync(CommitRuntime);
+  const _commit = runtime.runSync(CommitRuntime);
 
   const hang = Effect.never;
   const runPromise = runCommit(runtime, hang);
@@ -65,10 +65,7 @@ test("runCommit throws GenerationError for invalid generated commit message norm
 
   await assert.rejects(
     () =>
-      runCommit(
-        runtime,
-        commit.requestCommitMessage(mockResolvedModel("   "), mockSnapshot, ""),
-      ),
+      runCommit(runtime, commit.requestCommitMessage(mockResolvedModel("   "), mockSnapshot, "")),
     (error: unknown) => error instanceof GenerationError,
   );
 
@@ -81,10 +78,7 @@ test("runCommit throws GenerationError for invalid generated commit plan normali
 
   await assert.rejects(
     () =>
-      runCommit(
-        runtime,
-        commit.requestCommitPlan(mockResolvedModel("not json"), mockSnapshot, ""),
-      ),
+      runCommit(runtime, commit.requestCommitPlan(mockResolvedModel("not json"), mockSnapshot, "")),
     (error: unknown) => error instanceof GenerationError,
   );
 

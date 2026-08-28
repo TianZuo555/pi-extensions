@@ -20,10 +20,7 @@ import {
   statsFor,
   type TodoItem,
 } from "../lib/state.ts";
-import {
-  TodoDuplicateIdError,
-  TodoMissingListError,
-} from "./errors.ts";
+import { TodoDuplicateIdError, TodoMissingListError } from "./errors.ts";
 
 export const LEGACY_TOOL_NAME = "manage_todo_list";
 
@@ -46,9 +43,7 @@ export interface TodoRuntimeShape {
     items?: TodoItem[],
   ) => Effect.Effect<TodoWriteResult, TodoDuplicateIdError | TodoMissingListError>;
   readonly clear: Effect.Effect<void>;
-  readonly reconstructFromBranch: (
-    branchEntries: readonly unknown[],
-  ) => Effect.Effect<TodoItem[]>;
+  readonly reconstructFromBranch: (branchEntries: readonly unknown[]) => Effect.Effect<TodoItem[]>;
 }
 
 export class TodoRuntime extends Context.Service<TodoRuntime, TodoRuntimeShape>()(
@@ -78,8 +73,7 @@ const makeTodoRuntime = Effect.gen(function* () {
     Effect.gen(function* () {
       if (!items) {
         return yield* new TodoMissingListError({
-          message:
-            "todo: write requires todoList — send every item, not just the changed ones.",
+          message: "todo: write requires todoList — send every item, not just the changed ones.",
         });
       }
 
@@ -147,9 +141,7 @@ const makeTodoRuntime = Effect.gen(function* () {
       }
       return restored;
     }).pipe(
-      Effect.flatMap((restored) =>
-        SynchronizedRef.set(ref, restored).pipe(Effect.as(restored)),
-      ),
+      Effect.flatMap((restored) => SynchronizedRef.set(ref, restored).pipe(Effect.as(restored))),
     );
 
   return TodoRuntime.of({
@@ -162,10 +154,7 @@ const makeTodoRuntime = Effect.gen(function* () {
   });
 });
 
-export const TodoRuntimeLive: Layer.Layer<TodoRuntime> = Layer.effect(
-  TodoRuntime,
-  makeTodoRuntime,
-);
+export const TodoRuntimeLive: Layer.Layer<TodoRuntime> = Layer.effect(TodoRuntime, makeTodoRuntime);
 
 export function createTodoRuntime() {
   return ManagedRuntime.make(TodoRuntimeLive);

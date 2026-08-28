@@ -1,7 +1,6 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   AUTH_IDS,
-  getProviderStatuses,
   loadProviderKey,
   loadStoredConfig,
   saveStoredConfig,
@@ -45,10 +44,7 @@ type KeyProvider = keyof typeof KEY_PROVIDERS;
  *   ollama    • unconfigured
  * Configured providers are rendered green.
  */
-function providerLine(
-  name: KeyProvider | "ollama",
-  config: WebSearchConfig,
-): string {
+function providerLine(name: KeyProvider | "ollama", config: WebSearchConfig): string {
   const label = name.padEnd(10);
   if (name !== "ollama") {
     const envName = KEY_PROVIDERS[name];
@@ -62,28 +58,25 @@ function providerLine(
       const masked = key ? maskKey(key) : undefined;
       if (keylessDisabled) {
         return masked
-          ? GREEN + `${label}✓ auth: ${masked}` + RESET
+          ? `${GREEN}${label}✓ auth: ${masked}${RESET}`
           : `${label}• unconfigured (keyless disabled)`;
       }
       return masked
-        ? GREEN + `${label}✓ keyless (1k/mo) → key ${masked}` + RESET
-        : GREEN + `${label}✓ keyless (1,000 free credits/mo)` + RESET;
+        ? `${GREEN}${label}✓ keyless (1k/mo) → key ${masked}${RESET}`
+        : `${GREEN}${label}✓ keyless (1,000 free credits/mo)${RESET}`;
     }
     if (envKey) {
-      return GREEN + `${label}✓ env: ${envName}` + RESET;
+      return `${GREEN}${label}✓ env: ${envName}${RESET}`;
     }
     if (stored) {
-      return GREEN + `${label}✓ auth: ${maskKey(stored)}` + RESET;
+      return `${GREEN}${label}✓ auth: ${maskKey(stored)}${RESET}`;
     }
     return `${label}• unconfigured`;
   }
-  const envKey =
-    process.env.OLLAMA_HOST?.trim() || process.env.OLLAMA_API_KEY?.trim();
+  const envKey = process.env.OLLAMA_HOST?.trim() || process.env.OLLAMA_API_KEY?.trim();
   if (envKey) {
-    const envName = process.env.OLLAMA_HOST?.trim()
-      ? "OLLAMA_HOST"
-      : "OLLAMA_API_KEY";
-    return GREEN + `${label}✓ env: ${envName}` + RESET;
+    const envName = process.env.OLLAMA_HOST?.trim() ? "OLLAMA_HOST" : "OLLAMA_API_KEY";
+    return `${GREEN}${label}✓ env: ${envName}${RESET}`;
   }
   const stored = loadProviderKey(name);
   if (!stored && !config.ollama?.baseUrl) {
@@ -91,7 +84,7 @@ function providerLine(
   }
   const url = config.ollama?.baseUrl ?? OLLAMA_DEFAULT_URL;
   const key = stored ? ` · key: ${maskKey(stored)}` : "";
-  return GREEN + `${label}✓ auth: ${url}${key}` + RESET;
+  return `${GREEN}${label}✓ auth: ${url}${key}${RESET}`;
 }
 
 export default function webSearchExtension(pi: ExtensionAPI): void {
@@ -114,9 +107,7 @@ export default function webSearchExtension(pi: ExtensionAPI): void {
       } else {
         for (const u of usage) {
           const avg = u.ok + u.fail > 0 ? Math.round(u.totalMs / (u.ok + u.fail)) : 0;
-          lines.push(
-            `${u.kind}: ${u.provider} — ${u.ok} ok, ${u.fail} failed, ~${avg}ms/call`,
-          );
+          lines.push(`${u.kind}: ${u.provider} — ${u.ok} ok, ${u.fail} failed, ~${avg}ms/call`);
         }
       }
 
@@ -124,7 +115,8 @@ export default function webSearchExtension(pi: ExtensionAPI): void {
       if (health.length > 0) {
         lines.push("", "— Providers on cooldown / blocked —");
         for (const h of health) {
-          const scope = h.msLeft === null ? "rest of session" : `retry in ~${Math.ceil(h.msLeft / 1000)}s`;
+          const scope =
+            h.msLeft === null ? "rest of session" : `retry in ~${Math.ceil(h.msLeft / 1000)}s`;
           lines.push(`${h.provider}: ${h.reason} (${scope})`);
         }
       }
@@ -135,9 +127,7 @@ export default function webSearchExtension(pi: ExtensionAPI): void {
         if (wallet) {
           lines.push(
             `balance: $${wallet.balance.value.toFixed(2)} ${wallet.balance.currency}` +
-              (wallet.held.value > 0
-                ? ` (held: $${wallet.held.value.toFixed(2)})`
-                : ""),
+              (wallet.held.value > 0 ? ` (held: $${wallet.held.value.toFixed(2)})` : ""),
           );
           const runs = await listMonidRuns(5);
           if (runs && runs.length > 0) {
@@ -184,8 +174,8 @@ export default function webSearchExtension(pi: ExtensionAPI): void {
       ]);
       if (!provider) return;
       // Lines may start with a green ANSI code; match on the provider name.
-      const name = (["exa", "firecrawl", "tavily", "monid", "ollama"] as const).find(
-        (n) => provider.includes(n),
+      const name = (["exa", "firecrawl", "tavily", "monid", "ollama"] as const).find((n) =>
+        provider.includes(n),
       );
       if (!name) return;
 

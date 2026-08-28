@@ -62,10 +62,7 @@ test("TokenSpeedRuntime stream lifecycle and mode cycling", async () => {
   assert.equal(d2.shouldRender, false);
 
   // Delta after 100ms interval renders
-  const d3 = await runTokenSpeed(
-    runtime,
-    service.recordDelta(" more text streaming in", 1200),
-  );
+  const d3 = await runTokenSpeed(runtime, service.recordDelta(" more text streaming in", 1200));
   assert.equal(d3.shouldRender, true);
   assert.match(d3.statusText ?? "", /⚡/);
 

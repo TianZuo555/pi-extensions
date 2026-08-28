@@ -5,12 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import type { Skill } from "@earendil-works/pi-coding-agent";
-import {
-  ALL,
-  createRepoSkillsRuntime,
-  RepoSkillsRuntime,
-  runRepoSkills,
-} from "../src/runtime.ts";
+import { ALL, createRepoSkillsRuntime, RepoSkillsRuntime, runRepoSkills } from "../src/runtime.ts";
 
 test("RepoSkillsRuntime preserves spaces in Git worktree paths", async () => {
   const runtime = createRepoSkillsRuntime();

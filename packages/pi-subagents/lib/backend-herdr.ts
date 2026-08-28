@@ -31,14 +31,8 @@ import {
   semanticReportFromFile,
   type ReportFileOutcome,
 } from "./report-file.ts";
-import {
-  renderRunReport,
-  type ChildSemanticReport,
-} from "./run-report.ts";
-import {
-  createWorktreeViaHerdrEffect,
-  type WorktreeInfo,
-} from "./worktree.ts";
+import { renderRunReport, type ChildSemanticReport } from "./run-report.ts";
+import { createWorktreeViaHerdrEffect, type WorktreeInfo } from "./worktree.ts";
 
 const AGENT_START_TIMEOUT_MS = 30_000;
 const RECOVERY_WAIT_MS = 30_000;
@@ -96,13 +90,9 @@ export class HerdrSubagentBackend implements SubagentBackend {
       if (resource.workspaceId) {
         try {
           if (resource.worktreeWorkspace) {
-            await Effect.runPromise(
-              removeHerdrWorktree(resource.workspaceId, this.cliOptions),
-            );
+            await Effect.runPromise(removeHerdrWorktree(resource.workspaceId, this.cliOptions));
           } else {
-            await Effect.runPromise(
-              closeHerdrWorkspace(resource.workspaceId, this.cliOptions),
-            );
+            await Effect.runPromise(closeHerdrWorkspace(resource.workspaceId, this.cliOptions));
           }
         } catch {
           // best-effort
@@ -148,29 +138,17 @@ export class HerdrSubagentBackend implements SubagentBackend {
       const reportPath = reportPathFor(self.artifactRoot, input.runId);
       const task = input.task ?? input.prompt;
       if (!task.trim()) {
-        return self.withWorktree(
-          self.failOutput(input, "subagent task is empty"),
-          undefined,
-        );
+        return self.withWorktree(self.failOutput(input, "subagent task is empty"), undefined);
       }
 
-      const composedPrompt = buildInteractivePrompt(
-        input.profile,
-        task,
-        input.context,
-        reportPath,
-      );
+      const composedPrompt = buildInteractivePrompt(input.profile, task, input.context, reportPath);
 
       input.onActivity?.("starting");
 
       let worktreeInfo: WorktreeInfo | undefined;
 
       if (input.profile.workspace === "worktree") {
-        worktreeInfo = yield* createWorktreeViaHerdrEffect(
-          input.cwd,
-          input.runId,
-          self.cliOptions,
-        );
+        worktreeInfo = yield* createWorktreeViaHerdrEffect(input.cwd, input.runId, self.cliOptions);
         if (!worktreeInfo) {
           return self.failOutput(input, "could not create Herdr worktree for this profile");
         }
@@ -210,23 +188,13 @@ export class HerdrSubagentBackend implements SubagentBackend {
 
       if (promptResult.cancelled) {
         return self.withWorktree(
-          self.cancelledOutput(
-            input,
-            runState.paneId,
-            runState.workspaceId,
-            runState.agentStatus,
-          ),
+          self.cancelledOutput(input, runState.paneId, runState.workspaceId, runState.agentStatus),
           worktreeInfo,
         );
       }
       if (promptResult.timedOut) {
         return self.withWorktree(
-          self.timedOutOutput(
-            input,
-            runState.paneId,
-            runState.workspaceId,
-            runState.agentStatus,
-          ),
+          self.timedOutOutput(input, runState.paneId, runState.workspaceId, runState.agentStatus),
           worktreeInfo,
         );
       }
@@ -316,10 +284,7 @@ export class HerdrSubagentBackend implements SubagentBackend {
     return worktree ? { ...output, worktree } : output;
   }
 
-  private startAgent(
-    input: BackendRunInput,
-    paneId: string,
-  ): Effect.Effect<void, HerdrError> {
+  private startAgent(input: BackendRunInput, paneId: string): Effect.Effect<void, HerdrError> {
     const args: string[] = [
       "agent",
       "start",
@@ -439,7 +404,9 @@ export class HerdrSubagentBackend implements SubagentBackend {
     }
 
     return promptLoop.pipe(
-      Effect.ensuring(Effect.sync(() => input.signal.removeEventListener("abort", onPromptAbortEsc))),
+      Effect.ensuring(
+        Effect.sync(() => input.signal.removeEventListener("abort", onPromptAbortEsc)),
+      ),
     );
   }
 
@@ -497,10 +464,7 @@ export class HerdrSubagentBackend implements SubagentBackend {
     return visible.includes(snippet);
   }
 
-  private readTranscript(
-    alias: string,
-    composedPrompt: string,
-  ): Effect.Effect<string, HerdrError> {
+  private readTranscript(alias: string, composedPrompt: string): Effect.Effect<string, HerdrError> {
     return readAgent(alias, TRANSCRIPT_LINES, this.cliOptions).pipe(
       Effect.map((text) => this.stripTranscriptChrome(text, composedPrompt)),
     );
@@ -584,9 +548,7 @@ export class HerdrSubagentBackend implements SubagentBackend {
       usageAvailable: false,
       error: message,
       terminalReportReceived: false,
-      herdr: paneId
-        ? { paneId, alias: input.runId, workspaceId, agentStatus }
-        : undefined,
+      herdr: paneId ? { paneId, alias: input.runId, workspaceId, agentStatus } : undefined,
     };
   }
 
@@ -608,9 +570,7 @@ export class HerdrSubagentBackend implements SubagentBackend {
       usageAvailable: false,
       error: "subagent cancelled",
       terminalReportReceived: false,
-      herdr: paneId
-        ? { paneId, alias: input.runId, workspaceId, agentStatus }
-        : undefined,
+      herdr: paneId ? { paneId, alias: input.runId, workspaceId, agentStatus } : undefined,
     };
   }
 
@@ -632,9 +592,7 @@ export class HerdrSubagentBackend implements SubagentBackend {
       usageAvailable: false,
       error: "subagent timed out",
       terminalReportReceived: false,
-      herdr: paneId
-        ? { paneId, alias: input.runId, workspaceId, agentStatus }
-        : undefined,
+      herdr: paneId ? { paneId, alias: input.runId, workspaceId, agentStatus } : undefined,
     };
   }
 }

@@ -8,16 +8,29 @@
  * tool cards.
  */
 
-import type { AgyStepUpdate, AgyUsage, ParsedAgyEvent } from "./events.ts";
+import type { AgyUsage, ParsedAgyEvent } from "./events.ts";
 import { parseAgyLine } from "./events.ts";
 
 export type AgyActivity =
   | { type: "tool_start"; stepId?: number; name: string; args: Record<string, unknown> }
-  | { type: "tool_done"; stepId?: number; name: string; args: Record<string, unknown>; output?: string; durationSeconds?: number }
-  | { type: "tool_error"; stepId?: number; name: string; args: Record<string, unknown>; message: string }
+  | {
+      type: "tool_done";
+      stepId?: number;
+      name: string;
+      args: Record<string, unknown>;
+      output?: string;
+      durationSeconds?: number;
+    }
+  | {
+      type: "tool_error";
+      stepId?: number;
+      name: string;
+      args: Record<string, unknown>;
+      message: string;
+    }
   | {
       /** Synthetic — pushed by the bridge when agy invokes a `pi__*` tool.
-      * Never produced by applyEvent. */
+       * Never produced by applyEvent. */
       type: "bridge_call";
       id: string;
       name: string;
@@ -99,8 +112,7 @@ export function applyEvent(outcome: AgyTurnOutcome, event: ParsedAgyEvent): AgyA
         } else if (step.state === "ERROR") {
           // agy puts the error detail under tool_info on ERROR steps (e.g.
           // generate_image 429 rate limits); step.error is often absent.
-          const message =
-            step.error?.message ?? step.tool_info?.error?.message ?? "tool error";
+          const message = step.error?.message ?? step.tool_info?.error?.message ?? "tool error";
           activities.push({
             type: "tool_error",
             stepId: step.step_index,

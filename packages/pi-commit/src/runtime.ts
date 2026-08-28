@@ -26,7 +26,11 @@ import {
   ManagedRuntime,
   Result,
 } from "effect";
-import type { CommitThinkingLevel, CommitSettingsResolution, ModelReference } from "../lib/config.ts";
+import type {
+  CommitThinkingLevel,
+  CommitSettingsResolution,
+  ModelReference,
+} from "../lib/config.ts";
 import type { StagedSnapshot } from "../lib/git.ts";
 import {
   buildCommitAllPrompt,
@@ -141,11 +145,9 @@ const makeCommitRuntime = Effect.succeed(
         ).pipe(Effect.option);
 
         const fallback = fallbackReference
-          ? yield* resolveConfiguredModelEffect(
-              ctx,
-              fallbackReference,
-              fallbackThinkingLevel,
-            ).pipe(Effect.option)
+          ? yield* resolveConfiguredModelEffect(ctx, fallbackReference, fallbackThinkingLevel).pipe(
+              Effect.option,
+            )
           : undefined;
 
         if (primary._tag === "Some") {
@@ -163,13 +165,21 @@ const makeCommitRuntime = Effect.succeed(
           } satisfies ResolvedCommitModels;
         }
 
-        return yield* resolveConfiguredModelEffect(ctx, settings.model, settings.thinkingLevel).pipe(
-          Effect.map((active) => ({ active } satisfies ResolvedCommitModels)),
-        );
+        return yield* resolveConfiguredModelEffect(
+          ctx,
+          settings.model,
+          settings.thinkingLevel,
+        ).pipe(Effect.map((active) => ({ active }) satisfies ResolvedCommitModels));
       }),
 
     requestCommitMessage: (resolved, snapshot, guidance, signal) =>
-      requestModelText(resolved, COMMIT_SYSTEM_PROMPT, buildCommitPrompt(snapshot, guidance), 2048, signal).pipe(
+      requestModelText(
+        resolved,
+        COMMIT_SYSTEM_PROMPT,
+        buildCommitPrompt(snapshot, guidance),
+        2048,
+        signal,
+      ).pipe(
         Effect.flatMap((text) =>
           text === undefined
             ? Effect.void

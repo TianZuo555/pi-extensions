@@ -5,7 +5,6 @@ import path from "node:path";
 import test from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { TokensPanel } from "../lib/tokens-panel.ts";
-import { localDateKey } from "../lib/tokens-model.ts";
 import { scanLocalUsage, sessionFileStartMs, type ScanResult } from "../src/local-scan.ts";
 
 const HOUR = 60 * 60 * 1000;
@@ -87,13 +86,18 @@ test("scanLocalUsage skips files started long before the window but keeps nonsta
     scanLocalUsage({ sessionsDir: root, sinceMs: now - 7 * 24 * HOUR }),
   );
   assert.equal(scan.filesScanned, 1); // dated file skipped, repro.jsonl always scanned
-  assert.deepEqual(scan.records.map((record) => record.id), ["y"]);
+  assert.deepEqual(
+    scan.records.map((record) => record.id),
+    ["y"],
+  );
 
   fs.rmSync(root, { recursive: true, force: true });
 });
 
 test("sessionFileStartMs parses pi session filenames", () => {
-  const ms = sessionFileStartMs("2026-08-11T07-15-43-671Z_019fefad-5bb7-712a-919a-a71d64ee97ce.jsonl");
+  const ms = sessionFileStartMs(
+    "2026-08-11T07-15-43-671Z_019fefad-5bb7-712a-919a-a71d64ee97ce.jsonl",
+  );
   assert.equal(ms, Date.UTC(2026, 7, 11, 7, 15, 43, 671));
   assert.equal(sessionFileStartMs("repro.jsonl"), undefined);
 });
@@ -107,7 +111,9 @@ function panelHarness(snapshot: ScanResult) {
     fg: (_name: string, text: string) => text,
     bold: (text: string) => `\x1b[1m${text}\x1b[22m`,
   };
-  const keybindings = { matches: (data: string, name: string) => name === "cancel" && data === "\x1b" };
+  const keybindings = {
+    matches: (data: string, name: string) => name === "cancel" && data === "\x1b",
+  };
   const panel = new TokensPanel({
     tui: { requestRender: () => {} },
     theme,
@@ -132,12 +138,11 @@ async function scanLocalUsageFixture(): Promise<ScanResult> {
   const earlyToday = (minute: number, fallback: number) =>
     Math.max(dayStart.getTime() + minute * 60_000, anchor - fallback * 60_000);
   const root = fixtureDir({
-    "--project--": [
-      sessionLine("a", earlyToday(1, 10)),
-      sessionLine("b", earlyToday(2, 5)),
-    ],
+    "--project--": [sessionLine("a", earlyToday(1, 10)), sessionLine("b", earlyToday(2, 5))],
   });
-  const scan = await Effect.runPromise(scanLocalUsage({ sessionsDir: root, sinceMs: now.getTime() - 30 * 24 * HOUR }));
+  const scan = await Effect.runPromise(
+    scanLocalUsage({ sessionsDir: root, sinceMs: now.getTime() - 30 * 24 * HOUR }),
+  );
   fs.rmSync(root, { recursive: true, force: true });
   return scan;
 }

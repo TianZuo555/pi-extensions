@@ -125,15 +125,15 @@ export class NoGoalError extends Data.TaggedError("NoGoalError")<{
 export class AlreadyCompleteError extends Data.TaggedError("AlreadyCompleteError")<{
   readonly message: string;
 }> {}
-export class InvalidObjectiveError extends Data.TaggedError(
-  "InvalidObjectiveError",
-)<{ readonly message: string }> {}
+export class InvalidObjectiveError extends Data.TaggedError("InvalidObjectiveError")<{
+  readonly message: string;
+}> {}
 export class InvalidBudgetError extends Data.TaggedError("InvalidBudgetError")<{
   readonly message: string;
 }> {}
-export class GoalRuntimeClosedError extends Data.TaggedError(
-  "GoalRuntimeClosedError",
-)<{ readonly message: string }> {}
+export class GoalRuntimeClosedError extends Data.TaggedError("GoalRuntimeClosedError")<{
+  readonly message: string;
+}> {}
 
 export type GoalError =
   | NoGoalError
@@ -148,33 +148,22 @@ export interface GoalRuntimeShape {
   /** Current state snapshot (live maps; do not mutate). */
   readonly state: Effect.Effect<GoalRuntimeState, GoalError>;
   readonly goal: Effect.Effect<Goal | null, GoalError>;
-  readonly loadFromBranch: (
-    entries: readonly unknown[],
-  ) => Effect.Effect<void, GoalError>;
+  readonly loadFromBranch: (entries: readonly unknown[]) => Effect.Effect<void, GoalError>;
   readonly noteUserInput: (text: string) => Effect.Effect<void, GoalError>;
   readonly steerPause: Effect.Effect<GoalOpResult, GoalError>;
   readonly agentStart: Effect.Effect<void, GoalError>;
   readonly toolExecutionStarted: Effect.Effect<void, GoalError>;
-  readonly turnStarted: (
-    turnIndex: number,
-    timestamp: number,
-  ) => Effect.Effect<void, GoalError>;
+  readonly turnStarted: (turnIndex: number, timestamp: number) => Effect.Effect<void, GoalError>;
   readonly turnEnded: (
     turnIndex: number,
     message: unknown,
     toolResults: readonly unknown[],
   ) => Effect.Effect<GoalOpResult, GoalError>;
-  readonly agentEnded: (
-    messages: readonly unknown[],
-  ) => Effect.Effect<GoalOpResult, GoalError>;
+  readonly agentEnded: (messages: readonly unknown[]) => Effect.Effect<GoalOpResult, GoalError>;
   readonly agentSettled: Effect.Effect<GoalOpResult, GoalError>;
-  readonly pause: (
-    reason: GoalPauseReason,
-  ) => Effect.Effect<GoalOpResult, GoalError>;
+  readonly pause: (reason: GoalPauseReason) => Effect.Effect<GoalOpResult, GoalError>;
   readonly resume: Effect.Effect<GoalOpResult, GoalError>;
-  readonly setBudget: (
-    tokenBudget: number | undefined,
-  ) => Effect.Effect<GoalOpResult, GoalError>;
+  readonly setBudget: (tokenBudget: number | undefined) => Effect.Effect<GoalOpResult, GoalError>;
   readonly setGoalObjective: (
     objective: string,
     tokenBudget: number | undefined,
@@ -186,9 +175,7 @@ export interface GoalRuntimeShape {
   readonly completeGoal: Effect.Effect<GoalOpResult, GoalError>;
   readonly clearGoal: Effect.Effect<GoalOpResult, GoalError>;
   readonly queueContinuation: Effect.Effect<readonly GoalDirective[], GoalError>;
-  readonly steerBudget: (
-    goal: Goal,
-  ) => Effect.Effect<readonly GoalDirective[], GoalError>;
+  readonly steerBudget: (goal: Goal) => Effect.Effect<readonly GoalDirective[], GoalError>;
   readonly forgetBudgetSteering: Effect.Effect<void, GoalError>;
   readonly noteContinuationSendFailed: Effect.Effect<void, GoalError>;
   /** Deterministic disposal: marks the runtime closed so every subsequent
@@ -196,10 +183,9 @@ export interface GoalRuntimeShape {
   readonly close: Effect.Effect<void, GoalError>;
 }
 
-export class GoalRuntime extends Context.Service<
-  GoalRuntime,
-  GoalRuntimeShape
->()("pi-goal/GoalRuntime") {}
+export class GoalRuntime extends Context.Service<GoalRuntime, GoalRuntimeShape>()(
+  "pi-goal/GoalRuntime",
+) {}
 
 // --- Pure transition helpers ----------------------------------------------------
 
@@ -222,7 +208,9 @@ function isUsageLimitedMessage(value: unknown): boolean {
   // agentStart — but when the aggregate run settles on it with no retry, the
   // goal must become usage-limited instead of auto-continuing into repeated
   // 429s.
-  return /usage limit|quota|rate limit|resource exhausted|insufficient quota|monthly limit/.test(message);
+  return /usage limit|quota|rate limit|resource exhausted|insufficient quota|monthly limit/.test(
+    message,
+  );
 }
 
 function usageForTurn(message: unknown, toolResults: readonly unknown[]): number {
@@ -252,10 +240,7 @@ function persistDirective(goal: Goal | null): GoalDirective {
   return { kind: "persist", goal: cloneGoal(goal) };
 }
 
-function notifyDirective(
-  message: string,
-  type: "info" | "warning" | "error",
-): GoalDirective {
+function notifyDirective(message: string, type: "info" | "warning" | "error"): GoalDirective {
   return { kind: "notify", message, type };
 }
 
@@ -270,10 +255,7 @@ function sendDirective(
 }
 
 /** Attach an in-flight turn to the active goal for usage accounting. */
-function trackCurrentTurnGoal(
-  state: GoalRuntimeState,
-  goal: Goal,
-): GoalRuntimeState {
+function trackCurrentTurnGoal(state: GoalRuntimeState, goal: Goal): GoalRuntimeState {
   if (state.currentTurnIndex === undefined || goal.status !== "active") {
     return state;
   }
@@ -302,14 +284,10 @@ function loadFromBranchTransition(
   };
 }
 
-function noteUserInputTransition(
-  state: GoalRuntimeState,
-  text: string,
-): GoalRuntimeState {
+function noteUserInputTransition(state: GoalRuntimeState, text: string): GoalRuntimeState {
   return {
     ...state,
-    continuationSuppressed:
-      text.trim().length > 0 ? false : state.continuationSuppressed,
+    continuationSuppressed: text.trim().length > 0 ? false : state.continuationSuppressed,
     continuationQueued: false,
   };
 }
@@ -318,7 +296,7 @@ function steerPauseTransition(
   state: GoalRuntimeState,
   reason: GoalPauseReason,
 ): [GoalOpResult, GoalRuntimeState] {
-  if (!state.goal || state.goal.status !== "active") {
+  if (state.goal?.status !== "active") {
     return [resultOf(state, [], false), state];
   }
   const next: GoalRuntimeState = {
@@ -390,7 +368,13 @@ function turnEndedTransition(
       const report = completionBudgetReport(next.goal);
       if (report) {
         directives.push(
-          sendDirective(COMPLETION_MESSAGE_TYPE, report, { goalId: next.goal.goalId }, "steer", false),
+          sendDirective(
+            COMPLETION_MESSAGE_TYPE,
+            report,
+            { goalId: next.goal.goalId },
+            "steer",
+            false,
+          ),
         );
       }
     }
@@ -433,7 +417,13 @@ function turnEndedTransition(
     const report = completionBudgetReport(next.goal);
     if (report) {
       directives.push(
-        sendDirective(COMPLETION_MESSAGE_TYPE, report, { goalId: next.goal.goalId }, "steer", false),
+        sendDirective(
+          COMPLETION_MESSAGE_TYPE,
+          report,
+          { goalId: next.goal.goalId },
+          "steer",
+          false,
+        ),
       );
     }
   }
@@ -487,9 +477,7 @@ function agentEndedTransition(
   return [resultOf(state, [], false), state];
 }
 
-function agentSettledTransition(
-  state: GoalRuntimeState,
-): [GoalOpResult, GoalRuntimeState] {
+function agentSettledTransition(state: GoalRuntimeState): [GoalOpResult, GoalRuntimeState] {
   let next: GoalRuntimeState = {
     ...state,
     agentRunActive: false,
@@ -512,7 +500,9 @@ function agentSettledTransition(
         continuationSuppressed: true,
       };
       directives.push(persistDirective(next.goal));
-      directives.push(notifyDirective("The provider usage limit stopped the active goal.", "warning"));
+      directives.push(
+        notifyDirective("The provider usage limit stopped the active goal.", "warning"),
+      );
     }
   }
 
@@ -531,7 +521,7 @@ function pauseTransition(
   state: GoalRuntimeState,
   reason: GoalPauseReason,
 ): [GoalOpResult, GoalRuntimeState] {
-  if (!state.goal || state.goal.status !== "active") {
+  if (state.goal?.status !== "active") {
     return [resultOf(state, [], false), state];
   }
   const next: GoalRuntimeState = {
@@ -573,14 +563,21 @@ function setBudgetTransition(
   tokenBudget: number | undefined,
 ): readonly [TransitionOutcome<GoalError>, GoalRuntimeState] {
   if (!state.goal) {
-    return [{ ok: false, error: new NoGoalError({ message: "No goal exists for this thread." }) }, state];
+    return [
+      { ok: false, error: new NoGoalError({ message: "No goal exists for this thread." }) },
+      state,
+    ];
   }
   const budgetError = validateTokenBudget(tokenBudget);
   if (budgetError) {
     return [{ ok: false, error: new InvalidBudgetError({ message: budgetError }) }, state];
   }
   let nextStatus: GoalStatus = state.goal.status;
-  if (state.goal.status === "active" && tokenBudget !== undefined && state.goal.tokensUsed >= tokenBudget) {
+  if (
+    state.goal.status === "active" &&
+    tokenBudget !== undefined &&
+    state.goal.tokensUsed >= tokenBudget
+  ) {
     // Only an active goal can newly become budget-limited.
     nextStatus = "budget-limited";
   } else if (
@@ -635,8 +632,7 @@ function setGoalObjectiveTransition(
   }
 
   const edited = editGoalObjective(state.goal, objective);
-  const goal: Goal =
-    tokenBudget === undefined ? edited : { ...edited, tokenBudget };
+  const goal: Goal = tokenBudget === undefined ? edited : { ...edited, tokenBudget };
   const changed =
     goal.objective !== state.goal.objective ||
     goal.status !== state.goal.status ||
@@ -652,8 +648,7 @@ function setGoalObjectiveTransition(
     // A queued continuation remains valid: its revision metadata lets the
     // context hook supplement it with the edited objective before the call.
     continuationQueued: state.continuationQueued,
-    budgetSteeringGoalId:
-      goal.status === "active" ? undefined : state.budgetSteeringGoalId,
+    budgetSteeringGoalId: goal.status === "active" ? undefined : state.budgetSteeringGoalId,
     pendingCompletionReportGoalId: undefined,
   };
   const directives: GoalDirective[] = [persistDirective(goal)];
@@ -691,10 +686,16 @@ function updateGoalStatusTransition(
   status: "complete" | "blocked",
 ): readonly [TransitionOutcome<GoalError>, GoalRuntimeState] {
   if (!state.goal) {
-    return [{ ok: false, error: new NoGoalError({ message: "No goal exists for this thread." }) }, state];
+    return [
+      { ok: false, error: new NoGoalError({ message: "No goal exists for this thread." }) },
+      state,
+    ];
   }
   if (state.goal.status === "complete") {
-    return [{ ok: false, error: new AlreadyCompleteError({ message: "The goal is already complete." }) }, state];
+    return [
+      { ok: false, error: new AlreadyCompleteError({ message: "The goal is already complete." }) },
+      state,
+    ];
   }
   const goal = setGoalStatus(state.goal, status);
   let next: GoalRuntimeState = {
@@ -711,9 +712,7 @@ function updateGoalStatusTransition(
   return [{ ok: true, result: resultOf(next, [persistDirective(goal)], true) }, next];
 }
 
-function completeGoalTransition(
-  state: GoalRuntimeState,
-): [GoalOpResult, GoalRuntimeState] {
+function completeGoalTransition(state: GoalRuntimeState): [GoalOpResult, GoalRuntimeState] {
   if (!state.goal || state.goal.status === "complete") {
     return [resultOf(state, [], false), state];
   }
@@ -741,7 +740,7 @@ function clearGoalTransition(state: GoalRuntimeState): [GoalOpResult, GoalRuntim
 function queueContinuationTransition(
   state: GoalRuntimeState,
 ): readonly [readonly GoalDirective[], GoalRuntimeState] {
-  if (!state.goal || state.goal.status !== "active") return [[], state];
+  if (state.goal?.status !== "active") return [[], state];
   if (state.continuationSuppressed || state.continuationQueued) return [[], state];
   const next: GoalRuntimeState = { ...state, continuationQueued: true };
   return [
@@ -825,9 +824,7 @@ const makeGoalRuntime = Effect.gen(function* () {
       return [{ ok: true, result }, next];
     });
 
-  const update = (
-    f: (s: GoalRuntimeState) => GoalRuntimeState,
-  ): Effect.Effect<void, GoalError> =>
+  const update = (f: (s: GoalRuntimeState) => GoalRuntimeState): Effect.Effect<void, GoalError> =>
     ensureOpen.pipe(Effect.andThen(SynchronizedRef.update(ref, f)));
 
   return GoalRuntime.of({
@@ -851,9 +848,7 @@ const makeGoalRuntime = Effect.gen(function* () {
     resume: transitionOk(resumeTransition),
     setBudget: (tokenBudget) => transition((s) => setBudgetTransition(s, tokenBudget)),
     setGoalObjective: (objective, tokenBudget, steerActiveRun) =>
-      transition((s) =>
-        setGoalObjectiveTransition(s, objective, tokenBudget, steerActiveRun),
-      ),
+      transition((s) => setGoalObjectiveTransition(s, objective, tokenBudget, steerActiveRun)),
     updateGoalStatus: (status) => transition((s) => updateGoalStatusTransition(s, status)),
     completeGoal: transitionOk(completeGoalTransition),
     clearGoal: transitionOk(clearGoalTransition),
@@ -870,10 +865,7 @@ const makeGoalRuntime = Effect.gen(function* () {
   });
 });
 
-export const GoalRuntimeLive: Layer.Layer<GoalRuntime> = Layer.effect(
-  GoalRuntime,
-  makeGoalRuntime,
-);
+export const GoalRuntimeLive: Layer.Layer<GoalRuntime> = Layer.effect(GoalRuntime, makeGoalRuntime);
 
 // --- Adapter boundary helpers ----------------------------------------------------
 
@@ -890,10 +882,7 @@ export type GoalRuntimeInstance = ReturnType<typeof createGoalRuntime>;
  * to thrown Errors (what pi's tool/command contract expects); the typed
  * GoalError instances are Error subclasses, so `error.message` stays
  * available to the imperative adapters. */
-export function runGoalSync<A, E>(
-  runtime: GoalRuntimeInstance,
-  effect: Effect.Effect<A, E>,
-): A {
+export function runGoalSync<A, E>(runtime: GoalRuntimeInstance, effect: Effect.Effect<A, E>): A {
   const exit = runtime.runSyncExit(effect);
   if (Exit.isSuccess(exit)) return exit.value;
   const failure = Cause.findFail(exit.cause);

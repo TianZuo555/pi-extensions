@@ -80,9 +80,30 @@ test("windowDayKeys produces continuous local day keys", () => {
 test("aggregateWindow totals include empty days and per-model breakdown", () => {
   const now = new Date(2026, 7, 3, 12, 0);
   const records = [
-    record({ id: "a", ts: new Date(2026, 7, 1, 9, 0).getTime(), totalTokens: 100, costUSD: 1, provider: "p1", model: "m1" }),
-    record({ id: "b", ts: new Date(2026, 7, 3, 10, 0).getTime(), totalTokens: 50, costUSD: 2, provider: "p1", model: "m1" }),
-    record({ id: "c", ts: new Date(2026, 7, 3, 11, 0).getTime(), totalTokens: 25, costUSD: 4, provider: "p2", model: "m2" }),
+    record({
+      id: "a",
+      ts: new Date(2026, 7, 1, 9, 0).getTime(),
+      totalTokens: 100,
+      costUSD: 1,
+      provider: "p1",
+      model: "m1",
+    }),
+    record({
+      id: "b",
+      ts: new Date(2026, 7, 3, 10, 0).getTime(),
+      totalTokens: 50,
+      costUSD: 2,
+      provider: "p1",
+      model: "m1",
+    }),
+    record({
+      id: "c",
+      ts: new Date(2026, 7, 3, 11, 0).getTime(),
+      totalTokens: 25,
+      costUSD: 4,
+      provider: "p2",
+      model: "m2",
+    }),
   ];
   const aggregate = aggregateWindow("mtd", now, buildDayIndex(records));
   assert.equal(aggregate.totalTokens, 175);
@@ -106,7 +127,10 @@ test("buildHourBuckets buckets by local hour for one dateKey", () => {
   assert.equal(buckets.length, 24);
   assert.equal(buckets[0]!.totalTokens, 10);
   assert.equal(buckets[14]!.totalTokens, 20);
-  assert.equal(buckets.reduce((sum, bucket) => sum + bucket.totalTokens, 0), 30);
+  assert.equal(
+    buckets.reduce((sum, bucket) => sum + bucket.totalTokens, 0),
+    30,
+  );
 });
 
 test("bar chart stays within requested width, including 42 columns", () => {
@@ -137,7 +161,10 @@ test("bar chart drops oldest buckets when capacity is tight", () => {
 
 test("bar chart keeps ANSI sequences intact", () => {
   const lines = buildBarChart({
-    buckets: [{ label: "1", value: 5 }, { label: "2", value: 0 }],
+    buckets: [
+      { label: "1", value: 5 },
+      { label: "2", value: 0 },
+    ],
     width: 40,
     theme: { bar: (text) => `\x1b[31m${text}\x1b[39m`, label: (text) => `\x1b[2m${text}\x1b[22m` },
   });

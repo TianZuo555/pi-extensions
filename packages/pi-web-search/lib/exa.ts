@@ -83,7 +83,9 @@ export async function searchExa(
 
   if (!res.ok) {
     const errorText = await res.text().catch(() => "");
-    throw new Error(`Exa search failed (${res.status} ${res.statusText}): ${errorText.slice(0, 300)}`);
+    throw new Error(
+      `Exa search failed (${res.status} ${res.statusText}): ${errorText.slice(0, 300)}`,
+    );
   }
 
   const data = (await res.json()) as ExaSearchApiResponse;
@@ -107,10 +109,7 @@ export async function searchExa(
   };
 }
 
-export async function fetchExa(
-  url: string,
-  options: FetchOptions = {},
-): Promise<FetchResponse> {
+export async function fetchExa(url: string, options: FetchOptions = {}): Promise<FetchResponse> {
   const config = resolveExaConfig();
   if (!config) {
     throw new Error(
@@ -141,7 +140,9 @@ export async function fetchExa(
 
   if (!res.ok) {
     const errorText = await res.text().catch(() => "");
-    throw new Error(`Exa fetch failed (${res.status} ${res.statusText}): ${errorText.slice(0, 300)}`);
+    throw new Error(
+      `Exa fetch failed (${res.status} ${res.statusText}): ${errorText.slice(0, 300)}`,
+    );
   }
 
   const data = (await res.json()) as ExaContentsApiResponse;

@@ -34,8 +34,7 @@ function createKeybindings(): KeybindingsManager {
     "tui.editor.cursorDown": [DOWN],
   };
   return {
-    matches: (data: string, keybinding: string) =>
-      bindings[keybinding]?.includes(data) ?? false,
+    matches: (data: string, keybinding: string) => bindings[keybinding]?.includes(data) ?? false,
   } as KeybindingsManager;
 }
 
@@ -91,10 +90,7 @@ test("up and down always switch commits and preserve edits", () => {
   assert.match(rendered, /feat: first/);
 
   editor.handleInput(DOWN);
-  assert.match(
-    stripTerminalSequences(editor.render(80).join("\n")),
-    /feat: secondX/,
-  );
+  assert.match(stripTerminalSequences(editor.render(80).join("\n")), /feat: secondX/);
 });
 
 test("left and right stay free for cursor movement inside the message", () => {

@@ -83,10 +83,7 @@ test("spill receives the complete oversized chunk before retention", () => {
   buf.push("0123456789");
   assert.deepEqual(spilled, ["0123456789"]);
   assert.equal(buf.view().totalBytes, 10);
-  assert.equal(
-    Buffer.byteLength(buf.view().head) + Buffer.byteLength(buf.view().tail),
-    4,
-  );
+  assert.equal(Buffer.byteLength(buf.view().head) + Buffer.byteLength(buf.view().tail), 4);
 });
 
 test("push reports spill backpressure while retaining the chunk", () => {

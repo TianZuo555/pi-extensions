@@ -11,7 +11,6 @@ import {
   joinRefs,
   PROTOCOL_VERSION,
   type HelloMessage,
-  type ServerMessage,
 } from "./protocol";
 import { findHunkForNewLine, hunkNewRange, parseHunks } from "./hunks";
 
@@ -179,7 +178,7 @@ async function sendFromEditor(): Promise<void> {
   if (sel.isEmpty) {
     ref = formatRef(rel, sel.active.line + 1);
   } else {
-    let start = sel.start.line + 1;
+    const start = sel.start.line + 1;
     let end = sel.end.line + 1;
     if (sel.end.character === 0 && end > start) {
       end -= 1;

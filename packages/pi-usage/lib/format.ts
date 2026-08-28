@@ -73,8 +73,7 @@ export function dedupeZaiStates(
           ? cn
           : zai;
   return states.filter(
-    (state) =>
-      (state.id !== ZAI_PROVIDER_ID && state.id !== ZAI_CN_PROVIDER_ID) || state === keep,
+    (state) => (state.id !== ZAI_PROVIDER_ID && state.id !== ZAI_CN_PROVIDER_ID) || state === keep,
   );
 }
 
@@ -106,7 +105,10 @@ export function formatStatusline(report: ProviderReport): string | undefined {
   if (report.id === CODEX_PROVIDER_ID) {
     const parts = report.windows
       .filter((window) => window.remainingPercent !== undefined)
-      .map((window) => `${Math.round(window.remainingPercent as number)}% ${shortWindow(window.label)}`);
+      .map(
+        (window) =>
+          `${Math.round(window.remainingPercent as number)}% ${shortWindow(window.label)}`,
+      );
     return parts.length > 0 ? `codex ${parts.join(" ")}` : undefined;
   }
   if (report.id === COPILOT_PROVIDER_ID) {

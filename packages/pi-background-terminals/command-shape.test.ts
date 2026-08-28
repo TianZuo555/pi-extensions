@@ -75,20 +75,11 @@ test("duplicate detection matches only a running twin in the same directory", ()
     snap({ id: "bt-4", command: "npm run build" }),
   ];
 
-  assert.equal(
-    findDuplicateRunning(snapshots, "npm test", "/repo")?.id,
-    running.id,
-  );
+  assert.equal(findDuplicateRunning(snapshots, "npm test", "/repo")?.id, running.id);
   // A settled twin is a legitimate re-run.
-  assert.equal(
-    findDuplicateRunning([snapshots[1]], "npm test", "/repo"),
-    undefined,
-  );
+  assert.equal(findDuplicateRunning([snapshots[1]], "npm test", "/repo"), undefined);
   // Same command, different worktree.
-  assert.equal(
-    findDuplicateRunning(snapshots, "npm test", "/elsewhere"),
-    undefined,
-  );
+  assert.equal(findDuplicateRunning(snapshots, "npm test", "/elsewhere"), undefined);
   assert.equal(findDuplicateRunning([], "npm test", "/repo"), undefined);
 });
 

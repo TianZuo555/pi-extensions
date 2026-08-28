@@ -39,7 +39,12 @@ import {
   resolveZaiCnToken,
   resolveZaiToken,
 } from "./lib/auth.ts";
-import { dedupeZaiStates, formatReports, formatStatusline, type ProviderState } from "./lib/format.ts";
+import {
+  dedupeZaiStates,
+  formatReports,
+  formatStatusline,
+  type ProviderState,
+} from "./lib/format.ts";
 import { TokensPanel } from "./lib/tokens-panel.ts";
 import {
   aggregateWindow,
@@ -91,8 +96,7 @@ const PROVIDERS: ProviderQuerySpec[] = [
     id: COPILOT_PROVIDER_ID,
     name: "GitHub Copilot",
     configureHint: "sign in with /login and select GitHub Copilot",
-    hasLoginInfo: (ctx) =>
-      hasProviderLoginInfo(ctx, COPILOT_PROVIDER_ID, hasCopilotLoginInfo),
+    hasLoginInfo: (ctx) => hasProviderLoginInfo(ctx, COPILOT_PROVIDER_ID, hasCopilotLoginInfo),
     resolve: async () => resolveCopilotToken(),
     queryEffect: queryCopilotUsageEffect,
   },
@@ -109,8 +113,7 @@ const PROVIDERS: ProviderQuerySpec[] = [
     name: "GLM Coding Plan (China)",
     configureHint:
       "set ZAI_CODING_CN_API_KEY or sign in with /login and select ZAI Coding Plan (China)",
-    hasLoginInfo: (ctx) =>
-      hasProviderLoginInfo(ctx, ZAI_CN_PROVIDER_ID, hasZaiCnLoginInfo),
+    hasLoginInfo: (ctx) => hasProviderLoginInfo(ctx, ZAI_CN_PROVIDER_ID, hasZaiCnLoginInfo),
     resolve: async () => resolveZaiCnToken(),
     queryEffect: queryZaiCnUsageEffect,
   },
@@ -118,8 +121,7 @@ const PROVIDERS: ProviderQuerySpec[] = [
     id: DEEPSEEK_PROVIDER_ID,
     name: "DeepSeek",
     configureHint: "set DEEPSEEK_API_KEY or sign in with /login and select DeepSeek",
-    hasLoginInfo: (ctx) =>
-      hasProviderLoginInfo(ctx, DEEPSEEK_PROVIDER_ID, hasDeepSeekLoginInfo),
+    hasLoginInfo: (ctx) => hasProviderLoginInfo(ctx, DEEPSEEK_PROVIDER_ID, hasDeepSeekLoginInfo),
     resolve: async () => resolveDeepSeekToken(),
     queryEffect: queryDeepSeekUsageEffect,
   },
@@ -147,7 +149,9 @@ export default function usageExtension(pi: ExtensionAPI): void {
   // ctx.model there would reject our async handler, and since the handler itself
   // returns synchronously pi's per-handler try/catch never sees it: Node turns
   // the floating rejection into an uncaughtException and kills the process.
-  const probeModel = (ctx: ExtensionContext): { stale: true } | { stale: false; provider?: string } => {
+  const probeModel = (
+    ctx: ExtensionContext,
+  ): { stale: true } | { stale: false; provider?: string } => {
     try {
       return { stale: false, provider: ctx.model?.provider };
     } catch {
@@ -161,9 +165,7 @@ export default function usageExtension(pi: ExtensionAPI): void {
     force: boolean,
     signal?: AbortSignal,
   ): Promise<ProviderState> => {
-    const linked = signal
-      ? AbortSignal.any([sessionAbort.signal, signal])
-      : sessionAbort.signal;
+    const linked = signal ? AbortSignal.any([sessionAbort.signal, signal]) : sessionAbort.signal;
     return runUsage(usageRuntime, usageService.queryProvider(ctx, provider, force, linked), {
       signal: linked,
     });
@@ -188,9 +190,7 @@ export default function usageExtension(pi: ExtensionAPI): void {
     force: boolean,
     signal?: AbortSignal,
   ): Promise<ProviderState[]> => {
-    const linked = signal
-      ? AbortSignal.any([sessionAbort.signal, signal])
-      : sessionAbort.signal;
+    const linked = signal ? AbortSignal.any([sessionAbort.signal, signal]) : sessionAbort.signal;
     return runUsage(usageRuntime, usageService.collectStates(ctx, PROVIDERS, force, linked), {
       signal: linked,
     }).then((states) => dedupeZaiStates(states, activeProviderId(ctx), sharedZaiKey()));
@@ -316,18 +316,19 @@ export default function usageExtension(pi: ExtensionAPI): void {
   };
 
   const scanTokens = (signal?: AbortSignal): Promise<ScanResult> => {
-    const linked = signal
-      ? AbortSignal.any([sessionAbort.signal, signal])
-      : sessionAbort.signal;
+    const linked = signal ? AbortSignal.any([sessionAbort.signal, signal]) : sessionAbort.signal;
     return runUsage(
       usageRuntime,
-      scanLocalUsage({ sinceMs: tokensSinceMs(), sessionsDir: defaultSessionsDir(), signal: linked }),
+      scanLocalUsage({
+        sinceMs: tokensSinceMs(),
+        sessionsDir: defaultSessionsDir(),
+        signal: linked,
+      }),
       { signal: linked },
     );
   };
 
-  const refreshTokens = (): Promise<ScanResult | undefined> =>
-    scanTokens().catch(() => undefined);
+  const refreshTokens = (): Promise<ScanResult | undefined> => scanTokens().catch(() => undefined);
 
   const showTokens = async (ctx: ExtensionCommandContext) => {
     const controller = new AbortController();
@@ -343,15 +344,16 @@ export default function usageExtension(pi: ExtensionAPI): void {
         ctx.ui.notify(plainTokensSummary(snapshot), "info");
         return;
       }
-      await ctx.ui.custom<void>((tui, theme, keybindings, done) =>
-        new TokensPanel({
-          tui,
-          theme,
-          keybindings,
-          snapshot,
-          refresh: refreshTokens,
-          done: () => done(void 0),
-        }),
+      await ctx.ui.custom<void>(
+        (tui, theme, keybindings, done) =>
+          new TokensPanel({
+            tui,
+            theme,
+            keybindings,
+            snapshot,
+            refresh: refreshTokens,
+            done: () => done(void 0),
+          }),
       );
     } finally {
       controller.abort();
@@ -370,7 +372,8 @@ export default function usageExtension(pi: ExtensionAPI): void {
   });
 
   // Reuse freshly-collected menu data to update the footer for the active model.
-  const publishActiveFrom = (ctx: ExtensionContext, states: ProviderState[]) => {    const probe = probeModel(ctx);
+  const publishActiveFrom = (ctx: ExtensionContext, states: ProviderState[]) => {
+    const probe = probeModel(ctx);
     if (probe.stale) return;
     const provider = PROVIDERS.find((candidate) => candidate.id === probe.provider);
     if (!provider) {

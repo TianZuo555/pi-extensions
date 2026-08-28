@@ -2,11 +2,7 @@ import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { Effect } from "effect";
 import type { RunRecord } from "../domain.ts";
 import { herdrJson, type HerdrCliOptions } from "../herdr/cli.ts";
-import {
-  closePane,
-  focusPane,
-  readAgent,
-} from "../herdr/workspace.ts";
+import { closePane, focusPane, readAgent } from "../herdr/workspace.ts";
 import { formatUsageCost, type SubagentSupervisor } from "../supervisor.ts";
 
 const DASHBOARD_LINES = 80;
@@ -79,7 +75,10 @@ export async function openAgentsDashboard(
   supervisor: SubagentSupervisor,
 ): Promise<void> {
   const runs = supervisor.listRuns();
-  const profiles = supervisor.listProfiles().map((p) => p.qualifiedId).join(", ");
+  const profiles = supervisor
+    .listProfiles()
+    .map((p) => p.qualifiedId)
+    .join(", ");
   const diagnostics = supervisor.getProfileLoadDiagnostics();
   const cliOptions = supervisor.getBackendPool().getHerdrCliOptions();
   const branches = runs

@@ -17,10 +17,7 @@ import {
   type ExtensionAPI,
   type ExtensionCommandContext,
 } from "@earendil-works/pi-coding-agent";
-import {
-  loadCommitSettings,
-  type CommitSettingsResolution,
-} from "./lib/config.ts";
+import { loadCommitSettings, type CommitSettingsResolution } from "./lib/config.ts";
 import {
   describeGitFailure,
   hasWorkingTreeChanges,
@@ -30,11 +27,7 @@ import {
   type StagedSnapshot,
 } from "./lib/git.ts";
 import { CommitPlanEditor } from "./lib/commit-plan-editor.ts";
-import {
-  MAX_PATCH_BYTES,
-  normalizeEditedCommitMessage,
-  type CommitPlan,
-} from "./lib/prompt.ts";
+import { MAX_PATCH_BYTES, normalizeEditedCommitMessage, type CommitPlan } from "./lib/prompt.ts";
 import {
   commitSinglePlannedGroupEffect,
   commitWithMessageEffect,
@@ -147,7 +140,7 @@ function operationAbortError(): Error {
 
 async function generateWithLoader<T>(
   ctx: ExtensionCommandContext,
-  resolved: ResolvedModel,
+  _resolved: ResolvedModel,
   loaderMessage: string,
   operation: (signal?: AbortSignal) => Promise<T | undefined | void>,
 ): Promise<GenerationOutcome<T>> {
@@ -190,22 +183,16 @@ async function generateCommitMessage(
   snapshot: StagedSnapshot,
   guidance: string,
 ): Promise<GenerationOutcome<string>> {
-  return generateWithModelFallback(
-    ctx,
-    models,
-    settings,
-    (resolved) =>
-      generateWithLoader(
-        ctx,
-        resolved,
-        `Generating commit message with ${resolved.reference.value}…`,
-        (signal) =>
-          runCommit(
-            runtime,
-            commit.requestCommitMessage(resolved, snapshot, guidance, signal),
-            { signal },
-          ),
-      ),
+  return generateWithModelFallback(ctx, models, settings, (resolved) =>
+    generateWithLoader(
+      ctx,
+      resolved,
+      `Generating commit message with ${resolved.reference.value}…`,
+      (signal) =>
+        runCommit(runtime, commit.requestCommitMessage(resolved, snapshot, guidance, signal), {
+          signal,
+        }),
+    ),
   );
 }
 
@@ -218,29 +205,23 @@ async function generateCommitPlan(
   snapshot: StagedSnapshot,
   guidance: string,
 ): Promise<GenerationOutcome<CommitPlan>> {
-  return generateWithModelFallback(
-    ctx,
-    models,
-    settings,
-    (resolved) =>
-      generateWithLoader(
-        ctx,
-        resolved,
-        `Generating logical commit plan with ${resolved.reference.value}…`,
-        (signal) =>
-          runCommit(
-            runtime,
-            commit.requestCommitPlan(resolved, snapshot, guidance, signal),
-            { signal },
-          ),
-      ),
+  return generateWithModelFallback(ctx, models, settings, (resolved) =>
+    generateWithLoader(
+      ctx,
+      resolved,
+      `Generating logical commit plan with ${resolved.reference.value}…`,
+      (signal) =>
+        runCommit(runtime, commit.requestCommitPlan(resolved, snapshot, guidance, signal), {
+          signal,
+        }),
+    ),
   );
 }
 
 async function generateWithModelFallback<T>(
   ctx: ExtensionCommandContext,
   models: ResolvedCommitModels,
-  settings: CommitSettingsResolution,
+  _settings: CommitSettingsResolution,
   generate: (resolved: ResolvedModel) => Promise<GenerationOutcome<T>>,
 ): Promise<GenerationOutcome<T>> {
   const first = await generate(models.active);
@@ -282,19 +263,18 @@ async function editCommitPlan(
   plan: CommitPlan,
 ): Promise<CommitPlan | undefined> {
   if (ctx.mode === "tui" && plan.commits.length > 1) {
-    const edited = await ctx.ui.custom<CommitPlan | undefined>((tui, theme, keybindings, done) =>
-      new CommitPlanEditor(tui, theme, keybindings, plan.commits, (result) =>
-        done(result ?? undefined),
-      ),
+    const edited = await ctx.ui.custom<CommitPlan | undefined>(
+      (tui, theme, keybindings, done) =>
+        new CommitPlanEditor(tui, theme, keybindings, plan.commits, (result) =>
+          done(result ?? undefined),
+        ),
     );
     return edited;
   }
 
   const commits: CommitPlan["commits"] = [];
   for (const [index, commit] of plan.commits.entries()) {
-    const label = commit.paths.length === 1
-      ? commit.paths[0]
-      : `${commit.paths.length} files`;
+    const label = commit.paths.length === 1 ? commit.paths[0] : `${commit.paths.length} files`;
     const edited = await ctx.ui.editor(
       `Edit commit message ${index + 1}/${plan.commits.length} (${label})`,
       commit.message,
@@ -329,13 +309,7 @@ async function commitPlannedChanges(
       () =>
         runCommit(
           runtime,
-          commitSinglePlannedGroupEffect(
-            repository,
-            commit,
-            index,
-            plan.commits.length,
-            summaries,
-          ),
+          commitSinglePlannedGroupEffect(repository, commit, index, plan.commits.length, summaries),
         ),
     );
     if (step.kind === "failure") {
@@ -396,7 +370,10 @@ async function runCommitWorkflow(
       await runCommit(runtime, ensureCleanIndexEffect(repository));
     }
 
-    const snapshot = await runCommit(runtime, readStagedSnapshotEffect(repository, MAX_PATCH_BYTES));
+    const snapshot = await runCommit(
+      runtime,
+      readStagedSnapshotEffect(repository, MAX_PATCH_BYTES),
+    );
     if (snapshot.omittedPatchBytes > 0) {
       ctx.ui.notify(
         `The staged patch is large; ${snapshot.omittedPatchBytes} bytes were omitted from model context. The complete file list and stat are still included.`,
@@ -409,7 +386,15 @@ async function runCommitWorkflow(
     const CHOICE_CANCEL = "Cancel";
 
     if (!stageAll) {
-      const generation = await generateCommitMessage(ctx, commit, runtime, models, settings, snapshot, guidance);
+      const generation = await generateCommitMessage(
+        ctx,
+        commit,
+        runtime,
+        models,
+        settings,
+        snapshot,
+        guidance,
+      );
       if (generation.status === "cancelled") {
         ctx.ui.notify(cancellationNotice(stageAllWasRun), "info");
         return;
@@ -460,12 +445,7 @@ async function runCommitWorkflow(
         const pushOutcome = await runCancellableWithLoader(
           ctx,
           `Pushing ${snapshot.branch}…`,
-          (signal) =>
-            runCommit(
-              runtime,
-              pushCurrentBranchEffect(repository, signal),
-              { signal },
-            ),
+          (signal) => runCommit(runtime, pushCurrentBranchEffect(repository, signal), { signal }),
         );
         if (pushOutcome.status === "cancelled") {
           ctx.ui.notify(`Push cancelled. Commit ${summary} was created locally.`, "info");
@@ -487,7 +467,15 @@ async function runCommitWorkflow(
       return;
     }
 
-    const generation = await generateCommitPlan(ctx, commit, runtime, models, settings, snapshot, guidance);
+    const generation = await generateCommitPlan(
+      ctx,
+      commit,
+      runtime,
+      models,
+      settings,
+      snapshot,
+      guidance,
+    );
     if (generation.status === "cancelled") {
       ctx.ui.notify(cancellationNotice(stageAllWasRun), "info");
       return;
@@ -504,11 +492,10 @@ async function runCommitWorkflow(
       return;
     }
 
-    const choice = await ctx.ui.select(`Commit ${snapshot.branch} as ${editedPlan.commits.length} commit(s)?`, [
-      CHOICE_PUSH,
-      CHOICE_COMMIT,
-      CHOICE_CANCEL,
-    ]);
+    const choice = await ctx.ui.select(
+      `Commit ${snapshot.branch} as ${editedPlan.commits.length} commit(s)?`,
+      [CHOICE_PUSH, CHOICE_COMMIT, CHOICE_CANCEL],
+    );
     if (choice === undefined || choice === CHOICE_CANCEL) {
       ctx.ui.notify(cancellationNotice(stageAllWasRun), "info");
       return;
@@ -516,9 +503,10 @@ async function runCommitWorkflow(
 
     const plannedRun = await commitPlannedChanges(ctx, runtime, repository, snapshot, editedPlan);
     if (plannedRun.status === "error") {
-      const completed = plannedRun.summaries.length > 0
-        ? `\nPreviously created commits: ${plannedRun.summaries.join("; ")}`
-        : "";
+      const completed =
+        plannedRun.summaries.length > 0
+          ? `\nPreviously created commits: ${plannedRun.summaries.join("; ")}`
+          : "";
       ctx.ui.notify(
         `${compactError(plannedRun.error)}${completed}\nChanges staged by /commit-all remain staged.`,
         "error",
@@ -531,12 +519,7 @@ async function runCommitWorkflow(
       const pushOutcome = await runCancellableWithLoader(
         ctx,
         `Pushing ${snapshot.branch}…`,
-        (signal) =>
-          runCommit(
-            runtime,
-            pushCurrentBranchEffect(repository, signal),
-            { signal },
-          ),
+        (signal) => runCommit(runtime, pushCurrentBranchEffect(repository, signal), { signal }),
       );
       if (pushOutcome.status === "cancelled") {
         ctx.ui.notify(`Push cancelled. Commits ${summaries} were created locally.`, "info");
@@ -556,10 +539,7 @@ async function runCommitWorkflow(
 
     ctx.ui.notify(`Committed ${summaries}`, "info");
   } catch (error) {
-    const message =
-      error instanceof GitWorkflowError
-        ? error.message
-        : compactError(error);
+    const message = error instanceof GitWorkflowError ? error.message : compactError(error);
     ctx.ui.notify(`${message}${failureSuffix(stageAllWasRun)}`, "error");
   }
 }
@@ -611,6 +591,14 @@ export default function commitExtension(pi: ExtensionAPI): void {
     });
   };
 
-  register("commit", false, "Generate and review a commit for staged changes; optional arguments guide the message");
-  register("commit-all", true, "Stage all changes, then plan and review logical commits; optional arguments guide the messages");
+  register(
+    "commit",
+    false,
+    "Generate and review a commit for staged changes; optional arguments guide the message",
+  );
+  register(
+    "commit-all",
+    true,
+    "Stage all changes, then plan and review logical commits; optional arguments guide the messages",
+  );
 }
