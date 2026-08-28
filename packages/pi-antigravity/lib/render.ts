@@ -7,6 +7,7 @@
  * are single-line; pi's Text component handles wrapping and width safety.
  */
 
+import os from "node:os";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 
 /** agy tool name → native-equivalent label shown on the card. */
@@ -35,9 +36,10 @@ function pickArg(input: Record<string, unknown>, keys: string[]): string | undef
   return undefined;
 }
 
-/** Shorten an absolute path under $HOME to `~/...` like pi's own renderers. */
+/** Shorten an absolute path under the home directory to `~/...` like pi's own renderers. */
 function shortenPath(path: string): string {
-  const home = process.env.HOME;
+  // `os.homedir()` also resolves on Windows, where `$HOME` is unset.
+  const home = os.homedir();
   if (home && path.startsWith(home)) return `~${path.slice(home.length)}`;
   return path;
 }
