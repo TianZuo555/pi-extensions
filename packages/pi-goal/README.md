@@ -1,5 +1,7 @@
 # pi-goal
 
+Release notes: [changelog](https://github.com/TianZuo555/pi-extensions/blob/main/packages/pi-goal/CHANGELOG.md) · [GitHub releases](https://github.com/TianZuo555/pi-extensions/releases)
+
 A Codex-style persistent goal mode for the **pi coding agent**. It turns a
 thread into a bounded work loop: an explicit objective is persisted in the
 session, injected into each model turn, checked against evidence, and continued

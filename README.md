@@ -80,18 +80,23 @@ Extensions import pi's runtime packages (`@earendil-works/*`, `typebox`) as
 
 ## Publishing
 
-The [`Publish`](.github/workflows/publish.yml) workflow publishes to npm on
-every push to `main` that touches `packages/**`: it runs the checks and test
-suites, compares each workspace's version against npm, and publishes only
-versions not yet present — bumping one `package.json` version is enough to
-release it. Packages are published with npm provenance via OIDC trusted
-publishing (no token secret needed). The workflow can also be run manually
-from *Actions → Publish* with an optional dry-run toggle.
+Releases use [Changesets](https://github.com/changesets/changesets). For every
+publishable extension change, run `pnpm changeset`, select the package and
+semantic version bump, and commit the generated release-note file. Do not bump
+package versions manually.
 
-Manual publish for a single package:
+On pushes to `main`, the [`Publish`](.github/workflows/publish.yml) workflow
+runs all checks and opens or updates a release PR. Merging that PR publishes
+each changed package to npm, updates its package-specific `CHANGELOG.md`, and
+creates a separate tagged GitHub release. npm trusted publishing supplies OIDC
+provenance without a token secret. The workflow can also be run manually from
+*Actions → Publish* in dry-run mode to preview pending releases. The repository
+must allow GitHub Actions to create pull requests under *Settings → Actions →
+General → Workflow permissions*.
 
 ```bash
-pnpm --filter @tian.zuo/pi-commit publish --access public --no-git-checks
+pnpm changeset          # add release notes for changed packages
+pnpm changeset:status   # inspect pending releases
 ```
 
 ## License

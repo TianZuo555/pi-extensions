@@ -24,7 +24,8 @@
   "files": [
     "index.ts",
     "lib",
-    "NOTICES.md"
+    "NOTICES.md",
+    "CHANGELOG.md"
   ],
   "pi": {
     "extensions": [

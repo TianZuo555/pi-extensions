@@ -1,5 +1,7 @@
 # @tian.zuo/pi-compact-output
 
+Release notes: [changelog](https://github.com/TianZuo555/pi-extensions/blob/main/packages/pi-compact-output/CHANGELOG.md) · [GitHub releases](https://github.com/TianZuo555/pi-extensions/releases)
+
 TUI-only [pi coding agent](https://pi.dev) extension that keeps the transcript compact without changing tool execution, schemas, results, or session data.
 
 ## What it does

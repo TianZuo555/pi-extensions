@@ -1,6 +1,7 @@
 {
   "name": "pi-extensions",
   "version": "0.1.0",
+  "private": true,
   "description": "A collection of extensions for the pi coding agent: per-repository defaults, skill toggles, commits, token speed, and more.",
   "type": "module",
   "packageManager": "pnpm@11.21.0",
@@ -65,6 +66,10 @@
     "test:vscode-bridge": "pnpm --filter @tian.zuo/pi-vscode-bridge test",
     "test:web-search": "pnpm --filter @tian.zuo/pi-web-search test",
     "test:find": "pnpm --filter @tian.zuo/pi-find test",
+    "changeset": "changeset",
+    "changeset:status": "changeset status",
+    "version-packages": "changeset version",
+    "release": "changeset publish",
     "pack:check": "pnpm -r pack --dry-run"
   },
   "peerDependencies": {
@@ -75,6 +80,8 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.10",
+    "@changesets/changelog-github": "^1.0.0",
+    "@changesets/cli": "^3.0.1",
     "@earendil-works/pi-ai": "^0.84.2",
     "@earendil-works/pi-coding-agent": "^0.84.2",
     "@earendil-works/pi-tui": "^0.84.2",

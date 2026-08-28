@@ -1,5 +1,7 @@
 # @tian.zuo/pi-repo-model
 
+Release notes: [changelog](https://github.com/TianZuo555/pi-extensions/blob/main/packages/pi-repo-model/CHANGELOG.md) · [GitHub releases](https://github.com/TianZuo555/pi-extensions/releases)
+
 Per-repository default model and thinking-level preferences for the [pi coding agent](https://pi.dev).
 
 ```bash

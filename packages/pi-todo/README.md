@@ -1,5 +1,7 @@
 # pi-todo
 
+Release notes: [changelog](https://github.com/TianZuo555/pi-extensions/blob/main/packages/pi-todo/CHANGELOG.md) · [GitHub releases](https://github.com/TianZuo555/pi-extensions/releases)
+
 A small `todo` tool for the **pi coding agent**.
 
 Install: `npm:@tian.zuo/pi-todo` · npm package `@tian.zuo/pi-todo` · workspace `packages/pi-todo`

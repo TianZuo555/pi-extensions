@@ -1,5 +1,7 @@
 # @tian.zuo/pi-web-search
 
+Release notes: [changelog](https://github.com/TianZuo555/pi-extensions/blob/main/packages/pi-web-search/CHANGELOG.md) · [GitHub releases](https://github.com/TianZuo555/pi-extensions/releases)
+
 Web search and web fetch for the [pi coding agent](https://pi.dev). Two tools, six providers plus a built-in keyless fetcher, automatic fallback — no single point of failure. **Works with zero configuration** thanks to Firecrawl's keyless tier (search + fetch, no signup).
 
 > **Token-light by design.** The whole extension adds **196 characters** of model-facing text — two tool descriptions of one sentence each. For comparison, [pi-web-access](https://www.npmjs.com/package/pi-web-access) spends ≈3,200 characters on its `web_search` tool alone (1,853-char description + parameter guidance) — **~16× our entire prompt surface**, across 4 tools vs our 2. All the routing intelligence (fallback orders, keyless ladders, quota handling) lives in extension code, not in the prompt, so the model spends its attention on your code instead of reading tool manuals.

@@ -1,5 +1,7 @@
 # @tian.zuo/pi-subagents
 
+Release notes: [changelog](https://github.com/TianZuo555/pi-extensions/blob/main/packages/pi-subagents/CHANGELOG.md) · [GitHub releases](https://github.com/TianZuo555/pi-extensions/releases)
+
 Delegate bounded tasks to isolated subagent runs from [pi](https://pi.dev). Each profile can run on a **Herdr pane backend** (interactive agent CLIs in dedicated panes) or fall back to the legacy **RPC child backend** (`pi --mode rpc` headless children).
 
 ```bash

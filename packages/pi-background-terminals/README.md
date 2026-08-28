@@ -1,5 +1,7 @@
 # @tian.zuo/pi-background-terminals
 
+Release notes: [changelog](https://github.com/TianZuo555/pi-extensions/blob/main/packages/pi-background-terminals/CHANGELOG.md) · [GitHub releases](https://github.com/TianZuo555/pi-extensions/releases)
+
 A managed replacement for Pi's built-in `bash` tool.
 
 Every model shell command follows one path: start it, wait briefly, and return
