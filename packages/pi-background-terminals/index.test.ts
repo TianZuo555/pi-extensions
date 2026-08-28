@@ -79,7 +79,10 @@ function harness(extension = testExtension) {
   };
 }
 
-async function pollUntil(check: () => boolean, timeoutMs = 5_000) {
+async function pollUntil(
+  check: () => boolean,
+  timeoutMs = process.platform === "win32" ? 15_000 : 5_000,
+) {
   const deadline = Date.now() + timeoutMs;
   while (!check()) {
     if (Date.now() >= deadline) return false;
@@ -476,25 +479,35 @@ test("bash mirrors Pi's managed bin PATH handling", async () => {
       );
   };
 
+  const assertManagedPath = (result: any, expectedPath: string) => {
+    const text = result.content[0].text as string;
+    if (process.platform !== "win32") {
+      assert.ok(
+        text.includes(`stdout:\n${JSON.stringify({ value: expectedPath, count: 1 })}`),
+        text,
+      );
+      return;
+    }
+
+    // Git Bash prepends its own runtime directories and normalizes Windows
+    // PATH entries. The managed contract is that Pi's bin directory survives
+    // exactly once, not that Bash leaves the complete PATH byte-identical.
+    const output = /stdout:\n({[^\n]+})/.exec(text);
+    assert.ok(output, text);
+    const parsed = JSON.parse(output[1]) as { value: string; count: number };
+    assert.equal(parsed.count, 1, text);
+    assert.equal(parsed.value.split(path.delimiter).includes(binDir), true, text);
+  };
+
   try {
     const prependedPath = [binDir, basePath].filter(Boolean).join(path.delimiter);
     const prepended = await inspectPath("call-managed-path-prepend");
-    assert.ok(
-      prepended.content[0].text.includes(
-        `stdout:\n${JSON.stringify({ value: prependedPath, count: 1 })}`,
-      ),
-      prepended.content[0].text,
-    );
+    assertManagedPath(prepended, prependedPath);
 
     const existingPath = [basePath, binDir].filter(Boolean).join(path.delimiter);
     process.env[pathKey] = existingPath;
     const preserved = await inspectPath("call-managed-path-preserve");
-    assert.ok(
-      preserved.content[0].text.includes(
-        `stdout:\n${JSON.stringify({ value: existingPath, count: 1 })}`,
-      ),
-      preserved.content[0].text,
-    );
+    assertManagedPath(preserved, existingPath);
   } finally {
     await app.shutdown();
     if (previousPath === undefined) delete process.env[pathKey];

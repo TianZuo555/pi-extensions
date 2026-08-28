@@ -108,7 +108,8 @@ test("process exit safety net kills managed process groups", async () => {
   const result = spawnSync(process.execPath, ["--experimental-strip-types", crashExitFixture], {
     cwd,
     encoding: "utf8",
-    timeout: 15_000,
+    // A fresh Pi package import is materially slower on Windows hosts.
+    timeout: process.platform === "win32" ? 45_000 : 15_000,
     windowsHide: true,
   });
   const pid = Number(result.stdout.trim().split(/\s+/).at(-1));
@@ -298,6 +299,53 @@ test("hard runtime timeout terminates the tree and settles timed_out", async () 
   });
 });
 
+test("Windows timeout force-kills detached descendants before losing the shell root", {
+  skip: process.platform !== "win32",
+}, async () => {
+  let parent: number | undefined;
+  let descendant: number | undefined;
+  try {
+    await withManager(async (manager, runtime) => {
+      const started = await runTool(
+        runtime,
+        manager.start({
+          command: nodeCmd(
+            'const { spawn } = require("node:child_process"); const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { detached: true, stdio: "ignore", windowsHide: true }); child.unref(); console.log("parent:" + process.pid + " descendant:" + child.pid); setInterval(() => {}, 1000);',
+          ),
+          title: "windows-detached-deadline",
+          cwd,
+          timeoutMs: 1_000,
+        }),
+      );
+
+      assert.ok(
+        await pollUntil(() =>
+          (manager.view.get(started.id)?.stdout.text ?? "").includes("descendant:"),
+        ),
+        "detached descendant pid was printed",
+      );
+      const output = manager.view.get(started.id)?.stdout.text ?? "";
+      const match = /parent:(\d+) descendant:(\d+)/.exec(output);
+      assert.ok(match, "parsed parent and detached descendant pids");
+      parent = Number(match[1]);
+      descendant = Number(match[2]);
+      assert.equal(processGone(parent), false);
+      assert.equal(processGone(descendant), false);
+
+      const { snap: timedOut } = await settlement(manager, started.id);
+      assert.equal(timedOut.status, "timed_out");
+      assert.ok(await pollUntil(() => processGone(parent!)), "command process is gone");
+      assert.ok(
+        await pollUntil(() => processGone(descendant!)),
+        "detached descendant is gone after timeout",
+      );
+    });
+  } finally {
+    if (parent && !processGone(parent)) forceKillTree(parent);
+    if (descendant && !processGone(descendant)) forceKillTree(descendant);
+  }
+});
+
 test("manager invokes Bash syntax and passes the requested environment", async () => {
   await withManager(async (manager, runtime) => {
     const started = await runTool(
@@ -350,10 +398,17 @@ test("kill settles a never-exiting process as killed and resolves after settle; 
     assert.equal(report[0].status, "killed");
     assert.equal(report[0].killed, true);
     assert.equal(report[0].wasRunning, true);
-    assert.match(report[0].exit, /^SIG/);
     const after = manager.view.get(snap.id);
     assert.equal(after?.status, "killed");
-    assert.ok(after?.signal);
+    if (process.platform === "win32") {
+      // Windows TerminateProcess reports an exit code instead of a POSIX signal.
+      assert.equal(report[0].exit, "exit 1");
+      assert.equal(after?.exitCode, 1);
+      assert.equal(after?.signal, undefined);
+    } else {
+      assert.match(report[0].exit, /^SIG/);
+      assert.ok(after?.signal);
+    }
 
     const second = await runTool(runtime, manager.kill([snap.id]));
     assert.equal(second[0].killed, false);
