@@ -61,7 +61,10 @@ function asNumber(value: unknown): number | undefined {
 function unwrapResult(parsed: unknown): Record<string, unknown> {
   const root = asRecord(parsed);
   if (!root) throw new Error("agy-usage: quota response was not an object.");
-  if (root.event === "result" && asRecord(root.result)) return asRecord(root.result)!;
+  if (root.event === "result") {
+    const inner = asRecord(root.result);
+    if (inner) return inner;
+  }
   return root;
 }
 
@@ -89,7 +92,9 @@ function parseGroup(value: unknown): AgyUsageGroup | undefined {
   const name = asString(rec.name);
   if (!name) return undefined;
   const buckets = Array.isArray(rec.buckets)
-    ? rec.buckets.map(parseBucket).filter((bucket): bucket is AgyUsageBucket => bucket !== undefined)
+    ? rec.buckets
+        .map(parseBucket)
+        .filter((bucket): bucket is AgyUsageBucket => bucket !== undefined)
     : [];
   return { name, description: asString(rec.description), buckets };
 }

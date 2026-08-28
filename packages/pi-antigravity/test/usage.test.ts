@@ -176,14 +176,14 @@ test("formatAgyUsageReport matches the /usage layout", () => {
   const now = new Date("2026-08-28T07:08:42Z");
   const lines = formatAgyUsageReport(report, now).split("\n");
   assert.equal(lines[0], "Gemini Models");
-  assert.match(lines[1], /^  5h limit:\s+\[█+░*\] 98% left · resets /);
+  assert.match(lines[1], /^ {2}5h limit:\s+\[█+░*\] 98% left · resets /);
   assert.equal(lines[2], "");
-  assert.match(lines[3], /^  Weekly limit:\s+\[█+░*\] 97% left · resets /);
+  assert.match(lines[3], /^ {2}Weekly limit:\s+\[█+░*\] 97% left · resets /);
   assert.equal(lines[4], "");
   assert.equal(lines[5], "Claude and GPT models");
-  assert.match(lines[6], /^  5h limit:\s+\[█{20}\] 100% left · resets /);
+  assert.match(lines[6], /^ {2}5h limit:\s+\[█{20}\] 100% left · resets /);
   assert.equal(lines[7], "");
-  assert.match(lines[8], /^  Weekly limit:\s+\[█{20}\] 100% left · resets /);
+  assert.match(lines[8], /^ {2}Weekly limit:\s+\[█{20}\] 100% left · resets /);
   assert.equal(lines[1].indexOf("5h limit:"), 2);
   assert.equal(lines[1].indexOf("["), 20);
 });
