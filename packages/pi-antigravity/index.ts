@@ -268,6 +268,53 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
   bridge.setToolPrefix(bridgeToolPrefix);
   bridge.setOnCall((call) => service.pushBridgeCall(call));
 
+  /**
+   * Register the pi-tool bridge with agy. Idempotent: no-op when disabled or
+   * already running. Registration must precede the first agy spawn of the
+   * session — agy eagerly connects to MCP servers at startup (verified
+   * 2026-08-21) — so this runs as soon as an Antigravity model is selected.
+   */
+  async function ensureBridgeRegistered(ui?: ExtensionUIContext): Promise<void> {
+    if (!BRIDGE_ENABLED || bridge.running) return;
+    try {
+      await pruneStaleBridgeRegistrations();
+      await bridge.start();
+      await execAgy([
+        "mcp",
+        "add",
+        "--type",
+        "http",
+        "--header",
+        `x-pi-bridge-token: ${bridgeToken}`,
+        bridge.serverName,
+        bridge.url!,
+      ]);
+      bridge.refreshTools();
+    } catch (error) {
+      ui?.notify(
+        `antigravity: pi-tool bridge unavailable (${error instanceof Error ? error.message : error}).`,
+        "warning",
+      );
+    }
+  }
+
+  /**
+   * Deregister the pi-tool bridge and evict its manifest cache. No-op when
+   * the bridge is not running. Runs when the session leaves Antigravity
+   * models and on shutdown.
+   */
+  async function teardownBridge(): Promise<void> {
+    if (!bridge.running) return;
+    try {
+      await execAgy(["mcp", "remove", bridge.serverName], SHUTDOWN_AGY_TIMEOUT_MS);
+    } catch {
+      // Registration may already be gone.
+    }
+    // Deregistration does not evict agy's on-disk manifest cache.
+    await removeMcpCacheEntry(bridge.serverName);
+    await bridge.close();
+  }
+
   // --- Skill passing (Phase 2) ----------------------------------------------
   // pi's loaded skills, refreshed per turn via before_agent_start so /reload
   // is respected. Model-invocation-disabled skills are excluded.
@@ -607,34 +654,22 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
     if (ctx.hasUI) tasksUi = ctx.ui;
     tasksSessionCwd = ctx.cwd;
     updateAgyTasksWidget();
-    // Bridge must be registered before the first agy spawn of the session:
-    // agy eagerly connects to MCP servers at startup (verified 2026-08-21).
-    if (BRIDGE_ENABLED) {
-      try {
-        await pruneStaleBridgeRegistrations();
-        await bridge.start();
-        await execAgy([
-          "mcp",
-          "add",
-          "--type",
-          "http",
-          "--header",
-          `x-pi-bridge-token: ${bridgeToken}`,
-          bridge.serverName,
-          bridge.url!,
-        ]);
-        bridge.refreshTools();
-      } catch (error) {
-        ctx.ui.notify(
-          `antigravity: pi-tool bridge unavailable (${error instanceof Error ? error.message : error}).`,
-          "warning",
-        );
-      }
+    // The pi-tool bridge is only useful while an Antigravity model is
+    // selected: register lazily here (session resumed on an agy model) and on
+    // model_select; non-agy sessions never touch agy at all.
+    if (ctx.model?.provider === "antigravity") {
+      await ensureBridgeRegistered(ctx.ui);
     }
   });
 
-  pi.on("model_select", (event) => {
+  pi.on("model_select", async (event, ctx) => {
     syncWrapperToolActivation(event.model?.provider);
+    // The bridge exists only while an Antigravity model is selected.
+    if (event.model?.provider === "antigravity") {
+      await ensureBridgeRegistered(ctx?.ui);
+    } else {
+      await teardownBridge();
+    }
   });
 
   pi.on("session_tree", async (_event, ctx: ExtensionContext) => {
@@ -674,14 +709,7 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
       // Already closed.
     }
     if (bridge.running) {
-      try {
-        await execAgy(["mcp", "remove", bridge.serverName]);
-      } catch {
-        // Registration may already be gone.
-      }
-      // Deregistration does not evict agy's on-disk manifest cache.
-      await removeMcpCacheEntry(bridge.serverName);
-      await bridge.close();
+      await teardownBridge();
     }
     try {
       tasksUi?.setWidget(AGY_TASKS_WIDGET_KEY, undefined);
