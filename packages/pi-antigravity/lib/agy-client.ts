@@ -9,6 +9,7 @@
  */
 
 import { spawn } from "node:child_process";
+import { killAgyTree, trackAgyChild, untrackAgyChild } from "./agy-children.ts";
 import { parseAgyLine } from "./events.ts";
 import { applyEvent, newTurnOutcome, type AgyActivity, type AgyTurnOutcome } from "./reducer.ts";
 
@@ -87,7 +88,11 @@ export function runAgyTurn(request: AgyTurnRequest): Promise<AgyTurnOutcome> {
     const child = doSpawn(AGY_BINARY, buildAgyArgs(request), {
       cwd: request.cwd,
       stdio: ["ignore", "pipe", "pipe"],
+      // Own process group so one negative-pid SIGKILL reaps agy's whole
+      // tree on timeout/abort instead of leaving grandchildren running.
+      detached: true,
     });
+    trackAgyChild(child);
     const outcome = newTurnOutcome();
     let stdoutBuf = "";
     let stderrBuf = "";
@@ -96,13 +101,14 @@ export function runAgyTurn(request: AgyTurnRequest): Promise<AgyTurnOutcome> {
       if (settled) return;
       settled = true;
       clearTimeout(killTimer);
+      untrackAgyChild(child);
       fn();
     };
     let settled = false;
 
     const killTimer = setTimeout(() => {
       finish(() => {
-        child.kill("SIGKILL");
+        killAgyTree(child);
         reject(
           new AgySpawnError(
             `agy turn timed out after ${Math.round((request.timeoutMs ?? 600_000) / 1000)}s`,
@@ -116,7 +122,7 @@ export function runAgyTurn(request: AgyTurnRequest): Promise<AgyTurnOutcome> {
       "abort",
       () => {
         finish(() => {
-          child.kill("SIGKILL");
+          killAgyTree(child);
           outcome.status = "ERROR";
           outcome.error = "agy turn was aborted.";
           outcome.finished = true;

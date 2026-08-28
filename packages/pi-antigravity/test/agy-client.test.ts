@@ -176,3 +176,17 @@ test("controller rejects waiters after a failed turn", async () => {
   controller.push({ type: "text", delta: "late" });
   await assert.rejects(() => controller.next(), /agy turn failed/);
 });
+
+test("runAgyTurn rejects when the process never responds", async () => {
+  const stream = () => ({ setEncoding: () => {}, on: () => {} });
+  const child: FakeChild = {
+    stdout: stream(),
+    stderr: stream(),
+    on: () => {},
+    kill: () => {},
+  };
+  await assert.rejects(
+    runAgyTurn({ prompt: "hi", timeoutMs: 60, spawnOverride: (() => child) as never }),
+    /agy turn timed out/,
+  );
+});

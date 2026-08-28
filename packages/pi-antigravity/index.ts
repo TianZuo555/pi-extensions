@@ -18,11 +18,12 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { execFile } from "node:child_process";
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { piConfigDir, readJson, writeJson } from "./lib/config.ts";
 import { AGY_BINARY } from "./lib/agy-client.ts";
+import { installAgyDeathHooks, killAgyTree, trackAgyChild, untrackAgyChild } from "./lib/agy-children.ts";
 import {
   AgyPiBridge,
   BRIDGE_SERVER_NAME,
@@ -69,15 +70,59 @@ const DISCOVERY_TIMEOUT_MS = 15_000;
 
 const BRIDGE_ENABLED = process.env.PI_ANTIGRAVITY_PI_TOOL_BRIDGE !== "0";
 
+/** Timeout for shutdown-path agy calls — fast enough not to stall closing pi. */
+const SHUTDOWN_AGY_TIMEOUT_MS = 5_000;
+
 function execAgy(args: string[], timeoutMs = DISCOVERY_TIMEOUT_MS): Promise<string> {
   return new Promise((resolve, reject) => {
-    execFile(AGY_BINARY, args, { timeout: timeoutMs }, (err, stdout, stderr) => {
-      if (err) reject(new Error(stderr.trim() || err.message));
-      else resolve(stdout);
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let out = "";
+    let errOut = "";
+    const settle = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      fn();
+    };
+    const child = spawn(AGY_BINARY, args, {
+      stdio: ["ignore", "pipe", "pipe"],
+      // Own process group so killAgyTree's negative-pid SIGKILL reaps the
+      // whole tree on timeout. Raw spawn because execFile drops `detached`.
+      detached: true,
     });
+    trackAgyChild(child);
+    child.stdout?.setEncoding("utf8");
+    child.stdout?.on("data", (chunk: string) => {
+      out += chunk;
+    });
+    child.stderr?.setEncoding("utf8");
+    child.stderr?.on("data", (chunk: string) => {
+      errOut += chunk;
+    });
+    child.on("error", (err) => {
+      settle(() => {
+        untrackAgyChild(child);
+        reject(new Error(err.message));
+      });
+    });
+    child.on("close", (code) => {
+      settle(() => {
+        untrackAgyChild(child);
+        if (code === 0) resolve(out);
+        else {
+          reject(new Error(errOut.trim() || `agy ${args[0]} exited with code ${code ?? "signal"}`));
+        }
+      });
+    });
+    timer = setTimeout(() => {
+      settle(() => {
+        killAgyTree(child);
+        reject(new Error(`agy ${args[0]} timed out after ${Math.round(timeoutMs / 1000)}s`));
+      });
+    }, timeoutMs);
   });
 }
-
 
 /**
  * Remove `pi-bridge-*` MCP registrations whose loopback server is no longer
@@ -150,13 +195,12 @@ function normalizeModels(models: AgyModelInfo[]): AgyModelInfo[] {
   return out;
 }
 
-function listAgyModels(): Promise<AgyModelInfo[]> {
-  return new Promise((resolve) => {
-    execFile(AGY_BINARY, ["models"], { timeout: DISCOVERY_TIMEOUT_MS }, (err, stdout) => {
-      if (err) resolve([]);
-      else resolve(parseAgyModels(stdout));
-    });
-  });
+async function listAgyModels(): Promise<AgyModelInfo[]> {
+  try {
+    return parseAgyModels(await execAgy(["models"]));
+  } catch {
+    return [];
+  }
 }
 
 function getInitialModelCache(): ModelCache {
@@ -195,6 +239,7 @@ async function discoverModels(refresh = false): Promise<ModelCache> {
 }
 
 export default function antigravityExtension(pi: ExtensionAPI): void {
+  installAgyDeathHooks();
   const runtime = createAntigravityRuntime();
   const service = runtime.runSync(AntigravityRuntime);
   const replay = new AgyReplayStore();
