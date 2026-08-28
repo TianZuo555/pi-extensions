@@ -8,6 +8,7 @@
 //   /agy            show agy conversation status (id, model, turns)
 //   /agy reset      drop the current agy conversation (next turn starts fresh)
 //   /agy models     re-discover models from `agy models` and re-register
+//   /agy-usage      show Antigravity model quotas (weekly and 5-hour limits)
 
 import type {
   ExtensionAPI,
@@ -48,10 +49,12 @@ import type { AgyActivity } from "./lib/reducer.ts";
 import { AgyReplayStore, type RecordedAgyTool } from "./lib/replay.ts";
 import { findAgyTask, listAgyTasks, stopAgyTask } from "./lib/tasks.ts";
 import { findAgyArtifact, listAgyArtifacts } from "./lib/artifacts.ts";
+import { fetchAgyUsage } from "./lib/usage.ts";
 import { WRAPPER_TOOL_DESCRIPTION, WRAPPER_TOOL_NAME } from "./lib/prompt.ts";
 import { wrapperToolActiveAfterModelSwitch } from "./lib/wrapper-activation.ts";
 import { openAgyTasksPicker } from "./src/tasks-ui.ts";
 import { openArtifact, openAgyArtifactsPicker } from "./src/artifacts-ui.ts";
+import { openAgyUsagePicker } from "./src/usage-ui.ts";
 import { agyToolLabel, formatAgyCall, summarizeAgyResult } from "./lib/render.ts";
 import { streamAntigravity } from "./src/provider.ts";
 import { AntigravityRuntime, createAntigravityRuntime, runAntigravity } from "./src/runtime.ts";
@@ -753,6 +756,17 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
       }
 
       await openAgyArtifactsPicker(ctx, rescan);
+    },
+  });
+
+  pi.registerCommand("agy-usage", {
+    description: "Show Antigravity model quotas (weekly and 5-hour limits)",
+    handler: async (args, ctx) => {
+      if (args.trim()) {
+        ctx.ui.notify('agy-usage: usage "/agy-usage".', "error");
+        return;
+      }
+      await openAgyUsagePicker(ctx, (signal) => fetchAgyUsage({ signal }));
     },
   });
 }
