@@ -492,9 +492,7 @@ test("concurrent overlapping multi-id kills observe each settlement exactly once
   });
 });
 
-test("kill terminates the whole process tree (grandchildren die)", {
-  skip: process.platform === "win32",
-}, async () => {
+test("kill terminates the whole process tree (grandchildren die)", async () => {
   await withManager(async (manager, runtime) => {
     const sentinelDir = fs.mkdtempSync(path.join(os.tmpdir(), "bt-tree-test-"));
     const sentinel = path.join(sentinelDir, "heartbeat");
@@ -542,9 +540,7 @@ test("kill terminates the whole process tree (grandchildren die)", {
   });
 });
 
-test("a shell exit with inherited pipes open settles naturally and reaps descendants", {
-  skip: process.platform === "win32",
-}, async () => {
+test("a shell exit with inherited pipes open settles naturally and reaps descendants", async () => {
   await withManager(async (manager, runtime) => {
     const snap = await runTool(
       runtime,
@@ -578,9 +574,7 @@ test("a shell exit with inherited pipes open settles naturally and reaps descend
   });
 });
 
-test("kill preserves a natural exit observed before the signal point", {
-  skip: process.platform === "win32",
-}, async () => {
+test("kill preserves a natural exit observed before the signal point", async () => {
   await withManager(async (manager, runtime) => {
     const snap = await runTool(
       runtime,

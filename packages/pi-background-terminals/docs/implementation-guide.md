@@ -421,8 +421,14 @@ so paging always advances.
 Children use separate stdout/stderr pipes and no interactive stdin. On POSIX,
 `detached: true` gives the child its own process group. Windows has no portable
 graceful process-tree signal, so termination uses `taskkill /F /T` on the first
-attempt. A non-forced `taskkill` can remove the shell while leaving descendants
-alive, which destroys the stable tree root before escalation can find them.
+attempt — a non-forced `taskkill` can remove the shell while leaving
+descendants alive, destroying the stable tree root before escalation can find
+them. Each spawned shell is also assigned to a dedicated Job Object with
+`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` (loaded through koffi; pre-Windows-8
+nested-job limits or load failures degrade to the taskkill path alone). Job
+membership is inherited by every descendant, so closing the job handle lets
+the kernel terminate tree members that PID-based walks cannot reach after the
+shell exits and its children are re-parented.
 
 Termination is:
 
@@ -435,17 +441,19 @@ bounded final close/settle wait
 Exit metadata is recorded on Node's `exit` event, but settlement occurs on
 `close` so output has reached EOF. If descendants inherit the pipes and hold
 them open after the shell exits, bounded cleanup closes the entry scope and
-reaps the process group.
+reaps the process group — on Windows, closing the job kills the survivors and
+releases the pipes they hold.
 
 The entry scope is the single cleanup path for `/ps` stop, hard timeout,
 pruning, internal kill calls, and runtime disposal.
 
 Pi's detached-child tracker is internal and not exported. The manager therefore
 registers its own synchronous Node `exit` listener while live, tracks every
-spawned pid until close/scope cleanup, and sends a best-effort process-tree
-SIGKILL (`taskkill /F /T` on Windows) if an uncaught crash or emergency terminal
-exit bypasses `session_shutdown`. Runtime disposal removes the listener and
-sweeps any residual pid after normal bounded teardown.
+spawned pid until close/scope cleanup, and closes every tracked job object
+followed by a best-effort process-tree SIGKILL (`taskkill /F /T` on Windows) if
+an uncaught crash or emergency terminal exit bypasses `session_shutdown`.
+Runtime disposal removes the listener and sweeps any residual pid after normal
+bounded teardown.
 
 ## 14. Capacity and pruning
 
