@@ -257,15 +257,17 @@ function shellInvocation(command: string, shellPath?: string) {
 }
 
 /** Signal the whole process group on POSIX so descendants (servers a shell
- * command spawned) die with it; a wedged child must not orphan its tree. */
+ * command spawned) die with it; a wedged child must not orphan its tree.
+ * Windows has no graceful process-tree signal: taskkill without /F can remove
+ * the shell before its descendants, leaving no stable root for escalation.
+ * Force the complete tree in the first call so that snapshot-and-kill is atomic. */
 function killTree(child: ChildProcess, signal: NodeJS.Signals) {
   if (process.platform === "win32" && child.pid) {
     try {
-      const killer = spawn(
-        "taskkill",
-        ["/pid", String(child.pid), "/T", ...(signal === "SIGKILL" ? ["/F"] : [])],
-        { stdio: "ignore", windowsHide: true },
-      );
+      const killer = spawn("taskkill", ["/pid", String(child.pid), "/T", "/F"], {
+        stdio: "ignore",
+        windowsHide: true,
+      });
       killer.once("error", () => {
         try {
           child.kill(signal);
@@ -315,9 +317,10 @@ function awaitChildClose(child: ChildProcess, closed: () => boolean) {
   });
 }
 
-/** SIGTERM → deadline → SIGKILL; waits for stdio closure rather than only the
- * shell's exit because descendants can keep the inherited pipes and process
- * group alive after the shell itself is gone. */
+/** POSIX uses SIGTERM → deadline → SIGKILL. Windows force-kills the tree on
+ * the first call, then retains the same bounded wait/retry path. Waiting for
+ * stdio closure rather than only the shell's exit detects surviving descendants
+ * that inherited the pipes. */
 function terminateChild(child: ChildProcess, closed: () => boolean, onSignal: () => void) {
   return Effect.suspend(() => {
     if (closed()) return Effect.void;

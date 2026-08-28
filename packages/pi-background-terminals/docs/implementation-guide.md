@@ -419,15 +419,16 @@ so paging always advances.
 ## 13. Process lifecycle and termination
 
 Children use separate stdout/stderr pipes and no interactive stdin. On POSIX,
-`detached: true` gives the child its own process group. Windows uses `taskkill
-/T`, with `/F` for force kill.
+`detached: true` gives the child its own process group. Windows has no portable
+graceful process-tree signal, so termination uses `taskkill /F /T` on the first
+attempt. A non-forced `taskkill` can remove the shell while leaving descendants
+alive, which destroys the stable tree root before escalation can find them.
 
 Termination is:
 
 ```text
-SIGTERM whole tree
-wait up to 2 seconds for close
-SIGKILL whole tree
+POSIX:  SIGTERM whole tree → wait up to 2 seconds → SIGKILL whole tree
+Windows: taskkill /F /T whole tree → bounded close wait → forced retry if needed
 bounded final close/settle wait
 ```
 
