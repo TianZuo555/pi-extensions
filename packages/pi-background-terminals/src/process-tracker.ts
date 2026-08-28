@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import type { ChildJobHandle } from "./win32-job.ts";
 
 /**
  * Synchronously kill a process tree during Node's `exit` event, where async
@@ -35,6 +36,14 @@ function killProcessTreeSync(pid: number) {
 export interface DetachedChildTracker {
   track(pid: number): void;
   untrack(pid: number): void;
+  /**
+   * Track a dedicated per-child Windows job object. Job close is the reliable
+   * tree kill (taskkill cannot reach descendants re-parented after the shell
+   * exited), so the sweep closes jobs before falling back to pid sweeps.
+   */
+  trackJob(job: ChildJobHandle): void;
+  /** Stop retaining a job after its idempotent handle has been closed. */
+  untrackJob(job: ChildJobHandle): void;
   /** Remove the process listener and synchronously kill any residual trees. */
   dispose(): void;
 }
@@ -46,9 +55,16 @@ export interface DetachedChildTracker {
  */
 export function createDetachedChildTracker(): DetachedChildTracker {
   const pids = new Set<number>();
+  const jobs = new Set<ChildJobHandle>();
   let disposed = false;
 
   const sweep = () => {
+    // Jobs first: closing one terminates the whole tree synchronously at the
+    // kernel level, including PID-unreachable orphans holding stdio pipes.
+    const pendingJobs = [...jobs];
+    jobs.clear();
+    for (const job of pendingJobs) job.close();
+
     const pending = [...pids];
     pids.clear();
     for (const pid of pending) killProcessTreeSync(pid);
@@ -62,6 +78,12 @@ export function createDetachedChildTracker(): DetachedChildTracker {
     },
     untrack(pid) {
       pids.delete(pid);
+    },
+    trackJob(job) {
+      if (!disposed) jobs.add(job);
+    },
+    untrackJob(job) {
+      jobs.delete(job);
     },
     dispose() {
       if (disposed) return;

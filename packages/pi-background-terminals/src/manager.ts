@@ -12,10 +12,11 @@
  * and issue fire-and-forget kills without touching the Effect runtime.
  */
 
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import { getShellConfig } from "@earendil-works/pi-coding-agent";
 import { Context, Deferred, Effect, Exit, FiberSet, Layer, Scope } from "effect";
 import {
@@ -29,6 +30,7 @@ import {
 } from "./domain.ts";
 import { OutputBuffer } from "./output.ts";
 import { createDetachedChildTracker } from "./process-tracker.ts";
+import { createChildJob, preloadChildJobSupport, type ChildJobHandle } from "./win32-job.ts";
 import { codePointStart, completeCodePointEnd } from "./utf8.ts";
 
 export const MAX_RUNNING = 8;
@@ -60,6 +62,40 @@ const SETTLE_GRACE_MS = 1_000;
  * scope-close bound, so teardown remains bounded end to end. */
 const SPILL_FLUSH_TIMEOUT_MS = 1_500;
 const ERROR_TEXT_MAX_LENGTH = 4_096;
+const WIN32_CHILD_PATH = fileURLToPath(new URL("./win32-child.mjs", import.meta.url));
+
+export interface WindowsJobSupport {
+  readonly available: boolean;
+  readonly reason?: string;
+}
+
+let windowsJobSupportPromise: Promise<WindowsJobSupport> | undefined;
+
+async function detectWindowsJobSupport(): Promise<WindowsJobSupport> {
+  if (process.platform !== "win32") return { available: false, reason: "not running on Windows" };
+  const job = await createChildJob();
+  if (!job) return { available: false, reason: "native Job Object creation is unavailable" };
+  try {
+    const probe = spawnSync(process.execPath, [WIN32_CHILD_PATH, "--probe", job.name], {
+      encoding: "utf8",
+      stdio: ["ignore", "ignore", "pipe"],
+      timeout: 10_000,
+      windowsHide: true,
+    });
+    if (probe.status === 0) return { available: true };
+    const reason = probe.stderr.trim() || probe.error?.message || `launcher exited ${probe.status}`;
+    return { available: false, reason };
+  } catch (error) {
+    return { available: false, reason: boundedError(error) };
+  } finally {
+    job.close();
+  }
+}
+
+function getWindowsJobSupport() {
+  windowsJobSupportPromise ??= detectWindowsJobSupport();
+  return windowsJobSupportPromise;
+}
 
 function bounded(text: string) {
   return text.slice(0, ERROR_TEXT_MAX_LENGTH);
@@ -97,6 +133,10 @@ interface MutableSnapshot extends TerminalSnapshot {
 interface Entry {
   snapshot: MutableSnapshot;
   child: ChildProcess;
+  /** Dedicated Windows job containing the whole tree; closing it reaps
+   * descendants PID-based kills cannot reach. `undefined` elsewhere or when
+   * job support is unavailable. */
+  childJob: ChildJobHandle | undefined;
   scope: Scope.Closeable;
   stdoutBuf: OutputBuffer;
   stderrBuf: OutputBuffer;
@@ -233,6 +273,8 @@ export interface TerminalManagerShape {
   /** Tracked terminals ordered by creation time, newest first. */
   readonly list: Effect.Effect<ReadonlyArray<TerminalSnapshot>>;
   readonly disposeAll: Effect.Effect<void>;
+  /** Whether this host permits the nested Job Object used by Windows cleanup. */
+  readonly windowsJobSupport: WindowsJobSupport;
   readonly view: TerminalReadModel;
 }
 
@@ -260,7 +302,10 @@ function shellInvocation(command: string, shellPath?: string) {
  * command spawned) die with it; a wedged child must not orphan its tree.
  * Windows has no graceful process-tree signal: taskkill without /F can remove
  * the shell before its descendants, leaving no stable root for escalation.
- * Force the complete tree in the first call so that snapshot-and-kill is atomic. */
+ * Force the complete tree in the first call so that snapshot-and-kill is
+ * atomic. The per-child Job Object (see win32-job.ts) is the reliable
+ * backstop: taskkill cannot reach descendants re-parented after the shell
+ * exited, so the job close in the teardown path does the actual reaping. */
 function killTree(child: ChildProcess, signal: NodeJS.Signals) {
   if (process.platform === "win32" && child.pid) {
     try {
@@ -320,8 +365,15 @@ function awaitChildClose(child: ChildProcess, closed: () => boolean) {
 /** POSIX uses SIGTERM → deadline → SIGKILL. Windows force-kills the tree on
  * the first call, then retains the same bounded wait/retry path. Waiting for
  * stdio closure rather than only the shell's exit detects surviving descendants
- * that inherited the pipes. */
-function terminateChild(child: ChildProcess, closed: () => boolean, onSignal: () => void) {
+ * that inherited the pipes. `onEscalation` fires with the SIGKILL escalation —
+ * the Windows job close there releases pipes the dead shell's descendants
+ * still hold. */
+function terminateChild(
+  child: ChildProcess,
+  closed: () => boolean,
+  onSignal: () => void,
+  onEscalation: () => void,
+) {
   return Effect.suspend(() => {
     if (closed()) return Effect.void;
     return Effect.gen(function* () {
@@ -334,7 +386,10 @@ function terminateChild(child: ChildProcess, closed: () => boolean, onSignal: ()
         Effect.ignore,
       );
       if (closed()) return;
-      yield* Effect.sync(() => killTree(child, "SIGKILL"));
+      yield* Effect.sync(() => {
+        killTree(child, "SIGKILL");
+        onEscalation();
+      });
       yield* awaitChildClose(child, closed).pipe(Effect.timeout(500), Effect.ignore);
     });
   });
@@ -343,6 +398,10 @@ function terminateChild(child: ChildProcess, closed: () => boolean, onSignal: ()
 // --- Implementation --------------------------------------------------------------
 
 const makeManager = Effect.gen(function* () {
+  // Warm the Windows job-object surface before the first terminal needs a
+  // pre-created job (POSIX resolves immediately without loading Koffi).
+  yield* Effect.promise(preloadChildJobSupport);
+  const windowsJobSupport = yield* Effect.promise(getWindowsJobSupport);
   // Scoped detached forker for sync contexts (read-model kills, process-event
   // settlement, pruning). Completed fibers remove themselves; manager scope
   // close interrupts any work that outlives the bounded disposeAll wait.
@@ -537,6 +596,10 @@ const makeManager = Effect.gen(function* () {
     for (const waiter of waiters ?? []) waiter.consumed = true;
     const consumed = (killInterest.get(s.id) ?? 0) > 0 || (waiters?.size ?? 0) > 0;
     Deferred.doneUnsafe(entry.settled, Effect.void);
+    // The tree is final: close the Windows job so detached descendants that
+    // no PID path can reach are reaped now rather than at Pi exit.
+    entry.childJob?.close();
+    if (entry.childJob) detachedChildren.untrackJob(entry.childJob);
     notify(s.id);
     try {
       // During teardown, don't queue results into a shutting-down session.
@@ -677,29 +740,63 @@ const makeManager = Effect.gen(function* () {
               fallbackSafe: true,
             }),
         });
+        // Create the Windows kill switch before any process in the command
+        // tree exists. The launcher joins it before spawning the real shell,
+        // eliminating the post-spawn assignment race from issue #5.
+        const childJob = windowsJobSupport.available
+          ? yield* Effect.promise(createChildJob)
+          : undefined;
+        if (childJob) detachedChildren.trackJob(childJob);
+
         const child = yield* Effect.try({
           try: () => {
-            const spawned = spawn(invocation.shell, invocation.args, {
-              cwd: options.cwd,
-              env: options.env ?? process.env,
-              // No interactive stdin. The sole exception is legacy WSL Bash's
-              // one-shot script transport, which is closed immediately below.
-              stdio: [invocation.commandInput === undefined ? "ignore" : "pipe", "pipe", "pipe"],
-              // Own process group on POSIX → group kill takes the whole tree.
-              detached: process.platform !== "win32",
-              windowsHide: true,
-            });
-            if (invocation.commandInput !== undefined) {
-              spawned.stdin?.on("error", () => {});
+            const env = options.env ?? process.env;
+            const spawned = childJob
+              ? spawn(process.execPath, [WIN32_CHILD_PATH, childJob.name], {
+                  cwd: options.cwd,
+                  env,
+                  // One-shot JSON launch configuration; the requested shell
+                  // still receives no interactive stdin.
+                  stdio: ["pipe", "pipe", "pipe"],
+                  detached: false,
+                  windowsHide: true,
+                })
+              : spawn(invocation.shell, invocation.args, {
+                  cwd: options.cwd,
+                  env,
+                  // No interactive stdin. The sole exception is legacy WSL
+                  // Bash's one-shot script transport, closed immediately.
+                  stdio: [
+                    invocation.commandInput === undefined ? "ignore" : "pipe",
+                    "pipe",
+                    "pipe",
+                  ],
+                  // Own process group on POSIX → group kill takes the tree.
+                  detached: process.platform !== "win32",
+                  windowsHide: true,
+                });
+            spawned.stdin?.on("error", () => {});
+            if (childJob) {
+              spawned.stdin?.end(
+                JSON.stringify({
+                  shell: invocation.shell,
+                  args: invocation.args,
+                  commandInput: invocation.commandInput,
+                }),
+              );
+            } else if (invocation.commandInput !== undefined) {
               spawned.stdin?.end(invocation.commandInput);
             }
             return spawned;
           },
-          catch: (error) =>
-            new SpawnError({
+          catch: (error) => {
+            childJob?.close();
+            if (childJob) detachedChildren.untrackJob(childJob);
+            return new SpawnError({
               message: boundedError(error),
               fallbackSafe: true,
-            }),
+            });
+          },
         });
 
         const childPid = child.pid;
@@ -744,6 +841,7 @@ const makeManager = Effect.gen(function* () {
         const entry: Entry = {
           snapshot,
           child,
+          childJob,
           scope,
           stdoutBuf,
           stderrBuf,
@@ -823,6 +921,7 @@ const makeManager = Effect.gen(function* () {
                 () => {
                   entry.killSignaled ||= !entry.exited && entry.snapshot.status === "running";
                 },
+                () => entry.childJob?.close(),
               );
               // Give the natural close→flush→settle path a bounded grace,
               // then force the settle: a grandchild holding the pipe open
@@ -847,6 +946,11 @@ const makeManager = Effect.gen(function* () {
                 yield* flushSpillStreams(entry);
                 settle(entry);
               }
+              // The backstop: whatever the settle path decided, closing the
+              // job terminates any descendant still holding stdio pipes —
+              // PID-based kills cannot reach the re-parented survivors.
+              entry.childJob?.close();
+              if (entry.childJob) detachedChildren.untrackJob(entry.childJob);
               if (childPid) detachedChildren.untrack(childPid);
             }),
           ),
@@ -1184,6 +1288,7 @@ const makeManager = Effect.gen(function* () {
     kill,
     list: Effect.sync(listNewestFirst),
     disposeAll,
+    windowsJobSupport,
     view,
   });
 });
