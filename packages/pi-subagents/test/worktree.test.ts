@@ -14,6 +14,7 @@ import {
   PATCH_ARTIFACT_RETENTION_RUNS,
   type WorktreeInfo,
 } from "../lib/worktree.ts";
+import { assertPrivateMode, posixOnly } from "./platform.ts";
 
 const FIXTURE = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -72,6 +73,8 @@ afterEach(() => {
 function initGitRepo(dir: string, withRepoIdentity = true): void {
   const env = isolatedGitEnv();
   execFileSync("git", ["init"], { cwd: dir, stdio: "pipe", env });
+  // Windows CI runners default to core.autocrlf=true; keep fixtures byte-exact.
+  execFileSync("git", ["config", "core.autocrlf", "false"], { cwd: dir, stdio: "pipe", env });
   if (withRepoIdentity) {
     execFileSync("git", ["config", "user.name", "pi-subagents test"], {
       cwd: dir,
@@ -235,7 +238,7 @@ describe("worktree finalization", () => {
     fs.rmSync(repo, { recursive: true, force: true });
   });
 
-  it("retains worktree when porcelain status cannot be determined", async () => {
+  it("retains worktree when porcelain status cannot be determined", posixOnly, async () => {
     const repo = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-wt-"));
     initGitRepo(repo);
 
@@ -308,14 +311,10 @@ describe("worktree finalization", () => {
     assert.ok(result.delivery.patch);
     assert.ok(result.delivery.patch!.path.startsWith(artifactRoot));
     assert.ok(!result.delivery.patch!.path.startsWith(repo));
-    const mode = fs.statSync(result.delivery.patch!.path).mode & 0o777;
-    assert.equal(mode, 0o600);
-    const runDirMode = fs.statSync(path.dirname(result.delivery.patch!.path)).mode & 0o777;
-    assert.equal(runDirMode, 0o700);
-    const runsDirMode = fs.statSync(path.join(artifactRoot, "runs")).mode & 0o777;
-    assert.equal(runsDirMode, 0o700);
-    const rootMode = fs.statSync(artifactRoot).mode & 0o777;
-    assert.equal(rootMode, 0o700);
+    assertPrivateMode(result.delivery.patch!.path, 0o600);
+    assertPrivateMode(path.dirname(result.delivery.patch!.path), 0o700);
+    assertPrivateMode(path.join(artifactRoot, "runs"), 0o700);
+    assertPrivateMode(artifactRoot, 0o700);
 
     const patch = await writePatchArtifact({
       runId: "patch-run-2",
