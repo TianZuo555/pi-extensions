@@ -73,12 +73,12 @@ Requires the `agy` CLI installed and logged in (v1.1.17+). Override the binary w
 
 ### Skills & MCP bridge
 
-On session start, the extension runs a small local MCP server and registers it with agy as `pi-bridge-<pid>`. Two kinds of pi surface are bridged:
+When an Antigravity model is selected, the extension runs a small local MCP server and registers it with agy as `pi-bridge-<pid>`; switching to any other model (or closing pi) deregisters it and evicts its manifest cache, so non-Antigravity sessions never touch agy. Two kinds of pi surface are bridged:
 
 - **Skills** — one `pi__p<pid>__activate_skill` tool whose JSON-schema enum is the catalog and whose description carries each skill's one-liner, so agy can tell when a skill applies. Calling it with `{ "name": "grilling" }` returns that skill's full `SKILL.md` plus bundled resource paths. The catalog is not appended to the user prompt: agy sees it in tools/list on every spawn, including after pi compaction.
 - **MCP** — tools pi got from `pi-mcp-adapter` (the `mcp`/`mcpScript` gateways and per-server direct tools) are exposed with the same prefix.
 
-agy's MCP registry is **global** while bridge servers are per-pi-session, so concurrent sessions' tools all appear in every agy turn's tools/list. The per-session prefix (`pi__p<pid>__`) makes tool→server routing unambiguous: a tool name maps to exactly one session's bridge, so a call can only ever execute in the session that advertised it — never silently in another. Stale registrations from crashed sessions are pruned at startup. Calls still fail safe: no active turn, unknown tool, or a 480-second timeout returns an error to agy instead of hanging.
+agy's MCP registry is **global** while bridge servers are per-pi-session, so concurrent sessions' tools all appear in every agy turn's tools/list. The per-session prefix (`pi__p<pid>__`) makes tool→server routing unambiguous: a tool name maps to exactly one session's bridge, so a call can only ever execute in the session that advertised it — never silently in another. Stale registrations and manifest-cache leftovers from crashed sessions are pruned whenever a session registers its bridge. Calls still fail safe: no active turn, unknown tool, or a 480-second timeout returns an error to agy instead of hanging.
 
 An MCP call flows like this:
 
