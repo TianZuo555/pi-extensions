@@ -11,6 +11,7 @@ Use **Google Antigravity** (`agy`) models inside the [pi coding agent](https://p
 - **Skills & MCP bridge** — your global pi Agent Skills become callable tools inside agy turns (`pi__p<pid>__skill__grilling`, …), and pi's MCP servers (via the `pi-mcp-adapter` tools) are reachable from agy with pi's permissions, hooks, and rendering. Per-session tool names keep concurrent pi sessions fully isolated.
 - **Background-task manager** — long-running agy commands are tracked in a dashboard and stoppable with one keystroke (`/agy-tasks`).
 - **Artifact browser** — images and files agy creates are listed and openable via `/agy-artifacts`, with a status-bar hint when new ones appear.
+- **Model quotas** — `/agy-usage` ports agy's `/usage` into the same Refresh/Close menu as `/usage`: weekly and 5-hour remaining bars per model group, refreshed without spending tokens.
 
 ## How it works
 
@@ -115,6 +116,24 @@ Images and files agy creates land in a per-conversation artifact store. A hint a
 
 The dashboard shows name, type, size, and origin (`generated` vs `uploaded`). Press `o` to open a file with the system default app. Non-interactive: `/agy-artifacts open <name>`.
 
+### Model quotas (`/agy-usage`)
+
+agy's interactive `/usage` (alias `/quota`) is a TUI-only slash command — there is no `agy usage` subcommand. `/agy-usage` expands the same slash command in print mode (`agy --print /usage --output-format json`), which returns structured quota groups and reports zero tokens.
+
+The menu matches `/usage`: per-group 5-hour and weekly remaining bars with clock-style reset times. Refresh re-queries; Close dismisses. Print/RPC modes print the same numbers as a notification.
+
+```text
+Gemini Models
+  5h limit:         [████████████████████] 98% left · resets 19:53
+
+  Weekly limit:     [███████████████████░] 97% left · resets 09:10 on 4 Sep
+
+Claude and GPT models
+  5h limit:         [████████████████████] 100% left · resets 20:08
+
+  Weekly limit:     [████████████████████] 100% left · resets 15:08 on 4 Sep
+```
+
 ## Commands
 
 | Command | What it does |
@@ -124,6 +143,7 @@ The dashboard shows name, type, size, and origin (`generated` vs `uploaded`). Pr
 | `/agy models` | Re-discover models and re-register the provider |
 | `/agy-tasks` | Background-task dashboard (`stop <task-id>|all` for scripts) |
 | `/agy-artifacts` | Artifact browser (`open <name>` for scripts) |
+| `/agy-usage` | Model quotas (weekly and 5-hour remaining per group) |
 
 ## Configuration flags
 

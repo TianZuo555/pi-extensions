@@ -25,7 +25,7 @@ Each extension has its own package and its own README under
 | [pi-goal](packages/pi-goal/README.md) | `/goal`, tools `get_goal`/`update_goal` | User-owned, editable objective with evidence-checked bounded continuation. |
 | [pi-todo](packages/pi-todo/README.md) | tool `todo` | Small shared todo list for multi-step work. |
 | [pi-web-search](packages/pi-web-search/README.md) | tools `web_search`/`web_fetch` | Clean web search & fetch via OpenAI Responses, Exa, Firecrawl, or Ollama. |
-| [pi-antigravity](packages/pi-antigravity/README.md) | `/agy` | Google Antigravity (`agy`) models inside pi via stream-json RPC. |
+| [pi-antigravity](packages/pi-antigravity/README.md) | `/agy`, `/agy-usage` | Google Antigravity (`agy`) models inside pi via stream-json RPC. |
 | [pi-vscode-bridge](packages/pi-vscode-bridge/README.md) | `/vscode-connect` | Send file/line/diff-hunk refs from VS Code into pi's editor. |
 
 ## Install
