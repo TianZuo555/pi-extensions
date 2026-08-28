@@ -1,4 +1,4 @@
-name: Publish
+name: Release
 
 on:
   push:
@@ -6,9 +6,10 @@ on:
     paths:
       - "packages/**"
       - ".changeset/**"
-      - ".github/workflows/publish.yml"
+      - ".github/workflows/release.yml"
       - "package.json"
       - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
   workflow_dispatch:
     inputs:
       dry_run:
@@ -17,11 +18,18 @@ on:
         default: false
 
 concurrency:
-  group: publish-${{ github.ref }}
+  group: release-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  publish:
+  # Publishing to npm is irreversible, and the Changesets release PR is opened
+  # with the default GITHUB_TOKEN, so it never triggers `pull_request` CI.
+  # Gate every release on the full CI suite instead.
+  verify:
+    uses: ./.github/workflows/ci.yml
+
+  release:
+    needs: verify
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -39,24 +47,12 @@ jobs:
       - name: Setup Node
         uses: actions/setup-node@v7
         with:
-          node-version: 26
+          node-version: 26 # ships npm 11.19+, which supports trusted publishing
           registry-url: "https://registry.npmjs.org"
           cache: pnpm
 
-      - name: Upgrade npm for trusted publishing
-        run: npm install --global npm@^11.5.1
-
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
-
-      - name: Typecheck monorepo
-        run: pnpm run typecheck
-
-      - name: Typecheck Effect packages
-        run: pnpm run check
-
-      - name: Run tests
-        run: pnpm test
 
       - name: Preview pending releases
         if: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
@@ -64,7 +60,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          pnpm changeset:status
+          pnpm changeset:status || true
           if find .changeset -maxdepth 1 -type f -name '*.md' ! -name README.md | grep -q .; then
             pnpm version-packages
           else

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import os from "node:os";
 import { test } from "node:test";
 import { agyToolLabel, formatAgyCall, summarizeAgyResult } from "../lib/render.ts";
 
@@ -37,7 +38,7 @@ test("formatAgyCall renders native-style call lines", () => {
 });
 
 test("formatAgyCall shortens $HOME paths and bounds unknown-tool JSON", () => {
-  const home = process.env.HOME ?? "";
+  const home = os.homedir();
   assert.equal(
     formatAgyCall("view_file", { AbsolutePath: `${home}/notes` }, theme),
     "read ~/notes",

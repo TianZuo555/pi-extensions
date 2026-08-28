@@ -9,6 +9,7 @@ import {
   reportPathFor,
   semanticReportFromFile,
 } from "../lib/report-file.ts";
+import { assertPrivateMode } from "./platform.ts";
 
 function tempArtifactRoot(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-report-"));
@@ -19,8 +20,7 @@ describe("report-file", () => {
     const root = tempArtifactRoot();
     const reportPath = reportPathFor(root, "sa-test123");
     assert.equal(reportPath, path.join(root, "runs", "sa-test123", "report.json"));
-    const mode = fs.statSync(path.join(root, "runs", "sa-test123")).mode & 0o777;
-    assert.equal(mode, 0o700);
+    assertPrivateMode(path.join(root, "runs", "sa-test123"), 0o700);
     fs.rmSync(root, { recursive: true, force: true });
   });
 

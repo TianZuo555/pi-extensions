@@ -86,6 +86,8 @@ function initGitRepo(dir: string): void {
     GIT_CONFIG_SYSTEM: "/dev/null",
   };
   execFileSync("git", ["init"], { cwd: dir, stdio: "pipe", env });
+  // Windows CI runners default to core.autocrlf=true; keep fixtures byte-exact.
+  execFileSync("git", ["config", "core.autocrlf", "false"], { cwd: dir, stdio: "pipe", env });
   execFileSync("git", ["config", "user.name", "pi-herdr test"], { cwd: dir, stdio: "pipe", env });
   execFileSync("git", ["config", "user.email", "pi-herdr-test@example.invalid"], {
     cwd: dir,
