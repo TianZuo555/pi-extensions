@@ -123,8 +123,11 @@ export function findByHash(images: Iterable<CachedImage>, hash: string): CachedI
 
 export function isInsideTmpDir(candidate: string): boolean {
   try {
-    const root = realpathSync(tmpdir());
-    const resolved = realpathSync(candidate);
+    // `.native` also expands Windows 8.3 short names (`RUNNER~1`), which the JS
+    // `realpathSync` keeps — otherwise a long-form candidate never matches the
+    // short-form `tmpdir()` and clipboard images look like user files.
+    const root = realpathSync.native(tmpdir());
+    const resolved = realpathSync.native(candidate);
     return isPathWithin(root, resolved);
   } catch {
     return false;
