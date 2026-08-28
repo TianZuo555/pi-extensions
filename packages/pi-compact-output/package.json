@@ -28,7 +28,8 @@
     "index.ts",
     "lib",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "CHANGELOG.md"
   ],
   "pi": {
     "extensions": [

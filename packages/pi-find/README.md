@@ -1,5 +1,7 @@
 # pi-find
 
+Release notes: [changelog](https://github.com/TianZuo555/pi-extensions/blob/main/packages/pi-find/CHANGELOG.md) · [GitHub releases](https://github.com/TianZuo555/pi-extensions/releases)
+
 Simple, bounded `grep` and `find` tools for the [pi coding agent](https://pi.dev),
 backed by ripgrep and fd.
 

@@ -1,5 +1,7 @@
 # @tian.zuo/pi-repo-skills
 
+Release notes: [changelog](https://github.com/TianZuo555/pi-extensions/blob/main/packages/pi-repo-skills/CHANGELOG.md) · [GitHub releases](https://github.com/TianZuo555/pi-extensions/releases)
+
 Per-repository skill enable and disable controls for the [pi coding agent](https://pi.dev).
 
 ```bash

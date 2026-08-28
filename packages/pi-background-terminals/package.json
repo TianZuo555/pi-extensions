@@ -27,7 +27,8 @@
   "files": [
     "index.ts",
     "src",
-    "docs"
+    "docs",
+    "CHANGELOG.md"
   ],
   "pi": {
     "extensions": [

@@ -1,5 +1,7 @@
 # @tian.zuo/pi-token-speed
 
+Release notes: [changelog](https://github.com/TianZuo555/pi-extensions/blob/main/packages/pi-token-speed/CHANGELOG.md) · [GitHub releases](https://github.com/TianZuo555/pi-extensions/releases)
+
 Live and final tokens-per-second reporting for the [pi coding agent](https://pi.dev).
 
 ```bash

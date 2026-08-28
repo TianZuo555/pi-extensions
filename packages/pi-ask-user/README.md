@@ -1,5 +1,7 @@
 # @tian.zuo/pi-ask-user
 
+Release notes: [changelog](https://github.com/TianZuo555/pi-extensions/blob/main/packages/pi-ask-user/CHANGELOG.md) · [GitHub releases](https://github.com/TianZuo555/pi-extensions/releases)
+
 Let the model ask you a multiple-choice question from [pi](https://pi.dev).
 
 > **Token-light by design.** The entire model-facing surface — tool description, schema docs, and three guideline bullets — totals **≈560 characters**. The most-downloaded alternative `ask_user` package ([@eko24ive/pi-ask](https://www.npmjs.com/package/@eko24ive/pi-ask)) spends ≈1,700 on its tool description and schema alone, and popular pi extensions generally run 2–3k (pi-mcp-adapter: ≈2.5k across 12 tools; pi-web-access: ≈3.2k on `web_search` alone). Same interactive form, a third of the prompt weight — the wording lives in one small `lib/prompt.ts` instead of prose sprayed through the schema.
