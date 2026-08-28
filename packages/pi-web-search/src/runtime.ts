@@ -26,6 +26,7 @@ import { resolveFetchChain, resolveSearchChain } from "../lib/config.ts";
 import { fetchDirect } from "../lib/direct-fetch.ts";
 import { fetchExa, searchExa } from "../lib/exa.ts";
 import { fetchFirecrawl, searchFirecrawl } from "../lib/firecrawl.ts";
+import { fetchMonid, searchMonid } from "../lib/monid.ts";
 import { fetchOllama, searchOllama } from "../lib/ollama.ts";
 import { searchOpenAI } from "../lib/openai.ts";
 import { fetchTavily, searchTavily } from "../lib/tavily.ts";
@@ -90,6 +91,15 @@ export interface ProviderHealthEntry {
   readonly msLeft: number | null;
 }
 
+/** Per-provider session usage counters, surfaced by /websearch-usage. */
+export interface ProviderUsageEntry {
+  readonly kind: "search" | "fetch";
+  readonly provider: string;
+  readonly ok: number;
+  readonly fail: number;
+  readonly totalMs: number;
+}
+
 interface ProviderAttemptFailure {
   readonly provider: string;
   readonly message: string;
@@ -127,6 +137,9 @@ export interface WebSearchRuntimeShape {
   readonly providerHealth: Effect.Effect<
     ReadonlyArray<ProviderHealthEntry>
   >;
+
+  /** Per-provider session usage counters (see /websearch-usage). */
+  readonly usage: Effect.Effect<ReadonlyArray<ProviderUsageEntry>>;
 }
 
 export class WebSearchRuntime extends Context.Service<
@@ -138,6 +151,38 @@ const makeWebSearchRuntime = Effect.gen(function* () {
   const healthRef = yield* SynchronizedRef.make(
     new Map<string, ProviderBlock>(),
   );
+
+  /** Session usage counters keyed by `${kind}:${provider}`. */
+  const usage = new Map<string, ProviderUsageEntry>();
+
+  const recordUsage = (
+    kind: "search" | "fetch",
+    provider: string,
+    ok: boolean,
+    ms: number,
+  ): void => {
+    const key = `${kind}:${provider}`;
+    const current = usage.get(key) ?? {
+      kind,
+      provider,
+      ok: 0,
+      fail: 0,
+      totalMs: 0,
+    };
+    usage.set(key, {
+      ...current,
+      ok: current.ok + (ok ? 1 : 0),
+      fail: current.fail + (ok ? 0 : 1),
+      totalMs: current.totalMs + ms,
+    });
+  };
+
+  const usageSnapshot = (): ReadonlyArray<ProviderUsageEntry> =>
+    [...usage.values()].sort((a, b) =>
+      a.kind === b.kind
+        ? a.provider.localeCompare(b.provider)
+        : a.kind.localeCompare(b.kind),
+    );
 
   const recordBlock = (provider: string, failure: ProviderAttemptFailure) =>
     SynchronizedRef.update(healthRef, (health) => {
@@ -182,7 +227,7 @@ const makeWebSearchRuntime = Effect.gen(function* () {
    * providers it fell back from.
    */
   const runProviderChain = <P extends string, R extends { fallbacks?: ProviderFallback[] }>(
-    kind: string,
+    kind: "search" | "fetch",
     chain: readonly P[],
     attempt: (provider: P) => Effect.Effect<R, ProviderAttemptFailure>,
   ): Effect.Effect<R, WebSearchError> => {
@@ -202,8 +247,10 @@ const makeWebSearchRuntime = Effect.gen(function* () {
         );
       }
 
+      const t0 = Date.now();
       return attempt(head).pipe(
         Effect.flatMap((result) => {
+          recordUsage(kind, head, true, Date.now() - t0);
           const withFallbacks: R =
             failures.length > 0
               ? {
@@ -217,6 +264,9 @@ const makeWebSearchRuntime = Effect.gen(function* () {
           return clearBlock(head).pipe(Effect.as(withFallbacks));
         }),
         Effect.catch((failure: ProviderAttemptFailure) => {
+          if (!failure.userAborted) {
+            recordUsage(kind, head, false, Date.now() - t0);
+          }
           if (failure.userAborted) {
             return Effect.fail(
               new WebSearchApiError({
@@ -286,6 +336,8 @@ const makeWebSearchRuntime = Effect.gen(function* () {
                 return await searchTavily(query, searchOpts);
               case "firecrawl":
                 return await searchFirecrawl(query, searchOpts);
+              case "monid":
+                return await searchMonid(query, searchOpts);
               case "ollama":
                 return await searchOllama(query, searchOpts);
               default:
@@ -324,6 +376,8 @@ const makeWebSearchRuntime = Effect.gen(function* () {
                 return await fetchExa(url, fetchOpts);
               case "tavily":
                 return await fetchTavily(url, fetchOpts);
+              case "monid":
+                return await fetchMonid(url, fetchOpts);
               case "ollama":
                 return await fetchOllama(url, fetchOpts);
               case "direct":
@@ -346,6 +400,7 @@ const makeWebSearchRuntime = Effect.gen(function* () {
     search,
     fetch: fetchUrl,
     providerHealth,
+    usage: Effect.sync(usageSnapshot),
   });
 });
 

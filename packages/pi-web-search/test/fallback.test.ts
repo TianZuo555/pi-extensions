@@ -24,7 +24,9 @@ const ENV_KEYS = [
   "OPENAI_API_KEY",
   "EXA_API_KEY",
   "FIRECRAWL_API_KEY",
+  "FIRECRAWL_KEYLESS",
   "TAVILY_API_KEY",
+  "MONID_API_KEY",
   "OLLAMA_HOST",
   "OPENAI_BASE_URL",
 ] as const;
@@ -126,6 +128,7 @@ test("provider chains put the requested provider first and dedupe", () => {
     delete process.env.EXA_API_KEY;
     delete process.env.FIRECRAWL_API_KEY;
     delete process.env.TAVILY_API_KEY;
+    delete process.env.MONID_API_KEY;
     delete process.env.OLLAMA_HOST;
 
     // Firecrawl becomes "available" purely through its env key.
@@ -171,25 +174,35 @@ test("tavily joins search and fetch chains when configured", () => {
     delete process.env.EXA_API_KEY;
     delete process.env.FIRECRAWL_API_KEY;
     delete process.env.TAVILY_API_KEY;
+    delete process.env.MONID_API_KEY;
     delete process.env.OLLAMA_HOST;
 
     process.env.TAVILY_API_KEY = "tvly-key";
     const cfg = {};
 
     // Fetch chains never include OpenAI, so they are fully deterministic.
-    assert.deepEqual(availableFetchProviders(cfg), ["tavily", "direct"]);
-    assert.deepEqual(resolveFetchChain("tavily", cfg), [
+    // Keyless firecrawl is always available unless opted out; the available
+    // list follows the canonical order, resolveFetchChain puts the requested
+    // provider first.
+    assert.deepEqual(availableFetchProviders(cfg), [
+      "firecrawl",
       "tavily",
       "direct",
     ]);
+    assert.deepEqual(resolveFetchChain("tavily", cfg), [
+      "tavily",
+      "firecrawl",
+      "direct",
+    ]);
 
-    // Search chains may include OpenAI from pi's auth.json; assert
-    // structural properties instead of exact lists.
+    // Search chains may include OpenAI from pi's auth.json; firecrawl (keyless)
+    // always leads, ollama/monid trail.
     const available = availableSearchProviders(cfg);
     assert.ok(available.includes("tavily"));
+    assert.equal(available[0], "firecrawl");
     assert.equal(
       available.indexOf("tavily"),
-      available.includes("openai") ? 1 : 0,
+      available.includes("openai") ? 2 : 1,
     );
     assert.equal(available[available.length - 1], "ollama");
 
@@ -211,6 +224,7 @@ test("searchOrder and fetchOrder configure the fallback sequence", () => {
     delete process.env.EXA_API_KEY;
     delete process.env.FIRECRAWL_API_KEY;
     delete process.env.TAVILY_API_KEY;
+    delete process.env.MONID_API_KEY;
     delete process.env.OLLAMA_HOST;
 
     process.env.EXA_API_KEY = "exa-key";
@@ -251,6 +265,7 @@ test("order entries without credentials or with unknown names are dropped", () =
     delete process.env.EXA_API_KEY;
     delete process.env.FIRECRAWL_API_KEY;
     delete process.env.TAVILY_API_KEY;
+    delete process.env.MONID_API_KEY;
     delete process.env.OLLAMA_HOST;
 
     process.env.TAVILY_API_KEY = "tvly-key";
@@ -259,9 +274,62 @@ test("order entries without credentials or with unknown names are dropped", () =
       '{"searchOrder": ["firecrawl", "bogus"], "fetchOrder": ["exa", "bogus"]}',
     ) as WebSearchConfig;
 
-    assert.deepEqual(resolveSearchChain(undefined, cfg), ["tavily", "ollama"]);
-    assert.deepEqual(resolveFetchChain(undefined, cfg), ["tavily", "direct"]);
+    // exa is listed in fetchOrder but has no credentials, so it is dropped;
+    // the chain is the remaining available providers in canonical order
+    // (keyless firecrawl included).
+    assert.deepEqual(resolveSearchChain(undefined, cfg), [
+      "firecrawl",
+      "tavily",
+      "ollama",
+    ]);
+    assert.deepEqual(resolveFetchChain(undefined, cfg), [
+      "firecrawl",
+      "tavily",
+      "direct",
+    ]);
   } finally {
+    restoreFs();
+    restoreEnv(env);
+  }
+});
+
+test("usage counters track per-provider attempts for /websearch-usage", async () => {
+  const originalFetch = globalThis.fetch;
+  const restoreFs = hidePiAuthFile();
+  const env = snapshotEnv();
+  const control: MockControl = { calls: [], firecrawlStatus: 402, exaStatus: 200 };
+  try {
+    delete process.env.OPENAI_API_KEY;
+    process.env.EXA_API_KEY = "exa-key";
+    process.env.FIRECRAWL_API_KEY = "fc-key";
+    delete process.env.TAVILY_API_KEY;
+    delete process.env.MONID_API_KEY;
+    delete process.env.OLLAMA_HOST;
+    installFetchMock(control);
+
+    const runtime = createWebSearchRuntime();
+    const service = runtime.runSync(WebSearchRuntime);
+
+    // Call 1: firecrawl 402 -> exa ok. Call 2: firecrawl session-blocked,
+    // straight to exa.
+    await runWebSearch(runtime, service.search("u1", {}, "firecrawl"));
+    await runWebSearch(runtime, service.search("u2", {}, "firecrawl"));
+
+    const usage = await runWebSearch(runtime, service.usage);
+    const byKey = new Map(usage.map((u) => [`${u.kind}:${u.provider}`, u]));
+    const exa = byKey.get("search:exa");
+    const firecrawl = byKey.get("search:firecrawl");
+    assert.ok(exa);
+    assert.ok(firecrawl);
+    assert.equal(exa.ok, 2);
+    assert.equal(exa.fail, 0);
+    assert.equal(firecrawl.ok, 0);
+    assert.equal(firecrawl.fail, 1);
+    assert.equal(typeof exa.totalMs, "number");
+
+    await runtime.dispose();
+  } finally {
+    globalThis.fetch = originalFetch;
     restoreFs();
     restoreEnv(env);
   }
@@ -277,6 +345,7 @@ test("search: quota-exhausted provider is skipped for the rest of the session", 
     process.env.EXA_API_KEY = "exa-key";
     process.env.FIRECRAWL_API_KEY = "fc-key";
     delete process.env.TAVILY_API_KEY;
+    delete process.env.MONID_API_KEY;
     delete process.env.OLLAMA_HOST;
     installFetchMock(control);
 
@@ -330,6 +399,7 @@ test("search: walks the whole chain and reports an aggregated error", async () =
     process.env.EXA_API_KEY = "exa-key";
     process.env.FIRECRAWL_API_KEY = "fc-key";
     delete process.env.TAVILY_API_KEY;
+    delete process.env.MONID_API_KEY;
     delete process.env.OLLAMA_HOST;
     installFetchMock(control);
 
@@ -371,6 +441,7 @@ test("fetch: falls back through firecrawl -> exa -> direct within one call", asy
     process.env.EXA_API_KEY = "exa-key";
     process.env.FIRECRAWL_API_KEY = "fc-key";
     delete process.env.TAVILY_API_KEY;
+    delete process.env.MONID_API_KEY;
     delete process.env.OLLAMA_HOST;
 
     globalThis.fetch = (async (input: RequestInfo | URL) => {
@@ -404,6 +475,112 @@ test("fetch: falls back through firecrawl -> exa -> direct within one call", asy
     await runtime.dispose();
   } finally {
     globalThis.fetch = originalFetch;
+    restoreFs();
+    restoreEnv(env);
+  }
+});
+
+test("monid (TinyFish) joins the end of both chains when configured", () => {
+  const env = snapshotEnv();
+  const restoreFs = hidePiAuthFile();
+  try {
+    delete process.env.OPENAI_API_KEY;
+    delete process.env.EXA_API_KEY;
+    delete process.env.FIRECRAWL_API_KEY;
+    delete process.env.TAVILY_API_KEY;
+    delete process.env.OLLAMA_HOST;
+    // Opt out of the keyless firecrawl tier so monid really is the only
+    // credentialed provider in this scenario.
+    process.env.FIRECRAWL_KEYLESS = "0";
+
+    // Only Monid is configured: it becomes the sole credentialed fallback.
+    process.env.MONID_API_KEY = "monid-key";
+    const cfg = {};
+
+    // Fetch: monid slots in before the keyless direct net, never after it.
+    assert.deepEqual(availableFetchProviders(cfg), ["monid", "direct"]);
+    assert.deepEqual(resolveFetchChain(undefined, cfg), ["monid", "direct"]);
+    assert.deepEqual(resolveFetchChain("direct", cfg), ["direct", "monid"]);
+
+    // Search: appended after ollama at the very end of the canonical order.
+    const available = availableSearchProviders(cfg);
+    assert.ok(available.includes("monid"));
+    const chain = resolveSearchChain(undefined, cfg);
+    assert.equal(chain[chain.length - 1], "monid");
+    assert.equal(chain[chain.length - 2], "ollama");
+  } finally {
+    restoreFs();
+    restoreEnv(env);
+  }
+});
+
+test("fallback chain follows searchOrder/fetchOrder sequence including monid", () => {
+  const env = snapshotEnv();
+  const restoreFs = hidePiAuthFile();
+  try {
+    delete process.env.OPENAI_API_KEY;
+    delete process.env.OLLAMA_HOST;
+    process.env.EXA_API_KEY = "exa-key";
+    process.env.TAVILY_API_KEY = "tvly-key";
+    process.env.FIRECRAWL_API_KEY = "fc-key";
+    process.env.MONID_API_KEY = "monid-key";
+
+    // Without an explicit order, the chain mirrors the canonical order:
+    // keyless firecrawl leads, existing providers keep their relative order,
+    // monid is appended as the last resort.
+    assert.deepEqual(resolveSearchChain(undefined, {}), [
+      "firecrawl",
+      "exa",
+      "tavily",
+      "ollama",
+      "monid",
+    ]);
+    assert.deepEqual(resolveFetchChain(undefined, {}), [
+      "firecrawl",
+      "exa",
+      "tavily",
+      "monid",
+      "direct",
+    ]);
+
+    // With an explicit order, the chain follows it exactly, then appends
+    // unlisted credentialed providers in canonical order.
+    const cfg = {
+      searchOrder: ["tavily", "monid"] as SearchProviderName[],
+      fetchOrder: ["monid", "tavily"] as FetchProviderName[],
+    };
+    assert.deepEqual(resolveSearchChain(undefined, cfg), [
+      "tavily",
+      "monid",
+      "firecrawl",
+      "exa",
+      "ollama",
+    ]);
+    assert.deepEqual(resolveFetchChain(undefined, cfg), [
+      "monid",
+      "tavily",
+      "firecrawl",
+      "exa",
+      "direct",
+    ]);
+
+    // An explicitly requested provider still jumps the queue ahead of the
+    // configured order.
+    assert.deepEqual(resolveSearchChain("firecrawl", cfg), [
+      "firecrawl",
+      "tavily",
+      "monid",
+      "exa",
+      "ollama",
+    ]);
+    assert.deepEqual(resolveFetchChain("exa", cfg), [
+      "exa",
+      "monid",
+      "tavily",
+      "firecrawl",
+      "direct",
+    ]);
+  } finally {
     restoreFs();
     restoreEnv(env);
   }

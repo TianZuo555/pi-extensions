@@ -40,8 +40,8 @@ export interface FetchResponse {
   fallbacks?: ProviderFallback[];
 }
 
-export type SearchProviderName = "openai" | "exa" | "tavily" | "firecrawl" | "ollama";
-export type FetchProviderName = "firecrawl" | "exa" | "tavily" | "ollama" | "direct";
+export type SearchProviderName = "openai" | "exa" | "tavily" | "firecrawl" | "ollama" | "monid";
+export type FetchProviderName = "firecrawl" | "exa" | "tavily" | "ollama" | "monid" | "direct";
 
 export interface ProviderStatus {
   name: string;
@@ -72,11 +72,16 @@ export interface WebSearchConfig {
   };
   firecrawl?: {
     baseUrl?: string;
+    /** Set false to disable the keyless no-API-key tier (default on). */
+    keyless?: boolean;
   };
   tavily?: {
     baseUrl?: string;
   };
   ollama?: {
+    baseUrl?: string;
+  };
+  monid?: {
     baseUrl?: string;
   };
 }

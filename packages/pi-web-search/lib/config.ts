@@ -26,6 +26,7 @@ export const DEFAULT_OLLAMA_HOST = "http://localhost:11434";
 export const DEFAULT_EXA_API_URL = "https://api.exa.ai";
 export const DEFAULT_FIRECRAWL_API_URL = "https://api.firecrawl.dev/v2";
 export const DEFAULT_TAVILY_API_URL = "https://api.tavily.com";
+export const DEFAULT_MONID_API_URL = "https://api.monid.ai";
 
 interface PiAuthEntry {
     type?: string;
@@ -83,6 +84,7 @@ export const AUTH_IDS = {
     firecrawl: "websearch-firecrawl",
     tavily: "websearch-tavily",
     ollama: "websearch-ollama",
+    monid: "websearch-monid",
 } as const;
 
 export type AuthProviderId = (typeof AUTH_IDS)[keyof typeof AUTH_IDS];
@@ -93,7 +95,7 @@ function piAuthKey(id: AuthProviderId): string | undefined {
 
 /** Stored API key for a provider, read from pi's auth.json. */
 export function loadProviderKey(
-    name: "exa" | "firecrawl" | "tavily" | "ollama",
+    name: "exa" | "firecrawl" | "tavily" | "ollama" | "monid",
 ): string | undefined {
     return piAuthKey(AUTH_IDS[name]);
 }
@@ -265,9 +267,16 @@ export function resolveExaConfig(
 }
 
 export interface ResolvedFirecrawlConfig {
-    apiKey: string;
+    /** API key for the current primary mode: undefined in keyless mode. */
+    apiKey: string | undefined;
     baseUrl: string;
     source: string;
+    /** True when the keyless tier (1,000 free credits/month, no account) is
+     * the primary mode; requests omit Authorization. */
+    keyless: boolean;
+    /** When keyless is primary and the user also has a key, it is used as
+     * overflow once the free monthly credits run out. */
+    overflowApiKey?: string;
 }
 
 export function resolveFirecrawlConfig(
@@ -276,14 +285,44 @@ export function resolveFirecrawlConfig(
     const envKey = process.env.FIRECRAWL_API_KEY?.trim();
     const authKey = piAuthKey(AUTH_IDS.firecrawl);
     const key = envKey || authKey;
-    if (!key) return null;
+    const keySource = envKey ? "FIRECRAWL_API_KEY env" : "~/.pi/agent/auth.json";
+    const baseUrl =
+        process.env.FIRECRAWL_BASE_URL?.trim() ||
+        config.firecrawl?.baseUrl?.trim() ||
+        DEFAULT_FIRECRAWL_API_URL;
+
+    const optOut = /^(0|false|off)$/i.test(
+        process.env.FIRECRAWL_KEYLESS?.trim() ?? "",
+    );
+    const keylessDisabled = optOut || config.firecrawl?.keyless === false;
+
+    if (keylessDisabled) {
+        if (!key) return null;
+        return {
+            apiKey: key,
+            baseUrl,
+            source: keySource,
+            keyless: false,
+        };
+    }
+
+    if (key) {
+        // Keyless first (free), the user's key takes over once the monthly
+        // credits are used up.
+        return {
+            apiKey: undefined,
+            baseUrl,
+            source: `${keySource} (overflow after keyless credits)`,
+            keyless: true,
+            overflowApiKey: key,
+        };
+    }
+
     return {
-        apiKey: key,
-        baseUrl:
-            process.env.FIRECRAWL_BASE_URL?.trim() ||
-            config.firecrawl?.baseUrl?.trim() ||
-            DEFAULT_FIRECRAWL_API_URL,
-        source: envKey ? "FIRECRAWL_API_KEY env" : "~/.pi/agent/auth.json",
+        apiKey: undefined,
+        baseUrl,
+        source: "Firecrawl Keyless (no key; 1,000 credits/mo)",
+        keyless: true,
     };
 }
 
@@ -340,6 +379,29 @@ export function resolveOllamaConfig(
     };
 }
 
+export interface ResolvedMonidConfig {
+    apiKey: string;
+    baseUrl: string;
+    source: string;
+}
+
+export function resolveMonidConfig(
+    config = loadStoredConfig(),
+): ResolvedMonidConfig | null {
+    const envKey = process.env.MONID_API_KEY?.trim();
+    const authKey = piAuthKey(AUTH_IDS.monid);
+    const key = envKey || authKey;
+    if (!key) return null;
+    return {
+        apiKey: key,
+        baseUrl:
+            process.env.MONID_BASE_URL?.trim() ||
+            config.monid?.baseUrl?.trim() ||
+            DEFAULT_MONID_API_URL,
+        source: envKey ? "MONID_API_KEY env" : "~/.pi/agent/auth.json",
+    };
+}
+
 export function getProviderStatuses(ctx?: ExtensionContext): ProviderStatus[] {
     const config = loadStoredConfig();
     const openai = resolveOpenAIConfig(ctx, config);
@@ -347,6 +409,7 @@ export function getProviderStatuses(ctx?: ExtensionContext): ProviderStatus[] {
     const firecrawl = resolveFirecrawlConfig(config);
     const tavily = resolveTavilyConfig(config);
     const ollama = resolveOllamaConfig(config);
+    const monid = resolveMonidConfig(config);
 
     return [
         {
@@ -379,6 +442,13 @@ export function getProviderStatuses(ctx?: ExtensionContext): ProviderStatus[] {
             baseUrl: firecrawl?.baseUrl,
         },
         {
+            name: "monid",
+            label: "Monid (TinyFish)",
+            configured: !!monid,
+            source: monid?.source,
+            baseUrl: monid?.baseUrl,
+        },
+        {
             name: "ollama",
             label: "Ollama (Local/Cloud)",
             configured: true,
@@ -409,21 +479,26 @@ export function resolveFetchProvider(
     return resolveFetchChain(requested, config)[0];
 }
 
-/** Canonical fallback order for search providers. */
+/** Canonical fallback order for search providers. Keyless Firecrawl (real
+ * browser, never cached) is the zero-config default head; Monid (TinyFish
+ * via api.monid.ai, $0/call) is the last credentialed resort. */
 export const SEARCH_PROVIDER_ORDER: readonly SearchProviderName[] = [
+    "firecrawl",
     "openai",
     "exa",
     "tavily",
-    "firecrawl",
     "ollama",
+    "monid",
 ];
 
-/** Canonical fallback order for fetch providers. */
+/** Canonical fallback order for fetch providers. Keyless Firecrawl leads;
+ * keyless `direct` stays the absolute last resort. */
 export const FETCH_PROVIDER_ORDER: readonly FetchProviderName[] = [
     "firecrawl",
     "exa",
     "tavily",
     "ollama",
+    "monid",
     "direct",
 ];
 
@@ -432,11 +507,12 @@ export function availableSearchProviders(
     config = loadStoredConfig(),
 ): SearchProviderName[] {
     const list: SearchProviderName[] = [];
+    if (resolveFirecrawlConfig(config)) list.push("firecrawl");
     if (resolveOpenAIConfig(undefined, config)) list.push("openai");
     if (resolveExaConfig(config)) list.push("exa");
     if (resolveTavilyConfig(config)) list.push("tavily");
-    if (resolveFirecrawlConfig(config)) list.push("firecrawl");
     list.push("ollama");
+    if (resolveMonidConfig(config)) list.push("monid");
     return list;
 }
 
@@ -449,6 +525,7 @@ export function availableFetchProviders(
     if (resolveExaConfig(config)) list.push("exa");
     if (resolveTavilyConfig(config)) list.push("tavily");
     if (config.ollama || process.env.OLLAMA_HOST?.trim()) list.push("ollama");
+    if (resolveMonidConfig(config)) list.push("monid");
     list.push("direct");
     return list;
 }

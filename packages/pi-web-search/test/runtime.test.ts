@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { hideStoredConfig } from "./helpers.ts";
 import {
   createWebSearchRuntime,
   runWebSearch,
@@ -9,9 +10,18 @@ import {
 test("WebSearchRuntime search dispatches to resolved provider and returns results", async () => {
   const originalFetch = globalThis.fetch;
   const originalKey = process.env.OPENAI_API_KEY;
+  const originalFirecrawlKey = process.env.FIRECRAWL_API_KEY;
+  const originalKeyless = process.env.FIRECRAWL_KEYLESS;
+  // Ignore the developer machine's real ~/.config/pi-web-search/config.json:
+  // a configured searchProvider would win over the env-key canonical head.
+  const restoreConfig = hideStoredConfig();
 
   try {
     process.env.OPENAI_API_KEY = "sk-test-key";
+    // Keyless firecrawl would otherwise lead the canonical chain; opt this
+    // scenario out so the resolved head is openai.
+    delete process.env.FIRECRAWL_API_KEY;
+    process.env.FIRECRAWL_KEYLESS = "0";
 
     const mockOutput = {
       output: [
@@ -54,16 +64,30 @@ test("WebSearchRuntime search dispatches to resolved provider and returns result
     await runtime.dispose();
   } finally {
     globalThis.fetch = originalFetch;
+    restoreConfig();
     process.env.OPENAI_API_KEY = originalKey;
+    if (originalFirecrawlKey !== undefined) {
+      process.env.FIRECRAWL_API_KEY = originalFirecrawlKey;
+    } else {
+      delete process.env.FIRECRAWL_API_KEY;
+    }
+    if (originalKeyless !== undefined) {
+      process.env.FIRECRAWL_KEYLESS = originalKeyless;
+    } else {
+      delete process.env.FIRECRAWL_KEYLESS;
+    }
   }
 });
 
 test("WebSearchRuntime fetch handles fallback to direct fetch when scraper fails", async () => {
   const originalFetch = globalThis.fetch;
   const originalKey = process.env.FIRECRAWL_API_KEY;
+  const originalMonidKey = process.env.MONID_API_KEY;
+  const restoreConfig = hideStoredConfig();
 
   try {
     process.env.FIRECRAWL_API_KEY = "fc-key";
+    delete process.env.MONID_API_KEY;
 
     globalThis.fetch = async (input) => {
       const urlStr = String(input);
@@ -87,7 +111,13 @@ test("WebSearchRuntime fetch handles fallback to direct fetch when scraper fails
     await runtime.dispose();
   } finally {
     globalThis.fetch = originalFetch;
+    restoreConfig();
     process.env.FIRECRAWL_API_KEY = originalKey;
+    if (originalMonidKey !== undefined) {
+      process.env.MONID_API_KEY = originalMonidKey;
+    } else {
+      delete process.env.MONID_API_KEY;
+    }
   }
 });
 
