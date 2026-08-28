@@ -141,7 +141,7 @@ Claude and GPT models
 | `/agy` | Conversation status (id, model, turns) |
 | `/agy reset` | Drop the agy conversation; next turn starts fresh |
 | `/agy models` | Re-discover models and re-register the provider |
-| `/agy-tasks` | Background-task dashboard (`stop <task-id>|all` for scripts) |
+| `/agy-tasks` | Background-task dashboard (`stop <task-id> | all` for scripts) |
 | `/agy-artifacts` | Artifact browser (`open <name>` for scripts) |
 | `/agy-usage` | Model quotas (weekly and 5-hour remaining per group) |
 
@@ -158,7 +158,7 @@ Claude and GPT models
 - **Artifact review:** headless runs cannot show agy's review panel, so image generation would abort after creating the file. Set `"artifactReviewMode": "always-proceed"` in the same `settings.json` to let artifacts through (applies to interactive agy too).
 - **Image generation errors:** `generate_image` can hit Google-side 429 rate limits; agy retries and usually succeeds — failed attempts show on the card with the real reason.
 - **Conversation memory:** lives on agy's side and is reused across turns. Resuming or forking a pi session, selecting another history branch, switching models, or changing projects starts a matching agy conversation and restores the active pi branch into it. `/agy reset` intentionally starts with no restored history.
-- **Thinking level** maps to `agy --effort`: low → `low`, medium → `medium`, high and above → `high`.
+- **Thinking level** maps to `agy --effort`: unset omits the flag, low → `low`, medium → `medium`, high and above → `high`.
 - **Context window:** agy governs context with a ~200k working window and a 185k hard safety cap (`--agent-max-context`), not the vendors' raw 1M/2M limits. Models are registered with a 185k context window so pi's auto-compaction (window − reserveTokens ≈ 168.6k with defaults) and `/context` percentages track agy's real behavior.
 - **Compaction billing:** pi's auto-compaction summary runs as an agy turn, and agy reports the transcript's cached re-reads as usage — which inflates the `[compaction]` card into a fictional bill (agy is subscription-billed). Summarization requests are detected and reported with zero usage, so the card shows no cost. Regular turns keep full token accounting.
 - **Cost display** uses model-specific public API reference prices for Gemini and Claude (agy is subscription-billed); open or unknown models stay at zero rather than borrowing another model's price. Override per model in `~/.pi/agent/models.json` under `providers.antigravity.modelOverrides`.
