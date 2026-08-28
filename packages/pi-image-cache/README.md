@@ -1,5 +1,7 @@
 # @tian.zuo/pi-image-cache
 
+Release notes: [changelog](https://github.com/TianZuo555/pi-extensions/blob/main/packages/pi-image-cache/CHANGELOG.md) · [GitHub releases](https://github.com/TianZuo555/pi-extensions/releases)
+
 Temporary pasted-image caching with compact placeholders for the [pi coding agent](https://pi.dev).
 
 ```bash

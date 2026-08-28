@@ -24,5 +24,5 @@ A collection of independent extensions for the [pi coding agent](https://pi.dev)
 - **TUI Width Safety:** All renderers (`Component.render(width)`, `setWidget`, tool renderers) must guarantee `visibleWidth(line) <= width` (e.g., via ANSI-aware truncation or wrapping).
 - **Prompt Separation:** Keep all model-facing text (tool descriptions, system prompts, schema strings) in a dedicated `prompt.ts` module (`lib/prompt.ts` or `src/prompt.ts`), separated from runtime execution logic.
 - **State & Auth:** Machine-local state and caches belong under `~/.pi/...`, never inside the repository.
-- **Publishing & Versioning:** Bump `version` in `packages/<pkg>/package.json` when modifying an extension. To temporarily disable CI publishing for a package, set `"private": true` in its `package.json`.
+- **Publishing & Versioning:** Add a Changeset (`pnpm changeset`) for every publishable extension change; do not edit package versions or changelogs manually. To temporarily disable CI publishing for a package, set `"private": true` in its `package.json`.
 - **Pre-push Verification:** Ensure `pnpm run typecheck`, `pnpm run check`, and `pnpm test` pass before committing.

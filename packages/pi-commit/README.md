@@ -1,5 +1,7 @@
 # @tian.zuo/pi-commit
 
+Release notes: [changelog](https://github.com/TianZuo555/pi-extensions/blob/main/packages/pi-commit/CHANGELOG.md) · [GitHub releases](https://github.com/TianZuo555/pi-extensions/releases)
+
 Generate and review Git commit messages with a dedicated model without changing the model used by the current Pi session.
 
 ## Commands

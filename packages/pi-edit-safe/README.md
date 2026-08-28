@@ -1,5 +1,7 @@
 # pi-edit-safe
 
+Release notes: [changelog](https://github.com/TianZuo555/pi-extensions/blob/main/packages/pi-edit-safe/CHANGELOG.md) · [GitHub releases](https://github.com/TianZuo555/pi-extensions/releases)
+
 A drop-in replacement for the **pi coding agent**'s built-in `edit` tool, with a
 stricter matcher that refuses to silently edit the wrong place — and a call shape
 that weaker models can actually use.

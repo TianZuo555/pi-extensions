@@ -5,11 +5,14 @@ on:
     branches: [main]
     paths:
       - "packages/**"
+      - ".changeset/**"
       - ".github/workflows/publish.yml"
+      - "package.json"
+      - "pnpm-lock.yaml"
   workflow_dispatch:
     inputs:
       dry_run:
-        description: "Run in dry-run mode (no actual publish)"
+        description: "Preview pending releases without publishing"
         type: boolean
         default: false
 
@@ -21,11 +24,14 @@ jobs:
   publish:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
-      id-token: write # required for npm provenance
+      contents: write
+      pull-requests: write
+      id-token: write # required for npm trusted publishing and provenance
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v6
@@ -52,12 +58,20 @@ jobs:
       - name: Run tests
         run: pnpm test
 
-      - name: Publish changed packages
+      - name: Preview pending releases
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
         env:
-          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || 'false' }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          published_any=false
+          pnpm changeset:status
+          if find .changeset -maxdepth 1 -type f -name '*.md' ! -name README.md | grep -q .; then
+            pnpm version-packages
+          else
+            echo "No pending changesets; previewing unpublished manifest versions."
+          fi
+
+          found=false
           for dir in packages/*/; do
             [ -f "$dir/package.json" ] || continue
 
@@ -65,26 +79,27 @@ jobs:
             version=$(node -p "require('./$dir/package.json').version")
             private=$(node -p "Boolean(require('./$dir/package.json').private)")
 
-            if [ "$private" = "true" ]; then
-              echo "⏭  $name is private, skipping"
+            if [ "$private" = "true" ] || npm view "$name@$version" version >/dev/null 2>&1; then
               continue
             fi
 
-            if npm view "$name@$version" version >/dev/null 2>&1; then
-              echo "✔  $name@$version already published, skipping"
-              continue
-            fi
-
-            if [ "$DRY_RUN" = "true" ]; then
-              echo "🧪 [dry-run] would publish $name@$version"
-              (cd "$dir" && npm publish --dry-run --provenance --access public)
-            else
-              echo "🚀 Publishing $name@$version"
-              (cd "$dir" && npm publish --provenance --access public)
-              published_any=true
-            fi
+            found=true
+            echo "🧪 [dry-run] would publish $name@$version"
+            (cd "$dir" && npm publish --dry-run --provenance --access public)
           done
 
-          if [ "$published_any" = "false" ] && [ "$DRY_RUN" != "true" ]; then
-            echo "No new package versions to publish."
+          if [ "$found" = "false" ]; then
+            echo "No unpublished package versions found."
           fi
+
+      - name: Create release PR or publish packages
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
+        uses: changesets/action@v2
+        with:
+          version-script: pnpm version-packages
+          publish-script: pnpm release
+          pr-title: "chore: release extensions"
+          commit-message: "chore: release extensions"
+          create-github-releases: true
+        env:
+          NPM_CONFIG_PROVENANCE: true

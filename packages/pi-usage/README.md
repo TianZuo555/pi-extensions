@@ -1,5 +1,7 @@
 # @tian.zuo/pi-usage
 
+Release notes: [changelog](https://github.com/TianZuo555/pi-extensions/blob/main/packages/pi-usage/CHANGELOG.md) · [GitHub releases](https://github.com/TianZuo555/pi-extensions/releases)
+
 Show **OpenAI Codex**, **GitHub Copilot**, **Z.ai (GLM Coding Plan)**,
 **Z.ai Coding Plan (China)**, and **DeepSeek** account usage from inside the
 [pi coding agent](https://pi.dev), plus a `/tokens` dashboard of the token and
