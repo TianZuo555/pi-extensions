@@ -30,10 +30,13 @@ import {
   type PiToolInfo,
 } from "./lib/bridge.ts";
 import {
-  assignSkillToolNames,
+  ACTIVATE_SKILL_TOOL_NAME,
+  activateSkillDescription,
+  activateSkillParameters,
   formatSkillCatalog,
+  handleActivateSkill,
   nonWorkspaceSkills,
-  readSkillBundle,
+  usableSkillCatalog,
   type SkillLite,
 } from "./lib/skills.ts";
 import {
@@ -65,7 +68,6 @@ const DISCOVERY_TIMEOUT_MS = 15_000;
 // --- Pi-tool bridge ---------------------------------------------------------
 
 const BRIDGE_ENABLED = process.env.PI_ANTIGRAVITY_PI_TOOL_BRIDGE !== "0";
-const MAX_SKILL_TOOL_DESCRIPTION = 200;
 
 function execAgy(args: string[], timeoutMs = DISCOVERY_TIMEOUT_MS): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -75,6 +77,7 @@ function execAgy(args: string[], timeoutMs = DISCOVERY_TIMEOUT_MS): Promise<stri
     });
   });
 }
+
 
 /**
  * Remove `pi-bridge-*` MCP registrations whose loopback server is no longer
@@ -230,30 +233,33 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
       }));
   }
 
-  const getBootstrapSuffix = () =>
-    formatSkillCatalog(
-      // agy injects workspace .agents/skills itself — only bridge the rest.
-      nonWorkspaceSkills(loadedSkills, tasksSessionCwd),
-      BRIDGE_ENABLED ? "bridge" : "direct",
-      bridgeToolPrefix,
-    );
+  const bridgedSkills = () => usableSkillCatalog(nonWorkspaceSkills(loadedSkills, tasksSessionCwd));
 
-  /** Publish one bridge tool per global pi skill: `pi__p<pid>__skill__<name>`. */
+  /**
+   * Bridge mode keeps the catalog in activate_skill's schema (refreshed on
+   * every agy spawn), so nothing is appended to the prompt. When the bridge is
+   * off OR failed to register with agy, fall back to the direct-mode path
+   * catalog so skills never become silently invisible.
+   */
+  const getBootstrapSuffix = () =>
+    BRIDGE_ENABLED && bridge.running ? undefined : formatSkillCatalog(bridgedSkills());
+
+  /** Publish one `pi__p<pid>__activate_skill` tool for global pi skills. */
   function refreshSkillTools(): void {
     if (!BRIDGE_ENABLED) return;
-    bridge.setDynamicTools(
-      assignSkillToolNames(nonWorkspaceSkills(loadedSkills, tasksSessionCwd)).map(
-        ({ skill, toolName }) => ({
-          name: toolName,
-          description:
-            (skill.description.replace(/\s+/g, " ").trim().slice(0, MAX_SKILL_TOOL_DESCRIPTION) ||
-              `pi Agent Skill "${skill.name}"`) +
-            " (pi Agent Skill — calling this tool activates the skill: returns its full SKILL.md and bundled resource paths)",
-          parameters: { type: "object", properties: {} },
-          handler: () => readSkillBundle(skill),
-        }),
-      ),
-    );
+    const skills = bridgedSkills();
+    if (skills.length === 0) {
+      bridge.setDynamicTools([]);
+      return;
+    }
+    bridge.setDynamicTools([
+      {
+        name: ACTIVATE_SKILL_TOOL_NAME,
+        description: activateSkillDescription(skills),
+        parameters: activateSkillParameters(skills),
+        handler: (args) => handleActivateSkill(skills, args),
+      },
+    ]);
   }
 
   bridge.setToolSource(() => {
@@ -269,8 +275,8 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
     return selectBridgedTools(allTools, activeNames);
   });
 
-  // Bridge-virtual tools are gone; per-skill tools are published dynamically
-  // via refreshSkillTools() on every skills capture.
+  // Per-skill tools are gone; one activate_skill tool is published on every
+  // skills capture via refreshSkillTools().
 
   // --- Status-bar hint for live agy background tasks -----------------------
 

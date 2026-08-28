@@ -208,7 +208,7 @@ test("dynamic skill tools are listed and handled in-process", async () => {
   }
 });
 
-test("dynamic per-skill tools replace wholesale and route in-process", async () => {
+test("dynamic tools replace wholesale and route in-process", async () => {
   const bridge = new AgyPiBridge();
   bridge.setOnCall(() => {
     throw new Error("skill tools must not be routed into the agy turn");

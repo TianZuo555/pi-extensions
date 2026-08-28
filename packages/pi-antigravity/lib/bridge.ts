@@ -50,7 +50,7 @@ export interface PiToolInfo {
  * builtins and extension tools alike (ask_user, web_search, todo, …) — is
  * pi-session machinery agy must not mutate mid-turn; agy has native
  * equivalents for files, shell, and web. Skills are bridged separately as
- * dynamic `pi__skill__<name>` tools.
+ * one dynamic `pi__activate_skill` tool.
  */
 const MCP_ADAPTER_SOURCE = /pi-mcp-adapter/;
 
@@ -129,7 +129,7 @@ export class AgyPiBridge {
   #onCall: ((call: BridgeCall) => boolean) | undefined;
   /** Source of the current active-tool snapshot, invoked once per provider request. */
   #toolSource: (() => BridgeToolDef[]) | undefined;
-  /** Replaced wholesale on every skills refresh (one entry per skill). */
+  /** Replaced wholesale on every skills refresh (activate_skill, or empty). */
   #dynamic = new Map<string, DynamicTool>();
 
   constructor(serverName: string = BRIDGE_SERVER_NAME) {
@@ -160,10 +160,9 @@ export class AgyPiBridge {
   }
 
   /**
-   * Replace the dynamic tool set (used for per-skill `pi__skill__<name>`
-   * tools, handled in-process without a pi toolUse round-trip). The whole
-   * set is swapped so removed skills disappear from tools/list on the next
-   * refresh.
+   * Replace the dynamic tool set (used for `pi__activate_skill`, handled
+   * in-process without a pi toolUse round-trip). The whole set is swapped
+   * so a missing catalog disappears from tools/list on the next refresh.
    */
   setDynamicTools(
     tools: Array<{
