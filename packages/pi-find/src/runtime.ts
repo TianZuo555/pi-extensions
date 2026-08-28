@@ -89,7 +89,7 @@ function searchTarget(
 }
 
 function isInsideGitRepository(root: string): boolean {
-  for (let current = root;;) {
+  for (let current = root; ; ) {
     if (existsSync(nodePath.join(current, ".git"))) return true;
     const parent = nodePath.dirname(current);
     if (parent === current) return false;
@@ -157,10 +157,13 @@ const makeSearchRuntime = Effect.gen(function* () {
           return true;
         },
       }).pipe(
-        Effect.map((result) => ({
-          matches,
-          truncated: sawOverflow || result.stoppedEarly,
-        } satisfies GrepOutcome)),
+        Effect.map(
+          (result) =>
+            ({
+              matches,
+              truncated: sawOverflow || result.stoppedEarly,
+            }) satisfies GrepOutcome,
+        ),
       );
     });
 
@@ -190,10 +193,13 @@ const makeSearchRuntime = Effect.gen(function* () {
           return true;
         },
       }).pipe(
-        Effect.map((result) => ({
-          files,
-          truncated: sawOverflow || result.stoppedEarly,
-        } satisfies FindOutcome)),
+        Effect.map(
+          (result) =>
+            ({
+              files,
+              truncated: sawOverflow || result.stoppedEarly,
+            }) satisfies FindOutcome,
+        ),
       );
     });
 

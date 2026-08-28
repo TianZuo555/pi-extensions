@@ -48,7 +48,8 @@ export interface AssignedSkillTool {
 /** Assign stable unique names even when two skill names sanitize identically. */
 export function assignSkillToolNames(skills: SkillLite[]): AssignedSkillTool[] {
   const unique = skills.filter(
-    (skill, index) => skills.findIndex((candidate) => candidate.filePath === skill.filePath) === index,
+    (skill, index) =>
+      skills.findIndex((candidate) => candidate.filePath === skill.filePath) === index,
   );
   const bases = unique.map((skill) => skillToolName(skill));
   const counts = new Map<string, number>();
@@ -73,7 +74,10 @@ export type SkillCatalogMode = "bridge" | "direct";
  * only includes skills OUTSIDE the session workspace (pi-only globals like
  * `~/.pi/agent/skills` and `~/.agents/skills`, which agy never scans).
  */
-export function nonWorkspaceSkills(skills: SkillLite[], sessionCwd: string | undefined): SkillLite[] {
+export function nonWorkspaceSkills(
+  skills: SkillLite[],
+  sessionCwd: string | undefined,
+): SkillLite[] {
   if (!sessionCwd) return skills;
   const resolvedCwd = path.resolve(sessionCwd);
   const cwdPrefix = resolvedCwd.endsWith(path.sep) ? resolvedCwd : resolvedCwd + path.sep;
@@ -111,9 +115,7 @@ export function formatSkillCatalog(
     const description =
       skill.description.replace(/\s+/g, " ").trim().slice(0, MAX_DESCRIPTION) || "(no description)";
     const location =
-      mode === "bridge"
-        ? `${skill.filePath}; tool: ${toolPrefix}${toolName}`
-        : skill.filePath;
+      mode === "bridge" ? `${skill.filePath}; tool: ${toolPrefix}${toolName}` : skill.filePath;
     return `- ${skill.name}: ${description} (${location})`;
   });
   const how =

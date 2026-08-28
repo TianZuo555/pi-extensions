@@ -41,8 +41,7 @@ test("fetchProviderJsonEffect removes abort listeners and timeout after success"
 test("fetchProviderJsonEffect removes abort listeners after failure", async () => {
   const originalFetch = globalThis.fetch;
   const signal = AbortSignal.timeout(50);
-  globalThis.fetch = async () =>
-    new Response("nope", { status: 500, statusText: "Server Error" });
+  globalThis.fetch = async () => new Response("nope", { status: 500, statusText: "Server Error" });
 
   try {
     await assert.rejects(

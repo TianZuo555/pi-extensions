@@ -20,7 +20,7 @@ import type {
   Theme,
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import { Effect } from "effect";
+import type { Effect } from "effect";
 import { Type, type Static } from "typebox";
 import {
   buildGoalContextMessage,
@@ -81,9 +81,7 @@ function formatGoalForTool(goal: Goal | null): string {
     `Objective: ${goal.objective}`,
     `Usage: ${budget}`,
     `Elapsed time: ${Math.round(goal.timeUsedSeconds)} seconds`,
-    ...(remaining === undefined
-      ? []
-      : [`Remaining token budget: ${formatTokenCount(remaining)}`]),
+    ...(remaining === undefined ? [] : [`Remaining token budget: ${formatTokenCount(remaining)}`]),
   ].join("\n");
 }
 
@@ -97,10 +95,13 @@ export default function goalExtension(pi: ExtensionAPI): void {
    * it. After session_shutdown the runtime is closed and every op fails fast
    * with a typed GoalRuntimeClosedError. */
   const goalRuntime = runtime.runSync(GoalRuntime);
-  const run = <A, E>(effect: Effect.Effect<A, E>): A =>
-    runGoalSync(runtime, effect);
+  const run = <A, E>(effect: Effect.Effect<A, E>): A => runGoalSync(runtime, effect);
 
-  function notify(ctx: ExtensionContext, message: string, type: "info" | "warning" | "error" = "info"): void {
+  function notify(
+    ctx: ExtensionContext,
+    message: string,
+    type: "info" | "warning" | "error" = "info",
+  ): void {
     ctx.ui.notify(message, type);
   }
 
@@ -184,14 +185,11 @@ export default function goalExtension(pi: ExtensionAPI): void {
     };
   }
 
-  function renderCall(
-    name: string,
-    args: Record<string, unknown>,
-    theme: Theme,
-  ): Text {
+  function renderCall(name: string, args: Record<string, unknown>, theme: Theme): Text {
     let text = theme.fg("toolTitle", theme.bold(`${name} `));
     if (typeof args.objective === "string") {
-      const preview = args.objective.length > 64 ? `${args.objective.slice(0, 64)}…` : args.objective;
+      const preview =
+        args.objective.length > 64 ? `${args.objective.slice(0, 64)}…` : args.objective;
       text += theme.fg("dim", preview);
     } else if (typeof args.status === "string") {
       text += theme.fg("accent", args.status);
@@ -263,7 +261,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
 
   pi.on("context", (event) => {
     const goal = run(goalRuntime.goal);
-    if (!goal || goal.status !== "active") return;
+    if (goal?.status !== "active") return;
     const messages = event.messages;
     const last = messages.length > 0 ? messages[messages.length - 1] : undefined;
     // Goal steering messages already carry the objective. Skip duplicate
@@ -325,7 +323,11 @@ export default function goalExtension(pi: ExtensionAPI): void {
 
   pi.on("turn_end", async (event, ctx) => {
     const op = run(
-      goalRuntime.turnEnded(event.turnIndex, event.message, event.toolResults as readonly unknown[]),
+      goalRuntime.turnEnded(
+        event.turnIndex,
+        event.message,
+        event.toolResults as readonly unknown[],
+      ),
     );
     executeDirectives(ctx, op.directives);
   });
@@ -416,32 +418,20 @@ export default function goalExtension(pi: ExtensionAPI): void {
 
       const command = raw.toLowerCase();
 
-      const setUserObjective = async (
-        objective: string,
-        tokenBudget?: number,
-      ): Promise<void> => {
+      const setUserObjective = async (objective: string, tokenBudget?: number): Promise<void> => {
         const objectiveError = validateObjective(objective);
         if (objectiveError) throw new Error(objectiveError);
 
         const before = run(goalRuntime.goal);
         const reactivatesStoppedGoal =
-          before === null ||
-          before.status === "complete" ||
-          before.status === "budget-limited";
+          before === null || before.status === "complete" || before.status === "budget-limited";
         if (reactivatesStoppedGoal && !ctx.isIdle()) {
           ctx.abort();
           await ctx.waitForIdle();
         }
 
-        const steerActiveRun =
-          before?.status === "active" && !ctx.isIdle();
-        const op = run(
-          goalRuntime.setGoalObjective(
-            objective,
-            tokenBudget,
-            steerActiveRun,
-          ),
-        );
+        const steerActiveRun = before?.status === "active" && !ctx.isIdle();
+        const op = run(goalRuntime.setGoalObjective(objective, tokenBudget, steerActiveRun));
         executeDirectives(ctx, op.directives);
         const message = !op.changed
           ? "Goal objective unchanged."
@@ -483,7 +473,11 @@ export default function goalExtension(pi: ExtensionAPI): void {
       if (command === "pause") {
         const op = run(goalRuntime.pause("user"));
         executeDirectives(ctx, op.directives);
-        notify(ctx, op.changed ? "Goal paused." : "No active goal to pause.", op.changed ? "info" : "warning");
+        notify(
+          ctx,
+          op.changed ? "Goal paused." : "No active goal to pause.",
+          op.changed ? "info" : "warning",
+        );
         if (op.changed && !ctx.isIdle()) ctx.abort();
         return;
       }
@@ -499,8 +493,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
           return;
         }
         const willActivate =
-          before.tokenBudget === undefined ||
-          before.tokensUsed < before.tokenBudget;
+          before.tokenBudget === undefined || before.tokensUsed < before.tokenBudget;
         if (willActivate && !ctx.isIdle()) {
           // Keep the goal stopped while the current run settles: the in-flight
           // turn began while stopped and must not be billed to the resumed
@@ -554,9 +547,7 @@ export default function goalExtension(pi: ExtensionAPI): void {
           return;
         }
         const nextBudget =
-          value === "clear" || value === "none" || value === "off"
-            ? undefined
-            : Number(value);
+          value === "clear" || value === "none" || value === "off" ? undefined : Number(value);
         if (nextBudget !== undefined && !Number.isSafeInteger(nextBudget)) {
           notify(ctx, "Usage: /goal budget <positive integer> (or clear)", "error");
           return;

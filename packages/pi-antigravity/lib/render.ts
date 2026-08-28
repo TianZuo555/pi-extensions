@@ -121,10 +121,15 @@ export function formatAgyCall(tool: string, input: unknown, theme: Theme): strin
       return `${label} ${path(invalid)}`;
     case "find_by_name": {
       const pattern = pickArg(args, ["pattern", "Pattern", "glob", "name"]);
-      const dir = pickArg(args, ["search_directory", "SearchDirectory", "path", "Path", "directory"]);
+      const dir = pickArg(args, [
+        "search_directory",
+        "SearchDirectory",
+        "path",
+        "Path",
+        "directory",
+      ]);
       const patternText = pattern === undefined ? invalid : theme.fg("accent", pattern);
-      const dirText =
-        dir === undefined ? "" : theme.fg("toolOutput", ` in ${shortenPath(dir)}`);
+      const dirText = dir === undefined ? "" : theme.fg("toolOutput", ` in ${shortenPath(dir)}`);
       return `${label} ${patternText}${dirText}`;
     }
     case "grep_search": {
@@ -132,9 +137,7 @@ export function formatAgyCall(tool: string, input: unknown, theme: Theme): strin
       const searchPath = pickArg(args, ["search_path", "SearchPath", "path", "Path"]);
       const queryText = query === undefined ? invalid : theme.fg("accent", `"${query}"`);
       const pathText =
-        searchPath === undefined
-          ? ""
-          : theme.fg("toolOutput", ` in ${shortenPath(searchPath)}`);
+        searchPath === undefined ? "" : theme.fg("toolOutput", ` in ${shortenPath(searchPath)}`);
       return `${label} ${queryText}${pathText}`;
     }
     case "ask_question": {

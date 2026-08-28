@@ -15,8 +15,7 @@ export const WEB_SEARCH_PARAMETER_DESCRIPTIONS = {
   numResults: "Maximum results; default 8.",
 };
 
-export const WEB_FETCH_TOOL_DESCRIPTION =
-  "Fetch an HTTP(S) page as clean Markdown or text.";
+export const WEB_FETCH_TOOL_DESCRIPTION = "Fetch an HTTP(S) page as clean Markdown or text.";
 export const WEB_FETCH_PROMPT_SNIPPET = "Fetch a web page";
 
 export const WEB_FETCH_PARAMETER_DESCRIPTIONS = {

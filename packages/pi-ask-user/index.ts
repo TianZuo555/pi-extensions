@@ -21,7 +21,6 @@ import {
 import {
   ASK_USER_PARAMETER_DESCRIPTIONS,
   ASK_USER_PROMPT_GUIDELINES,
-  ASK_USER_PROMPT_SNIPPET,
   ASK_USER_TOOL_DESCRIPTION,
   type AskUserOutcome,
   buildAskUserResultMessage,
@@ -34,14 +33,20 @@ const MAX_OPTIONS = 5;
 const OTHER_LABEL = "Other — type your own answer";
 
 const OptionSchema = Type.Object({
-  label: Type.String({ description: ASK_USER_PARAMETER_DESCRIPTIONS.optionLabel }),
+  label: Type.String({
+    description: ASK_USER_PARAMETER_DESCRIPTIONS.optionLabel,
+  }),
   description: Type.Optional(
-    Type.String({ description: ASK_USER_PARAMETER_DESCRIPTIONS.optionDescription }),
+    Type.String({
+      description: ASK_USER_PARAMETER_DESCRIPTIONS.optionDescription,
+    }),
   ),
 });
 
 const QuestionSchema = Type.Object({
-  question: Type.String({ description: ASK_USER_PARAMETER_DESCRIPTIONS.question }),
+  question: Type.String({
+    description: ASK_USER_PARAMETER_DESCRIPTIONS.question,
+  }),
   options: Type.Array(OptionSchema, {
     minItems: MIN_OPTIONS,
     maxItems: MAX_OPTIONS,
@@ -80,9 +85,7 @@ interface AskUserDetails {
   cancelled: boolean;
 }
 
-type AskUserContext = Parameters<
-  Parameters<ExtensionAPI["registerTool"]>[0]["execute"]
->[4];
+type AskUserContext = Parameters<Parameters<ExtensionAPI["registerTool"]>[0]["execute"]>[4];
 
 function normalizeQuestions(params: AskUserInput): AskUserQuestion[] {
   return params.questions.map((question) => ({
@@ -136,9 +139,7 @@ function validateQuestions(questions: AskUserQuestion[]): void {
       );
     }
 
-    const selfOther = options.findIndex((option) =>
-      isSelfSuppliedOther(option.label),
-    );
+    const selfOther = options.findIndex((option) => isSelfSuppliedOther(option.label));
     if (selfOther >= 0) {
       throw new Error(
         `ask_user question ${index + 1} option ${selfOther + 1} ("${options[selfOther].label}") duplicates the free-form Other choice this tool always appends, so the user would see it twice. These questions were not shown. Remove that option and keep only the substantive choices.`,
@@ -152,15 +153,13 @@ function showQuestions(
   questions: AskUserQuestion[],
   signal: AbortSignal | undefined,
 ): Promise<AskUserSubmission | null> {
-  return ctx.ui.custom<AskUserSubmission | null>((tui, theme, keybindings, done) =>
-    new AskUserForm(tui, theme, keybindings, questions, done, signal),
+  return ctx.ui.custom<AskUserSubmission | null>(
+    (tui, theme, keybindings, done) =>
+      new AskUserForm(tui, theme, keybindings, questions, done, signal),
   );
 }
 
-function optionDialogLabel(
-  option: AskUserQuestion["options"][number],
-  index: number,
-): string {
+function optionDialogLabel(option: AskUserQuestion["options"][number], index: number): string {
   const description = option.description ? ` — ${option.description}` : "";
   return `${index + 1}. ${option.label}${description}`;
 }
@@ -174,10 +173,7 @@ async function askQuestionWithDialogs(
   const labels = question.options.map(optionDialogLabel);
   labels.push(`${question.options.length + 1}. ${OTHER_LABEL}`);
 
-  const selected = await ctx.ui.select(
-    `${questionIndex + 1}. ${question.question}`,
-    labels,
-  );
+  const selected = await ctx.ui.select(`${questionIndex + 1}. ${question.question}`, labels);
   if (selected === undefined || signal?.aborted) return null;
   const selectedIndex = labels.indexOf(selected);
   let choice: AskUserChoice;
@@ -216,9 +212,7 @@ async function showQuestionsWithDialogs(
 }
 
 function formatChoiceForResult(choice: AskUserChoice): string {
-  return choice.wasCustom
-    ? `(wrote) ${choice.label}`
-    : `${choice.optionIndex}. ${choice.label}`;
+  return choice.wasCustom ? `(wrote) ${choice.label}` : `${choice.optionIndex}. ${choice.label}`;
 }
 
 export default function askUser(pi: ExtensionAPI): void {
@@ -226,7 +220,6 @@ export default function askUser(pi: ExtensionAPI): void {
     name: "ask_user",
     label: "Ask User",
     description: ASK_USER_TOOL_DESCRIPTION,
-    promptSnippet: ASK_USER_PROMPT_SNIPPET,
     promptGuidelines: ASK_USER_PROMPT_GUIDELINES,
     parameters: AskUserParams,
     executionMode: "sequential",
@@ -268,7 +261,12 @@ export default function askUser(pi: ExtensionAPI): void {
       });
 
       const reply = (outcome: AskUserOutcome, submission: AskUserSubmission | null = null) => ({
-        content: [{ type: "text" as const, text: buildAskUserResultMessage(outcome) }],
+        content: [
+          {
+            type: "text" as const,
+            text: buildAskUserResultMessage(outcome),
+          },
+        ],
         details: detailsFor(submission),
       });
 
@@ -279,11 +277,11 @@ export default function askUser(pi: ExtensionAPI): void {
       // state. Consumers own state aggregation and transport. `herdr:blocked`
       // remains temporarily for compatibility with Herdr's version 6 bridge.
       const firstQuestion = questions[0].question.replace(/\s+/g, " ").trim();
-      const blockedLabel = (
-        questions.length === 1
+      const blockedLabel =
+        (questions.length === 1
           ? firstQuestion
           : `${questions.length} questions: ${firstQuestion}`
-      ).slice(0, 120) || "Waiting for user input";
+        ).slice(0, 120) || "Waiting for user input";
       const emitInputRequired = (active: boolean) => {
         const payload: AgentInputRequiredEvent = {
           version: 1,
@@ -339,7 +337,12 @@ export default function askUser(pi: ExtensionAPI): void {
             options?: Array<{ label?: string }>;
           }>)
         : typeof renderArgs.question === "string"
-          ? [{ question: renderArgs.question, options: renderArgs.options }]
+          ? [
+              {
+                question: renderArgs.question,
+                options: renderArgs.options,
+              },
+            ]
           : [];
       const count = rawQuestions.length;
       let text = theme.fg("toolTitle", theme.bold("ask_user "));
@@ -368,10 +371,11 @@ export default function askUser(pi: ExtensionAPI): void {
         return new Text(theme.fg("warning", "✗ dismissed"), 0, 0);
       }
 
-      const lines = details.answers.map((answer) =>
-        theme.fg("success", "✓ ") +
-        theme.fg("accent", `Q${answer.questionIndex}: `) +
-        theme.fg("text", formatChoiceForResult(answer.choice)),
+      const lines = details.answers.map(
+        (answer) =>
+          theme.fg("success", "✓ ") +
+          theme.fg("accent", `Q${answer.questionIndex}: `) +
+          theme.fg("text", formatChoiceForResult(answer.choice)),
       );
       return new Text(lines.join("\n"), 0, 0);
     },

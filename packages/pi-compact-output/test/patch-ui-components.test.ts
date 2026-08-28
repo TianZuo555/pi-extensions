@@ -8,13 +8,10 @@ import {
   ToolExecutionComponent,
   VERSION,
 } from "@earendil-works/pi-coding-agent";
-import { Container, Image, Text, type TUI, visibleWidth } from "@earendil-works/pi-tui";
+import { type Container, Image, Text, type TUI, visibleWidth } from "@earendil-works/pi-tui";
 import compactOutputExtension from "../index.ts";
 import { buildCompactToolGroup } from "../lib/compact-tool-group.ts";
-import {
-  CompactReasoningComponent,
-  normalizeReasoningText,
-} from "../lib/compact-reasoning.ts";
+import { CompactReasoningComponent, normalizeReasoningText } from "../lib/compact-reasoning.ts";
 import type { ToolExecutionInternals } from "../lib/compact-tool-line.ts";
 import {
   __getPatchStateForTests,
@@ -509,7 +506,10 @@ test("length, aborted, and error stop reasons remain visible", () => {
     component.updateContent(message);
     const rendered = component.render(120).join("\n");
     if (message.stopReason === "length") {
-      assert.match(rendered, /Response was truncated before completion|maximum output token limit/i);
+      assert.match(
+        rendered,
+        /Response was truncated before completion|maximum output token limit/i,
+      );
     } else if (message.stopReason === "aborted") {
       assert.match(rendered, /aborted/i);
     } else {
@@ -559,14 +559,18 @@ test("installation is idempotent", () => {
 });
 
 test("restoration restores the exact saved methods", () => {
-  const toolContainerPrototype = Object.getPrototypeOf(ToolExecutionComponent.prototype) as Container;
+  const toolContainerPrototype = Object.getPrototypeOf(
+    ToolExecutionComponent.prototype,
+  ) as Container;
   const beforeAddChild = toolContainerPrototype.addChild;
   const beforeRender = ToolExecutionComponent.prototype.render;
   const beforeSetExpanded = ToolExecutionComponent.prototype.setExpanded;
   const beforeUpdateContent = AssistantMessageComponent.prototype.updateContent;
-  const beforeAssistantSetExpanded = (AssistantMessageComponent.prototype as unknown as {
-    setExpanded?: (expanded: boolean) => void;
-  }).setExpanded;
+  const beforeAssistantSetExpanded = (
+    AssistantMessageComponent.prototype as unknown as {
+      setExpanded?: (expanded: boolean) => void;
+    }
+  ).setExpanded;
 
   const install = installUiPatches();
   if (!install.installed) {
@@ -580,9 +584,11 @@ test("restoration restores the exact saved methods", () => {
   assert.equal(ToolExecutionComponent.prototype.setExpanded, beforeSetExpanded);
   assert.equal(AssistantMessageComponent.prototype.updateContent, beforeUpdateContent);
   assert.equal(
-    (AssistantMessageComponent.prototype as unknown as {
-      setExpanded?: (expanded: boolean) => void;
-    }).setExpanded,
+    (
+      AssistantMessageComponent.prototype as unknown as {
+        setExpanded?: (expanded: boolean) => void;
+      }
+    ).setExpanded,
     beforeAssistantSetExpanded,
   );
 });
@@ -757,10 +763,7 @@ test("setCompactOutputLimits controls tool and reasoning line counts", () => {
   const reasonAssistant = new AssistantMessageComponent();
   reasonParent.addChild(reasonAssistant);
   reasonAssistant.updateContent(
-    assistantMessage(
-      [{ type: "thinking", thinking: "one\ntwo\nthree" }],
-      "toolUse",
-    ),
+    assistantMessage([{ type: "thinking", thinking: "one\ntwo\nthree" }], "toolUse"),
   );
   const reasonRendered = reasonParent.render(120).join("\n");
   assert.doesNotMatch(reasonRendered, /one/);
@@ -931,8 +934,14 @@ test("re-created components for finished tools keep one block per run", () => {
   );
   assert.match(rendered, /Now check the second thing/);
   assert.match(rendered, /grep t3/);
-  assert.ok(rendered.indexOf("read t2") < rendered.indexOf("Now check"), "first run before reasoning");
-  assert.ok(rendered.indexOf("Now check") < rendered.indexOf("grep t3"), "reasoning before second run");
+  assert.ok(
+    rendered.indexOf("read t2") < rendered.indexOf("Now check"),
+    "first run before reasoning",
+  );
+  assert.ok(
+    rendered.indexOf("Now check") < rendered.indexOf("grep t3"),
+    "reasoning before second run",
+  );
 });
 
 test("tool runs in separate turns keep their own blocks", () => {
@@ -971,7 +980,10 @@ test("tool runs in separate turns keep their own blocks", () => {
     const assistant = new AssistantMessageComponent();
     parent.addChild(assistant);
     assistant.updateContent(
-      assistantMessage(tools.map(([id, name]) => toolCall(id, name)), "toolUse"),
+      assistantMessage(
+        tools.map(([id, name]) => toolCall(id, name)),
+        "toolUse",
+      ),
     );
     for (const [id, name] of tools) {
       parent.addChild(makeTool(id, name));
@@ -979,8 +991,14 @@ test("tool runs in separate turns keep their own blocks", () => {
   };
 
   // Turn 1: t1, t2 finish; user sends a new input; turn 2: t3, t4 run.
-  runTurn([["t1", "grep"], ["t2", "read"]]);
-  runTurn([["t3", "grep"], ["t4", "edit"]]);
+  runTurn([
+    ["t1", "grep"],
+    ["t2", "read"],
+  ]);
+  runTurn([
+    ["t3", "grep"],
+    ["t4", "edit"],
+  ]);
 
   const rendered = parent.render(120).join("\n");
   assert.match(rendered, /read t2[^\n]*\n[^\n]*· \+1 more/, "first turn keeps its block");
@@ -1174,7 +1192,9 @@ test("collapsed group shows the last tool's call and result lines, never earlier
   fffTool.setExpanded(true);
   const expanded = parent.render(100).join("\n");
   assert.ok(expanded.includes("SECRET BUFFER"));
-  assert.ok(expanded.indexOf("grep /needle/ in haystack") < expanded.indexOf("read haystack/one.ts"));
+  assert.ok(
+    expanded.indexOf("grep /needle/ in haystack") < expanded.indexOf("read haystack/one.ts"),
+  );
 });
 
 test("compact render uses call renderer first line for real ToolExecutionComponent", () => {
@@ -1226,7 +1246,12 @@ test("custom image renderer is not shown collapsed", () => {
       name: "screenshot",
       renderCall: () => new Text("capture desktop", 0, 0),
       renderResult: () =>
-        new Image("aGVsbG8=", "image/png", { fallbackColor: (s: string) => s }, { maxWidthCells: 20 }),
+        new Image(
+          "aGVsbG8=",
+          "image/png",
+          { fallbackColor: (s: string) => s },
+          { maxWidthCells: 20 },
+        ),
     } as never,
     createTui(),
     process.cwd(),

@@ -45,10 +45,7 @@ export function loadSubagentsSettings(paths: string[]): SubagentsSettings {
 }
 
 export function settingsPaths(agentDir: string, projectDir: string): string[] {
-  return [
-    path.join(agentDir, "settings.json"),
-    path.join(projectDir, ".pi", "settings.json"),
-  ];
+  return [path.join(agentDir, "settings.json"), path.join(projectDir, ".pi", "settings.json")];
 }
 
 export function mergeProfileOverride(

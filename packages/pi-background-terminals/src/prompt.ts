@@ -39,16 +39,14 @@ export const BASH_TOOL_DESCRIPTION =
   "Returns output if done within the initial wait; otherwise returns a background terminal id and reports once on exit — do not poll it. " +
   `yield_time_ms sets the wait; timeout kills the process tree; max ${MAX_RUNNING} running terminals.`;
 
-export const BASH_PROMPT_SNIPPET =
-  "Run Bash; long commands yield and notify on exit";
+export const BASH_PROMPT_SNIPPET = "Run Bash; long commands yield and notify on exit";
 
 export const BASH_PARAMETER_DESCRIPTIONS = {
   command: "Shell script to run.",
   title: "/ps label; default derived from command.",
   workingDir:
     "Working directory for the command, relative to session cwd or absolute; default session cwd.",
-  yieldTimeMs:
-    `Initial wait in ms; default ${DEFAULT_YIELD_TIME_MS}, clamped to ${MIN_YIELD_TIME_MS}-${MAX_YIELD_TIME_MS}.`,
+  yieldTimeMs: `Initial wait in ms; default ${DEFAULT_YIELD_TIME_MS}, clamped to ${MIN_YIELD_TIME_MS}-${MAX_YIELD_TIME_MS}.`,
   timeout: "Hard runtime limit in seconds; no default.",
 };
 
@@ -64,8 +62,7 @@ export const TERMINAL_LOG_READ_PARAMETER_DESCRIPTIONS = {
 
 const LEADING_SETUP =
   /^(?:(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|[^;\s]+)\s*;\s*)+/;
-const LEADING_CD =
-  /^cd\s+(?:"[^"]*"|'[^']*'|[^\s;&|]+)\s*(?:&&|;)\s*/;
+const LEADING_CD = /^cd\s+(?:"[^"]*"|'[^']*'|[^\s;&|]+)\s*(?:&&|;)\s*/;
 
 function truncateTitle(text: string, maxLength = 80) {
   if (text.length <= maxLength) return text;
@@ -82,10 +79,7 @@ export function deriveCommandTitle(command: string, explicitTitle?: string) {
   if (explicitTitle !== undefined) {
     return truncateTitle(normalized || "command");
   }
-  const withoutSetup = normalized
-    .replace(LEADING_SETUP, "")
-    .replace(LEADING_CD, "")
-    .trim();
+  const withoutSetup = normalized.replace(LEADING_SETUP, "").replace(LEADING_CD, "").trim();
   return truncateTitle(withoutSetup || normalized || "command");
 }
 
@@ -166,18 +160,13 @@ function outputSection(
   const shownBytes = start.outputBytes + end.outputBytes;
   const omittedBytes = Math.max(0, view.totalBytes - shownBytes);
   const omittedStart = Math.min(view.totalBytes, start.outputBytes);
-  const tailSourceStart =
-    view.totalBytes - Buffer.byteLength(endSource, "utf8");
+  const tailSourceStart = view.totalBytes - Buffer.byteLength(endSource, "utf8");
   let tailOffset = endSource.length - end.content.length;
-  while (
-    tailOffset > 0 &&
-    !endSource.startsWith(end.content, tailOffset)
-  ) {
+  while (tailOffset > 0 && !endSource.startsWith(end.content, tailOffset)) {
     tailOffset--;
   }
   const omittedEnd = end.content
-    ? tailSourceStart +
-      Buffer.byteLength(endSource.slice(0, tailOffset), "utf8")
+    ? tailSourceStart + Buffer.byteLength(endSource.slice(0, tailOffset), "utf8")
     : view.totalBytes;
   const parts = [start.content];
   if (omittedBytes > 0) {
@@ -186,9 +175,7 @@ function outputSection(
   if (end.content) parts.push(end.content);
 
   const archiveRef = archiveReference(terminalId, stream, view);
-  const omittedRange = omittedBytes > 0
-    ? `${omittedStart}-${omittedEnd - 1}`
-    : "none";
+  const omittedRange = omittedBytes > 0 ? `${omittedStart}-${omittedEnd - 1}` : "none";
   const archive = archiveRef
     ? `archive ref ${archiveRef} (complete: ${view.archiveComplete === true ? "yes" : "no"}, omitted bytes ${omittedRange}); recover via terminal_log_read(ref)`
     : "complete archive unavailable to the model";

@@ -18,7 +18,10 @@ import {
   type SubagentBackendKind,
   type WorkspacePolicy,
 } from "./domain.ts";
-import { createProfileDiagnosticBuffer, type ProfileDiagnosticCollector } from "./profile-diagnostics.ts";
+import {
+  createProfileDiagnosticBuffer,
+  type ProfileDiagnosticCollector,
+} from "./profile-diagnostics.ts";
 import {
   loadSubagentsSettings,
   mergeProfileOverride,
@@ -31,7 +34,7 @@ import { profileContentHash } from "./trust.ts";
 const PACKAGE_ROOT = path.dirname(fileURLToPath(import.meta.url));
 
 /** Each entry is passed to a subprocess argv; reject shell metacharacters. */
-export const SAFE_AGENT_ARG_PATTERN = /^[A-Za-z0-9_@.,:=\/+\-\[\]]+$/;
+export const SAFE_AGENT_ARG_PATTERN = /^[A-Za-z0-9_@.,:=/+\-[\]]+$/;
 
 const AGENT_KIND_ALIASES: Record<string, AgentKind> = {
   "cursor-agent": "cursor",
@@ -87,7 +90,7 @@ function parseTools(raw: unknown): string[] {
 }
 
 function hasMutatingTool(tools: string[]): boolean {
-  return tools.some((t) => MUTATING_TOOLS.includes(t as typeof MUTATING_TOOLS[number]));
+  return tools.some((t) => MUTATING_TOOLS.includes(t as (typeof MUTATING_TOOLS)[number]));
 }
 
 function resolveWorkspace(raw: unknown, tools: string[]): WorkspacePolicy {
@@ -101,7 +104,7 @@ function resolveWorkspace(raw: unknown, tools: string[]): WorkspacePolicy {
 
 function validateTools(name: string, tools: string[], workspace: WorkspacePolicy): void {
   for (const tool of tools) {
-    if (!ALL_ALLOWED_TOOLS.includes(tool as typeof ALL_ALLOWED_TOOLS[number])) {
+    if (!ALL_ALLOWED_TOOLS.includes(tool as (typeof ALL_ALLOWED_TOOLS)[number])) {
       throw new Error(`Profile "${name}" tool "${tool}" is not allowed`);
     }
   }
@@ -116,12 +119,11 @@ function resolveMaxTurns(
   override: ProfileOverride | undefined,
   settings: SubagentsSettings,
 ): number {
-  const raw = override?.maxTurns ?? frontmatter.maxTurns ?? settings.defaultMaxTurns ?? DEFAULT_MAX_TURNS;
+  const raw =
+    override?.maxTurns ?? frontmatter.maxTurns ?? settings.defaultMaxTurns ?? DEFAULT_MAX_TURNS;
   const value = Number(raw);
   if (!Number.isInteger(value) || value < 1 || value > MAX_PROFILE_TURNS) {
-    throw new Error(
-      `Profile "${name}" maxTurns must be an integer from 1 to ${MAX_PROFILE_TURNS}`,
-    );
+    throw new Error(`Profile "${name}" maxTurns must be an integer from 1 to ${MAX_PROFILE_TURNS}`);
   }
   return value;
 }
@@ -147,7 +149,7 @@ function loadProfileFromFile(
       ? override.timeoutSeconds * 1000
       : timeoutSeconds > 0
         ? timeoutSeconds * 1000
-        : settings.defaultTimeoutMs ?? DEFAULT_RUN_TIMEOUT_MS;
+        : (settings.defaultTimeoutMs ?? DEFAULT_RUN_TIMEOUT_MS);
 
   const thinkingRaw = override?.thinking ?? frontmatter.thinking ?? frontmatter.thinkingLevel;
   const thinkingRef = thinkingRaw !== undefined ? String(thinkingRaw).trim() : "";
@@ -240,9 +242,7 @@ export class ProfileCatalog {
         const profile = loadProfileFromFile(filePath, "builtin", this.settings);
         if (profile) loaded.push(profile);
       } catch (error) {
-        onDiagnostic(
-          `skipped builtin ${name}: ${error instanceof Error ? error.message : error}`,
-        );
+        onDiagnostic(`skipped builtin ${name}: ${error instanceof Error ? error.message : error}`);
       }
     }
 
@@ -250,7 +250,12 @@ export class ProfileCatalog {
       ...loadDirProfiles(path.join(this.agentDir, "agents"), "user", this.settings, onDiagnostic),
     );
     loaded.push(
-      ...loadDirProfiles(path.join(this.cwd, ".pi", "agents"), "project", this.settings, onDiagnostic),
+      ...loadDirProfiles(
+        path.join(this.cwd, ".pi", "agents"),
+        "project",
+        this.settings,
+        onDiagnostic,
+      ),
     );
 
     this.profiles.clear();
@@ -295,12 +300,16 @@ export class ProfileCatalog {
   }
 }
 
-export function formatModelArg(model: Model<any>): string {
+export function formatModelArg(
+  // biome-ignore lint/suspicious/noExplicitAny: Model<T> generic is intentionally open in the pi AI API
+  model: Model<any>,
+): string {
   return `${model.provider}/${model.id}`;
 }
 
 export function resolveProfileModelArg(
   profile: ProfileDefinition,
+  // biome-ignore lint/suspicious/noExplicitAny: Model<T> generic is intentionally open in the pi AI API
   parentModel: Model<any> | undefined,
 ): string {
   let base: string;

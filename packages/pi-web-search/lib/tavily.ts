@@ -39,14 +39,11 @@ export async function searchTavily(
 ): Promise<SearchResponse> {
   const config = resolveTavilyConfig();
   if (!config) {
-    throw new Error(
-      "Tavily API key not found. Set TAVILY_API_KEY or run /websearch-auth",
-    );
+    throw new Error("Tavily API key not found. Set TAVILY_API_KEY or run /websearch-auth");
   }
 
   const searchUrl = `${config.baseUrl.replace(/\/+$/, "")}/search`;
-  const maxResults =
-    options.numResults && options.numResults > 0 ? options.numResults : 8;
+  const maxResults = options.numResults && options.numResults > 0 ? options.numResults : 8;
 
   const body: Record<string, unknown> = {
     query,
@@ -103,21 +100,14 @@ export async function searchTavily(
   };
 }
 
-export async function fetchTavily(
-  url: string,
-  options: FetchOptions = {},
-): Promise<FetchResponse> {
+export async function fetchTavily(url: string, options: FetchOptions = {}): Promise<FetchResponse> {
   const config = resolveTavilyConfig();
   if (!config) {
-    throw new Error(
-      "Tavily API key not found. Set TAVILY_API_KEY or run /websearch-auth",
-    );
+    throw new Error("Tavily API key not found. Set TAVILY_API_KEY or run /websearch-auth");
   }
 
   const extractUrl = `${config.baseUrl.replace(/\/+$/, "")}/extract`;
-  const timeoutSignal = AbortSignal.timeout(
-    options.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-  );
+  const timeoutSignal = AbortSignal.timeout(options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
   const combinedSignal = options.signal
     ? AbortSignal.any([options.signal, timeoutSignal])
     : timeoutSignal;

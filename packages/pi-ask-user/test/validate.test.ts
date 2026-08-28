@@ -33,9 +33,7 @@ function ask(labels: string[]) {
   return registeredTool().execute(
     "call-1",
     {
-      questions: [
-        { question: "Pick one", options: labels.map((label) => ({ label })) },
-      ],
+      questions: [{ question: "Pick one", options: labels.map((label) => ({ label })) }],
     },
     undefined,
     undefined,

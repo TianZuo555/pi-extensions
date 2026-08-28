@@ -3,7 +3,6 @@
 // chart, and navigates via keyboard. Implements Component directly (like
 // pi-ask-user's form) so render(width) can truncate every line to width.
 
-import type { KeybindingsManager } from "@earendil-works/pi-coding-agent";
 import { Key, matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
 import type { ScanResult } from "../src/local-scan.ts";
 import { buildBarChart, buildPeakLine } from "./tokens-chart.ts";
@@ -89,8 +88,7 @@ export class TokensPanel {
     // matchesKey understands legacy CSI sequences, application cursor mode,
     // and the Kitty keyboard protocol — raw "\x1b[D" comparisons do not.
     if (matchesKey(data, Key.left) || data === "h") {
-      this.windowIndex =
-        (this.windowIndex - 1 + WINDOW_ORDER.length) % WINDOW_ORDER.length;
+      this.windowIndex = (this.windowIndex - 1 + WINDOW_ORDER.length) % WINDOW_ORDER.length;
       this.redraw();
       return true;
     }
@@ -128,7 +126,9 @@ export class TokensPanel {
     const t = this.theme;
     const lines: string[] = [t.fg("accent", "─".repeat(renderWidth))];
 
-    const title = this.refreshing ? "tokens · local pi usage · rescanning…" : "tokens · local pi usage";
+    const title = this.refreshing
+      ? "tokens · local pi usage · rescanning…"
+      : "tokens · local pi usage";
     lines.push(clip(` ${t.bold(t.fg("accent", title))}`, renderWidth));
     lines.push(
       clip(
@@ -150,7 +150,10 @@ export class TokensPanel {
     const aggregate = aggregateWindow(window, this.now, this.dayIndex);
 
     lines.push(
-      clip(` ${t.fg("muted", `${WINDOW_LABELS[window]} (${this.windowDateLabel(window)}) · per ${window === "1d" ? "hour" : "day"}, ${this.metric}`)}`, renderWidth),
+      clip(
+        ` ${t.fg("muted", `${WINDOW_LABELS[window]} (${this.windowDateLabel(window)}) · per ${window === "1d" ? "hour" : "day"}, ${this.metric}`)}`,
+        renderWidth,
+      ),
     );
     lines.push(
       clip(
@@ -168,7 +171,10 @@ export class TokensPanel {
       ),
     );
     lines.push(
-      clip(` ${t.fg("muted", "cost at list prices (subscription plans may cover it)")}`, renderWidth),
+      clip(
+        ` ${t.fg("muted", "cost at list prices (subscription plans may cover it)")}`,
+        renderWidth,
+      ),
     );
     lines.push("");
 
@@ -256,7 +262,8 @@ export class TokensPanel {
     const t = this.theme;
     return WINDOW_ORDER.map((key, index) => {
       const label = key === "mtd" ? "MTD" : key;
-      const text = index === this.windowIndex ? t.bold(t.fg("accent", `[${label}]`)) : t.fg("muted", label);
+      const text =
+        index === this.windowIndex ? t.bold(t.fg("accent", `[${label}]`)) : t.fg("muted", label);
       return index === 0 ? text : ` ${text}`;
     }).join("");
   }

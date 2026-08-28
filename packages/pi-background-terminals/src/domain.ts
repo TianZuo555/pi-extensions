@@ -8,12 +8,7 @@
 
 import { Data } from "effect";
 
-export type TerminalStatus =
-  | "running"
-  | "done"
-  | "failed"
-  | "timed_out"
-  | "killed";
+export type TerminalStatus = "running" | "done" | "failed" | "timed_out" | "killed";
 // "done"      = exited with code 0
 // "failed"    = exited non-zero, or a spawn-level runtime error after start
 // "timed_out" = exceeded the model-requested hard runtime timeout
@@ -69,9 +64,7 @@ export function formatElapsed(snap: TerminalSnapshot) {
   const totalSeconds = Math.max(0, Math.round((end - snap.createdAt) / 1000));
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;
-  return minutes > 0
-    ? `${minutes}m${seconds.toString().padStart(2, "0")}s`
-    : `${seconds}s`;
+  return minutes > 0 ? `${minutes}m${seconds.toString().padStart(2, "0")}s` : `${seconds}s`;
 }
 
 /** "exit 0", "exit 137", "SIGTERM", or "running". */
@@ -91,20 +84,14 @@ export class SpawnError extends Data.TaggedError("SpawnError")<{
   readonly fallbackSafe: boolean;
 }> {}
 
-export class ConcurrencyLimitError extends Data.TaggedError(
-  "ConcurrencyLimitError",
-)<{
+export class ConcurrencyLimitError extends Data.TaggedError("ConcurrencyLimitError")<{
   readonly message: string;
 }> {}
 
-export class UnknownTerminalError extends Data.TaggedError(
-  "UnknownTerminalError",
-)<{
+export class UnknownTerminalError extends Data.TaggedError("UnknownTerminalError")<{
   readonly message: string;
 }> {}
 
-export class TerminalLogUnavailableError extends Data.TaggedError(
-  "TerminalLogUnavailableError",
-)<{
+export class TerminalLogUnavailableError extends Data.TaggedError("TerminalLogUnavailableError")<{
   readonly message: string;
 }> {}

@@ -3,11 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { test } from "node:test";
-import {
-  type AgentToolResult,
-  type ExtensionAPI,
-  type Theme,
-} from "@earendil-works/pi-coding-agent";
+import type { AgentToolResult, ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import { type Component, visibleWidth } from "@earendil-works/pi-tui";
 import { registerTools, type SearchDetails } from "../lib/tools.ts";
 import { resolveBinary } from "../src/binaries.ts";
@@ -73,24 +69,18 @@ test("registered grep and find execute the narrow contracts", {
   try {
     assert.deepEqual([...tools.keys()], ["grep", "find"]);
 
-    const grep = await tools.get("grep")!.execute(
-      "grep",
-      { pattern: "needle", path: "src", glob: "*.ts" },
-      undefined,
-      undefined,
-      { cwd: root },
-    );
+    const grep = await tools
+      .get("grep")!
+      .execute("grep", { pattern: "needle", path: "src", glob: "*.ts" }, undefined, undefined, {
+        cwd: root,
+      });
     assert.match(text(grep), /^1 match in 1 file/);
     assert.match(text(grep), /src\/main\.ts:1:/);
     assert.doesNotMatch(text(grep), /main\.js/);
 
-    const find = await tools.get("find")!.execute(
-      "find",
-      { pattern: "*.ts", path: "src" },
-      undefined,
-      undefined,
-      { cwd: root },
-    );
+    const find = await tools
+      .get("find")!
+      .execute("find", { pattern: "*.ts", path: "src" }, undefined, undefined, { cwd: root });
     assert.match(text(find), /^1 file/);
     assert.match(text(find), /src\/main\.ts/);
   } finally {
@@ -106,22 +96,14 @@ test("empty searches return short model-visible answers", {
   writeFileSync(path.join(root, "file.txt"), "value\n");
   const { runtime, tools } = captureTools();
   try {
-    const grep = await tools.get("grep")!.execute(
-      "grep",
-      { pattern: "missing" },
-      undefined,
-      undefined,
-      { cwd: root },
-    );
+    const grep = await tools
+      .get("grep")!
+      .execute("grep", { pattern: "missing" }, undefined, undefined, { cwd: root });
     assert.equal(text(grep), "No matches found.");
 
-    const find = await tools.get("find")!.execute(
-      "find",
-      { pattern: "*.ts" },
-      undefined,
-      undefined,
-      { cwd: root },
-    );
+    const find = await tools
+      .get("find")!
+      .execute("find", { pattern: "*.ts" }, undefined, undefined, { cwd: root });
     assert.equal(text(find), "No files found.");
   } finally {
     await runtime.dispose();

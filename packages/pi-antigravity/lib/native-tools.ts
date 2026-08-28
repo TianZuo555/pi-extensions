@@ -94,9 +94,7 @@ export function mapAgyToolToNative(
       if (!onlyKeys(args, [...patternKeys, ...pathKeys])) return undefined;
       const pattern = str(args, patternKeys);
       const path = str(args, pathKeys);
-      return pattern
-        ? { tool: "grep", args: path ? { pattern, path } : { pattern } }
-        : undefined;
+      return pattern ? { tool: "grep", args: path ? { pattern, path } : { pattern } } : undefined;
     }
     case "find_by_name": {
       const patternKeys = ["pattern", "Pattern", "glob", "name"];
@@ -104,9 +102,7 @@ export function mapAgyToolToNative(
       if (!onlyKeys(args, [...patternKeys, ...pathKeys])) return undefined;
       const pattern = str(args, patternKeys);
       const path = str(args, pathKeys);
-      return pattern
-        ? { tool: "find", args: path ? { pattern, path } : { pattern } }
-        : undefined;
+      return pattern ? { tool: "find", args: path ? { pattern, path } : { pattern } } : undefined;
     }
     default:
       return undefined;

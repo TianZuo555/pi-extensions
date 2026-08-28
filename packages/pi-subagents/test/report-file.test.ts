@@ -80,11 +80,9 @@ describe("report-file", () => {
   it("readReportFile returns valid for a schema-compliant report", () => {
     const root = tempArtifactRoot();
     const reportPath = reportPathFor(root, "sa-valid");
-    fs.writeFileSync(
-      reportPath,
-      JSON.stringify({ status: "completed", summary: "all good" }),
-      { mode: 0o600 },
-    );
+    fs.writeFileSync(reportPath, JSON.stringify({ status: "completed", summary: "all good" }), {
+      mode: 0o600,
+    });
     const outcome = readReportFile(reportPath);
     assert.equal(outcome.kind, "valid");
     if (outcome.kind === "valid") {

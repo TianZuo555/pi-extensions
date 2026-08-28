@@ -46,23 +46,15 @@ import {
 } from "./lib/models.ts";
 import type { AgyActivity } from "./lib/reducer.ts";
 import { AgyReplayStore, type RecordedAgyTool } from "./lib/replay.ts";
-import { findAgyTask, listAgyTasks, stopAgyTask, type AgyTask } from "./lib/tasks.ts";
+import { findAgyTask, listAgyTasks, stopAgyTask } from "./lib/tasks.ts";
 import { findAgyArtifact, listAgyArtifacts } from "./lib/artifacts.ts";
 import { WRAPPER_TOOL_DESCRIPTION, WRAPPER_TOOL_NAME } from "./lib/prompt.ts";
 import { wrapperToolActiveAfterModelSwitch } from "./lib/wrapper-activation.ts";
 import { openAgyTasksPicker } from "./src/tasks-ui.ts";
 import { openArtifact, openAgyArtifactsPicker } from "./src/artifacts-ui.ts";
-import {
-  agyToolLabel,
-  formatAgyCall,
-  summarizeAgyResult,
-} from "./lib/render.ts";
+import { agyToolLabel, formatAgyCall, summarizeAgyResult } from "./lib/render.ts";
 import { streamAntigravity } from "./src/provider.ts";
-import {
-  AntigravityRuntime,
-  createAntigravityRuntime,
-  runAntigravity,
-} from "./src/runtime.ts";
+import { AntigravityRuntime, createAntigravityRuntime, runAntigravity } from "./src/runtime.ts";
 
 const MODEL_CACHE_FILE = path.join(piConfigDir("antigravity"), "model-list.json");
 const DISCOVERY_TIMEOUT_MS = 15_000;
@@ -115,9 +107,7 @@ async function pruneStaleBridgeRegistrations(): Promise<void> {
       stale.push(name);
     }
   }
-  await Promise.all(
-    stale.map((name) => execAgy(["mcp", "remove", name]).catch(() => {})),
-  );
+  await Promise.all(stale.map((name) => execAgy(["mcp", "remove", name]).catch(() => {})));
 }
 
 interface ModelCache {
@@ -226,7 +216,9 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
     if (!Array.isArray(skills)) return;
     loadedSkills = skills
       .map((skill) => skill as Partial<SkillLite> & { disableModelInvocation?: boolean })
-      .filter((skill) => skill.disableModelInvocation !== true && typeof skill.filePath === "string")
+      .filter(
+        (skill) => skill.disableModelInvocation !== true && typeof skill.filePath === "string",
+      )
       .map((skill) => ({
         name: String(skill.name),
         description: String(skill.description ?? ""),
@@ -247,15 +239,17 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
   function refreshSkillTools(): void {
     if (!BRIDGE_ENABLED) return;
     bridge.setDynamicTools(
-      assignSkillToolNames(nonWorkspaceSkills(loadedSkills, tasksSessionCwd)).map(({ skill, toolName }) => ({
-        name: toolName,
-        description:
-          (skill.description.replace(/\s+/g, " ").trim().slice(0, MAX_SKILL_TOOL_DESCRIPTION) ||
-            `pi Agent Skill "${skill.name}"`) +
-          " (pi Agent Skill — calling this tool activates the skill: returns its full SKILL.md and bundled resource paths)",
-        parameters: { type: "object", properties: {} },
-        handler: () => readSkillBundle(skill),
-      })),
+      assignSkillToolNames(nonWorkspaceSkills(loadedSkills, tasksSessionCwd)).map(
+        ({ skill, toolName }) => ({
+          name: toolName,
+          description:
+            (skill.description.replace(/\s+/g, " ").trim().slice(0, MAX_SKILL_TOOL_DESCRIPTION) ||
+              `pi Agent Skill "${skill.name}"`) +
+            " (pi Agent Skill — calling this tool activates the skill: returns its full SKILL.md and bundled resource paths)",
+          parameters: { type: "object", properties: {} },
+          handler: () => readSkillBundle(skill),
+        }),
+      ),
     );
   }
 
@@ -435,9 +429,7 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
       }
       const body = recorded.output ?? "";
       return {
-        content: [
-          { type: "text", text: body ? body.slice(0, 16_000) : "(no output)" },
-        ],
+        content: [{ type: "text", text: body ? body.slice(0, 16_000) : "(no output)" }],
         details: recorded,
       };
     },
@@ -462,7 +454,7 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
       if (body && body !== "(no output)") {
         const lines = body.split("\n");
         const shown = expanded ? lines : lines.slice(0, 3);
-        text += "\n" + shown.map((line) => theme.fg("toolOutput", line)).join("\n");
+        text += `\n${shown.map((line) => theme.fg("toolOutput", line)).join("\n")}`;
         if (!expanded && lines.length > 3) {
           text += theme.fg("muted", `\n… +${lines.length - 3} lines (ctrl+o to expand)`);
         }
@@ -547,10 +539,7 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
 
   pi.on("session_start", async (event, ctx: ExtensionContext) => {
     syncWrapperToolActivation(ctx.model?.provider);
-    await runAntigravity(
-      runtime,
-      service.setSession(ctx.cwd, undefined, event.reason !== "new"),
-    );
+    await runAntigravity(runtime, service.setSession(ctx.cwd, undefined, event.reason !== "new"));
     if (ctx.hasUI) tasksUi = ctx.ui;
     tasksSessionCwd = ctx.cwd;
     updateAgyTasksWidget();
@@ -561,9 +550,14 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
         await pruneStaleBridgeRegistrations();
         await bridge.start();
         await execAgy([
-          "mcp", "add", "--type", "http",
-          "--header", `x-pi-bridge-token: ${bridgeToken}`,
-          bridge.serverName, bridge.url!,
+          "mcp",
+          "add",
+          "--type",
+          "http",
+          "--header",
+          `x-pi-bridge-token: ${bridgeToken}`,
+          bridge.serverName,
+          bridge.url!,
         ]);
         bridge.refreshTools();
       } catch (error) {
@@ -603,9 +597,7 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
           sessionCwd: tasksSessionCwd,
         });
         const live = tasks.filter((task) => task.pids.length > 0);
-        await Promise.all(
-          live.map((task) => stopAgyTask(task, { includeOrphans: false })),
-        );
+        await Promise.all(live.map((task) => stopAgyTask(task, { includeOrphans: false })));
       }
     } catch {
       // Runtime closed or scan failed; nothing to stop.
@@ -753,7 +745,10 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
         return;
       }
       if (arg) {
-        ctx.ui.notify('agy-artifacts: usage "/agy-artifacts" or "/agy-artifacts open <name>".', "error");
+        ctx.ui.notify(
+          'agy-artifacts: usage "/agy-artifacts" or "/agy-artifacts open <name>".',
+          "error",
+        );
         return;
       }
 

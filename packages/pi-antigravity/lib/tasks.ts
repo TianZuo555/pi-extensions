@@ -100,10 +100,7 @@ export function compareAgyTaskLogNames(left: string, right: string): number {
  * by basename is safe because every input log is a direct child of one task
  * directory, and avoids macOS `/var` → `/private/var` canonicalization drift.
  */
-export function parseTaskLogHolders(
-  output: string,
-  ownPid = process.pid,
-): Map<string, number[]> {
+export function parseTaskLogHolders(output: string, ownPid = process.pid): Map<string, number[]> {
   const holders = new Map<string, Set<number>>();
   let pid: number | undefined;
   for (const line of output.split("\n")) {
@@ -153,10 +150,7 @@ function parseProcessCwds(output: string): Map<number, string> {
  * nearest task birth time. The old per-log implementation ran a full `ps`
  * and one or more `lsof` processes for every historical task.
  */
-async function scanOrphans(
-  sessionCwd: string,
-  tasks: TaskBirth[],
-): Promise<Map<string, number[]>> {
+async function scanOrphans(sessionCwd: string, tasks: TaskBirth[]): Promise<Map<string, number[]>> {
   if (tasks.length === 0) return new Map();
   const psOut = await execText("ps", ["-axo", "pid=,ppid=,etime="]);
   const now = Date.now();
@@ -210,16 +204,19 @@ export async function listAgyTasks(
   conversationId: string,
   options: { brainDir?: string; sessionCwd?: string } = {},
 ): Promise<AgyTask[]> {
-  const dir = path.join(options.brainDir ?? agyBrainDir(), conversationId, ".system_generated", "tasks");
+  const dir = path.join(
+    options.brainDir ?? agyBrainDir(),
+    conversationId,
+    ".system_generated",
+    "tasks",
+  );
   let entries: string[];
   try {
     entries = await fs.readdir(dir);
   } catch {
     return [];
   }
-  const logs = entries
-    .filter((name) => /^task-.+\.log$/.test(name))
-    .sort(compareAgyTaskLogNames);
+  const logs = entries.filter((name) => /^task-.+\.log$/.test(name)).sort(compareAgyTaskLogNames);
   const metadata = await Promise.all(
     logs.map(async (name) => {
       const logPath = path.join(dir, name);
@@ -246,14 +243,16 @@ export async function listAgyTasks(
       : Promise.resolve(new Map<string, number[]>()),
   ]);
 
-  return metadata.map(({ name, logPath, stat }, index): AgyTask => ({
-    id: name.replace(/\.log$/, ""),
-    logPath,
-    pids: holders.get(name) ?? [],
-    orphans: orphans.get(name) ?? [],
-    description: describeTaskLog(contents[index]),
-    bytes: stat.size,
-  }));
+  return metadata.map(
+    ({ name, logPath, stat }, index): AgyTask => ({
+      id: name.replace(/\.log$/, ""),
+      logPath,
+      pids: holders.get(name) ?? [],
+      orphans: orphans.get(name) ?? [],
+      description: describeTaskLog(contents[index]),
+      bytes: stat.size,
+    }),
+  );
 }
 
 /** Resolve a task reference ("3", "task-3") against listed tasks. */
@@ -277,10 +276,15 @@ let cachedOwnPgid: Promise<number | undefined> | undefined;
 /** Our own process group id, so stopAgyTask can refuse to signal it. */
 function ownPgid(): Promise<number | undefined> {
   cachedOwnPgid ??= new Promise((resolve) => {
-    execFile("ps", ["-o", "pgid=", "-p", String(process.pid)], { timeout: 5_000 }, (error, stdout) => {
-      const pgid = Number.parseInt(String(stdout).trim(), 10);
-      resolve(error || !Number.isInteger(pgid) ? undefined : pgid);
-    });
+    execFile(
+      "ps",
+      ["-o", "pgid=", "-p", String(process.pid)],
+      { timeout: 5_000 },
+      (error, stdout) => {
+        const pgid = Number.parseInt(String(stdout).trim(), 10);
+        resolve(error || !Number.isInteger(pgid) ? undefined : pgid);
+      },
+    );
   });
   return cachedOwnPgid;
 }

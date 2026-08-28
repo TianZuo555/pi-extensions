@@ -66,18 +66,11 @@ export default function tokenSpeedExtension(pi: ExtensionAPI): void {
 
   pi.on("message_update", async (event, ctx) => {
     const ev = event.assistantMessageEvent;
-    if (
-      ev.type !== "text_delta" &&
-      ev.type !== "thinking_delta" &&
-      ev.type !== "toolcall_delta"
-    ) {
+    if (ev.type !== "text_delta" && ev.type !== "thinking_delta" && ev.type !== "toolcall_delta") {
       return;
     }
 
-    const res = await runTokenSpeed(
-      runtime,
-      service.recordDelta(ev.delta ?? "", Date.now()),
-    );
+    const res = await runTokenSpeed(runtime, service.recordDelta(ev.delta ?? "", Date.now()));
     if (res.shouldRender && res.statusText) {
       ctx.ui.setStatus(STATUS_KEY, res.statusText);
     }
@@ -86,10 +79,7 @@ export default function tokenSpeedExtension(pi: ExtensionAPI): void {
   pi.on("message_end", async (event, ctx) => {
     if (!isAssistant(event.message)) return;
     const total = event.message.usage?.output;
-    const res = await runTokenSpeed(
-      runtime,
-      service.endStream(total, Date.now()),
-    );
+    const res = await runTokenSpeed(runtime, service.endStream(total, Date.now()));
     if (res.shouldRender && res.summary) {
       ctx.ui.setStatus(STATUS_KEY, res.summary);
     }
@@ -108,22 +98,15 @@ export default function tokenSpeedExtension(pi: ExtensionAPI): void {
   });
 
   pi.registerCommand("tps", {
-    description:
-      "Cycle or set the tokens-per-second display: /tps [live|final|off]",
+    description: "Cycle or set the tokens-per-second display: /tps [live|final|off]",
     handler: async (args, ctx) => {
       const arg = args.trim().toLowerCase();
       if (arg && (MODES as string[]).includes(arg)) {
-        const mode = await runTokenSpeed(
-          runtime,
-          service.setMode(arg as DisplayMode),
-        );
+        const mode = await runTokenSpeed(runtime, service.setMode(arg as DisplayMode));
         if (mode === "off") clearStatus(ctx);
         ctx.ui.notify(`token-speed: ${mode}`, "info");
       } else if (arg) {
-        ctx.ui.notify(
-          `token-speed: unknown mode "${arg}". Use live | final | off.`,
-          "error",
-        );
+        ctx.ui.notify(`token-speed: unknown mode "${arg}". Use live | final | off.`, "error");
       } else {
         const mode = await runTokenSpeed(runtime, service.cycleMode);
         if (mode === "off") clearStatus(ctx);

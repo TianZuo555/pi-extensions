@@ -144,7 +144,10 @@ test("nonWorkspaceSkills drops skills inside the session cwd, keeps globals", ()
     [project, ancestorProject, global, homeGlobal],
     "/repo/packages/child",
   );
-  assert.deepEqual(filtered.map((skill) => skill.name), ["herdr", "home-global"]);
+  assert.deepEqual(
+    filtered.map((skill) => skill.name),
+    ["herdr", "home-global"],
+  );
   // No session cwd (pre-session_start) → keep everything.
   assert.equal(nonWorkspaceSkills([project], undefined).length, 1);
 });

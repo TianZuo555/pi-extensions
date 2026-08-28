@@ -22,10 +22,12 @@ function outcome(matches: ReadonlyArray<[string, number, string]>): GrepOutcome 
 
 test("grep renders one conventional path:line:text row per match", () => {
   assert.deepEqual(
-    renderGrepLines(outcome([
-      ["src/a.ts", 1, "const a = 1;"],
-      ["src/b.ts", 2, "const b = 2;"],
-    ])),
+    renderGrepLines(
+      outcome([
+        ["src/a.ts", 1, "const a = 1;"],
+        ["src/b.ts", 2, "const b = 2;"],
+      ]),
+    ),
     ["src/a.ts:1: const a = 1;", "src/b.ts:2: const b = 2;"],
   );
 });

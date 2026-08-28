@@ -21,13 +21,15 @@ import { createInterface } from "node:readline";
 import * as fs from "node:fs";
 
 const mode = process.argv.find((a) => a.startsWith("--mode="))?.split("=")[1] ?? "settle";
-const maxTurns = Number(process.argv.find((a) => a.startsWith("--max-turns="))?.split("=")[1] ?? "8");
+const _maxTurns = Number(
+  process.argv.find((a) => a.startsWith("--max-turns="))?.split("=")[1] ?? "8",
+);
 const TURN_DELAY_MS = 15;
 
 const rl = createInterface({ input: process.stdin });
 
 let promptActive = false;
-let emittedTurnCount = 0;
+let _emittedTurnCount = 0;
 let steerObserved = false;
 let turnTimer = null;
 
@@ -56,7 +58,7 @@ function emitReport(status, malformed = false) {
   });
 }
 
-function emitTurns(count) {
+function _emitTurns(count) {
   for (let i = 0; i < count; i++) {
     write({ type: "turn_start" });
     write({ type: "turn_end", messages: [] });
@@ -88,7 +90,7 @@ function finishAfterReport() {
 function emitOneTurn() {
   if (!promptActive) return;
 
-  emittedTurnCount++;
+  _emittedTurnCount++;
   write({ type: "turn_start" });
   write({ type: "turn_end", messages: [] });
 
@@ -108,7 +110,7 @@ function emitOneTurn() {
 
 function startAsyncTurnLoop() {
   promptActive = true;
-  emittedTurnCount = 0;
+  _emittedTurnCount = 0;
   steerObserved = false;
   scheduleNextTurn();
 }

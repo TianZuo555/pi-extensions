@@ -507,11 +507,13 @@ export default function subagentsExtension(pi: ExtensionAPI) {
   });
 
   pi.registerMessageRenderer(BACKGROUND_RESULT_TYPE, (message, _options, theme) => {
-    const details = (message.details ?? {}) as { runId?: string; profile?: string; status?: string };
+    const details = (message.details ?? {}) as {
+      runId?: string;
+      profile?: string;
+      status?: string;
+    };
     const icon =
-      details.status === "completed"
-        ? theme.fg("success", "✓ ")
-        : theme.fg("error", "✗ ");
+      details.status === "completed" ? theme.fg("success", "✓ ") : theme.fg("error", "✗ ");
     return new Text(
       icon +
         theme.fg("accent", `subagent ${details.runId ?? "?"}`) +

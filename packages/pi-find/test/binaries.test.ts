@@ -3,10 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { test } from "node:test";
-import {
-  isSupportedVersion,
-  pathCandidates,
-} from "../src/binaries.ts";
+import { isSupportedVersion, pathCandidates } from "../src/binaries.ts";
 
 test("binary version guards enforce features used by the runtime", () => {
   assert.equal(isSupportedVersion("rg", "ripgrep 11.0.2"), false);
@@ -25,10 +22,7 @@ test("fd resolution accepts Debian's fdfind alias", {
   const previousPath = process.env.PATH;
   try {
     process.env.PATH = bin;
-    assert.deepEqual(pathCandidates("fd"), [
-      path.join(bin, "fd"),
-      path.join(bin, "fdfind"),
-    ]);
+    assert.deepEqual(pathCandidates("fd"), [path.join(bin, "fd"), path.join(bin, "fdfind")]);
   } finally {
     process.env.PATH = previousPath;
     rmSync(bin, { recursive: true, force: true });

@@ -38,9 +38,7 @@ export function findDroppedItems(
   next: readonly TodoItem[],
 ): TodoItem[] {
   const keptIds = new Set(next.map((todo) => todo.id));
-  return previous.filter(
-    (todo) => todo.status !== "completed" && !keptIds.has(todo.id),
-  );
+  return previous.filter((todo) => todo.status !== "completed" && !keptIds.has(todo.id));
 }
 
 export function describeDropped(dropped: readonly TodoItem[]): string {

@@ -208,7 +208,12 @@ test("pushCurrentBranch forwards its abort signal to Git commands", async (t) =>
       assert.equal(command, "git");
       signals.push(options?.signal);
       if (args[0] === "rev-parse") {
-        return Promise.resolve({ stdout: "refs/remotes/origin/main\n", stderr: "", code: 0, killed: false });
+        return Promise.resolve({
+          stdout: "refs/remotes/origin/main\n",
+          stderr: "",
+          code: 0,
+          killed: false,
+        });
       }
       return Promise.resolve({ stdout: "", stderr: "", code: 0, killed: false });
     },
@@ -237,10 +242,7 @@ test("pushCurrentBranch sets upstream on the first push and pushes afterwards", 
 
   const firstPush = await pushCurrentBranch(repository);
   assert.equal(firstPush.code, 0, firstPush.stderr);
-  assert.equal(
-    git(directory, ["rev-parse", "--abbrev-ref", "@{upstream}"]),
-    "origin/main",
-  );
+  assert.equal(git(directory, ["rev-parse", "--abbrev-ref", "@{upstream}"]), "origin/main");
   assert.equal(
     git(remoteDir, ["log", "-1", "--pretty=format:%s", "refs/heads/main"]),
     "change for push",
@@ -275,8 +277,5 @@ test("pushCurrentBranch targets the only configured remote when origin is absent
 
   const pushResult = await pushCurrentBranch(repository);
   assert.equal(pushResult.code, 0, pushResult.stderr);
-  assert.equal(
-    git(directory, ["rev-parse", "--abbrev-ref", "@{upstream}"]),
-    "company/feature",
-  );
+  assert.equal(git(directory, ["rev-parse", "--abbrev-ref", "@{upstream}"]), "company/feature");
 });

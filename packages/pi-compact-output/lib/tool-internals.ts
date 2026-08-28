@@ -34,7 +34,8 @@ export function tryReadToolExecutionInternals(
   if (callRendererComponent !== undefined && !isComponent(callRendererComponent)) return undefined;
 
   const resultRendererComponent = runtime.resultRendererComponent;
-  if (resultRendererComponent !== undefined && !isComponent(resultRendererComponent)) return undefined;
+  if (resultRendererComponent !== undefined && !isComponent(resultRendererComponent))
+    return undefined;
 
   const hideComponent = runtime.hideComponent;
   if (hideComponent !== undefined && typeof hideComponent !== "boolean") return undefined;

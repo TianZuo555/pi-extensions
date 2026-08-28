@@ -150,8 +150,9 @@ export function runAgyTurn(request: AgyTurnRequest): Promise<AgyTurnOutcome> {
     child.stdout?.setEncoding("utf-8");
     child.stdout?.on("data", (chunk: string) => {
       stdoutBuf += chunk;
-      let nl: number;
-      while ((nl = stdoutBuf.indexOf("\n")) >= 0) {
+      for (;;) {
+        const nl = stdoutBuf.indexOf("\n");
+        if (nl < 0) break;
         const line = stdoutBuf.slice(0, nl);
         stdoutBuf = stdoutBuf.slice(nl + 1);
         handleParsed(parseAgyLine(line));

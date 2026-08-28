@@ -9,7 +9,6 @@ import { Data, Effect } from "effect";
 import {
   DEFAULT_RETRY_COUNT,
   DEFAULT_TIMEOUT_MS,
-  fetchProviderJson,
   fetchProviderJsonEffect,
   type ProviderQueryError,
 } from "../src/fetch.ts";
@@ -232,8 +231,7 @@ function normalizeCopilotReport(data: Record<string, unknown>): ProviderReport {
     if (COPILOT_HIDDEN_SNAPSHOTS.has(key)) continue;
     const snapshot = asObject(snapshots[key]);
     if (!snapshot) continue;
-    const remaining =
-      asNumber(snapshot.quota_remaining) ?? asNumber(snapshot.remaining);
+    const remaining = asNumber(snapshot.quota_remaining) ?? asNumber(snapshot.remaining);
     const entitlement = asNumber(snapshot.entitlement);
     const unlimited =
       snapshot.unlimited === true ||

@@ -13,8 +13,7 @@ export const GREP_PARAMETER_DESCRIPTIONS = {
   glob: "Optional file glob, for example '*.ts' or '**/*.test.ts'.",
 };
 
-export const FIND_TOOL_DESCRIPTION =
-  "Find files with a glob; respects .gitignore.";
+export const FIND_TOOL_DESCRIPTION = "Find files with a glob; respects .gitignore.";
 export const FIND_PROMPT_SNIPPET = "Find files with a glob";
 
 export const FIND_PARAMETER_DESCRIPTIONS = {

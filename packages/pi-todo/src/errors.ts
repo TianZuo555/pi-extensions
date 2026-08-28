@@ -13,7 +13,4 @@ export class TodoClosedError extends Data.TaggedError("TodoClosedError")<{
   readonly message: string;
 }> {}
 
-export type TodoError =
-  | TodoDuplicateIdError
-  | TodoMissingListError
-  | TodoClosedError;
+export type TodoError = TodoDuplicateIdError | TodoMissingListError | TodoClosedError;

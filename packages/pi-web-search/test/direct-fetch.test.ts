@@ -14,16 +14,13 @@ test("classifyBody trusts Content-Type for text files", () => {
   assert.equal(classifyBody("text/plain; charset=utf-8", "any content"), "text");
   assert.equal(classifyBody("text/markdown", "# hi"), "text");
   assert.equal(classifyBody("application/json", "{}"), "text");
-  assert.equal(
-    classifyBody("application/typescript", "const x = 1;"),
-    "text",
-  );
+  assert.equal(classifyBody("application/typescript", "const x = 1;"), "text");
 });
 
 test("classifyBody never converts source code that mentions <html>", () => {
   // Regression: JSX templates, Python strings, and Markdown examples used to
   // be misdetected as HTML because "<html" appeared in the first 1000 chars.
-  const jsx = 'const tpl = `<html>\n  <body>hi</body>\n</html>`;\nexport default tpl;\n';
+  const jsx = "const tpl = `<html>\n  <body>hi</body>\n</html>`;\nexport default tpl;\n";
   const py = 'print("<html>demo</html>")\n';
   const md = "# Guide\n\n```html\n<html><body>hi</body></html>\n```\n";
   for (const body of [jsx, py, md]) {
@@ -37,11 +34,8 @@ test("classifyBody detects HTML by Content-Type or document start", () => {
   // Missing Content-Type: sniff, but only a real document *start* counts.
   assert.equal(classifyBody("", '<!DOCTYPE html>\n<html lang="en">'), "html");
   assert.equal(classifyBody("", '<html lang="en"><body></body></html>'), "html");
-  assert.equal(classifyBody("", '<div>loose fragment</div>'), "text");
-  assert.equal(
-    classifyBody("", 'const tpl = `<html>`; // html mid-body, not a document'),
-    "text",
-  );
+  assert.equal(classifyBody("", "<div>loose fragment</div>"), "text");
+  assert.equal(classifyBody("", "const tpl = `<html>`; // html mid-body, not a document"), "text");
 });
 
 test("classifyBody rejects binary content", () => {
@@ -54,7 +48,7 @@ test("classifyBody rejects binary content", () => {
 
 test("fetchDirect returns text/plain source files unconverted", async () => {
   const originalFetch = globalThis.fetch;
-  const jsx = 'const tpl = `<html>\n  <body>hi</body>\n</html>`;\nexport default tpl;\n';
+  const jsx = "const tpl = `<html>\n  <body>hi</body>\n</html>`;\nexport default tpl;\n";
   globalThis.fetch = (async () =>
     new Response(jsx, {
       status: 200,
@@ -93,7 +87,7 @@ test("fetchDirect rejects binary responses instead of returning mojibake", async
 test("decodeHtmlEntities converts entities correctly", () => {
   assert.equal(
     decodeHtmlEntities("Hello &amp; welcome &lt;world&gt; &quot;quote&#39; &nbsp; &#65;"),
-    'Hello & welcome <world> "quote\'   A',
+    "Hello & welcome <world> \"quote'   A",
   );
 });
 
@@ -108,10 +102,7 @@ test("extractHtmlTitle parses <title>, og:title, and <h1>", () => {
     ),
     "OG Page Title",
   );
-  assert.equal(
-    extractHtmlTitle("<html><body><h1>Main Heading</h1></body></html>"),
-    "Main Heading",
-  );
+  assert.equal(extractHtmlTitle("<html><body><h1>Main Heading</h1></body></html>"), "Main Heading");
 });
 
 test("htmlToMarkdown strips scripts, styles, and extracts readable content", () => {
@@ -163,15 +154,9 @@ test("maybeDecodeBase64Body decodes googlesource ?format=TEXT bodies", () => {
 test("maybeDecodeBase64Body leaves non-googlesource or invalid bodies untouched", () => {
   const b64 = Buffer.from("just plain ascii text\n").toString("base64");
   // Not a googlesource host: unchanged even if the body is valid base64.
-  assert.equal(
-    maybeDecodeBase64Body("https://raw.githubusercontent.com/a/b/c/d.txt", b64),
-    b64,
-  );
+  assert.equal(maybeDecodeBase64Body("https://raw.githubusercontent.com/a/b/c/d.txt", b64), b64);
   // googlesource without format=TEXT: unchanged.
-  assert.equal(
-    maybeDecodeBase64Body("https://android.googlesource.com/x/+/main/f", b64),
-    b64,
-  );
+  assert.equal(maybeDecodeBase64Body("https://android.googlesource.com/x/+/main/f", b64), b64);
   // googlesource but body is normal text: unchanged.
   assert.equal(
     maybeDecodeBase64Body(
@@ -182,10 +167,7 @@ test("maybeDecodeBase64Body leaves non-googlesource or invalid bodies untouched"
   );
   // googlesource but body is not valid base64 (length % 4 != 0): unchanged.
   assert.equal(
-    maybeDecodeBase64Body(
-      "https://android.googlesource.com/x/+/main/f?format=TEXT",
-      "abc",
-    ),
+    maybeDecodeBase64Body("https://android.googlesource.com/x/+/main/f?format=TEXT", "abc"),
     "abc",
   );
 });

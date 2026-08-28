@@ -22,12 +22,7 @@ export function commitPlanEntryLabel(paths: readonly string[]): string {
   return paths.length === 1 ? paths[0] : `${paths.length} files`;
 }
 
-function appendWrapped(
-  lines: string[],
-  width: number,
-  prefix: string,
-  text: string,
-): void {
+function appendWrapped(lines: string[], width: number, prefix: string, text: string): void {
   const renderWidth = Math.max(1, width);
   const prefixWidth = visibleWidth(prefix);
 
@@ -137,10 +132,7 @@ export class CommitPlanEditor implements Component, Focusable {
   }
 
   private moveCommit(offset: number): void {
-    const next = Math.min(
-      this.messages.length - 1,
-      Math.max(0, this.commitIndex + offset),
-    );
+    const next = Math.min(this.messages.length - 1, Math.max(0, this.commitIndex + offset));
     if (next === this.commitIndex) return;
     this.saveCurrentMessage();
     this.commitIndex = next;
@@ -201,17 +193,11 @@ export class CommitPlanEditor implements Component, Focusable {
       return;
     }
 
-    if (
-      matchesKey(data, Key.up) ||
-      this.keybindings.matches(data, "tui.editor.cursorUp")
-    ) {
+    if (matchesKey(data, Key.up) || this.keybindings.matches(data, "tui.editor.cursorUp")) {
       this.moveCommit(-1);
       return;
     }
-    if (
-      matchesKey(data, Key.down) ||
-      this.keybindings.matches(data, "tui.editor.cursorDown")
-    ) {
+    if (matchesKey(data, Key.down) || this.keybindings.matches(data, "tui.editor.cursorDown")) {
       this.moveCommit(1);
       return;
     }

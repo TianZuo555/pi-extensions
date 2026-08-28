@@ -23,7 +23,12 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 const AUTH_FILE = path.join(os.homedir(), ".pi", "agent", "auth.json");
 const COPILOT_APPS_FILE = path.join(os.homedir(), ".config", "github-copilot", "apps.json");
-const COPILOT_TOKEN_ENV = ["GH_TOKEN", "GITHUB_TOKEN", "GITHUB_COPILOT_TOKEN", "COPILOT_GITHUB_TOKEN"];
+const COPILOT_TOKEN_ENV = [
+  "GH_TOKEN",
+  "GITHUB_TOKEN",
+  "GITHUB_COPILOT_TOKEN",
+  "COPILOT_GITHUB_TOKEN",
+];
 const ZAI_TOKEN_ENV = ["ZAI_API_KEY"];
 const ZAI_CN_TOKEN_ENV = ["ZAI_CODING_CN_API_KEY", "ZHIPU_API_KEY"];
 const DEEPSEEK_TOKEN_ENV = ["DEEPSEEK_API_KEY"];
@@ -116,10 +121,7 @@ async function bearerFromRegistry(
     const models = [...registry.getAvailable(), ...registry.getAll()];
     const model = models.find((candidate) => candidate.provider === providerId);
     if (!model) return undefined;
-    const result = await withTimeout(
-      registry.getApiKeyAndHeaders(model),
-      AUTH_RESOLVE_TIMEOUT_MS,
-    );
+    const result = await withTimeout(registry.getApiKeyAndHeaders(model), AUTH_RESOLVE_TIMEOUT_MS);
     if (!result?.ok) return undefined;
     const authorization =
       result.headers?.Authorization ?? result.headers?.authorization ?? undefined;
@@ -189,7 +191,7 @@ export function hasZaiLoginInfo(): boolean {
 
 /** Resolve the Z.ai API key used for the GLM Coding Plan usage endpoint. */
 export function resolveZaiToken(): ResolvedToken | undefined {
-  const key = readPiAuth()["zai"]?.key;
+  const key = readPiAuth().zai?.key;
   if (key) return { token: key, source: "~/.pi/agent/auth.json" };
 
   for (const name of ZAI_TOKEN_ENV) {
@@ -223,7 +225,7 @@ export function hasDeepSeekLoginInfo(): boolean {
 
 /** Resolve the DeepSeek API key used for the balance endpoint. */
 export function resolveDeepSeekToken(): ResolvedToken | undefined {
-  const key = readPiAuth()["deepseek"]?.key;
+  const key = readPiAuth().deepseek?.key;
   if (key) return { token: key, source: "~/.pi/agent/auth.json" };
 
   for (const name of DEEPSEEK_TOKEN_ENV) {

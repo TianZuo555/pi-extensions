@@ -9,10 +9,16 @@ import {
 } from "../lib/bridge.ts";
 
 const TOOL_DEFS = [
-  { name: "commit", description: "Generate a commit message.", parameters: { type: "object", properties: {} } },
+  {
+    name: "commit",
+    description: "Generate a commit message.",
+    parameters: { type: "object", properties: {} },
+  },
 ];
 
-async function startedBridge(onCall: (call: { id: string; tool: string; args: Record<string, unknown> }) => boolean) {
+async function startedBridge(
+  onCall: (call: { id: string; tool: string; args: Record<string, unknown> }) => boolean,
+) {
   const bridge = new AgyPiBridge();
   bridge.setOnCall(onCall);
   bridge.setToolSource(() => TOOL_DEFS);
@@ -20,7 +26,10 @@ async function startedBridge(onCall: (call: { id: string; tool: string; args: Re
   return bridge;
 }
 
-function post(bridge: AgyPiBridge, body: unknown): Promise<{ status: number; json: Record<string, any> }> {
+function post(
+  bridge: AgyPiBridge,
+  body: unknown,
+): Promise<{ status: number; json: Record<string, any> }> {
   return fetch(bridge.url!, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -132,8 +141,12 @@ test("bridge times out pending calls with an isError result", async () => {
       method: "tools/call",
       params: { name: `${BRIDGE_TOOL_PREFIX}commit`, arguments: {} },
     }).then(
-      (value) => { posted = value; },
-      (error) => { postError = error; },
+      (value) => {
+        posted = value;
+      },
+      (error) => {
+        postError = error;
+      },
     );
     // Wait until the call is routed and pending — a fixed sleep races on
     // slow CI runners (observed: fetch not delivered within 10ms). Stop

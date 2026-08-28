@@ -11,16 +11,8 @@ import { spawn } from "node:child_process";
 import { statSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { Effect } from "effect";
-import {
-  missingBinaryMessage,
-  resolveBinary,
-  type SearchBinary,
-} from "./binaries.ts";
-import {
-  SearchAbortedError,
-  SearchProcessError,
-  SearchToolMissingError,
-} from "./errors.ts";
+import { missingBinaryMessage, resolveBinary, type SearchBinary } from "./binaries.ts";
+import { SearchAbortedError, SearchProcessError, SearchToolMissingError } from "./errors.ts";
 
 export interface StreamRequest {
   readonly binary: SearchBinary;
@@ -45,11 +37,7 @@ export interface StreamResult {
  * perfectly good answer; fd uses 0 even when nothing matched. A killed child
  * reports null, which is expected whenever we stop early.
  */
-function isBenignExit(
-  binary: SearchBinary,
-  code: number | null,
-  stoppedEarly: boolean,
-): boolean {
+function isBenignExit(binary: SearchBinary, code: number | null, stoppedEarly: boolean): boolean {
   if (code === 0 || code === null) return true;
   if (stoppedEarly) return true;
   return binary === "rg" && code === 1;
@@ -65,10 +53,7 @@ function isDirectoryPath(candidate: string): boolean {
 
 export function streamLines(
   request: StreamRequest,
-): Effect.Effect<
-  StreamResult,
-  SearchToolMissingError | SearchProcessError | SearchAbortedError
-> {
+): Effect.Effect<StreamResult, SearchToolMissingError | SearchProcessError | SearchAbortedError> {
   return Effect.callback<
     StreamResult,
     SearchToolMissingError | SearchProcessError | SearchAbortedError
@@ -86,9 +71,7 @@ export function streamLines(
 
     const outerSignal = request.signal;
     if (outerSignal?.aborted === true || effectSignal.aborted) {
-      resume(
-        new SearchAbortedError({ message: `${request.binary} search aborted` }),
-      );
+      resume(new SearchAbortedError({ message: `${request.binary} search aborted` }));
       return;
     }
 
@@ -200,9 +183,10 @@ export function streamLines(
         const detail = stderr.trim().split("\n")[0] ?? "";
         settle(
           new SearchProcessError({
-            message: detail.length > 0
-              ? `${request.binary} failed: ${detail}`
-              : `${request.binary} exited with code ${code}`,
+            message:
+              detail.length > 0
+                ? `${request.binary} failed: ${detail}`
+                : `${request.binary} exited with code ${code}`,
             tool: request.binary,
             exitCode: code ?? undefined,
           }),

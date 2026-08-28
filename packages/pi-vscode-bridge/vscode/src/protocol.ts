@@ -16,18 +16,34 @@ export interface HelloMessage {
   name: string | null;
   pid: number;
 }
-export interface ByeMessage { type: "bye"; reason: "shutdown" | "disconnect"; }
+export interface ByeMessage {
+  type: "bye";
+  reason: "shutdown" | "disconnect";
+}
 export type ClientMessage = HelloMessage | ByeMessage;
 
-export interface WelcomeMessage { type: "welcome"; protocol: number; workspaceFolders: string[]; }
-export interface RejectMessage { type: "reject"; reason: string; }
-export interface PrefillMessage { type: "prefill"; text: string; }
-export interface DetachedMessage { type: "detached"; reason: "superseded" | "server-shutdown"; }
+export interface WelcomeMessage {
+  type: "welcome";
+  protocol: number;
+  workspaceFolders: string[];
+}
+export interface RejectMessage {
+  type: "reject";
+  reason: string;
+}
+export interface PrefillMessage {
+  type: "prefill";
+  text: string;
+}
+export interface DetachedMessage {
+  type: "detached";
+  reason: "superseded" | "server-shutdown";
+}
 export type ServerMessage = WelcomeMessage | RejectMessage | PrefillMessage | DetachedMessage;
 
 /** Serialize one message as a single JSONL record, including the trailing newline. */
 export function encodeFrame(message: unknown): string {
-  return JSON.stringify(message) + "\n";
+  return `${JSON.stringify(message)}\n`;
 }
 
 /**
@@ -45,8 +61,9 @@ export function createFrameSplitter(): (chunk: string) => string[] {
   return (chunk: string): string[] => {
     buffer += chunk;
     const lines: string[] = [];
-    let newlineIndex: number;
-    while ((newlineIndex = buffer.indexOf("\n")) !== -1) {
+    for (;;) {
+      const newlineIndex = buffer.indexOf("\n");
+      if (newlineIndex === -1) break;
       let line = buffer.slice(0, newlineIndex);
       buffer = buffer.slice(newlineIndex + 1);
       if (line.endsWith("\r")) {
@@ -72,7 +89,7 @@ export function formatRef(relPath: string, startLine?: number, endLine?: number)
 
 /** Join refs with a single space and append one trailing space. */
 export function joinRefs(refs: string[]): string {
-  return refs.join(" ") + " ";
+  return `${refs.join(" ")} `;
 }
 
 function isWindowsAbsolutePath(path: string): boolean {

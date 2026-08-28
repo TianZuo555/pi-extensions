@@ -2,13 +2,7 @@
  * Report file contract for Herdr-backed subagent handoff.
  */
 
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  statSync,
-} from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { Check } from "typebox/value";
 import {
@@ -42,11 +36,11 @@ export function buildHandoffInstructions(reportPath: string): string {
     "## Required handoff",
     "When you are finished, write your final report as JSON to:",
     `  ${reportPath}`,
-    "Schema: {\"status\":\"completed\"|\"blocked\"|\"failed\",\"summary\":string,",
-    "  \"evidence\":[{\"path\":string,\"line\"?:number,\"detail\":string}],",
-    "  \"changes\":[{\"path\":string,\"summary\":string}],",
-    "  \"checks\":[{\"command\":string,\"status\":\"passed\"|\"failed\"|\"not-run\",\"summary\"?:string}],",
-    "  \"questions\":[string],\"artifacts\":[{\"kind\":...,\"path\":string,\"description\":string}]}",
+    'Schema: {"status":"completed"|"blocked"|"failed","summary":string,',
+    '  "evidence":[{"path":string,"line"?:number,"detail":string}],',
+    '  "changes":[{"path":string,"summary":string}],',
+    '  "checks":[{"command":string,"status":"passed"|"failed"|"not-run","summary"?:string}],',
+    '  "questions":[string],"artifacts":[{"kind":...,"path":string,"description":string}]}',
     "Then reply with only that path and nothing else. Do not print the JSON in the terminal.",
   ].join("\n");
 }

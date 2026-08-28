@@ -27,10 +27,7 @@ test("bash metadata states the managed-shell contract concisely", () => {
   assert.match(BASH_TOOL_DESCRIPTION, /timeout kills the process tree/);
   assert.match(BASH_TOOL_DESCRIPTION, /do not poll/i);
   assert.match(BASH_PARAMETER_DESCRIPTIONS.command, /script/);
-  assert.match(
-    BASH_PARAMETER_DESCRIPTIONS.yieldTimeMs,
-    /default 10000, clamped to 250-30000/,
-  );
+  assert.match(BASH_PARAMETER_DESCRIPTIONS.yieldTimeMs, /default 10000, clamped to 250-30000/);
   assert.match(BASH_PARAMETER_DESCRIPTIONS.timeout, /no default/i);
   assert.match(BASH_PARAMETER_DESCRIPTIONS.workingDir, /session cwd/);
   // The schema carries exclusiveMinimum/maximum for timeout, so prose must not
@@ -45,15 +42,10 @@ test("bash metadata states the managed-shell contract concisely", () => {
 test("default titles expose work after repeated setup prefixes", () => {
   const root = "/Users/example/a/very/long/pi-coding-agent/install/path";
   assert.equal(
-    deriveCommandTitle(
-      `D=${root}; grep -rn 'contextTokens' $D/docs/*.md | head -20`,
-    ),
+    deriveCommandTitle(`D=${root}; grep -rn 'contextTokens' $D/docs/*.md | head -20`),
     "grep -rn 'contextTokens' $D/docs/*.md | head -20",
   );
-  assert.equal(
-    deriveCommandTitle(`cd ${root} && npm test`),
-    "npm test",
-  );
+  assert.equal(deriveCommandTitle(`cd ${root} && npm test`), "npm test");
   assert.equal(deriveCommandTitle("ignored", "Meaningful title"), "Meaningful title");
 
   const long = deriveCommandTitle(`printf '${"x".repeat(120)}'`);
@@ -114,10 +106,7 @@ test("every settled result names the directory the command actually ran in", () 
     buildBashResult(snap({ cwd: "/repo/packages/x" })),
     /Command finished in .* \(exit 0\) in \/repo\/packages\/x\./,
   );
-  assert.match(
-    buildBashResult(snap({ cwd: "/repo" })),
-    /\(exit 0\) in \/repo\./,
-  );
+  assert.match(buildBashResult(snap({ cwd: "/repo" })), /\(exit 0\) in \/repo\./);
   assert.match(
     buildBashResult(snap({ cwd: "/repo", status: "timed_out" })),
     /timed out after .* in \/repo\./,
@@ -163,8 +152,7 @@ test("model-facing output uses an opaque archive reference without leaking paths
           head,
           tail,
           totalBytes,
-          truncatedBytes:
-            totalBytes - Buffer.byteLength(head) - Buffer.byteLength(tail),
+          truncatedBytes: totalBytes - Buffer.byteLength(head) - Buffer.byteLength(tail),
           spillPath,
           archiveComplete: true,
         }),
@@ -194,8 +182,7 @@ test("model-facing output uses an opaque archive reference without leaking paths
           head,
           tail,
           totalBytes,
-          truncatedBytes:
-            totalBytes - Buffer.byteLength(head) - Buffer.byteLength(tail),
+          truncatedBytes: totalBytes - Buffer.byteLength(head) - Buffer.byteLength(tail),
           spillPath,
         }),
       }),
@@ -225,10 +212,7 @@ test("archive completeness does not follow settlement status", () => {
 });
 
 test("line-bounded output does not duplicate overlapping head and tail", () => {
-  const output = Array.from(
-    { length: 41 },
-    (_, index) => `line-${index + 1}`,
-  ).join("\n");
+  const output = Array.from({ length: 41 }, (_, index) => `line-${index + 1}`).join("\n");
   const text = buildTerminalResultMessage(
     snap({
       stdout: view({
@@ -299,10 +283,7 @@ test("completion message reports kill vs exit", () => {
 });
 
 test("failed and timed-out completions keep the diagnostic output budget", () => {
-  const output = Array.from(
-    { length: 1_000 },
-    (_, index) => `line-${index + 1}`,
-  ).join("\n");
+  const output = Array.from({ length: 1_000 }, (_, index) => `line-${index + 1}`).join("\n");
   const failed = buildTerminalResultMessage(
     snap({
       status: "failed",
@@ -342,10 +323,7 @@ test("failed and timed-out completions keep the diagnostic output budget", () =>
 });
 
 test("completion output is shorter than the initial bash result", () => {
-  const output = Array.from(
-    { length: 1_000 },
-    (_, index) => `line-${index + 1}`,
-  ).join("\n");
+  const output = Array.from({ length: 1_000 }, (_, index) => `line-${index + 1}`).join("\n");
   const terminal = snap({
     stdout: view({
       text: output,

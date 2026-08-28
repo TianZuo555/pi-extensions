@@ -16,16 +16,14 @@ import {
   type ScopedModel,
 } from "@earendil-works/pi-coding-agent";
 import { Container, Spacer, Text } from "@earendil-works/pi-tui";
-import { type RepoMeta } from "./lib/repo-registry.ts";
+import type { RepoMeta } from "./lib/repo-registry.ts";
 import {
   createRepoModelRuntime,
   DEFAULT_TRIGGERS,
-  type RepoModelConfig,
   type RepoModelEntry,
   RepoModelRuntime,
   type RepoModelRuntimeInstance,
   runRepoModel,
-  type SessionStartReason,
 } from "./src/runtime.ts";
 
 // off + the reasoning levels pi supports.
@@ -141,7 +139,10 @@ function parseModelRef(raw: string): ParsedRef {
   let ref = ref0;
   const lastColon = ref.lastIndexOf(":");
   if (lastColon > ref.lastIndexOf("/")) {
-    const candidate = ref.slice(lastColon + 1).trim().toLowerCase();
+    const candidate = ref
+      .slice(lastColon + 1)
+      .trim()
+      .toLowerCase();
     if (
       candidate === "off" ||
       ["minimal", "low", "medium", "high", "xhigh", "max"].includes(candidate)
@@ -268,7 +269,10 @@ class RepoModelPicker extends Container {
       const visibleRows = 10;
       const start = Math.max(
         0,
-        Math.min(this.modelIndex - Math.floor(visibleRows / 2), this.modelOptions.length - visibleRows),
+        Math.min(
+          this.modelIndex - Math.floor(visibleRows / 2),
+          this.modelOptions.length - visibleRows,
+        ),
       );
       const end = Math.min(start + visibleRows, this.modelOptions.length);
 
@@ -292,9 +296,7 @@ class RepoModelPicker extends Container {
       for (let i = 0; i < this.thinkingOptions.length; i++) {
         const selected = i === this.thinkingIndex;
         const prefix = selected ? t.fg("accent", "❯ ") : "  ";
-        const text = selected
-          ? t.bold(this.thinkingOptions[i]!)
-          : this.thinkingOptions[i]!;
+        const text = selected ? t.bold(this.thinkingOptions[i]!) : this.thinkingOptions[i]!;
         lines.push(`${prefix}${text}`);
       }
     }
@@ -310,7 +312,8 @@ class RepoModelPicker extends Container {
 
     if (this.stage === "model") {
       if (this.keybindings.matches(data, "up") || data === "\x1b[A") {
-        this.modelIndex = (this.modelIndex - 1 + this.modelOptions.length) % this.modelOptions.length;
+        this.modelIndex =
+          (this.modelIndex - 1 + this.modelOptions.length) % this.modelOptions.length;
         this.rebuildUI();
         return true;
       }
@@ -403,7 +406,7 @@ async function interactiveSet(
     }
   }
 
-  const custom = (ctx.ui as { custom?: Function }).custom;
+  const custom = (ctx.ui as { custom?: (...args: unknown[]) => unknown }).custom;
   if (typeof custom !== "function") {
     const label = await ctx.ui.select(
       `repo-model · pick a model for ${meta.name}`,
@@ -415,7 +418,7 @@ async function interactiveSet(
     return commitEntry(pi, ctx, meta, picked, undefined, runtime);
   }
 
-  const result = await custom.call(
+  const result = (await custom.call(
     ctx.ui,
     (
       _tui: unknown,
@@ -431,7 +434,7 @@ async function interactiveSet(
         keybindings,
         done,
       }),
-  );
+  )) as PickerResult | undefined;
   if (!result) return { message: "cancelled", level: "info" };
 
   return commitEntry(pi, ctx, meta, result.model, result.thinking, runtime);
@@ -483,7 +486,10 @@ async function runAction(
   if (action === "get") {
     const entry = await runRepoModel(runtime, service.getRepoModel(ctx.cwd));
     if (!entry) {
-      return { message: `${meta.name}: no default set. Run /repo-model to pick one.`, level: "info" };
+      return {
+        message: `${meta.name}: no default set. Run /repo-model to pick one.`,
+        level: "info",
+      };
     }
     return { message: `${meta.name} -> ${describeEntry(entry)}`, level: "info" };
   }
@@ -501,7 +507,10 @@ async function runAction(
   const parsed = parseModelRef(modelRef);
   if (parsed.error) return { message: parsed.error, level: "error" };
   if (!ctx.modelRegistry.find(parsed.provider, parsed.model)) {
-    return { message: `${parsed.provider}/${parsed.model} not found in your models`, level: "error" };
+    return {
+      message: `${parsed.provider}/${parsed.model} not found in your models`,
+      level: "error",
+    };
   }
 
   const entry: RepoModelEntry = {

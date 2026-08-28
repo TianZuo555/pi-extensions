@@ -35,10 +35,7 @@ test("todo metadata stays concise and non-redundant", () => {
     promptSnippet: TODO_PROMPT_SNIPPET,
     promptGuidelines: TODO_PROMPT_GUIDELINES,
   }).length;
-  assert.ok(
-    metadataChars <= 950,
-    `prompt budget exceeded: ${metadataChars} chars`,
-  );
+  assert.ok(metadataChars <= 950, `prompt budget exceeded: ${metadataChars} chars`);
 });
 
 test("todo schema carries localized contracts and validation", () => {

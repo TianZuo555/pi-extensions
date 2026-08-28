@@ -40,9 +40,10 @@ function buildSnapshotPrompt(snapshot: StagedSnapshot, guidance: string): string
   const recent = snapshot.recentCommitSubjects.trim() || "(no recent commits)";
   const userGuidance = guidance.trim() || "(none)";
   const paths = snapshot.paths.map((filePath) => JSON.stringify(filePath)).join("\n") || "(none)";
-  const truncation = snapshot.omittedPatchBytes > 0
-    ? `\n[Patch truncated: ${snapshot.omittedPatchBytes} of ${snapshot.patchBytes} UTF-8 bytes omitted. Use the complete file list and stat to cover the whole staged snapshot.]`
-    : "";
+  const truncation =
+    snapshot.omittedPatchBytes > 0
+      ? `\n[Patch truncated: ${snapshot.omittedPatchBytes} of ${snapshot.patchBytes} UTF-8 bytes omitted. Use the complete file list and stat to cover the whole staged snapshot.]`
+      : "";
 
   return [
     "USER GUIDANCE (trusted instructions):",
@@ -91,7 +92,9 @@ function validateMessage(value: string): string {
   if (normalized.includes("\0")) throw new Error("Commit message cannot contain NUL characters.");
   const bytes = Buffer.byteLength(normalized, "utf8");
   if (bytes > MAX_COMMIT_MESSAGE_BYTES) {
-    throw new Error(`Commit message is too large (${bytes} bytes; maximum ${MAX_COMMIT_MESSAGE_BYTES}).`);
+    throw new Error(
+      `Commit message is too large (${bytes} bytes; maximum ${MAX_COMMIT_MESSAGE_BYTES}).`,
+    );
   }
   return normalized;
 }
@@ -143,10 +146,14 @@ export function normalizeGeneratedCommitPlan(
 
     const paths = rawCommit.paths.map((filePath, pathIndex) => {
       if (typeof filePath !== "string" || filePath.length === 0) {
-        throw new Error(`Commit plan path ${index + 1}.${pathIndex + 1} must be a non-empty string.`);
+        throw new Error(
+          `Commit plan path ${index + 1}.${pathIndex + 1} must be a non-empty string.`,
+        );
       }
       if (!expected.has(filePath)) {
-        throw new Error(`Commit plan contains unstaged or unknown path: ${JSON.stringify(filePath)}.`);
+        throw new Error(
+          `Commit plan contains unstaged or unknown path: ${JSON.stringify(filePath)}.`,
+        );
       }
       if (seen.has(filePath)) {
         throw new Error(`Commit plan contains duplicate path: ${JSON.stringify(filePath)}.`);
@@ -163,7 +170,9 @@ export function normalizeGeneratedCommitPlan(
 
   const missing = stagedPaths.filter((filePath) => !seen.has(filePath));
   if (missing.length > 0) {
-    throw new Error(`Commit plan omitted staged path(s): ${missing.map((filePath) => JSON.stringify(filePath)).join(", ")}.`);
+    throw new Error(
+      `Commit plan omitted staged path(s): ${missing.map((filePath) => JSON.stringify(filePath)).join(", ")}.`,
+    );
   }
 
   return { commits };
@@ -176,5 +185,8 @@ export function normalizeEditedCommitMessage(value: string): string {
 export function commitMessagePreview(message: string, maxBytes = 4 * 1024): string {
   const buffer = Buffer.from(message, "utf8");
   if (buffer.byteLength <= maxBytes) return message;
-  return `${buffer.subarray(0, maxBytes).toString("utf8").replace(/\uFFFD$/, "")}\n…`;
+  return `${buffer
+    .subarray(0, maxBytes)
+    .toString("utf8")
+    .replace(/\uFFFD$/, "")}\n…`;
 }

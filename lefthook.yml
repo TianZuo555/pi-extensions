@@ -1,0 +1,12 @@
+# Git hooks managed by lefthook (https://lefthook.dev).
+# Installed automatically via the root package.json "postinstall" script.
+# Skip locally with: git push --no-verify
+
+pre-push:
+  commands:
+    lint:
+      run: pnpm lint
+    typecheck:
+      run: pnpm typecheck
+    test:
+      run: pnpm test

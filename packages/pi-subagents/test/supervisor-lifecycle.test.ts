@@ -14,9 +14,10 @@ const FIXTURE = path.join(
   "fake-rpc-child.mjs",
 );
 
-const fakeModel = { provider: "openai", id: "gpt-4.1-mini" } as import("@earendil-works/pi-ai").Model<
-  import("@earendil-works/pi-ai").Api
->;
+const fakeModel = {
+  provider: "openai",
+  id: "gpt-4.1-mini",
+} as import("@earendil-works/pi-ai").Model<import("@earendil-works/pi-ai").Api>;
 
 function isolatedAgentDir(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-lifecycle-"));
@@ -40,11 +41,7 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-async function waitFor(
-  predicate: () => boolean,
-  timeoutMs = 3000,
-  intervalMs = 25,
-): Promise<void> {
+async function waitFor(predicate: () => boolean, timeoutMs = 3000, intervalMs = 25): Promise<void> {
   const start = Date.now();
   while (!predicate()) {
     if (Date.now() - start >= timeoutMs) {
@@ -296,7 +293,12 @@ describe("SubagentSupervisor lifecycle", () => {
     assert.match(result.error ?? "", /RpcChild exited|branch=|patch=/i);
     const branchDiff = execFileSync(
       "git",
-      ["diff", `${result.worktreeDelivery!.baseSha}..${result.worktreeDelivery!.branch}`, "--", "orphan-change.txt"],
+      [
+        "diff",
+        `${result.worktreeDelivery!.baseSha}..${result.worktreeDelivery!.branch}`,
+        "--",
+        "orphan-change.txt",
+      ],
       { cwd: repo, encoding: "utf8" },
     );
     assert.match(branchDiff, /orphan/);

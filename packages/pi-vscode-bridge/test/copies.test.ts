@@ -17,8 +17,5 @@ test("lib/protocol.ts matches vscode/src/protocol.ts byte-for-byte", () => {
 test("lib/hunks.ts matches vscode/src/hunks.ts byte-for-byte", () => {
   const lib = readFileSync(join(root, "lib/hunks.ts"));
   const vscode = readFileSync(join(root, "vscode/src/hunks.ts"));
-  assert.ok(
-    lib.equals(vscode),
-    "lib/hunks.ts and vscode/src/hunks.ts differ — re-copy with cp",
-  );
+  assert.ok(lib.equals(vscode), "lib/hunks.ts and vscode/src/hunks.ts differ — re-copy with cp");
 });

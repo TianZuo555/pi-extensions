@@ -14,11 +14,7 @@ import type {
   Theme,
 } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
-import {
-  stripTerminalSequences,
-  truncateToWidth,
-  visibleWidth,
-} from "@earendil-works/pi-tui";
+import { stripTerminalSequences, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { stopAgyTask, type AgyTask } from "../lib/tasks.ts";
 
 export type AgyTaskStatus = "running" | "orphan" | "done";
@@ -85,9 +81,7 @@ export function reconcileAgyTasksSelection(
   selection: AgyTasksSelection,
   tasks: ReadonlyArray<Pick<AgyTask, "id">>,
 ) {
-  const stableIndex = selection.id
-    ? tasks.findIndex((task) => task.id === selection.id)
-    : -1;
+  const stableIndex = selection.id ? tasks.findIndex((task) => task.id === selection.id) : -1;
   selection.index =
     stableIndex >= 0
       ? stableIndex
@@ -213,8 +207,7 @@ export class AgyTasksDashboard implements Component {
     }
     if (this.keybindings.matches(data, "tui.select.up") || data === "k") {
       if (tasks.length > 0) {
-        this.selection.index =
-          (this.selection.index - 1 + tasks.length) % tasks.length;
+        this.selection.index = (this.selection.index - 1 + tasks.length) % tasks.length;
         this.selection.id = tasks[this.selection.index]?.id;
         this.tui.requestRender();
       }
@@ -417,20 +410,9 @@ export class AgyTasksDashboard implements Component {
     // Header: title left, count right
     const headerLeft = theme.fg("accent", theme.bold("agy background tasks"));
     const live = tasks.filter((task) => agyTaskStatus(task) !== "done").length;
-    const headerRight = theme.fg(
-      "muted",
-      `${live} live / ${tasks.length}`,
-    );
-    const headerPad = Math.max(
-      1,
-      width - visibleWidth(headerLeft) - visibleWidth(headerRight) - 4,
-    );
-    lines.push(
-      truncateToWidth(
-        `  ${headerLeft}${" ".repeat(headerPad)}${headerRight}  `,
-        width,
-      ),
-    );
+    const headerRight = theme.fg("muted", `${live} live / ${tasks.length}`);
+    const headerPad = Math.max(1, width - visibleWidth(headerLeft) - visibleWidth(headerRight) - 4);
+    lines.push(truncateToWidth(`  ${headerLeft}${" ".repeat(headerPad)}${headerRight}  `, width));
 
     // Top border with panel title
     lines.push(
@@ -457,10 +439,7 @@ export class AgyTasksDashboard implements Component {
         : this.renderRows(tasks, innerWidth, bodyHeight);
     for (let i = 0; i < bodyHeight; i++) {
       lines.push(
-        truncateToWidth(
-          divider + this.pad(rowLines[i] ?? "", innerWidth) + divider,
-          width,
-        ),
+        truncateToWidth(divider + this.pad(rowLines[i] ?? "", innerWidth) + divider, width),
       );
     }
 
@@ -521,11 +500,7 @@ export class AgyTasksDashboard implements Component {
     return out;
   }
 
-  private renderRows(
-    tasks: ReadonlyArray<AgyTask>,
-    width: number,
-    height: number,
-  ): string[] {
+  private renderRows(tasks: ReadonlyArray<AgyTask>, width: number, height: number): string[] {
     const theme = this.theme;
     const out: string[] = [];
 
@@ -549,10 +524,7 @@ export class AgyTasksDashboard implements Component {
       const title = isSelected
         ? theme.fg("accent", oneLine(task.description))
         : theme.fg("text", oneLine(task.description));
-      const pids =
-        task.pids.length > 0
-          ? task.pids
-          : task.orphans;
+      const pids = task.pids.length > 0 ? task.pids : task.orphans;
       const left = ` ${marker} ${statusGlyph(status, theme)} ${title} ${theme.fg("dim", task.id)}`;
 
       const dot = theme.fg("dim", " · ");
@@ -567,7 +539,9 @@ export class AgyTasksDashboard implements Component {
       const leftMax = Math.max(0, width - rightWidth - 2);
       out.push(
         truncateToWidth(left, leftMax) +
-          " ".repeat(Math.max(1, width - visibleWidth(truncateToWidth(left, leftMax)) - rightWidth)) +
+          " ".repeat(
+            Math.max(1, width - visibleWidth(truncateToWidth(left, leftMax)) - rightWidth),
+          ) +
           right,
       );
     }

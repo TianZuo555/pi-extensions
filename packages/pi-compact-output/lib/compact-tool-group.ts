@@ -78,9 +78,9 @@ export function buildCompactToolGroup(
     return [];
   }
 
-  const contentLines = lineParts.slice(0, lineCount).map((line) =>
-    truncateToWidth(line, contentWidth),
-  );
+  const contentLines = lineParts
+    .slice(0, lineCount)
+    .map((line) => truncateToWidth(line, contentWidth));
   if (contentLines.length > 0 && items.length > 1) {
     // Keep the overflow count visible after the configured preview lines
     // instead of truncating it onto the last tool/result line.
@@ -95,22 +95,13 @@ export function buildCompactToolGroup(
   const innerWidth = Math.max(0, safeWidth - 2);
   const label = ` Tool ${styledMarker} `;
   const topDashes = Math.max(0, innerWidth - visibleWidth(label));
-  const top = truncateToWidth(
-    border("╭") + label + border("─".repeat(topDashes) + "╮"),
-    safeWidth,
-  );
+  const top = truncateToWidth(border("╭") + label + border(`${"─".repeat(topDashes)}╮`), safeWidth);
 
   const renderedContent = contentLines.map((line) => {
     const padding = Math.max(0, contentWidth - visibleWidth(line));
-    return truncateToWidth(
-      border("│ ") + line + " ".repeat(padding) + border(" │"),
-      safeWidth,
-    );
+    return truncateToWidth(border("│ ") + line + " ".repeat(padding) + border(" │"), safeWidth);
   });
-  const bottom = truncateToWidth(
-    border("╰") + border("─".repeat(innerWidth) + "╯"),
-    safeWidth,
-  );
+  const bottom = truncateToWidth(border("╰") + border(`${"─".repeat(innerWidth)}╯`), safeWidth);
 
   const topSpacer = new Spacer(1);
   const bottomSpacer = new Spacer(1);

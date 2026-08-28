@@ -73,7 +73,11 @@ function initGitRepo(dir: string, withRepoIdentity = true): void {
   const env = isolatedGitEnv();
   execFileSync("git", ["init"], { cwd: dir, stdio: "pipe", env });
   if (withRepoIdentity) {
-    execFileSync("git", ["config", "user.name", "pi-subagents test"], { cwd: dir, stdio: "pipe", env });
+    execFileSync("git", ["config", "user.name", "pi-subagents test"], {
+      cwd: dir,
+      stdio: "pipe",
+      env,
+    });
     execFileSync("git", ["config", "user.email", "pi-subagents-test@example.invalid"], {
       cwd: dir,
       stdio: "pipe",
@@ -356,13 +360,20 @@ describe("worktree finalization", () => {
 
     const worktree = createWorktree(repo, "herdr-branch-run");
     assert.ok(worktree);
-    execFileSync("git", ["checkout", "-B", worktree!.branch], { cwd: worktree!.workPath, stdio: "pipe" });
+    execFileSync("git", ["checkout", "-B", worktree!.branch], {
+      cwd: worktree!.workPath,
+      stdio: "pipe",
+    });
     const herdrWorktree: WorktreeInfo = {
       ...worktree!,
       branchPreexisting: true,
       herdrWorkspaceId: "ws-herdr-test",
     };
-    fs.writeFileSync(path.join(herdrWorktree.workPath, "herdr-change.txt"), "herdr branch\n", "utf8");
+    fs.writeFileSync(
+      path.join(herdrWorktree.workPath, "herdr-change.txt"),
+      "herdr branch\n",
+      "utf8",
+    );
 
     const artifactRoot = mkArtifactRoot();
     const removeLog = path.join(os.tmpdir(), `herdr-remove-log-${process.pid}`);
@@ -377,7 +388,9 @@ describe("worktree finalization", () => {
         assert.equal(result.hasChanges, true);
         assert.equal(result.delivery.branch, herdrWorktree.branch);
         assert.ok(result.delivery.patch);
-        const logged = JSON.parse(fs.readFileSync(removeLog, "utf8").trim().split("\n")[0]) as string[];
+        const logged = JSON.parse(
+          fs.readFileSync(removeLog, "utf8").trim().split("\n")[0],
+        ) as string[];
         assert.deepEqual(logged.slice(-5), [
           "worktree",
           "remove",
@@ -404,9 +417,7 @@ describe("worktree finalization", () => {
       await withEnv({ FAKE_HERDR_RECORD_REMOVE: removeLog }, async () => {
         const { removeHerdrWorktree } = await import("../lib/herdr/workspace.ts");
         const { Effect } = await import("effect");
-        await Effect.runPromise(
-          removeHerdrWorktree("ws-shape-test", fakeCliOptions()),
-        );
+        await Effect.runPromise(removeHerdrWorktree("ws-shape-test", fakeCliOptions()));
         const logged = JSON.parse(fs.readFileSync(removeLog, "utf8").trim()) as string[];
         assert.deepEqual(logged.slice(-5), [
           "worktree",

@@ -65,7 +65,11 @@ export function selectBridgedTools(
     if (!active.has(tool.name)) continue;
     if (tool.name === WRAPPER_TOOL_NAME) continue; // display-only replay wrapper
     if (!MCP_ADAPTER_SOURCE.test(tool.sourceInfo?.source ?? "")) continue;
-    bridged.push({ name: tool.name, description: tool.description ?? "", parameters: tool.parameters });
+    bridged.push({
+      name: tool.name,
+      description: tool.description ?? "",
+      parameters: tool.parameters,
+    });
   }
   return bridged;
 }
@@ -248,7 +252,9 @@ export class AgyPiBridge {
     }
     if (req.method !== "POST") {
       res.writeHead(405, { "content-type": "application/json" });
-      res.end(JSON.stringify({ jsonrpc: "2.0", error: { code: -32000, message: "GET not supported" } }));
+      res.end(
+        JSON.stringify({ jsonrpc: "2.0", error: { code: -32000, message: "GET not supported" } }),
+      );
       return;
     }
     const chunks: Buffer[] = [];
@@ -259,7 +265,9 @@ export class AgyPiBridge {
         rpc = JSON.parse(Buffer.concat(chunks).toString("utf-8")) as JsonRpcRequest;
       } catch {
         res.writeHead(400, { "content-type": "application/json" });
-        res.end(JSON.stringify({ jsonrpc: "2.0", error: { code: -32700, message: "Parse error" } }));
+        res.end(
+          JSON.stringify({ jsonrpc: "2.0", error: { code: -32700, message: "Parse error" } }),
+        );
         return;
       }
       void this.#handleRpc(rpc).then(
@@ -278,7 +286,9 @@ export class AgyPiBridge {
         },
         () => {
           res.writeHead(500, { "content-type": "application/json" });
-          res.end(JSON.stringify({ jsonrpc: "2.0", error: { code: -32603, message: "Internal error" } }));
+          res.end(
+            JSON.stringify({ jsonrpc: "2.0", error: { code: -32603, message: "Internal error" } }),
+          );
         },
       );
     });
@@ -305,13 +315,15 @@ export class AgyPiBridge {
           ...base,
           result: {
             tools: [
-              ...this.#tools.filter((tool) => !this.#dynamic.has(tool.name)).map((tool) => ({
-                name: `${this.#toolPrefix}${tool.name}`,
-                description:
-                  tool.description ||
-                  `pi tool "${tool.name}" bridged into agy by ${BRIDGE_SERVER_NAME}.`,
-                inputSchema: tool.parameters,
-              })),
+              ...this.#tools
+                .filter((tool) => !this.#dynamic.has(tool.name))
+                .map((tool) => ({
+                  name: `${this.#toolPrefix}${tool.name}`,
+                  description:
+                    tool.description ||
+                    `pi tool "${tool.name}" bridged into agy by ${BRIDGE_SERVER_NAME}.`,
+                  inputSchema: tool.parameters,
+                })),
               ...[...this.#dynamic].map(([name, definition]) => ({
                 name: `${this.#toolPrefix}${name}`,
                 description: definition.description,
@@ -348,7 +360,10 @@ export class AgyPiBridge {
    */
   async #routeCall(mcpName: string, args: Record<string, unknown>): Promise<BridgeCallResult> {
     if (!mcpName.startsWith(this.#toolPrefix)) {
-      return { content: `antigravity: unknown tool "${mcpName}" — only ${this.#toolPrefix}* bridge tools exist.`, isError: true };
+      return {
+        content: `antigravity: unknown tool "${mcpName}" — only ${this.#toolPrefix}* bridge tools exist.`,
+        isError: true,
+      };
     }
     const tool = mcpName.slice(this.#toolPrefix.length);
     const dynamic = this.#dynamic.get(tool);
@@ -363,7 +378,10 @@ export class AgyPiBridge {
     const id = `pi-bridge-${++this.#seq}`;
     const dispatched = this.#onCall?.({ id, tool, args }) ?? false;
     if (!dispatched) {
-      return { content: "antigravity: no active agy turn to route the tool call into.", isError: true };
+      return {
+        content: "antigravity: no active agy turn to route the tool call into.",
+        isError: true,
+      };
     }
     return new Promise<BridgeCallResult>((resolve) => {
       const pending: PendingCall = {

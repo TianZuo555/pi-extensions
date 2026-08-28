@@ -41,11 +41,15 @@ describe("profile trust", () => {
     const profile = sampleProjectProfile("abc123");
     await assert.rejects(
       () =>
-        ensureProjectProfileAllowed(profile, {
-          projectTrusted: false,
-          hasUI: true,
-          requestApproval: async () => true,
-        }, "/tmp/agent"),
+        ensureProjectProfileAllowed(
+          profile,
+          {
+            projectTrusted: false,
+            hasUI: true,
+            requestApproval: async () => true,
+          },
+          "/tmp/agent",
+        ),
       /requires a trusted project/,
     );
   });
@@ -57,14 +61,18 @@ describe("profile trust", () => {
 
     const profile = sampleProjectProfile("deadbeef00000000");
     let asked = false;
-    await ensureProjectProfileAllowed(profile, {
-      projectTrusted: true,
-      hasUI: true,
-      requestApproval: async () => {
-        asked = true;
-        return true;
+    await ensureProjectProfileAllowed(
+      profile,
+      {
+        projectTrusted: true,
+        hasUI: true,
+        requestApproval: async () => {
+          asked = true;
+          return true;
+        },
       },
-    }, agentDir);
+      agentDir,
+    );
     assert.equal(asked, true);
     assert.equal(isProfileApproved(agentDir, profile.qualifiedId, profile.contentHash!), true);
 
@@ -79,14 +87,18 @@ describe("profile trust", () => {
     const profile = sampleProjectProfile("cafebabe00000000");
     recordProfileApproval(agentDir, profile.qualifiedId, profile.contentHash!);
     let asked = false;
-    await ensureProjectProfileAllowed(profile, {
-      projectTrusted: true,
-      hasUI: true,
-      requestApproval: async () => {
-        asked = true;
-        return true;
+    await ensureProjectProfileAllowed(
+      profile,
+      {
+        projectTrusted: true,
+        hasUI: true,
+        requestApproval: async () => {
+          asked = true;
+          return true;
+        },
       },
-    }, agentDir);
+      agentDir,
+    );
     assert.equal(asked, false);
 
     fs.rmSync(tmp, { recursive: true, force: true });

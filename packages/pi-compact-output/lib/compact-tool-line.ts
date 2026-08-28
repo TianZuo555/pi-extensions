@@ -1,10 +1,7 @@
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { Component } from "@earendil-works/pi-tui";
 import { firstSanitizedLine, firstSanitizedLines, sanitizeCompactText } from "./sanitize-text.ts";
-import {
-  SPINNER_FRAMES,
-  type CompactToolStatus,
-} from "./compact-status.ts";
+import { SPINNER_FRAMES, type CompactToolStatus } from "./compact-status.ts";
 
 export interface ToolExecutionInternals {
   toolName: string;
@@ -36,7 +33,10 @@ function isVisuallyNonEmpty(line: string): boolean {
   return stripAnsi(trimTrailingPaddingPreservingAnsi(line)).trim().length > 0;
 }
 
-function firstNonEmptyRenderedLine(component: Component | undefined, width: number): string | undefined {
+function firstNonEmptyRenderedLine(
+  component: Component | undefined,
+  width: number,
+): string | undefined {
   return firstNonEmptyRenderedLines(component, width, 1)[0];
 }
 
@@ -58,7 +58,6 @@ function firstNonEmptyRenderedLines(
 }
 
 export { firstNonEmptyRenderedLine, firstNonEmptyRenderedLines };
-
 
 function readStringField(args: unknown, key: string): string | undefined {
   if (!args || typeof args !== "object") return undefined;

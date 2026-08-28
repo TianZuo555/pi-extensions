@@ -147,9 +147,7 @@ export async function searchFirecrawl(
   }
 
   const data = (await res.json()) as FirecrawlSearchApiResponse;
-  const rawResults = Array.isArray(data.data)
-    ? data.data
-    : (data.data?.web ?? []);
+  const rawResults = Array.isArray(data.data) ? data.data : (data.data?.web ?? []);
 
   const results: SearchResult[] = rawResults.map((item) => {
     const url = item.url || "";

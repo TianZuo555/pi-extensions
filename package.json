@@ -42,8 +42,12 @@
     ]
   },
   "scripts": {
+    "postinstall": "lefthook install",
     "typecheck": "tsc --noEmit",
     "check": "pnpm -r run check",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "format": "biome format --write .",
     "test": "pnpm run test:usage && pnpm -r test",
     "test:usage": "node --test tests/pi-usage-providers.test.mjs",
     "test:ask-user": "pnpm --filter @tian.zuo/pi-ask-user test",
@@ -70,10 +74,12 @@
     "typebox": "*"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.5.10",
     "@earendil-works/pi-ai": "^0.84.2",
     "@earendil-works/pi-coding-agent": "^0.84.2",
     "@earendil-works/pi-tui": "^0.84.2",
     "@types/node": "^26.2.0",
+    "lefthook": "^2.1.10",
     "typebox": "^1.3.15",
     "typescript": "^7.0.2"
   }

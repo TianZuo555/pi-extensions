@@ -12,10 +12,7 @@ import {
   type CompactReasoningPreview,
 } from "./compact-reasoning.ts";
 import { buildCompactToolGroup } from "./compact-tool-group.ts";
-import {
-  getThinkingSegmentText,
-  parseAssistantContentSegments,
-} from "./content-segments.ts";
+import { getThinkingSegmentText, parseAssistantContentSegments } from "./content-segments.ts";
 import { firstSanitizedLines } from "./sanitize-text.ts";
 import { SPINNER_FRAMES, SPINNER_INTERVAL_MS } from "./compact-status.ts";
 import { tryReadToolExecutionInternals } from "./tool-internals.ts";
@@ -181,7 +178,10 @@ export function compactThinkingSummary(
   }
 
   const latest = normalizeReasoningText(segments[segmentIndex] ?? "");
-  if (segmentIndex > (previous?.segmentIndex ?? -1) && firstSanitizedLines(latest, 1).length === 0) {
+  if (
+    segmentIndex > (previous?.segmentIndex ?? -1) &&
+    firstSanitizedLines(latest, 1).length === 0
+  ) {
     return {
       summary: previous?.summary,
       state: previous ?? { segmentIndex: -1 },
@@ -241,10 +241,7 @@ function compactAssistantMessage(message: AssistantMessage): AssistantMessage {
   return { ...message, content };
 }
 
-function withAssistantThinkingHidden<T>(
-  component: AssistantMessageComponent,
-  render: () => T,
-): T {
+function withAssistantThinkingHidden<T>(component: AssistantMessageComponent, render: () => T): T {
   const internals = component as unknown as { hideThinkingBlock?: unknown };
   if (typeof internals.hideThinkingBlock !== "boolean") {
     return render();
@@ -265,16 +262,20 @@ function readToolCallId(component: ToolExecutionComponent): string | undefined {
 }
 
 function findToolRecordByCallId(state: PatchState, toolCallId: string): ToolRecord | undefined {
-  return state.toolRecords.find(
-    (record) => record.toolCallId === toolCallId && !record.duplicate,
-  );
+  return state.toolRecords.find((record) => record.toolCallId === toolCallId && !record.duplicate);
 }
 
-function findToolComponent(state: PatchState, toolCallId: string): ToolExecutionComponent | undefined {
+function findToolComponent(
+  state: PatchState,
+  toolCallId: string,
+): ToolExecutionComponent | undefined {
   return findToolRecordByCallId(state, toolCallId)?.component;
 }
 
-function getAssistantTurn(state: PatchState, assistant: AssistantMessageComponent): AssistantTurnState {
+function getAssistantTurn(
+  state: PatchState,
+  assistant: AssistantMessageComponent,
+): AssistantTurnState {
   const existing = state.assistantTurns.get(assistant);
   if (existing) return existing;
   const turn: AssistantTurnState = {
@@ -314,9 +315,11 @@ function assignToolSequences(
 
 function captureRequestRender(state: PatchState): (() => void) | undefined {
   for (const record of state.toolRecords) {
-    const ui = (record.component as unknown as {
-      ui?: { requestRender?: unknown };
-    }).ui;
+    const ui = (
+      record.component as unknown as {
+        ui?: { requestRender?: unknown };
+      }
+    ).ui;
     if (ui && typeof ui.requestRender === "function") {
       const requestRender = ui.requestRender as () => void;
       return () => requestRender.call(ui);
@@ -467,13 +470,13 @@ function buildTurnComponentOrder(state: PatchState, turn: AssistantTurnState): C
 function reorderTurnComponents(parent: Container, ordered: readonly Component[]): void {
   if (ordered.length === 0) return;
 
-  const orderedSet = new Set(ordered);
+  const _orderedSet = new Set(ordered);
   const indices = ordered
     .map((component) => parent.children.indexOf(component))
     .filter((index) => index >= 0);
   if (indices.length === 0) return;
 
-  const minIndex = Math.min(...indices);
+  const _minIndex = Math.min(...indices);
   const maxIndex = Math.max(...indices);
   const tail = parent.children.slice(maxIndex + 1);
 
@@ -517,7 +520,10 @@ function tryReorderAssistantTurn(state: PatchState, assistant: AssistantMessageC
   }
 }
 
-function findToolRecord(state: PatchState, component: ToolExecutionComponent): ToolRecord | undefined {
+function findToolRecord(
+  state: PatchState,
+  component: ToolExecutionComponent,
+): ToolRecord | undefined {
   return state.toolRecords.find((record) => record.component === component);
 }
 
@@ -547,10 +553,7 @@ function ensureToolRecord(
     callId !== undefined &&
     state.toolRecords.some(
       (other) =>
-        other !== record &&
-        other.toolCallId === callId &&
-        !other.duplicate &&
-        isMounted(other),
+        other !== record && other.toolCallId === callId && !other.duplicate && isMounted(other),
     );
   state.toolRecords.push(record);
   return record;
@@ -563,11 +566,7 @@ function isMounted(record: ToolRecord): boolean {
 function getToolGroup(state: PatchState, record: ToolRecord): ToolRecord[] {
   return state.toolRecords
     .filter((candidate) => {
-      if (
-        candidate.duplicate ||
-        candidate.sequence !== record.sequence ||
-        !isMounted(candidate)
-      ) {
+      if (candidate.duplicate || candidate.sequence !== record.sequence || !isMounted(candidate)) {
         return false;
       }
       if (record.parent) return candidate.parent === record.parent;
@@ -577,18 +576,12 @@ function getToolGroup(state: PatchState, record: ToolRecord): ToolRecord[] {
 }
 
 function buildToolGroup(state: PatchState, record: ToolRecord, width: number): string[] {
-  const items = getToolGroup(state, record)
-    .flatMap((candidate) => {
-      const internals = tryReadToolExecutionInternals(candidate.component);
-      if (!internals || internals.hideComponent) return [];
-      return [{ internals }];
-    });
-  return buildCompactToolGroup(
-    items,
-    width,
-    state.toolLineCount,
-    state.toolSpinnerFrame,
-  );
+  const items = getToolGroup(state, record).flatMap((candidate) => {
+    const internals = tryReadToolExecutionInternals(candidate.component);
+    if (!internals || internals.hideComponent) return [];
+    return [{ internals }];
+  });
+  return buildCompactToolGroup(items, width, state.toolLineCount, state.toolSpinnerFrame);
 }
 
 export function installUiPatches(): PatchInstallResult {
@@ -617,8 +610,8 @@ export function installUiPatches(): PatchInstallResult {
   const originalContainerAddChild = containerPrototype.addChild;
   const originalToolRender = ToolExecutionComponent.prototype.render as ToolRender;
   const originalToolSetExpanded = ToolExecutionComponent.prototype.setExpanded as ToolSetExpanded;
-  const originalAssistantUpdateContent =
-    AssistantMessageComponent.prototype.updateContent as AssistantUpdateContent;
+  const originalAssistantUpdateContent = AssistantMessageComponent.prototype
+    .updateContent as AssistantUpdateContent;
   const assistantPrototype = AssistantMessageComponent.prototype as AssistantPrototype;
   const originalAssistantSetExpanded = assistantPrototype.setExpanded;
 
@@ -671,7 +664,10 @@ export function installUiPatches(): PatchInstallResult {
     originalToolSetExpanded.call(this, expanded);
   };
 
-  const toolRenderWrapper: ToolRender = function toolRenderWrapper(this: ToolExecutionComponent, width: number) {
+  const toolRenderWrapper: ToolRender = function toolRenderWrapper(
+    this: ToolExecutionComponent,
+    width: number,
+  ) {
     const current = getPatchState();
     if (!current?.installed) {
       return originalToolRender.call(this, width);
@@ -705,37 +701,40 @@ export function installUiPatches(): PatchInstallResult {
     }
   };
 
-  const assistantUpdateContentWrapper: AssistantUpdateContent = function assistantUpdateContentWrapper(
-    this: AssistantMessageComponent,
-    message: AssistantMessage,
-  ) {
-    const current = getPatchState();
-    if (!current?.installed) {
-      originalAssistantUpdateContent.call(this, message);
-      return;
-    }
-
-    try {
-      const sourceMessage = current.assistantDisplayMessages.get(message) ?? message;
-      current.lastUpdatedAssistant = this;
-      current.assistantMessages.set(this, sourceMessage);
-
-      const turn = getAssistantTurn(current, this);
-      turn.lastMessage = sourceMessage;
-
-      const expanded = current.assistantExpandedStates.get(this) ?? current.reasoningExpanded;
-      syncReasoningComponents(current, turn, sourceMessage, expanded);
-
-      const displayMessage = compactAssistantMessage(sourceMessage);
-      if (displayMessage !== sourceMessage) {
-        current.assistantDisplayMessages.set(displayMessage, sourceMessage);
+  const assistantUpdateContentWrapper: AssistantUpdateContent =
+    function assistantUpdateContentWrapper(
+      this: AssistantMessageComponent,
+      message: AssistantMessage,
+    ) {
+      const current = getPatchState();
+      if (!current?.installed) {
+        originalAssistantUpdateContent.call(this, message);
+        return;
       }
-      withAssistantThinkingHidden(this, () => originalAssistantUpdateContent.call(this, displayMessage));
-      tryReorderAssistantTurn(current, this);
-    } catch {
-      originalAssistantUpdateContent.call(this, message);
-    }
-  };
+
+      try {
+        const sourceMessage = current.assistantDisplayMessages.get(message) ?? message;
+        current.lastUpdatedAssistant = this;
+        current.assistantMessages.set(this, sourceMessage);
+
+        const turn = getAssistantTurn(current, this);
+        turn.lastMessage = sourceMessage;
+
+        const expanded = current.assistantExpandedStates.get(this) ?? current.reasoningExpanded;
+        syncReasoningComponents(current, turn, sourceMessage, expanded);
+
+        const displayMessage = compactAssistantMessage(sourceMessage);
+        if (displayMessage !== sourceMessage) {
+          current.assistantDisplayMessages.set(displayMessage, sourceMessage);
+        }
+        withAssistantThinkingHidden(this, () =>
+          originalAssistantUpdateContent.call(this, displayMessage),
+        );
+        tryReorderAssistantTurn(current, this);
+      } catch {
+        originalAssistantUpdateContent.call(this, message);
+      }
+    };
 
   const assistantSetExpandedWrapper: AssistantSetExpanded = function assistantSetExpandedWrapper(
     this: AssistantMessageComponent,
@@ -755,7 +754,9 @@ export function installUiPatches(): PatchInstallResult {
           if (displayMessage !== message) {
             current.assistantDisplayMessages.set(displayMessage, message);
           }
-          withAssistantThinkingHidden(this, () => originalAssistantUpdateContent.call(this, displayMessage));
+          withAssistantThinkingHidden(this, () =>
+            originalAssistantUpdateContent.call(this, displayMessage),
+          );
           tryReorderAssistantTurn(current, this);
         } catch {
           originalAssistantUpdateContent.call(this, message);

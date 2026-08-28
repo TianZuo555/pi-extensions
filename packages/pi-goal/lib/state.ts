@@ -66,11 +66,7 @@ function finiteNonNegative(value: unknown): value is number {
 }
 
 function finitePositiveInteger(value: unknown): value is number {
-  return (
-    typeof value === "number" &&
-    Number.isSafeInteger(value) &&
-    value > 0
-  );
+  return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
 }
 
 /**
@@ -190,18 +186,12 @@ export function isTerminalGoal(goal: Goal): boolean {
 /** Edit user-owned goal content in place, preserving identity and accounting.
  * Codex keeps paused/blocked/usage-limited goals stopped, while editing a
  * complete or budget-limited goal makes the revised objective active again. */
-export function editGoalObjective(
-  goal: Goal,
-  objective: string,
-  now = Date.now(),
-): Goal {
+export function editGoalObjective(goal: Goal, objective: string, now = Date.now()): Goal {
   const normalizedObjective = objective.trim();
   const objectiveError = validateObjective(normalizedObjective);
   if (objectiveError) throw new Error(objectiveError);
   const status =
-    goal.status === "complete" || goal.status === "budget-limited"
-      ? "active"
-      : goal.status;
+    goal.status === "complete" || goal.status === "budget-limited" ? "active" : goal.status;
   return {
     ...goal,
     objective: normalizedObjective,
@@ -238,9 +228,7 @@ export function addGoalUsage(goal: Goal, usage: GoalUsage, now = Date.now()): Go
   const nextTokens = goal.tokensUsed + Math.max(0, usage.tokens);
   const nextSeconds = goal.timeUsedSeconds + Math.max(0, usage.seconds);
   const budgetReached =
-    goal.status === "active" &&
-    goal.tokenBudget !== undefined &&
-    nextTokens >= goal.tokenBudget;
+    goal.status === "active" && goal.tokenBudget !== undefined && nextTokens >= goal.tokenBudget;
 
   return {
     ...goal,
@@ -312,6 +300,8 @@ export function usageFromUnknown(value: unknown): number {
   const fields = ["input", "output", "cacheRead", "cacheWrite"];
   return fields.reduce((sum, field) => {
     const amount = value[field];
-    return sum + (typeof amount === "number" && Number.isFinite(amount) && amount >= 0 ? amount : 0);
+    return (
+      sum + (typeof amount === "number" && Number.isFinite(amount) && amount >= 0 ? amount : 0)
+    );
   }, 0);
 }

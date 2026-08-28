@@ -5,9 +5,7 @@ import { applyEvent, newTurnOutcome, reduceAgyStream } from "../lib/reducer.ts";
 import { CONVERSATION_ID, OK_CAPTURE, REAL_CAPTURE } from "./fixtures.ts";
 
 test("parseAgyLine recognizes init/step/result and tolerates junk", () => {
-  const init = parseAgyLine(
-    `{"event":"init","conversation_id":"x","init":{"cwd":"/tmp"}}`,
-  );
+  const init = parseAgyLine(`{"event":"init","conversation_id":"x","init":{"cwd":"/tmp"}}`);
   assert.equal(init.kind, "init");
   assert.ok(init.kind === "init" && init.conversationId === "x");
 

@@ -30,22 +30,10 @@ test("formatAgyCall renders native-style call lines", () => {
     formatAgyCall("find_by_name", { Pattern: "*.fish", SearchDirectory: "/tmp/dot" }, theme),
     "find *.fish in /tmp/dot",
   );
-  assert.equal(
-    formatAgyCall("list_dir", { DirectoryPath: "/tmp/x" }, theme),
-    "ls /tmp/x",
-  );
-  assert.equal(
-    formatAgyCall("view_file", { AbsolutePath: "/tmp/a.md" }, theme),
-    "read /tmp/a.md",
-  );
-  assert.equal(
-    formatAgyCall("run_command", { command: "just test" }, theme),
-    "bash just test",
-  );
-  assert.equal(
-    formatAgyCall("run_command", { CommandLine: "sleep 120" }, theme),
-    "bash sleep 120",
-  );
+  assert.equal(formatAgyCall("list_dir", { DirectoryPath: "/tmp/x" }, theme), "ls /tmp/x");
+  assert.equal(formatAgyCall("view_file", { AbsolutePath: "/tmp/a.md" }, theme), "read /tmp/a.md");
+  assert.equal(formatAgyCall("run_command", { command: "just test" }, theme), "bash just test");
+  assert.equal(formatAgyCall("run_command", { CommandLine: "sleep 120" }, theme), "bash sleep 120");
 });
 
 test("formatAgyCall shortens $HOME paths and bounds unknown-tool JSON", () => {
@@ -75,10 +63,7 @@ test("formatAgyCall covers orchestration and media tools", () => {
     formatAgyCall("send_message", { to: "researcher", Message: "status?" }, theme),
     'send_message researcher "status?"',
   );
-  assert.equal(
-    formatAgyCall("manage_task", { Action: "list" }, theme),
-    "manage_task list",
-  );
+  assert.equal(formatAgyCall("manage_task", { Action: "list" }, theme), "manage_task list");
   // Unknown shapes fall back to a bounded key/value summary, not raw JSON.
   const generic = formatAgyCall("schedule", { cron: "* * * * *", prompt: "run tests" }, theme);
   assert.match(generic, /schedule/);
@@ -87,10 +72,10 @@ test("formatAgyCall covers orchestration and media tools", () => {
 });
 
 test("summarizeAgyResult counts grep matches and find results", () => {
-  const grep = summarizeAgyResult("grep_search", './a.ts: one\n./a.ts: two\n./b.ts: three\n');
+  const grep = summarizeAgyResult("grep_search", "./a.ts: one\n./a.ts: two\n./b.ts: three\n");
   assert.deepEqual(grep, { counts: "3 matches in 2 files" });
 
-  const single = summarizeAgyResult("grep_search", "./package.json: \"version\"");
+  const single = summarizeAgyResult("grep_search", './package.json: "version"');
   assert.deepEqual(single, { counts: "1 match in 1 file" });
 
   const found = summarizeAgyResult("find_by_name", "x.txt\ny.txt\n");

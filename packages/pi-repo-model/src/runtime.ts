@@ -4,15 +4,7 @@
  */
 
 import path from "node:path";
-import {
-  Cause,
-  Context,
-  Effect,
-  Exit,
-  Layer,
-  ManagedRuntime,
-  Result,
-} from "effect";
+import { Cause, Context, Effect, Exit, Layer, ManagedRuntime, Result } from "effect";
 import {
   getRepoMeta as getRepoMetaHelper,
   piConfigDir,
@@ -20,7 +12,7 @@ import {
   type RepoMeta,
   writeJson,
 } from "../lib/repo-registry.ts";
-import { RepoModelConfigError, type RepoModelError } from "./errors.ts";
+import { RepoModelConfigError } from "./errors.ts";
 
 export type SessionStartReason = "startup" | "new" | "resume" | "fork" | "reload";
 export const DEFAULT_TRIGGERS: SessionStartReason[] = ["startup", "new"];
@@ -53,15 +45,12 @@ export interface RepoModelRuntimeShape {
   readonly unsetRepoModel: (
     cwd: string,
   ) => Effect.Effect<{ removed: boolean; repoName: string }, RepoModelConfigError>;
-  readonly listRepos: Effect.Effect<
-    Array<{ path: string; name: string; entry: RepoModelEntry }>
-  >;
+  readonly listRepos: Effect.Effect<Array<{ path: string; name: string; entry: RepoModelEntry }>>;
 }
 
-export class RepoModelRuntime extends Context.Service<
-  RepoModelRuntime,
-  RepoModelRuntimeShape
->()("pi-repo-model/RepoModelRuntime") {}
+export class RepoModelRuntime extends Context.Service<RepoModelRuntime, RepoModelRuntimeShape>()(
+  "pi-repo-model/RepoModelRuntime",
+) {}
 
 const makeRepoModelRuntime = Effect.sync(() => {
   const loadConfig: Effect.Effect<RepoModelConfig> = Effect.sync(() => {
@@ -130,20 +119,19 @@ const makeRepoModelRuntime = Effect.sync(() => {
       return { removed: true, repoName: meta.name };
     });
 
-  const listRepos: Effect.Effect<
-    Array<{ path: string; name: string; entry: RepoModelEntry }>
-  > = Effect.gen(function* () {
-    const config = yield* loadConfig;
-    const entries: Array<{ path: string; name: string; entry: RepoModelEntry }> = [];
-    for (const [repoPath, entry] of Object.entries(config.repos ?? {})) {
-      entries.push({
-        path: repoPath,
-        name: entry.name || path.basename(repoPath),
-        entry,
-      });
-    }
-    return entries;
-  });
+  const listRepos: Effect.Effect<Array<{ path: string; name: string; entry: RepoModelEntry }>> =
+    Effect.gen(function* () {
+      const config = yield* loadConfig;
+      const entries: Array<{ path: string; name: string; entry: RepoModelEntry }> = [];
+      for (const [repoPath, entry] of Object.entries(config.repos ?? {})) {
+        entries.push({
+          path: repoPath,
+          name: entry.name || path.basename(repoPath),
+          entry,
+        });
+      }
+      return entries;
+    });
 
   return RepoModelRuntime.of({
     loadConfig,

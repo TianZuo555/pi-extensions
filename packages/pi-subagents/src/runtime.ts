@@ -49,14 +49,19 @@ export interface SubagentRuntimeShape {
     options?: SubagentSupervisorOptions,
     onBackgroundComplete?: BackgroundCompleteHandler,
   ) => Effect.Effect<void, SubagentRuntimeClosedError>;
-  readonly run: (input: SupervisorRunInput) => Effect.Effect<SubagentRunResult, SubagentRuntimeError>;
+  readonly run: (
+    input: SupervisorRunInput,
+  ) => Effect.Effect<SubagentRunResult, SubagentRuntimeError>;
   readonly cancelRun: (
     runId: string,
     reason?: string,
   ) => Effect.Effect<boolean, SubagentRuntimeError>;
   readonly applyPatch: (runId: string) => Effect.Effect<SubagentRunResult, SubagentRuntimeError>;
   readonly drainPendingResults: Effect.Effect<void, SubagentRuntimeError>;
-  readonly supervisor: Effect.Effect<SubagentSupervisor, SubagentNotInitializedError | SubagentRuntimeClosedError>;
+  readonly supervisor: Effect.Effect<
+    SubagentSupervisor,
+    SubagentNotInitializedError | SubagentRuntimeClosedError
+  >;
   readonly close: Effect.Effect<void, SubagentRuntimeClosedError>;
 }
 
@@ -97,9 +102,7 @@ const makeSubagentRuntime = Effect.gen(function* () {
           Effect.promise(async () => {
             if (supervisor) await supervisor.dispose();
             const artifactRoot = options?.artifactRoot;
-            const backendPool =
-              options?.backendPool ??
-              new SubagentBackendPool({ artifactRoot });
+            const backendPool = options?.backendPool ?? new SubagentBackendPool({ artifactRoot });
             supervisor = new SubagentSupervisor(cwd, undefined, {
               artifactRoot,
               backendPool,

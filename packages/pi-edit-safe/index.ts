@@ -20,9 +20,9 @@
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
-	generateDiffString,
-	generateUnifiedPatch,
-	withFileMutationQueue,
+  generateDiffString,
+  generateUnifiedPatch,
+  withFileMutationQueue,
 } from "@earendil-works/pi-coding-agent";
 import { Type, type Static } from "typebox";
 import { readFile, writeFile } from "node:fs/promises";
@@ -30,97 +30,97 @@ import { resolve } from "node:path";
 import { applyEdits } from "./lib/edit-replace.ts";
 import { prepareEditArguments } from "./lib/prepare-arguments.ts";
 import {
-	EDIT_PARAMETER_DESCRIPTIONS,
-	EDIT_PROMPT_GUIDELINES,
-	EDIT_PROMPT_SNIPPET,
-	EDIT_TOOL_DESCRIPTION,
+  EDIT_PARAMETER_DESCRIPTIONS,
+  EDIT_PROMPT_GUIDELINES,
+  EDIT_PROMPT_SNIPPET,
+  EDIT_TOOL_DESCRIPTION,
 } from "./lib/prompt.ts";
 
 const parameters = Type.Object({
-	path: Type.String({
-		description: EDIT_PARAMETER_DESCRIPTIONS.path,
-	}),
-	edits: Type.Array(
-		Type.Object({
-			oldText: Type.String({
-				description: EDIT_PARAMETER_DESCRIPTIONS.oldText,
-			}),
-			newText: Type.String({
-				description: EDIT_PARAMETER_DESCRIPTIONS.newText,
-			}),
-		}),
-		{
-			minItems: 1,
-			description: EDIT_PARAMETER_DESCRIPTIONS.edits,
-		},
-	),
+  path: Type.String({
+    description: EDIT_PARAMETER_DESCRIPTIONS.path,
+  }),
+  edits: Type.Array(
+    Type.Object({
+      oldText: Type.String({
+        description: EDIT_PARAMETER_DESCRIPTIONS.oldText,
+      }),
+      newText: Type.String({
+        description: EDIT_PARAMETER_DESCRIPTIONS.newText,
+      }),
+    }),
+    {
+      minItems: 1,
+      description: EDIT_PARAMETER_DESCRIPTIONS.edits,
+    },
+  ),
 });
 
 export default function editSafeExtension(pi: ExtensionAPI): void {
-	// Kill switch: if set, do not register and let the built-in edit remain active.
-	if (process.env.PI_EDIT_SAFE_DISABLE === "1") return;
+  // Kill switch: if set, do not register and let the built-in edit remain active.
+  if (process.env.PI_EDIT_SAFE_DISABLE === "1") return;
 
-	pi.registerTool({
-		name: "edit", // same name as the built-in → overrides it
-		label: "edit (strict)",
-		description: EDIT_TOOL_DESCRIPTION,
-		promptSnippet: EDIT_PROMPT_SNIPPET,
-		parameters,
-		prepareArguments: (args: unknown) => prepareEditArguments(args) as Static<typeof parameters>,
-		promptGuidelines: EDIT_PROMPT_GUIDELINES,
-		async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-			// Re-normalize defensively: the prepareArguments hook already ran on
-			// current pi versions, and normalization is idempotent.
-			const { path, edits } = prepareEditArguments(params);
-			if (!path) {
-				throw new Error(`edit: missing "path" — pass the file to edit`);
-			}
-			const abs = resolve(ctx.cwd, path);
+  pi.registerTool({
+    name: "edit", // same name as the built-in → overrides it
+    label: "edit (strict)",
+    description: EDIT_TOOL_DESCRIPTION,
+    promptSnippet: EDIT_PROMPT_SNIPPET,
+    parameters,
+    prepareArguments: (args: unknown) => prepareEditArguments(args) as Static<typeof parameters>,
+    promptGuidelines: EDIT_PROMPT_GUIDELINES,
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      // Re-normalize defensively: the prepareArguments hook already ran on
+      // current pi versions, and normalization is idempotent.
+      const { path, edits } = prepareEditArguments(params);
+      if (!path) {
+        throw new Error(`edit: missing "path" — pass the file to edit`);
+      }
+      const abs = resolve(ctx.cwd, path);
 
-			// Read, match, and write all inside the mutation queue so no other
-			// pi-side mutation can interleave between our read and our write.
-			return withFileMutationQueue(abs, async () => {
-				const throwIfAborted = () => {
-					if (signal?.aborted) throw new Error("Operation aborted");
-				};
-				throwIfAborted();
+      // Read, match, and write all inside the mutation queue so no other
+      // pi-side mutation can interleave between our read and our write.
+      return withFileMutationQueue(abs, async () => {
+        const throwIfAborted = () => {
+          if (signal?.aborted) throw new Error("Operation aborted");
+        };
+        throwIfAborted();
 
-				let source: string;
-				try {
-					source = await readFile(abs, "utf-8");
-				} catch (err) {
-					throw new Error(
-						`edit: cannot read "${path}" (${(err as NodeJS.ErrnoException).message}). Use the write tool to create a new file.`,
-					);
-				}
-				throwIfAborted();
+        let source: string;
+        try {
+          source = await readFile(abs, "utf-8");
+        } catch (err) {
+          throw new Error(
+            `edit: cannot read "${path}" (${(err as NodeJS.ErrnoException).message}). Use the write tool to create a new file.`,
+          );
+        }
+        throwIfAborted();
 
-				const { content, edits: outcomes } = applyEdits(source, edits, path);
-				await writeFile(abs, content, "utf-8");
+        const { content, edits: outcomes } = applyEdits(source, edits, path);
+        await writeFile(abs, content, "utf-8");
 
-				const summary = outcomes
-					.map((o, i) => `  ${i + 1}. ${o.matchedVia} match → lines ${o.startLine}-${o.endLine}`)
-					.join("\n");
+        const summary = outcomes
+          .map((o, i) => `  ${i + 1}. ${o.matchedVia} match → lines ${o.startLine}-${o.endLine}`)
+          .join("\n");
 
-				// Diff against the real bytes on both sides. This matcher never
-				// normalizes the file, so `source` IS the base content — unlike
-				// pi's built-in, which diffs its LF-normalized view.
-				const { diff, firstChangedLine } = generateDiffString(source, content);
-				const patch = generateUnifiedPatch(path, source, content);
+        // Diff against the real bytes on both sides. This matcher never
+        // normalizes the file, so `source` IS the base content — unlike
+        // pi's built-in, which diffs its LF-normalized view.
+        const { diff, firstChangedLine } = generateDiffString(source, content);
+        const patch = generateUnifiedPatch(path, source, content);
 
-				return {
-					content: [
-						{
-							type: "text",
-							text: `Edited ${path} (${outcomes.length} replacement${outcomes.length > 1 ? "s, applied in order" : ""}):\n${summary}`,
-						},
-					],
-					// Built-in EditToolDetails shape (diff/patch/firstChangedLine) so
-					// pi's inherited renderer and SDK/ACP consumers keep working;
-					// `edits` carries the extra strict-matcher provenance.
-					details: { path: abs, diff, patch, firstChangedLine, edits: outcomes },
-				};
-			});
-		},
-	});
+        return {
+          content: [
+            {
+              type: "text",
+              text: `Edited ${path} (${outcomes.length} replacement${outcomes.length > 1 ? "s, applied in order" : ""}):\n${summary}`,
+            },
+          ],
+          // Built-in EditToolDetails shape (diff/patch/firstChangedLine) so
+          // pi's inherited renderer and SDK/ACP consumers keep working;
+          // `edits` carries the extra strict-matcher provenance.
+          details: { path: abs, diff, patch, firstChangedLine, edits: outcomes },
+        };
+      });
+    },
+  });
 }

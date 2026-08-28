@@ -2,11 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { AgyTurnRequest } from "../lib/agy-client.ts";
 import { newTurnOutcome, type AgyTurnOutcome } from "../lib/reducer.ts";
-import {
-  AntigravityRuntime,
-  createAntigravityRuntime,
-  runAntigravity,
-} from "../src/runtime.ts";
+import { AntigravityRuntime, createAntigravityRuntime, runAntigravity } from "../src/runtime.ts";
 
 function completedOutcome(conversationId: string): AgyTurnOutcome {
   return {
@@ -39,10 +35,7 @@ test("runtime restores the selected pi branch only when starting a fresh convers
       }),
     );
     assert.equal(await first.next(), null);
-    assert.equal(
-      requests[0].prompt,
-      "RESTORED PI BRANCH\n\ncurrent request\n\nSKILL CATALOG",
-    );
+    assert.equal(requests[0].prompt, "RESTORED PI BRANCH\n\ncurrent request\n\nSKILL CATALOG");
     assert.equal(requests[0].conversationId, undefined);
 
     await runAntigravity(runtime, service.finishTurn);

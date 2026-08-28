@@ -15,7 +15,10 @@ function mockExtensionApi() {
     },
     registerTool() {},
     registerMessageRenderer() {},
-    registerCommand(name: string, spec: { handler: (args: string, ctx: ExtensionContext) => Promise<void> }) {
+    registerCommand(
+      name: string,
+      spec: { handler: (args: string, ctx: ExtensionContext) => Promise<void> },
+    ) {
       if (name === "agents") agentsHandler = spec.handler;
     },
     sendMessage() {

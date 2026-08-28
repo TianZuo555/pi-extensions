@@ -78,14 +78,8 @@ export function createSpillSource(
   } = {},
 ): SpillSource {
   const windowBytes = Math.max(1024, options.windowBytes ?? SPILL_WINDOW_BYTES);
-  const tailBytes = Math.max(
-    1024,
-    Math.min(options.tailBytes ?? SPILL_TAIL_BYTES, windowBytes),
-  );
-  const chunkBytes = Math.max(
-    1024,
-    Math.min(options.chunkBytes ?? SPILL_CHUNK_BYTES, windowBytes),
-  );
+  const tailBytes = Math.max(1024, Math.min(options.tailBytes ?? SPILL_TAIL_BYTES, windowBytes));
+  const chunkBytes = Math.max(1024, Math.min(options.chunkBytes ?? SPILL_CHUNK_BYTES, windowBytes));
 
   let window = Buffer.alloc(0);
   let start = 0;

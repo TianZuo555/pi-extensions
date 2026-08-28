@@ -228,322 +228,357 @@ export class ImageCacheRuntime extends Context.Service<ImageCacheRuntime, ImageC
 
 const makeImageCacheRuntime = (config: ResolvedImageCacheRuntimeConfig) =>
   Effect.gen(function* () {
-  const ref = yield* SynchronizedRef.make<ImageCacheState>(sessionState(`process-${process.pid}`));
-  const workers = yield* FiberSet.make();
-  const inFlight = MutableRef.make(0);
-  const closed = MutableRef.make(false);
+    const ref = yield* SynchronizedRef.make<ImageCacheState>(
+      sessionState(`process-${process.pid}`),
+    );
+    const workers = yield* FiberSet.make();
+    const inFlight = MutableRef.make(0);
+    const closed = MutableRef.make(false);
 
-  const closedError = () =>
-    new ImageCacheRuntimeClosedError({
-      message: "Image cache runtime is shut down; no further cache operations are accepted.",
-    });
+    const closedError = () =>
+      new ImageCacheRuntimeClosedError({
+        message: "Image cache runtime is shut down; no further cache operations are accepted.",
+      });
 
-  const ensureOpen: Effect.Effect<void, ImageCacheRuntimeClosedError> = Effect.suspend(() =>
-    MutableRef.get(closed) ? Effect.fail(closedError()) : Effect.void,
-  );
-
-  const rejectIfClosed: Effect.Effect<void, ImageCacheRuntimeClosedError> = Effect.suspend(() =>
-    MutableRef.get(closed) ? Effect.fail(closedError()) : Effect.void,
-  );
-
-  const decrementInFlight = Effect.sync(() => {
-    MutableRef.set(inFlight, Math.max(0, MutableRef.get(inFlight) - 1));
-  });
-
-  /** Open-check and increment happen in one synchronous step (no yield between them). */
-  const acquireInFlight: Effect.Effect<void, ImageCacheRuntimeClosedError> = Effect.suspend(() => {
-    if (MutableRef.get(closed)) return Effect.fail(closedError());
-    MutableRef.set(inFlight, MutableRef.get(inFlight) + 1);
-    return Effect.void;
-  });
-
-  const waitForDrain = (): Effect.Effect<void> =>
-    Effect.gen(function* () {
-      while (MutableRef.get(inFlight) > 0) {
-        yield* Effect.sleep(5);
-      }
-    });
-
-  const runTracked = <A, E>(
-    effect: Effect.Effect<A, E>,
-  ): Effect.Effect<A, E | ImageCacheRuntimeClosedError> =>
-    acquireInFlight.pipe(
-      Effect.flatMap(() =>
-        Effect.gen(function* () {
-          const fiber = yield* FiberSet.run(workers, effect);
-          return yield* Fiber.join(fiber);
-        }),
-      ),
-      Effect.ensuring(decrementInFlight),
+    const ensureOpen: Effect.Effect<void, ImageCacheRuntimeClosedError> = Effect.suspend(() =>
+      MutableRef.get(closed) ? Effect.fail(closedError()) : Effect.void,
     );
 
-  const writeManifest = (state: ImageCacheState) =>
-    tryIo("writeManifest", async () => {
-      const { mkdir, rename, writeFile } = await import("node:fs/promises");
-      await mkdir(state.cacheDir, { recursive: true });
-      const manifest: Manifest = {
-        version: 1,
-        images: [...state.imagesByPlaceholder.values()],
-      };
-      const tmpPath = `${state.manifestPath}.${process.pid}.tmp`;
-      await writeFile(tmpPath, JSON.stringify(manifest, null, 2), "utf8");
-      await rename(tmpPath, state.manifestPath);
-    }, state.manifestPath);
+    const rejectIfClosed: Effect.Effect<void, ImageCacheRuntimeClosedError> = Effect.suspend(() =>
+      MutableRef.get(closed) ? Effect.fail(closedError()) : Effect.void,
+    );
 
-  const toPngBytes = (bytes: Buffer, mimeType: string, stagePath: string) =>
-    tryIo("convertToPng", async () => {
-      const converted = await convertToPng(bytes.toString("base64"), mimeType).catch(() => null);
-      if (converted) return Buffer.from(converted.data, "base64");
-      if (process.platform !== "darwin") return null;
-
-      const outPath = `${stagePath}.png`;
-      const { readFile, unlink, writeFile } = await import("node:fs/promises");
-      try {
-        await writeFile(stagePath, bytes);
-        await execFileAsync("/usr/bin/sips", ["-s", "format", "png", stagePath, "--out", outPath], {
-          timeout: 10_000,
-          maxBuffer: 2 * 1024 * 1024,
-        });
-        return await readFile(outPath);
-      } catch {
-        return null;
-      } finally {
-        await unlink(stagePath).catch(() => undefined);
-        await unlink(outPath).catch(() => undefined);
-      }
-    }, stagePath);
-
-  const cacheBytesLocked = (
-    state: ImageCacheState,
-    bytes: Buffer,
-    detectedMime: string,
-    sourcePath?: string,
-  ): Effect.Effect<readonly [ImageCacheState, CachedImage | null], ImageCacheIoError | ImageCacheRuntimeClosedError> => {
-    const orphanPaths: string[] = [];
-    let committed = false;
-
-    const rollbackOrphans = Effect.gen(function* () {
-      if (committed) return;
-      const { unlink } = yield* Effect.promise(() => import("node:fs/promises"));
-      for (const orphanPath of orphanPaths) {
-        yield* tryIoBestEffort("unlink", () => unlink(orphanPath), orphanPath);
-      }
+    const decrementInFlight = Effect.sync(() => {
+      MutableRef.set(inFlight, Math.max(0, MutableRef.get(inFlight) - 1));
     });
 
-    return Effect.gen(function* () {
-      if (config.mutationDelayMs > 0) yield* Effect.sleep(config.mutationDelayMs);
-      yield* rejectIfClosed;
+    /** Open-check and increment happen in one synchronous step (no yield between them). */
+    const acquireInFlight: Effect.Effect<void, ImageCacheRuntimeClosedError> = Effect.suspend(
+      () => {
+        if (MutableRef.get(closed)) return Effect.fail(closedError());
+        MutableRef.set(inFlight, MutableRef.get(inFlight) + 1);
+        return Effect.void;
+      },
+    );
 
-      const sourceHash = hashBytes(bytes);
-      const existing = findByHash(state.imagesByPlaceholder.values(), sourceHash);
-      if (existing) return [state, existing] as const;
-
-      const { mkdir, writeFile } = yield* Effect.promise(() => import("node:fs/promises"));
-      yield* tryIo("mkdir", () => mkdir(state.cacheDir, { recursive: true }), state.cacheDir);
-
-      const id = state.nextImageId;
-      const placeholder = formatPlaceholder(id);
-      let mimeType = normalizeMimeType(detectedMime);
-      let storedBytes = bytes;
-
-      if (!MODEL_SUPPORTED_MIMES.has(mimeType)) {
-        const stagePath = join(state.cacheDir, `${fileStem(placeholder)}.source`);
-        const png = yield* toPngBytes(bytes, mimeType, stagePath);
-        if (!png) return [state, null] as const;
-        storedBytes = png;
-        mimeType = "image/png";
-      }
-
-      const filePath = join(state.cacheDir, `${fileStem(placeholder)}.${imageExtension(mimeType)}`);
-      yield* rejectIfClosed;
-      yield* tryIo("writeFile", () => writeFile(filePath, storedBytes), filePath);
-      orphanPaths.push(filePath);
-
-      if (mimeType !== "image/png") {
-        const converted = yield* tryIo(
-          "convertDisplayPng",
-          () => convertToPng(storedBytes.toString("base64"), mimeType).catch(() => null),
-        ).pipe(Effect.orElseSucceed(() => null));
-        if (converted) {
-          const displayPath = displayPathFor(filePath);
-          yield* tryIoBestEffort(
-            "writeDisplayPng",
-            () => writeFile(displayPath, Buffer.from(converted.data, "base64")),
-            displayPath,
-          );
-          orphanPaths.push(displayPath);
+    const waitForDrain = (): Effect.Effect<void> =>
+      Effect.gen(function* () {
+        while (MutableRef.get(inFlight) > 0) {
+          yield* Effect.sleep(5);
         }
-      }
+      });
 
-      if (config.postWriteGate) {
-        config.postWriteGate.onImageFileWritten();
-        yield* Effect.tryPromise({
-          try: () => config.postWriteGate!.waitUntilReleased(),
-          catch: (cause) =>
-            new ImageCacheRuntimeClosedError({
-              message: cause instanceof Error ? cause.message : String(cause),
-            }),
-        });
-      }
+    const runTracked = <A, E>(
+      effect: Effect.Effect<A, E>,
+    ): Effect.Effect<A, E | ImageCacheRuntimeClosedError> =>
+      acquireInFlight.pipe(
+        Effect.flatMap(() =>
+          Effect.gen(function* () {
+            const fiber = yield* FiberSet.run(workers, effect);
+            return yield* Fiber.join(fiber);
+          }),
+        ),
+        Effect.ensuring(decrementInFlight),
+      );
 
-      if (config.postImageWriteDelayMs > 0) yield* Effect.sleep(config.postImageWriteDelayMs);
-      yield* rejectIfClosed;
+    const writeManifest = (state: ImageCacheState) =>
+      tryIo(
+        "writeManifest",
+        async () => {
+          const { mkdir, rename, writeFile } = await import("node:fs/promises");
+          await mkdir(state.cacheDir, { recursive: true });
+          const manifest: Manifest = {
+            version: 1,
+            images: [...state.imagesByPlaceholder.values()],
+          };
+          const tmpPath = `${state.manifestPath}.${process.pid}.tmp`;
+          await writeFile(tmpPath, JSON.stringify(manifest, null, 2), "utf8");
+          await rename(tmpPath, state.manifestPath);
+        },
+        state.manifestPath,
+      );
 
-      const cached: CachedImage = {
-        id,
-        placeholder,
+    const toPngBytes = (bytes: Buffer, mimeType: string, stagePath: string) =>
+      tryIo(
+        "convertToPng",
+        async () => {
+          const converted = await convertToPng(bytes.toString("base64"), mimeType).catch(
+            () => null,
+          );
+          if (converted) return Buffer.from(converted.data, "base64");
+          if (process.platform !== "darwin") return null;
+
+          const outPath = `${stagePath}.png`;
+          const { readFile, unlink, writeFile } = await import("node:fs/promises");
+          try {
+            await writeFile(stagePath, bytes);
+            await execFileAsync(
+              "/usr/bin/sips",
+              ["-s", "format", "png", stagePath, "--out", outPath],
+              {
+                timeout: 10_000,
+                maxBuffer: 2 * 1024 * 1024,
+              },
+            );
+            return await readFile(outPath);
+          } catch {
+            return null;
+          } finally {
+            await unlink(stagePath).catch(() => undefined);
+            await unlink(outPath).catch(() => undefined);
+          }
+        },
+        stagePath,
+      );
+
+    const cacheBytesLocked = (
+      state: ImageCacheState,
+      bytes: Buffer,
+      detectedMime: string,
+      sourcePath?: string,
+    ): Effect.Effect<
+      readonly [ImageCacheState, CachedImage | null],
+      ImageCacheIoError | ImageCacheRuntimeClosedError
+    > => {
+      const orphanPaths: string[] = [];
+      let committed = false;
+
+      const rollbackOrphans = Effect.gen(function* () {
+        if (committed) return;
+        const { unlink } = yield* Effect.promise(() => import("node:fs/promises"));
+        for (const orphanPath of orphanPaths) {
+          yield* tryIoBestEffort("unlink", () => unlink(orphanPath), orphanPath);
+        }
+      });
+
+      return Effect.gen(function* () {
+        if (config.mutationDelayMs > 0) yield* Effect.sleep(config.mutationDelayMs);
+        yield* rejectIfClosed;
+
+        const sourceHash = hashBytes(bytes);
+        const existing = findByHash(state.imagesByPlaceholder.values(), sourceHash);
+        if (existing) return [state, existing] as const;
+
+        const { mkdir, writeFile } = yield* Effect.promise(() => import("node:fs/promises"));
+        yield* tryIo("mkdir", () => mkdir(state.cacheDir, { recursive: true }), state.cacheDir);
+
+        const id = state.nextImageId;
+        const placeholder = formatPlaceholder(id);
+        let mimeType = normalizeMimeType(detectedMime);
+        let storedBytes = bytes;
+
+        if (!MODEL_SUPPORTED_MIMES.has(mimeType)) {
+          const stagePath = join(state.cacheDir, `${fileStem(placeholder)}.source`);
+          const png = yield* toPngBytes(bytes, mimeType, stagePath);
+          if (!png) return [state, null] as const;
+          storedBytes = png;
+          mimeType = "image/png";
+        }
+
+        const filePath = join(
+          state.cacheDir,
+          `${fileStem(placeholder)}.${imageExtension(mimeType)}`,
+        );
+        yield* rejectIfClosed;
+        yield* tryIo("writeFile", () => writeFile(filePath, storedBytes), filePath);
+        orphanPaths.push(filePath);
+
+        if (mimeType !== "image/png") {
+          const converted = yield* tryIo("convertDisplayPng", () =>
+            convertToPng(storedBytes.toString("base64"), mimeType).catch(() => null),
+          ).pipe(Effect.orElseSucceed(() => null));
+          if (converted) {
+            const displayPath = displayPathFor(filePath);
+            yield* tryIoBestEffort(
+              "writeDisplayPng",
+              () => writeFile(displayPath, Buffer.from(converted.data, "base64")),
+              displayPath,
+            );
+            orphanPaths.push(displayPath);
+          }
+        }
+
+        if (config.postWriteGate) {
+          config.postWriteGate.onImageFileWritten();
+          yield* Effect.tryPromise({
+            try: () => config.postWriteGate!.waitUntilReleased(),
+            catch: (cause) =>
+              new ImageCacheRuntimeClosedError({
+                message: cause instanceof Error ? cause.message : String(cause),
+              }),
+          });
+        }
+
+        if (config.postImageWriteDelayMs > 0) yield* Effect.sleep(config.postImageWriteDelayMs);
+        yield* rejectIfClosed;
+
+        const cached: CachedImage = {
+          id,
+          placeholder,
+          filePath,
+          mimeType,
+          createdAt: Date.now(),
+          sourceHash,
+          ...(sourcePath ? { sourcePath } : {}),
+        };
+        const nextState: ImageCacheState = {
+          ...state,
+          nextImageId: id + 1,
+          imagesByPlaceholder: new Map(state.imagesByPlaceholder).set(placeholder, cached),
+        };
+        yield* writeManifest(nextState);
+        committed = true;
+        return [nextState, cached] as const;
+      }).pipe(Effect.ensuring(rollbackOrphans));
+    };
+
+    const cacheBytesEffect = (
+      bytes: Buffer,
+      detectedMime: string,
+      sourcePath?: string,
+    ): Effect.Effect<CachedImage | null, ImageCacheRuntimeError> =>
+      SynchronizedRef.modifyEffect(ref, (state) =>
+        cacheBytesLocked(state, bytes, detectedMime, sourcePath).pipe(
+          Effect.map(([nextState, cached]) => [Effect.succeed(cached), nextState] as const),
+        ),
+      ).pipe(Effect.flatten);
+
+    const cacheBytes = (
+      bytes: Buffer,
+      detectedMime: string,
+      sourcePath?: string,
+    ): Effect.Effect<CachedImage | null, ImageCacheRuntimeError> =>
+      runTracked(cacheBytesEffect(bytes, detectedMime, sourcePath));
+
+    const cacheImageFileEffect = (filePath: string, sourcePath?: string) =>
+      tryIo(
+        "readImageFile",
+        async () => {
+          const { readFile, stat } = await import("node:fs/promises");
+          const info = await stat(filePath);
+          if (!info.isFile() || info.size === 0 || info.size > MAX_SOURCE_BYTES) return null;
+          const bytes = await readFile(filePath);
+          const detectedMime = detectMimeType(filePath, bytes);
+          if (!detectedMime) return null;
+          return { bytes, detectedMime };
+        },
         filePath,
-        mimeType,
-        createdAt: Date.now(),
-        sourceHash,
-        ...(sourcePath ? { sourcePath } : {}),
-      };
-      const nextState: ImageCacheState = {
-        ...state,
-        nextImageId: id + 1,
-        imagesByPlaceholder: new Map(state.imagesByPlaceholder).set(placeholder, cached),
-      };
-      yield* writeManifest(nextState);
-      committed = true;
-      return [nextState, cached] as const;
-    }).pipe(Effect.ensuring(rollbackOrphans));
-  };
+      ).pipe(
+        Effect.flatMap((parsed) =>
+          parsed
+            ? cacheBytesEffect(parsed.bytes, parsed.detectedMime, sourcePath)
+            : Effect.succeed(null),
+        ),
+      );
 
-  const cacheBytesEffect = (
-    bytes: Buffer,
-    detectedMime: string,
-    sourcePath?: string,
-  ): Effect.Effect<CachedImage | null, ImageCacheRuntimeError> =>
-    SynchronizedRef.modifyEffect(ref, (state) =>
-      cacheBytesLocked(state, bytes, detectedMime, sourcePath).pipe(
-        Effect.map(([nextState, cached]) => [Effect.succeed(cached), nextState] as const),
-      ),
+    const cacheImageFile = (filePath: string, sourcePath?: string) =>
+      runTracked(cacheImageFileEffect(filePath, sourcePath));
+
+    const cacheExistingImage = (sourcePath: string) =>
+      cacheImageFile(sourcePath, sourcePath).pipe(
+        Effect.flatMap((cached) =>
+          cached && basename(sourcePath).startsWith("pi-clipboard-") && isInsideTmpDir(sourcePath)
+            ? tryIoBestEffort(
+                "unlink",
+                async () => {
+                  const { unlink } = await import("node:fs/promises");
+                  await unlink(sourcePath);
+                },
+                sourcePath,
+              ).pipe(Effect.as(cached))
+            : Effect.succeed(cached),
+        ),
+      );
+
+    const loadManifestEffect = SynchronizedRef.modifyEffect(ref, (state) =>
+      Effect.gen(function* () {
+        const { readFile } = yield* Effect.promise(() => import("node:fs/promises"));
+        const { existsSync } = yield* Effect.promise(() => import("node:fs"));
+        const next: ImageCacheState = {
+          ...state,
+          imagesByPlaceholder: new Map(),
+          nextImageId: 1,
+        };
+        let dropped = false;
+        const readResult = yield* tryIo(
+          "readManifest",
+          () => readFile(state.manifestPath, "utf8"),
+          state.manifestPath,
+        ).pipe(Effect.orElseSucceed(() => null));
+        if (readResult) {
+          const manifest = parseManifest(readResult);
+          for (const image of manifest.images ?? []) {
+            next.nextImageId = Math.max(next.nextImageId, image.id + 1);
+            if (!existsSync(image.filePath)) {
+              dropped = true;
+              continue;
+            }
+            next.imagesByPlaceholder.set(image.placeholder, image);
+          }
+        }
+        const persist = dropped ? writeManifest(next) : Effect.void;
+        return [persist, next] as const;
+      }),
     ).pipe(Effect.flatten);
 
-  const cacheBytes = (
-    bytes: Buffer,
-    detectedMime: string,
-    sourcePath?: string,
-  ): Effect.Effect<CachedImage | null, ImageCacheRuntimeError> =>
-    runTracked(cacheBytesEffect(bytes, detectedMime, sourcePath));
-
-  const cacheImageFileEffect = (filePath: string, sourcePath?: string) =>
-    tryIo("readImageFile", async () => {
-      const { readFile, stat } = await import("node:fs/promises");
-      const info = await stat(filePath);
-      if (!info.isFile() || info.size === 0 || info.size > MAX_SOURCE_BYTES) return null;
-      const bytes = await readFile(filePath);
-      const detectedMime = detectMimeType(filePath, bytes);
-      if (!detectedMime) return null;
-      return { bytes, detectedMime };
-    }, filePath).pipe(
-      Effect.flatMap((parsed) =>
-        parsed
-          ? cacheBytesEffect(parsed.bytes, parsed.detectedMime, sourcePath)
-          : Effect.succeed(null),
-      ),
-    );
-
-  const cacheImageFile = (filePath: string, sourcePath?: string) =>
-    runTracked(cacheImageFileEffect(filePath, sourcePath));
-
-  const cacheExistingImage = (sourcePath: string) =>
-    cacheImageFile(sourcePath, sourcePath).pipe(
-      Effect.flatMap((cached) =>
-        cached && basename(sourcePath).startsWith("pi-clipboard-") && isInsideTmpDir(sourcePath)
-          ? tryIoBestEffort("unlink", async () => {
-              const { unlink } = await import("node:fs/promises");
-              await unlink(sourcePath);
-            }, sourcePath).pipe(Effect.as(cached))
-          : Effect.succeed(cached),
-      ),
-    );
-
-  const loadManifestEffect = SynchronizedRef.modifyEffect(ref, (state) =>
-    Effect.gen(function* () {
-      const { readFile } = yield* Effect.promise(() => import("node:fs/promises"));
-      const { existsSync } = yield* Effect.promise(() => import("node:fs"));
-      const next: ImageCacheState = {
-        ...state,
-        imagesByPlaceholder: new Map(),
-        nextImageId: 1,
-      };
-      let dropped = false;
-      const readResult = yield* tryIo(
-        "readManifest",
-        () => readFile(state.manifestPath, "utf8"),
-        state.manifestPath,
-      ).pipe(Effect.orElseSucceed(() => null));
-      if (readResult) {
-        const manifest = parseManifest(readResult);
-        for (const image of manifest.images ?? []) {
-          next.nextImageId = Math.max(next.nextImageId, image.id + 1);
-          if (!existsSync(image.filePath)) {
-            dropped = true;
-            continue;
-          }
-          next.imagesByPlaceholder.set(image.placeholder, image);
-        }
-      }
-      const persist = dropped ? writeManifest(next) : Effect.void;
-      return [persist, next] as const;
-    }),
-  ).pipe(Effect.flatten);
-
-  const cleanupOldCachesEffect = SynchronizedRef.get(ref).pipe(
-    Effect.flatMap((state) =>
-      tryIoBestEffort("cleanupOldCaches", async () => {
-        const { mkdir, readdir, rm, stat } = await import("node:fs/promises");
-        await mkdir(CACHE_ROOT, { recursive: true });
-        const entries = await readdir(CACHE_ROOT, { withFileTypes: true });
-        const now = Date.now();
-        await Promise.all(
-          entries
-            .filter((entry) => entry.isDirectory())
-            .map(async (entry) => {
-              const fullPath = join(CACHE_ROOT, entry.name);
-              if (fullPath === state.cacheDir) return;
-              try {
-                const [info, contents] = await Promise.all([stat(fullPath), readdir(fullPath)]);
-                const expired = now - info.mtimeMs > CACHE_TTL_MS;
-                const isEmpty = contents.length === 0;
-                const onlyManifest = contents.length === 1 && contents[0] === "manifest.json";
-                if (expired || isEmpty || onlyManifest) {
-                  await rm(fullPath, { recursive: true, force: true });
+    const cleanupOldCachesEffect = SynchronizedRef.get(ref).pipe(
+      Effect.flatMap((state) =>
+        tryIoBestEffort("cleanupOldCaches", async () => {
+          const { mkdir, readdir, rm, stat } = await import("node:fs/promises");
+          await mkdir(CACHE_ROOT, { recursive: true });
+          const entries = await readdir(CACHE_ROOT, { withFileTypes: true });
+          const now = Date.now();
+          await Promise.all(
+            entries
+              .filter((entry) => entry.isDirectory())
+              .map(async (entry) => {
+                const fullPath = join(CACHE_ROOT, entry.name);
+                if (fullPath === state.cacheDir) return;
+                try {
+                  const [info, contents] = await Promise.all([stat(fullPath), readdir(fullPath)]);
+                  const expired = now - info.mtimeMs > CACHE_TTL_MS;
+                  const isEmpty = contents.length === 0;
+                  const onlyManifest = contents.length === 1 && contents[0] === "manifest.json";
+                  if (expired || isEmpty || onlyManifest) {
+                    await rm(fullPath, { recursive: true, force: true });
+                  }
+                } catch {
+                  // Per-entry cleanup failures are ignored.
                 }
-              } catch {
-                // Per-entry cleanup failures are ignored.
-              }
-            }),
-        );
-      }),
-    ),
-  );
-
-  const touchCacheDirEffect = SynchronizedRef.get(ref).pipe(
-    Effect.flatMap((state) =>
-      tryIoBestEffort("utimes", async () => {
-        const { utimes } = await import("node:fs/promises");
-        const now = new Date();
-        await utimes(state.cacheDir, now, now);
-      }, state.cacheDir),
-    ),
-  );
-
-  /** Clipboard caching is best-effort: per-file IO failures become unreadable paths. */
-  const cacheClipboardFile = (path: string) =>
-    cacheImageFileEffect(path, path).pipe(
-      Effect.catchIf(
-        (error): error is ImageCacheIoError => error instanceof ImageCacheIoError,
-        () => Effect.succeed(null),
+              }),
+          );
+        }),
       ),
     );
 
-  const readMacClipboardImagesEffect =
-    process.platform === "darwin"
-      ? SynchronizedRef.get(ref).pipe(
-          Effect.flatMap((state) =>
-            tryIoBestEffort("readMacClipboard", async () => {
+    const touchCacheDirEffect = SynchronizedRef.get(ref).pipe(
+      Effect.flatMap((state) =>
+        tryIoBestEffort(
+          "utimes",
+          async () => {
+            const { utimes } = await import("node:fs/promises");
+            const now = new Date();
+            await utimes(state.cacheDir, now, now);
+          },
+          state.cacheDir,
+        ),
+      ),
+    );
+
+    /** Clipboard caching is best-effort: per-file IO failures become unreadable paths. */
+    const cacheClipboardFile = (path: string) =>
+      cacheImageFileEffect(path, path).pipe(
+        Effect.catchIf(
+          (error): error is ImageCacheIoError => error instanceof ImageCacheIoError,
+          () => Effect.succeed(null),
+        ),
+      );
+
+    const readMacClipboardImagesEffect =
+      process.platform === "darwin"
+        ? SynchronizedRef.get(ref).pipe(
+            Effect.flatMap((state) =>
+              tryIoBestEffort("readMacClipboard", async () => {
                 const { mkdir } = await import("node:fs/promises");
                 await mkdir(state.cacheDir, { recursive: true });
                 const rawPath = join(state.cacheDir, `clipboard-${randomUUID()}.raw`);
@@ -584,10 +619,14 @@ if (result.kind === 'none') {
 JSON.stringify(result);
 `;
                 try {
-                  const { stdout } = await execFileAsync("osascript", ["-l", "JavaScript", "-e", script], {
-                    timeout: 5_000,
-                    maxBuffer: 256 * 1024,
-                  });
+                  const { stdout } = await execFileAsync(
+                    "osascript",
+                    ["-l", "JavaScript", "-e", script],
+                    {
+                      timeout: 5_000,
+                      maxBuffer: 256 * 1024,
+                    },
+                  );
                   const result = JSON.parse(stdout.trim()) as ClipboardScriptResult;
                   return { result, rawPath };
                 } catch {
@@ -600,9 +639,7 @@ JSON.stringify(result);
                   if (result.kind === "files") {
                     return Effect.all(
                       result.paths.map((path) =>
-                        cacheClipboardFile(path).pipe(
-                          Effect.map((image) => ({ path, image })),
-                        ),
+                        cacheClipboardFile(path).pipe(Effect.map((image) => ({ path, image }))),
                       ),
                       { concurrency: "unbounded" },
                     ).pipe(
@@ -624,19 +661,27 @@ JSON.stringify(result);
                         unreadable: [] as string[],
                       })),
                       Effect.ensuring(
-                        tryIoBestEffort("unlink", async () => {
-                          const { unlink } = await import("node:fs/promises");
-                          await unlink(rawPath);
-                        }, rawPath),
+                        tryIoBestEffort(
+                          "unlink",
+                          async () => {
+                            const { unlink } = await import("node:fs/promises");
+                            await unlink(rawPath);
+                          },
+                          rawPath,
+                        ),
                       ),
                     );
                   }
                   return Effect.succeed({ images: [], unreadable: [] }).pipe(
                     Effect.ensuring(
-                      tryIoBestEffort("unlink", async () => {
-                        const { unlink } = await import("node:fs/promises");
-                        await unlink(rawPath);
-                      }, rawPath),
+                      tryIoBestEffort(
+                        "unlink",
+                        async () => {
+                          const { unlink } = await import("node:fs/promises");
+                          await unlink(rawPath);
+                        },
+                        rawPath,
+                      ),
                     ),
                   );
                 }),
@@ -645,125 +690,137 @@ JSON.stringify(result);
           )
         : Effect.succeed({ images: [], unreadable: [] });
 
-  const readMacClipboardTextEffect =
-    process.platform === "darwin"
-      ? tryIoBestEffort("readMacClipboardText", async () => {
-          const { stdout } = await execFileAsync("pbpaste", [], {
-            timeout: 5_000,
-            maxBuffer: 8 * 1024 * 1024,
-          });
-          return stdout.length > 0 ? stdout : null;
-        }).pipe(Effect.map((text) => text ?? null))
-      : Effect.succeed(null);
+    const readMacClipboardTextEffect =
+      process.platform === "darwin"
+        ? tryIoBestEffort("readMacClipboardText", async () => {
+            const { stdout } = await execFileAsync("pbpaste", [], {
+              timeout: 5_000,
+              maxBuffer: 8 * 1024 * 1024,
+            });
+            return stdout.length > 0 ? stdout : null;
+          }).pipe(Effect.map((text) => text ?? null))
+        : Effect.succeed(null);
 
-  const toImageContentEffect = (cached: CachedImage) =>
-    tryIo("readFile", async () => {
-        const { readFile } = await import("node:fs/promises");
-        const bytes = await readFile(cached.filePath);
-        const resized =
-          cached.mimeType === "image/gif"
-            ? null
-            : await resizeImage(bytes, cached.mimeType, { maxWidth: 2000, maxHeight: 2000 });
+    const toImageContentEffect = (cached: CachedImage) =>
+      tryIo(
+        "readFile",
+        async () => {
+          const { readFile } = await import("node:fs/promises");
+          const bytes = await readFile(cached.filePath);
+          const resized =
+            cached.mimeType === "image/gif"
+              ? null
+              : await resizeImage(bytes, cached.mimeType, { maxWidth: 2000, maxHeight: 2000 });
 
-        if (resized) {
+          if (resized) {
+            return {
+              content: { type: "image" as const, mimeType: resized.mimeType, data: resized.data },
+              ...(formatDimensionNote(resized) ? { note: formatDimensionNote(resized) } : {}),
+            };
+          }
+
+          if (bytes.length > MAX_INLINE_BYTES) {
+            return {
+              error: `${cached.placeholder} is too large to send inline (${Math.round(bytes.length / 1024)} KB)`,
+            };
+          }
+
           return {
-            content: { type: "image" as const, mimeType: resized.mimeType, data: resized.data },
-            ...(formatDimensionNote(resized) ? { note: formatDimensionNote(resized) } : {}),
+            content: {
+              type: "image" as const,
+              mimeType: cached.mimeType,
+              data: bytes.toString("base64"),
+            },
           };
-        }
-
-        if (bytes.length > MAX_INLINE_BYTES) {
-          return {
-            error: `${cached.placeholder} is too large to send inline (${Math.round(bytes.length / 1024)} KB)`,
-          };
-        }
-
-        return {
-          content: {
-            type: "image" as const,
-            mimeType: cached.mimeType,
-            data: bytes.toString("base64"),
-          },
-        };
-      }, cached.filePath);
-
-  const toImageContent = (cached: CachedImage) => runTracked(toImageContentEffect(cached));
-
-  const clearEffect = SynchronizedRef.modifyEffect(ref, (state) =>
-    tryIo("rm", async () => {
-      const { rm } = await import("node:fs/promises");
-      await rm(state.cacheDir, { recursive: true, force: true });
-    }, state.cacheDir).pipe(
-      Effect.as([
-        Effect.void,
-        {
-          ...state,
-          imagesByPlaceholder: new Map(),
         },
-      ] as const),
-    ),
-  ).pipe(Effect.flatten);
+        cached.filePath,
+      );
 
-  const removeEmptyCacheDirEffect = SynchronizedRef.modifyEffect(ref, (state) => {
-    const effect =
-      state.imagesByPlaceholder.size === 0
-        ? tryIoBestEffort("rm", async () => {
-            const { rm } = await import("node:fs/promises");
-            await rm(state.cacheDir, { recursive: true, force: true });
-          }, state.cacheDir)
-        : Effect.void;
-    return effect.pipe(Effect.as([Effect.void, state] as const));
-  }).pipe(Effect.flatten);
+    const toImageContent = (cached: CachedImage) => runTracked(toImageContentEffect(cached));
 
-  return ImageCacheRuntime.of({
-    init: (sessionId) =>
-      runTracked(
-        SynchronizedRef.set(ref, sessionState(sessionId)).pipe(
-          Effect.flatMap(() => cleanupOldCachesEffect),
-          Effect.flatMap(() => loadManifestEffect),
-          Effect.flatMap(() => touchCacheDirEffect),
+    const clearEffect = SynchronizedRef.modifyEffect(ref, (state) =>
+      tryIo(
+        "rm",
+        async () => {
+          const { rm } = await import("node:fs/promises");
+          await rm(state.cacheDir, { recursive: true, force: true });
+        },
+        state.cacheDir,
+      ).pipe(
+        Effect.as([
+          Effect.void,
+          {
+            ...state,
+            imagesByPlaceholder: new Map(),
+          },
+        ] as const),
+      ),
+    ).pipe(Effect.flatten);
+
+    const removeEmptyCacheDirEffect = SynchronizedRef.modifyEffect(ref, (state) => {
+      const effect =
+        state.imagesByPlaceholder.size === 0
+          ? tryIoBestEffort(
+              "rm",
+              async () => {
+                const { rm } = await import("node:fs/promises");
+                await rm(state.cacheDir, { recursive: true, force: true });
+              },
+              state.cacheDir,
+            )
+          : Effect.void;
+      return effect.pipe(Effect.as([Effect.void, state] as const));
+    }).pipe(Effect.flatten);
+
+    return ImageCacheRuntime.of({
+      init: (sessionId) =>
+        runTracked(
+          SynchronizedRef.set(ref, sessionState(sessionId)).pipe(
+            Effect.flatMap(() => cleanupOldCachesEffect),
+            Effect.flatMap(() => loadManifestEffect),
+            Effect.flatMap(() => touchCacheDirEffect),
+          ),
         ),
-      ),
 
-    imageCount: ensureOpen.pipe(
-      Effect.flatMap(() => SynchronizedRef.get(ref)),
-      Effect.map((state) => state.imagesByPlaceholder.size),
-    ),
-
-    getImage: (placeholder) =>
-      ensureOpen.pipe(
+      imageCount: ensureOpen.pipe(
         Effect.flatMap(() => SynchronizedRef.get(ref)),
-        Effect.map((state) => state.imagesByPlaceholder.get(placeholder)),
+        Effect.map((state) => state.imagesByPlaceholder.size),
       ),
 
-    listImages: ensureOpen.pipe(
-      Effect.flatMap(() => SynchronizedRef.get(ref)),
-      Effect.map((state) => [...state.imagesByPlaceholder.values()]),
-    ),
+      getImage: (placeholder) =>
+        ensureOpen.pipe(
+          Effect.flatMap(() => SynchronizedRef.get(ref)),
+          Effect.map((state) => state.imagesByPlaceholder.get(placeholder)),
+        ),
 
-    previewData: previewEntryData,
-
-    cacheBytes,
-    cacheImageFile,
-    cacheExistingImage,
-    readMacClipboardImages: runTracked(readMacClipboardImagesEffect),
-    readMacClipboardText: runTracked(readMacClipboardTextEffect),
-    toImageContent,
-    touchCacheDir: runTracked(touchCacheDirEffect),
-
-    clear: runTracked(clearEffect),
-
-    close: ensureOpen.pipe(
-      Effect.andThen(
-        Effect.sync(() => {
-          MutableRef.set(closed, true);
-        }),
+      listImages: ensureOpen.pipe(
+        Effect.flatMap(() => SynchronizedRef.get(ref)),
+        Effect.map((state) => [...state.imagesByPlaceholder.values()]),
       ),
-      Effect.andThen(Effect.yieldNow),
-      Effect.andThen(waitForDrain()),
-      Effect.andThen(removeEmptyCacheDirEffect),
-    ),
-  });
+
+      previewData: previewEntryData,
+
+      cacheBytes,
+      cacheImageFile,
+      cacheExistingImage,
+      readMacClipboardImages: runTracked(readMacClipboardImagesEffect),
+      readMacClipboardText: runTracked(readMacClipboardTextEffect),
+      toImageContent,
+      touchCacheDir: runTracked(touchCacheDirEffect),
+
+      clear: runTracked(clearEffect),
+
+      close: ensureOpen.pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            MutableRef.set(closed, true);
+          }),
+        ),
+        Effect.andThen(Effect.yieldNow),
+        Effect.andThen(waitForDrain()),
+        Effect.andThen(removeEmptyCacheDirEffect),
+      ),
+    });
   });
 
 export const ImageCacheRuntimeLive: Layer.Layer<ImageCacheRuntime> = Layer.effect(

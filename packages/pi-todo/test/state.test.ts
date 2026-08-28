@@ -17,7 +17,10 @@ test("dropping an unfinished item is reported; pruning completed ones is not", (
 
   // A partial resend that loses unfinished work.
   const dropped = findDroppedItems(previous, [item(2, "in-progress")]);
-  assert.deepEqual(dropped.map((todo) => todo.id), [3]);
+  assert.deepEqual(
+    dropped.map((todo) => todo.id),
+    [3],
+  );
   const message = describeDropped(dropped);
   assert.match(message, /1 unfinished item/);
   assert.match(message, /3\. task 3/);

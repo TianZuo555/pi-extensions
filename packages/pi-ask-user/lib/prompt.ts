@@ -6,11 +6,9 @@ import type { AskUserAnswer } from "./form";
 /** Schema descriptions shown to the model for questions and options. */
 export const ASK_USER_PARAMETER_DESCRIPTIONS = {
   optionLabel: "Concise display label.",
-  optionDescription:
-    "Context, constraints, or trade-offs; may use multiple sentences.",
+  optionDescription: "Context, constraints, or trade-offs; may use multiple sentences.",
   question: "Question shown to the user.",
-  options:
-    "Answer options, recommendation first. Other is added automatically; do not include it.",
+  options: "Answer options, recommendation first. Other is added automatically; do not include it.",
   questions: "Questions shown together.",
 };
 
@@ -19,8 +17,7 @@ export const ASK_USER_TOOL_DESCRIPTION =
   "Ask the user one or more multiple-choice questions. They may write a custom answer or dismiss.";
 
 /** One-line entry added to the model's `Available tools` section. */
-export const ASK_USER_PROMPT_SNIPPET =
-  "Ask the user multiple-choice questions";
+export const ASK_USER_PROMPT_SNIPPET = "Ask the user multiple-choice questions";
 
 /** Guideline bullets appended to the system prompt while ask_user is active. */
 export const ASK_USER_PROMPT_GUIDELINES = [
@@ -52,10 +49,7 @@ export function buildAskUserResultMessage(outcome: AskUserOutcome): string {
       return "User dismissed the questions without answering. Do not assume answers; proceed accordingly or ask differently.";
     case "answered":
       return outcome.answers
-        .map(
-          (answer) =>
-            `Question ${answer.questionIndex}: ${formatChoice(answer.choice)}`,
-        )
+        .map((answer) => `Question ${answer.questionIndex}: ${formatChoice(answer.choice)}`)
         .join("\n");
   }
 }

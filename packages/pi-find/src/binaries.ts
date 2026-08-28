@@ -21,17 +21,10 @@ const MINIMUM_VERSIONS: Record<SearchBinary, readonly [number, number, number]> 
   fd: [8, 7, 0],
 };
 
-export function isSupportedVersion(
-  binary: SearchBinary,
-  versionOutput: string,
-): boolean {
+export function isSupportedVersion(binary: SearchBinary, versionOutput: string): boolean {
   const match = versionOutput.match(/\b(\d+)\.(\d+)(?:\.(\d+))?/);
   if (match === null) return false;
-  const actual = [
-    Number(match[1]),
-    Number(match[2]),
-    Number(match[3] ?? 0),
-  ] as const;
+  const actual = [Number(match[1]), Number(match[2]), Number(match[3] ?? 0)] as const;
   const minimum = MINIMUM_VERSIONS[binary];
   for (let index = 0; index < minimum.length; index++) {
     if (actual[index]! > minimum[index]!) return true;
@@ -66,9 +59,8 @@ function isExecutable(candidate: string): boolean {
 /** Test seam for platform PATH aliases. */
 export function pathCandidates(binary: SearchBinary): string[] {
   const exeSuffix = process.platform === "win32" ? ".exe" : "";
-  const names = binary === "fd" && process.platform !== "win32"
-    ? ["fd", "fdfind"]
-    : [`${binary}${exeSuffix}`];
+  const names =
+    binary === "fd" && process.platform !== "win32" ? ["fd", "fdfind"] : [`${binary}${exeSuffix}`];
   const entries = (process.env.PATH ?? "").split(path.delimiter);
   return entries
     .filter((entry) => entry.length > 0)
@@ -90,8 +82,8 @@ export function resolveBinary(binary: SearchBinary): string | null {
     ...pathCandidates(binary),
   ];
 
-  const found = candidates.find((candidate) =>
-    isExecutable(candidate) && hasSupportedVersion(candidate, binary)
+  const found = candidates.find(
+    (candidate) => isExecutable(candidate) && hasSupportedVersion(candidate, binary),
   );
   // Do not cache misses: a user may install the binary and immediately retry
   // in the same session. Positive entries are revalidated on every lookup.

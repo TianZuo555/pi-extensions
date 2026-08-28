@@ -6,7 +6,11 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
-import { applyVerifiedPatch, readVerifiedPatch, type PatchApplyOutcome } from "../lib/patch-apply.ts";
+import {
+  applyVerifiedPatch,
+  readVerifiedPatch,
+  type PatchApplyOutcome,
+} from "../lib/patch-apply.ts";
 import { finalizeWorktree, createWorktree } from "../lib/worktree.ts";
 import { SubagentSupervisor } from "../lib/supervisor.ts";
 
@@ -16,9 +20,10 @@ const FIXTURE = path.join(
   "fake-rpc-child.mjs",
 );
 
-const fakeModel = { provider: "openai", id: "gpt-4.1-mini" } as import("@earendil-works/pi-ai").Model<
-  import("@earendil-works/pi-ai").Api
->;
+const fakeModel = {
+  provider: "openai",
+  id: "gpt-4.1-mini",
+} as import("@earendil-works/pi-ai").Model<import("@earendil-works/pi-ai").Api>;
 
 function initGitRepo(dir: string): void {
   execFileSync("git", ["init"], { cwd: dir, stdio: "pipe" });
@@ -73,7 +78,10 @@ describe("patch apply", () => {
   it("applies a forward-clean patch once", async () => {
     const repo = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-apply-repo-"));
     initGitRepo(repo);
-    const baseSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim();
+    const baseSha = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: repo,
+      encoding: "utf8",
+    }).trim();
     const branch = "pi-subagent-test";
     createFeatureBranch(repo, branch, baseSha);
 
@@ -89,7 +97,10 @@ describe("patch apply", () => {
   it("returns already-applied on idempotent retry", async () => {
     const repo = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-apply-repo-"));
     initGitRepo(repo);
-    const baseSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim();
+    const baseSha = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: repo,
+      encoding: "utf8",
+    }).trim();
     const branch = "pi-subagent-test";
     createFeatureBranch(repo, branch, baseSha);
 
@@ -185,7 +196,10 @@ describe("patch apply", () => {
   it("applies when parent has unrelated dirty files", async () => {
     const repo = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-apply-repo-"));
     initGitRepo(repo);
-    const baseSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim();
+    const baseSha = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: repo,
+      encoding: "utf8",
+    }).trim();
     const branch = "pi-subagent-dirty";
     createFeatureBranch(repo, branch, baseSha);
 
@@ -206,7 +220,10 @@ describe("patch apply", () => {
   it("applies when parent HEAD moved without conflicting files", async () => {
     const repo = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-apply-repo-"));
     initGitRepo(repo);
-    const baseSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim();
+    const baseSha = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: repo,
+      encoding: "utf8",
+    }).trim();
     const branch = "pi-subagent-head";
     createFeatureBranch(repo, branch, baseSha);
 
@@ -225,7 +242,10 @@ describe("patch apply", () => {
   it("fails on conflicting changed HEAD without mutating checkout", async () => {
     const repo = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-apply-repo-"));
     initGitRepo(repo);
-    const baseSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim();
+    const baseSha = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: repo,
+      encoding: "utf8",
+    }).trim();
     const branch = "pi-subagent-conflict";
     createFeatureBranch(repo, branch, baseSha);
 
@@ -255,7 +275,10 @@ describe("patch apply", () => {
     initGitRepo(repo);
     const artifactRoot = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-artifacts-"));
     const agentDir = isolatedAgentDir();
-    const baseSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim();
+    const baseSha = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: repo,
+      encoding: "utf8",
+    }).trim();
     const sourceBranch = "pi-subagent-source";
     createFeatureBranch(repo, sourceBranch, baseSha);
 
@@ -314,7 +337,10 @@ describe("patch apply", () => {
   it("supports binary patch content", async () => {
     const repo = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-apply-repo-"));
     initGitRepo(repo);
-    const baseSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim();
+    const baseSha = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: repo,
+      encoding: "utf8",
+    }).trim();
     const branch = "pi-subagent-binary";
     const binary = Buffer.from([0, 1, 2, 3, 255, 254]);
     fs.writeFileSync(path.join(repo, "binary.bin"), binary);

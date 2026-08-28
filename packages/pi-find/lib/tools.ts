@@ -36,12 +36,8 @@ export const GrepParams = Type.Object({
     minLength: 1,
     description: GREP_PARAMETER_DESCRIPTIONS.pattern,
   }),
-  path: Type.Optional(
-    Type.String({ minLength: 1, description: GREP_PARAMETER_DESCRIPTIONS.path }),
-  ),
-  glob: Type.Optional(
-    Type.String({ minLength: 1, description: GREP_PARAMETER_DESCRIPTIONS.glob }),
-  ),
+  path: Type.Optional(Type.String({ minLength: 1, description: GREP_PARAMETER_DESCRIPTIONS.path })),
+  glob: Type.Optional(Type.String({ minLength: 1, description: GREP_PARAMETER_DESCRIPTIONS.glob })),
 });
 
 export type GrepInput = Static<typeof GrepParams>;
@@ -51,9 +47,7 @@ export const FindParams = Type.Object({
     minLength: 1,
     description: FIND_PARAMETER_DESCRIPTIONS.pattern,
   }),
-  path: Type.Optional(
-    Type.String({ minLength: 1, description: FIND_PARAMETER_DESCRIPTIONS.path }),
-  ),
+  path: Type.Optional(Type.String({ minLength: 1, description: FIND_PARAMETER_DESCRIPTIONS.path })),
 });
 
 export type FindInput = Static<typeof FindParams>;
@@ -67,9 +61,7 @@ export interface SearchDetails {
 }
 
 export function renderGrepLines(outcome: GrepOutcome): string[] {
-  return outcome.matches.map(
-    (match) => `${match.path}:${match.lineNumber}: ${match.text}`,
-  );
+  return outcome.matches.map((match) => `${match.path}:${match.lineNumber}: ${match.text}`);
 }
 
 function countFiles(outcome: GrepOutcome): number {
@@ -83,10 +75,7 @@ interface BoundedBody {
 
 const BODY_MAX_BYTES = DEFAULT_MAX_BYTES - 8 * 1024;
 
-function boundedBody(
-  lines: readonly string[],
-  kind: "grep" | "find",
-): BoundedBody {
+function boundedBody(lines: readonly string[], kind: "grep" | "find"): BoundedBody {
   const body: string[] = [];
   let bytes = 0;
   let consumed = 0;
@@ -109,10 +98,7 @@ function boundedBody(
   };
 }
 
-export function registerTools(
-  pi: ExtensionAPI,
-  runtime: SearchRuntimeInstance,
-): void {
+export function registerTools(pi: ExtensionAPI, runtime: SearchRuntimeInstance): void {
   pi.registerTool({
     name: "grep",
     label: "grep",
@@ -150,9 +136,7 @@ export function registerTools(
 
       const body = boundedBody(renderGrepLines(outcome), "grep");
       const fileCount = countFiles(outcome);
-      const notices = outcome.truncated
-        ? [resultLimitNotice("matches", GREP_RESULT_LIMIT)]
-        : [];
+      const notices = outcome.truncated ? [resultLimitNotice("matches", GREP_RESULT_LIMIT)] : [];
       const text = [
         grepResultHeader(matchCount, fileCount),
         "",
@@ -173,20 +157,13 @@ export function registerTools(
     },
 
     renderCall(args: Partial<GrepInput> | undefined, theme: Theme) {
-      const pattern = typeof args?.pattern === "string" && args.pattern.length > 0
-        ? theme.fg("accent", `/${args.pattern}/`)
-        : theme.fg("muted", "…");
-      const scope = typeof args?.path === "string"
-        ? theme.fg("muted", ` in ${args.path}`)
-        : "";
-      const filter = typeof args?.glob === "string"
-        ? theme.fg("muted", ` (${args.glob})`)
-        : "";
-      return new Text(
-        theme.fg("toolTitle", theme.bold("grep ")) + pattern + scope + filter,
-        0,
-        0,
-      );
+      const pattern =
+        typeof args?.pattern === "string" && args.pattern.length > 0
+          ? theme.fg("accent", `/${args.pattern}/`)
+          : theme.fg("muted", "…");
+      const scope = typeof args?.path === "string" ? theme.fg("muted", ` in ${args.path}`) : "";
+      const filter = typeof args?.glob === "string" ? theme.fg("muted", ` (${args.glob})`) : "";
+      return new Text(theme.fg("toolTitle", theme.bold("grep ")) + pattern + scope + filter, 0, 0);
     },
 
     renderResult(result, options, theme, context) {
@@ -229,9 +206,7 @@ export function registerTools(
 
       const body = boundedBody(outcome.files, "find");
       const count = outcome.files.length;
-      const notices = outcome.truncated
-        ? [resultLimitNotice("files", FIND_RESULT_LIMIT)]
-        : [];
+      const notices = outcome.truncated ? [resultLimitNotice("files", FIND_RESULT_LIMIT)] : [];
       const text = [
         findResultHeader(count),
         "",
@@ -252,17 +227,12 @@ export function registerTools(
     },
 
     renderCall(args: Partial<FindInput> | undefined, theme: Theme) {
-      const pattern = typeof args?.pattern === "string" && args.pattern.length > 0
-        ? theme.fg("accent", args.pattern)
-        : theme.fg("muted", "…");
-      const scope = typeof args?.path === "string"
-        ? theme.fg("muted", ` in ${args.path}`)
-        : "";
-      return new Text(
-        theme.fg("toolTitle", theme.bold("find ")) + pattern + scope,
-        0,
-        0,
-      );
+      const pattern =
+        typeof args?.pattern === "string" && args.pattern.length > 0
+          ? theme.fg("accent", args.pattern)
+          : theme.fg("muted", "…");
+      const scope = typeof args?.path === "string" ? theme.fg("muted", ` in ${args.path}`) : "";
+      return new Text(theme.fg("toolTitle", theme.bold("find ")) + pattern + scope, 0, 0);
     },
 
     renderResult(result, options, theme, context) {
@@ -278,19 +248,12 @@ interface SearchRenderOptions {
 
 function textResult(result: AgentToolResult<unknown>): string {
   return result.content
-    .filter((block): block is { type: "text"; text: string } =>
-      block.type === "text"
-    )
+    .filter((block): block is { type: "text"; text: string } => block.type === "text")
     .map((block) => block.text)
     .join("\n");
 }
 
-function expandedResult(
-  summary: string,
-  output: string,
-  expanded: boolean,
-  theme: Theme,
-): Text {
+function expandedResult(summary: string, output: string, expanded: boolean, theme: Theme): Text {
   if (!expanded || output.length === 0) return new Text(summary, 0, 0);
   return new Text([summary, theme.fg("toolOutput", output)].join("\n"), 0, 0);
 }
@@ -306,14 +269,8 @@ function renderSearchResult(
     return new Text(theme.fg("warning", "searching…"), 0, 0);
   }
   if (isError) {
-    const firstLine = output.split("\n").find((line) => line.trim().length > 0) ??
-      "search failed";
-    return expandedResult(
-      theme.fg("error", `✗ ${firstLine}`),
-      output,
-      options.expanded,
-      theme,
-    );
+    const firstLine = output.split("\n").find((line) => line.trim().length > 0) ?? "search failed";
+    return expandedResult(theme.fg("error", `✗ ${firstLine}`), output, options.expanded, theme);
   }
 
   const details = result.details as SearchDetails | undefined;
@@ -326,22 +283,19 @@ function renderSearchResult(
     );
   }
   if (details.resultCount === 0) {
-    return expandedResult(
-      theme.fg("muted", "no results"),
-      output,
-      options.expanded,
-      theme,
-    );
+    return expandedResult(theme.fg("muted", "no results"), output, options.expanded, theme);
   }
 
-  const unit = details.kind === "find"
-    ? `file${details.resultCount === 1 ? "" : "s"}`
-    : `match${details.resultCount === 1 ? "" : "es"}`;
-  const scope = details.kind === "find"
-    ? ""
-    : ` in ${details.fileCount} file${details.fileCount === 1 ? "" : "s"}`;
+  const unit =
+    details.kind === "find"
+      ? `file${details.resultCount === 1 ? "" : "s"}`
+      : `match${details.resultCount === 1 ? "" : "es"}`;
+  const scope =
+    details.kind === "find"
+      ? ""
+      : ` in ${details.fileCount} file${details.fileCount === 1 ? "" : "s"}`;
   const more = details.truncated ? theme.fg("warning", " (truncated)") : "";
-  const summary = theme.fg("success", "✓ ") +
-    theme.fg("muted", `${details.resultCount} ${unit}${scope}`) + more;
+  const summary =
+    theme.fg("success", "✓ ") + theme.fg("muted", `${details.resultCount} ${unit}${scope}`) + more;
   return expandedResult(summary, output, options.expanded, theme);
 }

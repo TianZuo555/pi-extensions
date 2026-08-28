@@ -5,9 +5,7 @@ import * as path from "node:path";
 import test from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Check } from "typebox/value";
-import backgroundTerminals, {
-  createBackgroundTerminalsExtension,
-} from "./index.ts";
+import backgroundTerminals, { createBackgroundTerminalsExtension } from "./index.ts";
 
 function command(script: string) {
   const encoded = Buffer.from(script).toString("base64");
@@ -94,10 +92,7 @@ test("extension overrides bash, adds log reading, and keeps the user /ps command
   const app = harness(backgroundTerminals);
   try {
     assert.deepEqual([...app.tools.keys()], ["bash", "terminal_log_read"]);
-    assert.equal(
-      app.tools.get("terminal_log_read").promptSnippet,
-      "Read a terminal archive page",
-    );
+    assert.equal(app.tools.get("terminal_log_read").promptSnippet, "Read a terminal archive page");
     assert.equal(app.tools.get("terminal_log_read").promptGuidelines, undefined);
     assert.deepEqual([...app.commands.keys()], ["ps"]);
   } finally {
@@ -114,19 +109,18 @@ test("background tool metadata stays concise", async () => {
     ]);
 
     for (const [name, tool] of app.tools) {
-      for (const [parameter, schema] of Object.entries(
-        tool.parameters.properties,
-      )) {
+      for (const [parameter, schema] of Object.entries(tool.parameters.properties)) {
         assert.ok(
           (schema as { description?: string }).description,
           `${name}.${parameter} has no description`,
         );
       }
-      const modelChars = JSON.stringify({
-        name,
-        description: tool.description,
-        parameters: tool.parameters,
-      }).length +
+      const modelChars =
+        JSON.stringify({
+          name,
+          description: tool.description,
+          parameters: tool.parameters,
+        }).length +
         (tool.promptSnippet?.length ?? 0) +
         (tool.promptGuidelines ?? []).reduce(
           (total: number, guideline: string) => total + guideline.length,
@@ -147,18 +141,9 @@ test("terminal_log_read validates opaque refs and bounded pages", async () => {
   try {
     const schema = app.tools.get("terminal_log_read").parameters;
     assert.equal(Check(schema, { ref: "bt-1:stdout" }), true);
-    assert.equal(
-      Check(schema, { ref: "bt-1:stdout", offset: 0, limit: 64 * 1024 }),
-      true,
-    );
-    assert.equal(
-      Check(schema, { ref: "bt-1:stdout", limit: 64 * 1024 + 1 }),
-      false,
-    );
-    assert.equal(
-      Check(schema, { ref: "bt-1:stdout", offset: -1 }),
-      false,
-    );
+    assert.equal(Check(schema, { ref: "bt-1:stdout", offset: 0, limit: 64 * 1024 }), true);
+    assert.equal(Check(schema, { ref: "bt-1:stdout", limit: 64 * 1024 + 1 }), false);
+    assert.equal(Check(schema, { ref: "bt-1:stdout", offset: -1 }), false);
   } finally {
     await app.shutdown();
   }
@@ -180,13 +165,9 @@ test("terminal_log_read resolves an opaque ref from bash", async () => {
     const ref = /archive ref (bt-\d+:stdout)/.exec(result.content[0].text)?.[1];
     assert.ok(ref, result.content[0].text);
 
-    const page = await app.tools.get("terminal_log_read").execute(
-      "call-log-read",
-      { ref, offset: 0, limit: 1_024 },
-      undefined,
-      undefined,
-      app.ctx,
-    );
+    const page = await app.tools
+      .get("terminal_log_read")
+      .execute("call-log-read", { ref, offset: 0, limit: 1_024 }, undefined, undefined, app.ctx);
     assert.match(page.content[0].text, /bytes 0-1023/);
     assert.match(page.content[0].text, /settled: yes/);
     assert.match(page.content[0].text, /complete: yes/);
@@ -252,27 +233,17 @@ test("renderers distinguish quick bash from actually yielded terminals", async (
   } as any;
   try {
     const tool = app.tools.get("bash");
-    const call = tool.renderCall(
-      { command: "printf visible-command" },
-      theme,
-      {},
-    );
-    assert.equal(
-      call.render(120).join("\n").trimEnd(),
-      "$ printf visible-command",
-    );
+    const call = tool.renderCall({ command: "printf visible-command" }, theme, {});
+    assert.equal(call.render(120).join("\n").trimEnd(), "$ printf visible-command");
 
     const quick = tool.renderResult(
       {
-        content: [{
-          type: "text",
-          text: [
-            "Command finished in 0s (exit 0).",
-            "",
-            "stdout:",
-            "visible-output",
-          ].join("\n"),
-        }],
+        content: [
+          {
+            type: "text",
+            text: ["Command finished in 0s (exit 0).", "", "stdout:", "visible-output"].join("\n"),
+          },
+        ],
       },
       { isPartial: false, expanded: false },
       theme,
@@ -285,16 +256,18 @@ test("renderers distinguish quick bash from actually yielded terminals", async (
 
     const yielded = tool.renderResult(
       {
-        content: [{
-          type: "text",
-          text: [
-            'Command is still running as background terminal bt-9 "server".',
-            'bt-9 [running] "server" (pid 99)',
-            "",
-            "stdout:",
-            "startup-output",
-          ].join("\n"),
-        }],
+        content: [
+          {
+            type: "text",
+            text: [
+              'Command is still running as background terminal bt-9 "server".',
+              'bt-9 [running] "server" (pid 99)',
+              "",
+              "stdout:",
+              "startup-output",
+            ].join("\n"),
+          },
+        ],
       },
       { isPartial: false, expanded: true },
       theme,
@@ -302,11 +275,9 @@ test("renderers distinguish quick bash from actually yielded terminals", async (
     );
     const renderedYielded = yielded.render(120).join("\n").trimEnd();
     assert.match(renderedYielded, /terminal bt-9 running.*\/ps to inspect/);
-    assert.doesNotMatch(renderedYielded, /stdout|startup-output|server\"/);
+    assert.doesNotMatch(renderedYielded, /stdout|startup-output|server"/);
 
-    const completionRenderer = app.messageRenderers.get(
-      "background-terminal-result",
-    );
+    const completionRenderer = app.messageRenderers.get("background-terminal-result");
     const completion = completionRenderer(
       {
         content: "Background terminal bt-9 exited.\n\nstdout:\nlater-output",
@@ -322,10 +293,7 @@ test("renderers distinguish quick bash from actually yielded terminals", async (
     );
     const renderedCompletion = completion.render(120).join("\n").trimEnd();
     assert.match(renderedCompletion, /terminal bt-9.*\/ps to inspect/);
-    assert.doesNotMatch(
-      renderedCompletion,
-      /stdout|later-output|server/,
-    );
+    assert.doesNotMatch(renderedCompletion, /stdout|later-output|server/);
   } finally {
     await app.shutdown();
   }
@@ -347,23 +315,27 @@ test("a command that only mutates the discarded shell is refused before spawning
   const app = harness();
   try {
     await assert.rejects(
-      app.tools.get("bash").execute(
-        "call-cd-only",
-        { command: "cd /tmp", yield_time_ms: 30_000 },
-        undefined,
-        undefined,
-        app.ctx,
-      ),
+      app.tools
+        .get("bash")
+        .execute(
+          "call-cd-only",
+          { command: "cd /tmp", yield_time_ms: 30_000 },
+          undefined,
+          undefined,
+          app.ctx,
+        ),
       /was not executed.*working_dir/is,
     );
     // The same directory change with real work attached still runs.
-    const result = await app.tools.get("bash").execute(
-      "call-cd-with-work",
-      { command: "cd /tmp && pwd", yield_time_ms: 30_000 },
-      undefined,
-      undefined,
-      app.ctx,
-    );
+    const result = await app.tools
+      .get("bash")
+      .execute(
+        "call-cd-with-work",
+        { command: "cd /tmp && pwd", yield_time_ms: 30_000 },
+        undefined,
+        undefined,
+        app.ctx,
+      );
     assert.match(result.content[0].text, /tmp/);
   } finally {
     await app.shutdown();
@@ -428,13 +400,15 @@ test("foreground wait streams bounded progress updates", async () => {
   try {
     const script =
       'process.stdout.write("early\\n"); setTimeout(() => process.stdout.write("late\\n"), 300)';
-    const result = await app.tools.get("bash").execute(
-      "call-progress",
-      { command: command(script), yield_time_ms: 30_000 },
-      undefined,
-      (update: any) => updates.push(update),
-      app.ctx,
-    );
+    const result = await app.tools
+      .get("bash")
+      .execute(
+        "call-progress",
+        { command: command(script), yield_time_ms: 30_000 },
+        undefined,
+        (update: any) => updates.push(update),
+        app.ctx,
+      );
     assert.match(result.content[0].text, /early/);
     assert.match(result.content[0].text, /late/);
     assert.ok(
@@ -451,26 +425,23 @@ test("bash exposes the current Pi session environment", async () => {
   try {
     const script =
       'process.stdout.write([process.env.PI_SESSION_ID, process.env.PI_PROVIDER, process.env.PI_MODEL, process.env.PI_REASONING_LEVEL].join("|"))';
-    const result = await app.tools.get("bash").execute(
-      "call-env",
-      { command: command(script), yield_time_ms: 30_000 },
-      undefined,
-      undefined,
-      app.ctx,
-    );
-    assert.match(
-      result.content[0].text,
-      /test-session\|test-provider\|test-model\|high/,
-    );
+    const result = await app.tools
+      .get("bash")
+      .execute(
+        "call-env",
+        { command: command(script), yield_time_ms: 30_000 },
+        undefined,
+        undefined,
+        app.ctx,
+      );
+    assert.match(result.content[0].text, /test-session\|test-provider\|test-model\|high/);
   } finally {
     await app.shutdown();
   }
 });
 
 test("bash mirrors Pi's managed bin PATH handling", async () => {
-  const pathKey =
-    Object.keys(process.env).find((key) => key.toLowerCase() === "path") ??
-    "PATH";
+  const pathKey = Object.keys(process.env).find((key) => key.toLowerCase() === "path") ?? "PATH";
   const previousPath = process.env[pathKey];
   const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
   const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-agent-dir-"));
@@ -494,19 +465,19 @@ test("bash mirrors Pi's managed bin PATH handling", async () => {
       "const entries = value.split(path.delimiter).filter(Boolean)",
       "process.stdout.write(JSON.stringify({ value, count: entries.filter((entry) => entry === binDir).length }))",
     ].join(";");
-    return app.tools.get("bash").execute(
-      toolCallId,
-      { command: command(script), yield_time_ms: 30_000 },
-      undefined,
-      undefined,
-      app.ctx,
-    );
+    return app.tools
+      .get("bash")
+      .execute(
+        toolCallId,
+        { command: command(script), yield_time_ms: 30_000 },
+        undefined,
+        undefined,
+        app.ctx,
+      );
   };
 
   try {
-    const prependedPath = [binDir, basePath]
-      .filter(Boolean)
-      .join(path.delimiter);
+    const prependedPath = [binDir, basePath].filter(Boolean).join(path.delimiter);
     const prepended = await inspectPath("call-managed-path-prepend");
     assert.ok(
       prepended.content[0].text.includes(
@@ -515,9 +486,7 @@ test("bash mirrors Pi's managed bin PATH handling", async () => {
       prepended.content[0].text,
     );
 
-    const existingPath = [basePath, binDir]
-      .filter(Boolean)
-      .join(path.delimiter);
+    const existingPath = [basePath, binDir].filter(Boolean).join(path.delimiter);
     process.env[pathKey] = existingPath;
     const preserved = await inspectPath("call-managed-path-preserve");
     assert.ok(
@@ -547,9 +516,7 @@ test("bash preserves Pi's configured command prefix", async () => {
     const result = await app.tools.get("bash").execute(
       "call-prefix",
       {
-        command: command(
-          'process.stdout.write(process.env.PI_PREFIX_FROM_SETTINGS || "missing")',
-        ),
+        command: command('process.stdout.write(process.env.PI_PREFIX_FROM_SETTINGS || "missing")'),
         yield_time_ms: 30_000,
       },
       undefined,
@@ -584,13 +551,9 @@ test("managed setup failure uses the foreground fallback before spawn", async ()
   });
   const app = harness(extension);
   try {
-    const result = await app.tools.get("bash").execute(
-      "call-fallback",
-      { command: "printf fallback" },
-      undefined,
-      undefined,
-      app.ctx,
-    );
+    const result = await app.tools
+      .get("bash")
+      .execute("call-fallback", { command: "printf fallback" }, undefined, undefined, app.ctx);
     assert.equal(fallbackCalls, 1);
     assert.match(result.content[0].text, /Managed bash unavailable before spawn/);
     assert.match(result.content[1].text, /fallback: printf fallback/);
@@ -617,13 +580,15 @@ test("a proven pre-spawn shell failure may use the foreground fallback", async (
   });
   const app = harness(extension);
   try {
-    const result = await app.tools.get("bash").execute(
-      "call-pre-spawn-fallback",
-      { command: "printf fallback" },
-      undefined,
-      undefined,
-      app.ctx,
-    );
+    const result = await app.tools
+      .get("bash")
+      .execute(
+        "call-pre-spawn-fallback",
+        { command: "printf fallback" },
+        undefined,
+        undefined,
+        app.ctx,
+      );
     assert.equal(fallbackCalls, 1);
     assert.match(result.content[0].text, /unavailable before spawn/);
     assert.match(result.content[1].text, /pre-spawn fallback ran/);
@@ -639,13 +604,15 @@ test("a failed command is never retried through the fallback", async () => {
   try {
     const script = `require("fs").appendFileSync(${JSON.stringify(marker)}, "once\\n"); process.exit(7)`;
     await assert.rejects(
-      app.tools.get("bash").execute(
-        "call-failed",
-        { command: command(script), yield_time_ms: 30_000 },
-        undefined,
-        undefined,
-        app.ctx,
-      ),
+      app.tools
+        .get("bash")
+        .execute(
+          "call-failed",
+          { command: command(script), yield_time_ms: 30_000 },
+          undefined,
+          undefined,
+          app.ctx,
+        ),
       /exit 7/,
     );
     assert.equal(fs.readFileSync(marker, "utf8"), "once\n");
@@ -731,11 +698,7 @@ test("failed result delivery does not write directly to the TUI terminal", async
       app.ctx,
     );
     assert.match(result.content[0].text, /background terminal bt-\d+/);
-    assert.equal(
-      await pollUntil(() => deliveryAttempts === 1),
-      true,
-      "delivery was attempted",
-    );
+    assert.equal(await pollUntil(() => deliveryAttempts === 1), true, "delivery was attempted");
     assert.deepEqual(consoleErrors, []);
   } finally {
     console.error = originalConsoleError;
@@ -770,10 +733,7 @@ test("yielded command returns an id then sends exactly one completion", async ()
     );
     await new Promise((resolve) => setTimeout(resolve, 100));
     assert.equal(app.messages.length, 1);
-    assert.equal(
-      app.messages[0].message.customType,
-      "background-terminal-result",
-    );
+    assert.equal(app.messages[0].message.customType, "background-terminal-result");
     assert.match(app.messages[0].message.content, /exited \(exit 0\)/);
     assert.deepEqual(app.messages[0].options, {
       deliverAs: "followUp",

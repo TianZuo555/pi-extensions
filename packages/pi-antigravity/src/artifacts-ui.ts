@@ -139,8 +139,7 @@ export class AgyArtifactsDashboard implements Component {
     }
     if (this.keybindings.matches(data, "tui.select.up") || data === "k") {
       if (artifacts.length > 0) {
-        this.selection.index =
-          (this.selection.index - 1 + artifacts.length) % artifacts.length;
+        this.selection.index = (this.selection.index - 1 + artifacts.length) % artifacts.length;
         this.selection.name = artifacts[this.selection.index]?.name;
         this.tui.requestRender();
       }
@@ -217,16 +216,8 @@ export class AgyArtifactsDashboard implements Component {
 
     const headerLeft = theme.fg("accent", theme.bold("agy artifacts"));
     const headerRight = theme.fg("muted", `${artifacts.length}`);
-    const headerPad = Math.max(
-      1,
-      width - visibleWidth(headerLeft) - visibleWidth(headerRight) - 4,
-    );
-    lines.push(
-      truncateToWidth(
-        `  ${headerLeft}${" ".repeat(headerPad)}${headerRight}  `,
-        width,
-      ),
-    );
+    const headerPad = Math.max(1, width - visibleWidth(headerLeft) - visibleWidth(headerRight) - 4);
+    lines.push(truncateToWidth(`  ${headerLeft}${" ".repeat(headerPad)}${headerRight}  `, width));
 
     lines.push(
       truncateToWidth(
@@ -241,10 +232,7 @@ export class AgyArtifactsDashboard implements Component {
     const rowLines = this.renderRows(artifacts, innerWidth, bodyHeight);
     for (let i = 0; i < bodyHeight; i++) {
       lines.push(
-        truncateToWidth(
-          divider + this.pad(rowLines[i] ?? "", innerWidth) + divider,
-          width,
-        ),
+        truncateToWidth(divider + this.pad(rowLines[i] ?? "", innerWidth) + divider, width),
       );
     }
 
@@ -294,9 +282,7 @@ export class AgyArtifactsDashboard implements Component {
 
       const marker = isSelected ? theme.fg("accent", "❯") : " ";
       const glyph =
-        artifact.kind === "generated"
-          ? theme.fg("success", "◆")
-          : theme.fg("muted", "◇");
+        artifact.kind === "generated" ? theme.fg("success", "◆") : theme.fg("muted", "◇");
       const title = isSelected
         ? theme.fg("accent", oneLine(artifact.name))
         : theme.fg("text", oneLine(artifact.name));
@@ -306,10 +292,7 @@ export class AgyArtifactsDashboard implements Component {
       const rightParts = [
         theme.fg("muted", artifact.mediaType),
         theme.fg("muted", formatBytes(artifact.bytes)),
-        theme.fg(
-          "muted",
-          artifact.kind === "generated" ? "generated" : "uploaded",
-        ),
+        theme.fg("muted", artifact.kind === "generated" ? "generated" : "uploaded"),
       ];
       const right = `${rightParts.join(dot)} `;
 
@@ -317,7 +300,9 @@ export class AgyArtifactsDashboard implements Component {
       const leftMax = Math.max(0, width - rightWidth - 2);
       out.push(
         truncateToWidth(left, leftMax) +
-          " ".repeat(Math.max(1, width - visibleWidth(truncateToWidth(left, leftMax)) - rightWidth)) +
+          " ".repeat(
+            Math.max(1, width - visibleWidth(truncateToWidth(left, leftMax)) - rightWidth),
+          ) +
           right,
       );
     }

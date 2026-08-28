@@ -13,9 +13,10 @@ const FIXTURE = path.join(
   "fake-rpc-child.mjs",
 );
 
-const fakeModel = { provider: "openai", id: "gpt-4.1-mini" } as import("@earendil-works/pi-ai").Model<
-  import("@earendil-works/pi-ai").Api
->;
+const fakeModel = {
+  provider: "openai",
+  id: "gpt-4.1-mini",
+} as import("@earendil-works/pi-ai").Model<import("@earendil-works/pi-ai").Api>;
 
 function isolatedAgentDir(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-subagents-catalog-"));
@@ -59,7 +60,10 @@ describe("SubagentSupervisor budgets", () => {
         }),
       ),
     );
-    assert.equal(started.every((r) => r.status === "running"), true);
+    assert.equal(
+      started.every((r) => r.status === "running"),
+      true,
+    );
 
     await assert.rejects(
       () =>

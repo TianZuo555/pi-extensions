@@ -7,11 +7,7 @@ import {
   reconcileDashboardSelection,
   type DashboardSelection,
 } from "./src/ui/ps.ts";
-import {
-  buildOutputLines,
-  createOutputLineCache,
-  sanitizeText,
-} from "./src/ui/output-view.ts";
+import { buildOutputLines, createOutputLineCache, sanitizeText } from "./src/ui/output-view.ts";
 
 test("dashboard selection follows its terminal id and falls back by row", () => {
   const selection: DashboardSelection = { id: "bt-7", index: 6 };
@@ -88,10 +84,7 @@ test("sanitizeText strips ANSI, tabs, and control characters", () => {
   assert.equal(sanitizeText("\u001b[31mred\u001b[0m"), "red");
   assert.equal(sanitizeText("\u001b[12345Cshifted"), "shifted");
   assert.equal(sanitizeText("\u001b]0;window title\u0007output"), "output");
-  assert.equal(
-    sanitizeText("\u001b]8;;https://example.com\u001b\\link\u001b]8;;\u001b\\"),
-    "link",
-  );
+  assert.equal(sanitizeText("\u001b]8;;https://example.com\u001b\\link\u001b]8;;\u001b\\"), "link");
   assert.equal(sanitizeText("\u001b]0;title\u009coutput"), "output");
   assert.equal(sanitizeText("\u009d0;title\u0007output"), "output");
   assert.equal(sanitizeText("a\u0085b"), "ab");
@@ -118,9 +111,7 @@ test("output line cache reuses a version/width key and invalidates either dimens
 test("buildOutputLines wraps long lines and keeps only the final CR segment", () => {
   const lines = buildOutputLines("progress 1\rprogress 2\rdone\nnext", 80);
   assert.deepEqual(lines, ["done", "next"]);
-  assert.deepEqual(buildOutputLines("progress 1\rprogress 2\r", 80), [
-    "progress 2",
-  ]);
+  assert.deepEqual(buildOutputLines("progress 1\rprogress 2\r", 80), ["progress 2"]);
 
   const wrapped = buildOutputLines("x".repeat(25), 10);
   assert.ok(wrapped.length > 1);

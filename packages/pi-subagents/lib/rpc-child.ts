@@ -183,10 +183,13 @@ export async function runRpcChild(input: RpcChildRunInput): Promise<RpcChildRunO
   let budgetWarningSent = false;
   const maxTurns = input.profile.maxTurns;
 
-  const pendingCommands = new Map<string, {
-    resolve: (line: RpcLine) => void;
-    reject: (error: Error) => void;
-  }>();
+  const pendingCommands = new Map<
+    string,
+    {
+      resolve: (line: RpcLine) => void;
+      reject: (error: Error) => void;
+    }
+  >();
 
   const rejectAllPending = (reason: string) => {
     for (const pending of pendingCommands.values()) {
@@ -376,10 +379,7 @@ export async function runRpcChild(input: RpcChildRunInput): Promise<RpcChildRunO
         // Already closed.
       }
 
-      const exitWait = Promise.race([
-        waitForExit,
-        sleep(STOP_TIMEOUT_MS).then(() => null),
-      ]);
+      const exitWait = Promise.race([waitForExit, sleep(STOP_TIMEOUT_MS).then(() => null)]);
 
       exitCode = await exitWait;
 
@@ -397,10 +397,7 @@ export async function runRpcChild(input: RpcChildRunInput): Promise<RpcChildRunO
             // ignore
           }
         }
-        exitCode = await Promise.race([
-          waitForExit,
-          sleep(FORCE_KILL_AFTER_MS).then(() => null),
-        ]);
+        exitCode = await Promise.race([waitForExit, sleep(FORCE_KILL_AFTER_MS).then(() => null)]);
         if (exitCode === null && childPid) {
           try {
             if (process.platform === "win32") {

@@ -100,7 +100,8 @@ function listSessionFiles(sessionsDir: string): Effect.Effect<string[], LocalSca
       walk(sessionsDir);
       return files.sort();
     },
-    catch: (cause) => new LocalScanError({ message: `Failed to list sessions in ${sessionsDir}`, cause }),
+    catch: (cause) =>
+      new LocalScanError({ message: `Failed to list sessions in ${sessionsDir}`, cause }),
   });
 }
 
@@ -109,7 +110,10 @@ interface FileParseResult {
   readonly parseErrors: number;
 }
 
-function parseSessionFile(file: string, options: ScanOptions): Effect.Effect<FileParseResult, LocalScanError> {
+function parseSessionFile(
+  file: string,
+  options: ScanOptions,
+): Effect.Effect<FileParseResult, LocalScanError> {
   return Effect.callback<FileParseResult, LocalScanError>((resume) => {
     const records: UsageRecord[] = [];
     let parseErrors = 0;
@@ -185,7 +189,7 @@ function parseUsageLine(line: string): UsageRecord | undefined {
     return undefined;
   }
   const message = parsed.message;
-  if (!message || message.role !== "assistant" || !message.usage) return undefined;
+  if (message?.role !== "assistant" || !message.usage) return undefined;
   const id = typeof parsed.id === "string" ? parsed.id : undefined;
   if (!id) return undefined;
 
@@ -227,7 +231,15 @@ export function sessionFileStartMs(name: string): number | undefined {
   if (!match) return undefined; // non-standard name (e.g. repro.jsonl) — always scan
   const [, year, month, day, hour, minute, second, ms] = match;
   const date = new Date(
-    Date.UTC(Number(year), Number(month) - 1, Number(day), Number(hour), Number(minute), Number(second), Number(ms)),
+    Date.UTC(
+      Number(year),
+      Number(month) - 1,
+      Number(day),
+      Number(hour),
+      Number(minute),
+      Number(second),
+      Number(ms),
+    ),
   );
   return Number.isNaN(date.getTime()) ? undefined : date.getTime();
 }

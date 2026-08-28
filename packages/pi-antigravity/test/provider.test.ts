@@ -23,7 +23,13 @@ test("latestUserPrompt extracts the last user text", () => {
   const ctx = contextWith([
     { role: "user", content: [{ type: "text", text: "first" }] },
     { role: "assistant", content: [{ type: "text", text: "reply" }] },
-    { role: "user", content: [{ type: "text", text: "second" }, { type: "text", text: "line2" }] },
+    {
+      role: "user",
+      content: [
+        { type: "text", text: "second" },
+        { type: "text", text: "line2" },
+      ],
+    },
   ]);
   const { prompt, images } = latestUserPrompt(ctx);
   assert.equal(prompt, "second\nline2");
@@ -32,7 +38,13 @@ test("latestUserPrompt extracts the last user text", () => {
 
 test("latestUserPrompt notes omitted images", () => {
   const ctx = contextWith([
-    { role: "user", content: [{ type: "image", data: "..." }, { type: "text", text: "look" }] },
+    {
+      role: "user",
+      content: [
+        { type: "image", data: "..." },
+        { type: "text", text: "look" },
+      ],
+    },
   ]);
   const { prompt, images } = latestUserPrompt(ctx);
   assert.equal(images, 1);
@@ -45,22 +57,24 @@ test("latestUserPrompt returns empty when there is no user message", () => {
 });
 
 test("piHistoryBootstrap restores the active branch before the current request", () => {
-  const restored = piHistoryBootstrap(contextWith([
-    { role: "user", content: [{ type: "text", text: "Use SQLite." }] },
-    {
-      role: "assistant",
-      content: [
-        { type: "text", text: "I will inspect it." },
-        { type: "toolCall", name: "read", arguments: { path: "db.ts" } },
-      ],
-    },
-    {
-      role: "toolResult",
-      toolName: "read",
-      content: [{ type: "text", text: "export const db = ..." }],
-    },
-    { role: "user", content: [{ type: "text", text: "Continue." }] },
-  ]));
+  const restored = piHistoryBootstrap(
+    contextWith([
+      { role: "user", content: [{ type: "text", text: "Use SQLite." }] },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "I will inspect it." },
+          { type: "toolCall", name: "read", arguments: { path: "db.ts" } },
+        ],
+      },
+      {
+        role: "toolResult",
+        toolName: "read",
+        content: [{ type: "text", text: "export const db = ..." }],
+      },
+      { role: "user", content: [{ type: "text", text: "Continue." }] },
+    ]),
+  );
   assert.ok(restored);
   assert.match(restored, /Restored pi conversation context/);
   assert.match(restored, /Use SQLite/);
@@ -71,16 +85,18 @@ test("piHistoryBootstrap restores the active branch before the current request",
 
 test("piHistoryBootstrap is absent for a first-turn request and bounds old history", () => {
   assert.equal(
-    piHistoryBootstrap(contextWith([
-      { role: "user", content: [{ type: "text", text: "First request" }] },
-    ])),
+    piHistoryBootstrap(
+      contextWith([{ role: "user", content: [{ type: "text", text: "First request" }] }]),
+    ),
     undefined,
   );
-  const restored = piHistoryBootstrap(contextWith([
-    { role: "user", content: [{ type: "text", text: "x".repeat(30_000) }] },
-    { role: "assistant", content: [{ type: "text", text: "tail" }] },
-    { role: "user", content: [{ type: "text", text: "now" }] },
-  ]));
+  const restored = piHistoryBootstrap(
+    contextWith([
+      { role: "user", content: [{ type: "text", text: "x".repeat(30_000) }] },
+      { role: "assistant", content: [{ type: "text", text: "tail" }] },
+      { role: "user", content: [{ type: "text", text: "now" }] },
+    ]),
+  );
   assert.ok(restored);
   assert.match(restored, /Earlier history omitted/);
   assert.ok(restored.length < 25_000);
@@ -286,10 +302,28 @@ test("streamAntigravity reports cumulative agy usage exactly once across tool ca
   for (const activity of [
     { type: "usage", usage: { input_tokens: 13_712, output_tokens: 264, total_tokens: 13_976 } },
     { type: "tool_start", stepId: 1, name: "view_file", args: { AbsolutePath: "/tmp/a" } },
-    { type: "tool_done", stepId: 1, name: "view_file", args: { AbsolutePath: "/tmp/a" }, output: "ok" },
+    {
+      type: "tool_done",
+      stepId: 1,
+      name: "view_file",
+      args: { AbsolutePath: "/tmp/a" },
+      output: "ok",
+    },
     { type: "tool_start", stepId: 2, name: "run_command", args: { CommandLine: "echo hi" } },
-    { type: "tool_error", stepId: 2, name: "run_command", args: { CommandLine: "echo hi" }, message: "denied" },
-    { type: "result", status: "ERROR", response: "", error: "permission denied", usage: { input_tokens: 44_909, output_tokens: 610, total_tokens: 45_519 } },
+    {
+      type: "tool_error",
+      stepId: 2,
+      name: "run_command",
+      args: { CommandLine: "echo hi" },
+      message: "denied",
+    },
+    {
+      type: "result",
+      status: "ERROR",
+      response: "",
+      error: "permission denied",
+      usage: { input_tokens: 44_909, output_tokens: 610, total_tokens: 45_519 },
+    },
   ] as const) {
     controller.push(activity);
   }
@@ -300,7 +334,10 @@ test("streamAntigravity reports cumulative agy usage exactly once across tool ca
     const terminal = events.find((event) => event.type === "done" || event.type === "error");
     messages.push(terminal.type === "done" ? terminal.message : terminal.error);
   }
-  assert.deepEqual(messages.map((message) => message.usage.totalTokens), [13_976, 0, 31_543]);
+  assert.deepEqual(
+    messages.map((message) => message.usage.totalTokens),
+    [13_976, 0, 31_543],
+  );
   assert.equal(
     messages.reduce((sum, message) => sum + message.usage.totalTokens, 0),
     45_519,
@@ -329,7 +366,10 @@ test("streamAntigravity treats result with ERROR status as success when response
   assert.equal(doneEvent.reason, "stop");
   assert.equal(doneEvent.message.stopReason, "stop");
   assert.equal(doneEvent.message.errorMessage, undefined);
-  assert.equal(doneEvent.message.content[0].text, "All custom agent integration features are fully implemented.");
+  assert.equal(
+    doneEvent.message.content[0].text,
+    "All custom agent integration features are fully implemented.",
+  );
 });
 
 test("streamAntigravity snaps text_end to the authoritative response when deltas drift", async () => {

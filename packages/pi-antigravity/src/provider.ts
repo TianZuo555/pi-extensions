@@ -26,7 +26,7 @@ import {
 import type { AgyEffort } from "../lib/agy-client.ts";
 import { type AgyPiBridge, resolveBridgeResultsFromContext } from "../lib/bridge.ts";
 import type { AgyActivity, AgyUsage } from "../lib/reducer.ts";
-import { AgyReplayStore } from "../lib/replay.ts";
+import type { AgyReplayStore } from "../lib/replay.ts";
 import { mapAgyToolToNative } from "../lib/native-tools.ts";
 import { restoredPiContextPrompt, WRAPPER_TOOL_NAME } from "../lib/prompt.ts";
 import type { AntigravityRuntimeInstance, AntigravityRuntimeShape } from "./runtime.ts";
@@ -98,7 +98,7 @@ export function piHistoryBootstrap(context: Context): string | undefined {
     const role =
       message.role === "toolResult"
         ? `tool ${message.toolName ?? "result"}`
-        : message.role ?? "message";
+        : (message.role ?? "message");
     entries.push(`${role}:\n${rendered.join("\n")}`);
   }
   if (entries.length === 0) return undefined;
@@ -185,11 +185,14 @@ function agyToolStepKey(activity: { stepId?: number; name: string }): string {
  * real pi tool), so the raw call_mcp_tool step must not render a duplicate
  * display-only card. MCP calls against OTHER servers render normally.
  */
-function isBridgedMcpStep(activity: {
-  name: string;
-  args: Record<string, unknown>;
-}, serverName: string): boolean {
-  return activity.name === "call_mcp_tool" && activity.args?.["ServerName"] === serverName;
+function isBridgedMcpStep(
+  activity: {
+    name: string;
+    args: Record<string, unknown>;
+  },
+  serverName: string,
+): boolean {
+  return activity.name === "call_mcp_tool" && activity.args?.ServerName === serverName;
 }
 
 /** Build the streamSimple implementation bound to the runtime service. */
@@ -393,9 +396,7 @@ export function streamAntigravity(
             type: "toolCall" as const,
             id,
             name: effective ? effective.tool : WRAPPER_TOOL_NAME,
-            arguments: effective
-              ? effective.args
-              : { tool: activity.name, input: activity.args },
+            arguments: effective ? effective.args : { tool: activity.name, input: activity.args },
           };
           if (!effective) recordReplayResult(id, activity);
           output.content.push(toolCall);

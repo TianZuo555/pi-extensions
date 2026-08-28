@@ -5,11 +5,7 @@ import { createServer, type Server, type Socket } from "node:net";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
-import {
-  createFrameSplitter,
-  encodeFrame,
-  PROTOCOL_VERSION,
-} from "../lib/protocol.ts";
+import { createFrameSplitter, encodeFrame, PROTOCOL_VERSION } from "../lib/protocol.ts";
 import {
   BridgeClient,
   BridgeRejectedError,

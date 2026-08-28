@@ -3,7 +3,6 @@ import test from "node:test";
 import { Effect } from "effect";
 import type { ProviderReport } from "../lib/providers.ts";
 import {
-  CACHE_TTL_MS,
   createUsageRuntime,
   type ProviderQuerySpec,
   runUsage,
@@ -111,11 +110,9 @@ test("UsageRuntime shared in-flight query survives first caller cancellation", a
   const ctx = mockCtx();
   const controller = new AbortController();
 
-  const first = runUsage(
-    runtime,
-    usage.queryProvider(ctx, spec, true, controller.signal),
-    { signal: controller.signal },
-  );
+  const first = runUsage(runtime, usage.queryProvider(ctx, spec, true, controller.signal), {
+    signal: controller.signal,
+  });
 
   while (counts.query === 0) {
     await new Promise((resolve) => setTimeout(resolve, 1));

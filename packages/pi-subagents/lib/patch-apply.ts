@@ -78,7 +78,13 @@ export async function applyVerifiedPatch(input: PatchApplyInput): Promise<PatchA
   const forwardOk = await gitApplyCheck(["--check", "-"], input.repoRoot, patchBytes);
 
   return classifyAndApply(
-    () => runGitWithInput(["apply", "--binary", "-"], input.repoRoot, patchBytes, GIT_DEFAULT_TIMEOUT_MS),
+    () =>
+      runGitWithInput(
+        ["apply", "--binary", "-"],
+        input.repoRoot,
+        patchBytes,
+        GIT_DEFAULT_TIMEOUT_MS,
+      ),
     reverseOk,
     forwardOk,
   );

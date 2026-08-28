@@ -140,7 +140,7 @@ export default function (pi: ExtensionAPI) {
       try {
         await run(cacheService.close);
       } finally {
-        await cacheRuntime!.dispose();
+        await cacheRuntime?.dispose();
         cacheRuntime = undefined;
         cacheService = undefined;
         closing = undefined;

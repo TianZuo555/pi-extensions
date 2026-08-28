@@ -36,7 +36,7 @@ async function tryPost(
     "Content-Type": "application/json",
   };
   if (apiKey) {
-    headers["Authorization"] = `Bearer ${apiKey}`;
+    headers.Authorization = `Bearer ${apiKey}`;
   }
   return fetch(url, {
     method: "POST",
@@ -89,7 +89,7 @@ export async function searchOllama(
     }
   }
 
-  if (!res || !res.ok) {
+  if (!res?.ok) {
     throw (
       lastError ||
       new Error(
@@ -119,10 +119,7 @@ export async function searchOllama(
   };
 }
 
-export async function fetchOllama(
-  url: string,
-  options: FetchOptions = {},
-): Promise<FetchResponse> {
+export async function fetchOllama(url: string, options: FetchOptions = {}): Promise<FetchResponse> {
   const config = resolveOllamaConfig();
   const timeoutSignal = AbortSignal.timeout(options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
   const combinedSignal = options.signal
@@ -139,12 +136,7 @@ export async function fetchOllama(
 
   for (const endpoint of endpoints) {
     try {
-      const candidate = await tryPost(
-        endpoint,
-        { url },
-        config.apiKey,
-        combinedSignal,
-      );
+      const candidate = await tryPost(endpoint, { url }, config.apiKey, combinedSignal);
       if (candidate.ok) {
         res = candidate;
         break;
@@ -160,7 +152,7 @@ export async function fetchOllama(
     }
   }
 
-  if (!res || !res.ok) {
+  if (!res?.ok) {
     throw (
       lastError ||
       new Error(

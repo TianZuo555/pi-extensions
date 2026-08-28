@@ -12,8 +12,7 @@
 
 import { formatElapsed, type TerminalSnapshot } from "./domain.ts";
 
-const ASSIGNMENT =
-  /^(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S+)$/;
+const ASSIGNMENT = /^(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S+)$/;
 const BARE_CD = /^cd(?:\s|$)/i;
 /** Syntax that can touch the world outside the discarded shell: redirects
  * create files, substitution runs real commands. Ambiguity fails open. */
@@ -30,9 +29,7 @@ export function isStateOnlyCommand(command: string) {
     .split(/\s*(?:&&|\|\||[;|]|\n)\s*/)
     .filter(Boolean);
   if (segments.length === 0) return false;
-  return segments.every(
-    (segment) => ASSIGNMENT.test(segment) || BARE_CD.test(segment),
-  );
+  return segments.every((segment) => ASSIGNMENT.test(segment) || BARE_CD.test(segment));
 }
 
 export function stateOnlyCommandError() {
@@ -54,8 +51,7 @@ export function findDuplicateRunning(
   cwd: string,
 ) {
   return snapshots.find(
-    (snap) =>
-      snap.status === "running" && snap.command === command && snap.cwd === cwd,
+    (snap) => snap.status === "running" && snap.command === command && snap.cwd === cwd,
   );
 }
 

@@ -39,7 +39,9 @@ function fakeSpawn(output: string, code = 0) {
   queueMicrotask(() => {
     stdout.emit(output);
     listeners.data ??= [];
-    (listeners.close ?? []).forEach((fn) => fn(code));
+    (listeners.close ?? []).forEach((fn) => {
+      fn(code);
+    });
   });
   return child as unknown as never;
 }
@@ -56,7 +58,14 @@ test("buildAgyArgs always skips permissions and puts the prompt directly after -
   assert.ok(!base.includes("--effort"));
   assert.ok(!base.includes("--add-dir"));
 
-  const full = buildAgyArgs({ prompt: "hi", conversationId: "c1", model: "m1", effort: "medium", cwd: "/tmp/w", timeoutMs: 90_000 });
+  const full = buildAgyArgs({
+    prompt: "hi",
+    conversationId: "c1",
+    model: "m1",
+    effort: "medium",
+    cwd: "/tmp/w",
+    timeoutMs: 90_000,
+  });
   assert.equal(full[full.indexOf("--conversation") + 1], "c1");
   assert.equal(full[full.indexOf("--model") + 1], "m1");
   assert.equal(full[full.indexOf("--effort") + 1], "medium");
@@ -115,8 +124,12 @@ test("runAgyTurn surfaces a background-task timeout with a stuck ACTIVE tool ste
     onActivity: pushActivity as never,
     spawnOverride: (() =>
       fakeSpawn(
-        [
-          JSON.stringify({ event: "init", conversation_id: "c-bg-1", init: { cwd: "/tmp", tools: [], permission_mode: "auto" } }),
+        `${[
+          JSON.stringify({
+            event: "init",
+            conversation_id: "c-bg-1",
+            init: { cwd: "/tmp", tools: [], permission_mode: "auto" },
+          }),
           JSON.stringify({
             event: "step_update",
             step_update: {
@@ -130,7 +143,7 @@ test("runAgyTurn surfaces a background-task timeout with a stuck ACTIVE tool ste
           }),
           // No DONE, no result: the turn dies while the step is still ACTIVE,
           // exactly like a command agy backgrounded.
-        ].join("\n") + "\n",
+        ].join("\n")}\n`,
         1,
       )) as never,
   });

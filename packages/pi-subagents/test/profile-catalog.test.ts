@@ -18,7 +18,12 @@ function isolatedAgentDir(): string {
   return dir;
 }
 
-function writeAgentProfile(agentDir: string, filename: string, frontmatter: string, body = "Test agent."): void {
+function writeAgentProfile(
+  agentDir: string,
+  filename: string,
+  frontmatter: string,
+  body = "Test agent.",
+): void {
   fs.writeFileSync(
     path.join(agentDir, "agents", filename),
     `---
@@ -153,7 +158,11 @@ Broken
 
   it("parses agentArgs from string and YAML list", () => {
     const agentDir = isolatedAgentDir();
-    writeAgentProfile(agentDir, "string-args.md", `name: string-args\nagentArgs: --plan --model gpt-4`);
+    writeAgentProfile(
+      agentDir,
+      "string-args.md",
+      `name: string-args\nagentArgs: --plan --model gpt-4`,
+    );
     writeAgentProfile(
       agentDir,
       "list-args.md",
@@ -167,16 +176,20 @@ Broken
 
   it("rejects unsafe agentArgs with diagnostics", () => {
     const agentDir = isolatedAgentDir();
-    const agentsDir = path.join(agentDir, "agents");
+    const _agentsDir = path.join(agentDir, "agents");
     const unsafeCases: { file: string; agentArgs: string }[] = [
       { file: "semi.md", agentArgs: "--plan;rm" },
       { file: "backtick.md", agentArgs: "`whoami`" },
-      { file: "dollar.md", agentArgs: "${HOME}" },
+      { file: "dollar.md", agentArgs: "\${HOME}" },
       { file: "pipe.md", agentArgs: "a|b" },
       { file: "space-quote.md", agentArgs: '--foo "bar"' },
     ];
     for (const { file, agentArgs } of unsafeCases) {
-      writeAgentProfile(agentDir, file, `name: ${path.basename(file, ".md")}\nagentArgs: ${agentArgs}`);
+      writeAgentProfile(
+        agentDir,
+        file,
+        `name: ${path.basename(file, ".md")}\nagentArgs: ${agentArgs}`,
+      );
     }
     const catalog = new ProfileCatalog(process.cwd(), agentDir);
     const diags = catalog.getLoadDiagnostics();
@@ -195,7 +208,7 @@ Broken
     assert.equal(SAFE_AGENT_ARG_PATTERN.test("--model"), true);
     assert.equal(SAFE_AGENT_ARG_PATTERN.test("a;b"), false);
     assert.equal(SAFE_AGENT_ARG_PATTERN.test("`id`"), false);
-    assert.equal(SAFE_AGENT_ARG_PATTERN.test("${PATH}"), false);
+    assert.equal(SAFE_AGENT_ARG_PATTERN.test("\${PATH}"), false);
     assert.equal(SAFE_AGENT_ARG_PATTERN.test("a|b"), false);
     assert.equal(SAFE_AGENT_ARG_PATTERN.test('"quoted"'), false);
     assert.equal(SAFE_AGENT_ARG_PATTERN.test("foo bar"), false);

@@ -4,11 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import {
-  createRepoModelRuntime,
-  RepoModelRuntime,
-  runRepoModel,
-} from "../src/runtime.ts";
+import { createRepoModelRuntime, RepoModelRuntime, runRepoModel } from "../src/runtime.ts";
 
 test("RepoModelRuntime getRepoMeta resolves directory metadata", async () => {
   const runtime = createRepoModelRuntime();

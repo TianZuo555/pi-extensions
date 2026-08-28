@@ -15,11 +15,8 @@ import {
 } from "./domain.ts";
 import { buildTaskPrompt } from "./prompt.ts";
 import type { ProfileDefinition } from "./domain.ts";
-import {
-  ProfileCatalog,
-  resolveProfileModelArg,
-} from "./profile-catalog.ts";
-import type { BackendRunOutput, SubagentBackend } from "./backend.ts";
+import { ProfileCatalog, resolveProfileModelArg } from "./profile-catalog.ts";
+import type { BackendRunOutput } from "./backend.ts";
 import { SubagentBackendPool } from "./backend-pool.ts";
 import type { ResolvedBackendKind } from "./backend-selection.ts";
 import { applyVerifiedPatch } from "./patch-apply.ts";
@@ -43,6 +40,7 @@ export interface SupervisorRunInput {
   task: string;
   context?: string;
   cwd: string;
+  // biome-ignore lint/suspicious/noExplicitAny: Model<T> generic is intentionally open in the pi AI API
   parentModel: Model<any> | undefined;
   mode?: RunMode;
   timeoutMs?: number;
@@ -55,7 +53,7 @@ export interface SupervisorRunInput {
   requestProfileApproval?: (profile: ProfileDefinition) => Promise<boolean>;
 }
 
-export type BackgroundCompleteHandler = (result: SubagentRunResult) => void | boolean;
+export type BackgroundCompleteHandler = (result: SubagentRunResult) => undefined | boolean;
 
 interface PreparedSubagentRun {
   runId: string;
@@ -78,7 +76,8 @@ const RECOVERY_BLOCK_MAX_BYTES = 4_096;
 function formatRecoveryBlock(delivery: WorktreeDelivery): string | undefined {
   const lines: string[] = [];
   if (delivery.error) lines.push(`Finalization error: ${delivery.error}`);
-  if (delivery.retainedWorktreePath) lines.push(`Retained worktree: ${delivery.retainedWorktreePath}`);
+  if (delivery.retainedWorktreePath)
+    lines.push(`Retained worktree: ${delivery.retainedWorktreePath}`);
   if (delivery.retainedHerdrWorkspaceId) {
     lines.push(`Retained workspace: ${delivery.retainedHerdrWorkspaceId}`);
   }
@@ -97,7 +96,8 @@ function formatRecoveryErrorSummary(delivery: WorktreeDelivery): string | undefi
   const parts: string[] = [];
   if (delivery.error) parts.push(delivery.error);
   if (delivery.retainedWorktreePath) parts.push(`retained=${delivery.retainedWorktreePath}`);
-  if (delivery.retainedHerdrWorkspaceId) parts.push(`workspace=${delivery.retainedHerdrWorkspaceId}`);
+  if (delivery.retainedHerdrWorkspaceId)
+    parts.push(`workspace=${delivery.retainedHerdrWorkspaceId}`);
   if (delivery.branch) parts.push(`branch=${delivery.branch}`);
   if (delivery.patch?.path) parts.push(`patch=${delivery.patch.path}`);
   return parts.length ? parts.join("; ") : undefined;
@@ -318,7 +318,7 @@ export class SubagentSupervisor {
 
   private async startBackground(input: SupervisorRunInput): Promise<SubagentRunResult> {
     const prepared = await this.prepareRun(input);
-    const record = this.runs.register({
+    const _record = this.runs.register({
       runId: prepared.runId,
       profile: prepared.profile.name,
       qualifiedProfile: prepared.profile.qualifiedId,
@@ -408,8 +408,7 @@ export class SubagentSupervisor {
         else linkedSignal.addEventListener("abort", () => abortController.abort(), { once: true });
       }
 
-      const taskPreview =
-        input.task.length > 80 ? `${input.task.slice(0, 80)}…` : input.task;
+      const taskPreview = input.task.length > 80 ? `${input.task.slice(0, 80)}…` : input.task;
 
       const { backendId } = this.backendPool.resolve(profile, usesRpcOnlyControls(input));
 
@@ -441,9 +440,12 @@ export class SubagentSupervisor {
       ? formatRecoveryErrorSummary(worktreeDelivery)
       : undefined;
     const recoveryFailed = worktreeDelivery ? hasRecoveryFailure(worktreeDelivery) : false;
-    const infraError = executeError instanceof Error ? executeError.message : executeError
-      ? String(executeError)
-      : undefined;
+    const infraError =
+      executeError instanceof Error
+        ? executeError.message
+        : executeError
+          ? String(executeError)
+          : undefined;
 
     let status: RunTerminalStatus = "completed";
     // Structured child reports with status blocked/failed are completed runs, not supervisor failures.
@@ -581,7 +583,9 @@ export class SubagentSupervisor {
   }
 }
 
-export function formatUsageCost(result: Pick<SubagentRunResult, "usage" | "usageAvailable">): string {
+export function formatUsageCost(
+  result: Pick<SubagentRunResult, "usage" | "usageAvailable">,
+): string {
   if (result.usageAvailable === false) return "n/a";
   return `$${result.usage.cost.toFixed(4)}`;
 }
@@ -599,7 +603,8 @@ export function formatRunSummary(result: SubagentRunResult): string {
     parts.push("report:unstructured");
   }
   if (result.worktreeBranch) parts.push(`branch:${result.worktreeBranch}`);
-  if (result.worktreeDelivery?.patch) parts.push(`patch:${result.worktreeDelivery.patch.applyStatus}`);
+  if (result.worktreeDelivery?.patch)
+    parts.push(`patch:${result.worktreeDelivery.patch.applyStatus}`);
   if (result.budgetExhausted) parts.push("budget-exhausted");
   return parts.join(" · ");
 }

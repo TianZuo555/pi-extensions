@@ -1,10 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {
-  DEFAULT_COMMIT_MODEL,
-  parseModelReference,
-  resolveCommitSettings,
-} from "../lib/config.ts";
+import { DEFAULT_COMMIT_MODEL, parseModelReference, resolveCommitSettings } from "../lib/config.ts";
 import { truncateUtf8, type StagedSnapshot } from "../lib/git.ts";
 import {
   buildCommitAllPrompt,
@@ -56,9 +52,9 @@ test("fallback model and fallback thinking level resolve with project overrides"
 });
 
 test("invalid fallback model is reported without blocking the primary model", () => {
-  const resolved = resolveCommitSettings(
-    { piCommit: { model: "openai/gpt-test", fallbackModel: "missing-provider" } },
-  );
+  const resolved = resolveCommitSettings({
+    piCommit: { model: "openai/gpt-test", fallbackModel: "missing-provider" },
+  });
   assert.equal(resolved.model.value, "openai/gpt-test");
   assert.equal(resolved.fallbackModel, undefined);
   assert.match(resolved.warnings.join("\n"), /fallbackModel/);
@@ -92,7 +88,9 @@ test("model references preserve slashes inside the model ID", () => {
 
 test("generated commit messages shed common model wrappers", () => {
   assert.equal(
-    normalizeGeneratedCommitMessage("```text\nfeat: add commit workflow\n\nKeep staging explicit.\n```"),
+    normalizeGeneratedCommitMessage(
+      "```text\nfeat: add commit workflow\n\nKeep staging explicit.\n```",
+    ),
     "feat: add commit workflow\n\nKeep staging explicit.",
   );
   assert.equal(
@@ -157,19 +155,24 @@ test("generated commit plans cover each staged path exactly once", () => {
     '{"commits":[{"paths":["src/feature.ts"],"message":"feat: add feature"},{"paths":["test/feature.test.ts"],"message":"test: cover feature"}]}',
     ["src/feature.ts", "test/feature.test.ts"],
   );
-  assert.deepEqual(plan.commits.map((commit) => commit.paths), [["src/feature.ts"], ["test/feature.test.ts"]]);
+  assert.deepEqual(
+    plan.commits.map((commit) => commit.paths),
+    [["src/feature.ts"], ["test/feature.test.ts"]],
+  );
   assert.throws(
-    () => normalizeGeneratedCommitPlan(
-      '{"commits":[{"paths":["src/feature.ts", "src/feature.ts"],"message":"bad"}]}',
-      ["src/feature.ts"],
-    ),
+    () =>
+      normalizeGeneratedCommitPlan(
+        '{"commits":[{"paths":["src/feature.ts", "src/feature.ts"],"message":"bad"}]}',
+        ["src/feature.ts"],
+      ),
     /duplicate path/,
   );
   assert.throws(
-    () => normalizeGeneratedCommitPlan(
-      '{"commits":[{"paths":["src/feature.ts"],"message":"bad"}]}',
-      ["src/feature.ts", "test/feature.test.ts"],
-    ),
+    () =>
+      normalizeGeneratedCommitPlan('{"commits":[{"paths":["src/feature.ts"],"message":"bad"}]}', [
+        "src/feature.ts",
+        "test/feature.test.ts",
+      ]),
     /omitted staged path/,
   );
 });

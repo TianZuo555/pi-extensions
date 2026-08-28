@@ -52,6 +52,10 @@ export function runGitWithInput(
   });
 }
 
-export function runGitText(args: string[], cwd: string, timeout = GIT_DEFAULT_TIMEOUT_MS): Promise<string> {
+export function runGitText(
+  args: string[],
+  cwd: string,
+  timeout = GIT_DEFAULT_TIMEOUT_MS,
+): Promise<string> {
   return runGitBuffer(args, cwd, { timeout }).then((stdout) => stdout.toString().trim());
 }

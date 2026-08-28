@@ -44,12 +44,7 @@ interface MutableAnswer {
 const OTHER_LABEL = "Other";
 const OTHER_DESCRIPTION = "type your own answer";
 
-function appendWrapped(
-  lines: string[],
-  width: number,
-  prefix: string,
-  text: string,
-): void {
+function appendWrapped(lines: string[], width: number, prefix: string, text: string): void {
   const renderWidth = Math.max(1, width);
   const prefixWidth = visibleWidth(prefix);
 
@@ -179,10 +174,7 @@ export class AskUserForm implements Component, Focusable {
   }
 
   private moveQuestion(offset: number): void {
-    const next = Math.min(
-      this.questions.length - 1,
-      Math.max(0, this.questionIndex + offset),
-    );
+    const next = Math.min(this.questions.length - 1, Math.max(0, this.questionIndex + offset));
     if (next === this.questionIndex) return;
     this.questionIndex = next;
     this.warning = undefined;
@@ -191,10 +183,7 @@ export class AskUserForm implements Component, Focusable {
 
   private moveOption(offset: number): void {
     const current = this.currentOptionIndex();
-    const next = Math.min(
-      this.currentOptionCount() - 1,
-      Math.max(0, current + offset),
-    );
+    const next = Math.min(this.currentOptionCount() - 1, Math.max(0, current + offset));
     if (next === current) return;
     this.focusedOptionIndices[this.questionIndex] = next;
     this.warning = undefined;
@@ -333,17 +322,11 @@ export class AskUserForm implements Component, Focusable {
       this.moveOption(1);
       return;
     }
-    if (
-      matchesKey(data, Key.left) ||
-      this.keybindings.matches(data, "tui.editor.cursorLeft")
-    ) {
+    if (matchesKey(data, Key.left) || this.keybindings.matches(data, "tui.editor.cursorLeft")) {
       this.moveQuestion(-1);
       return;
     }
-    if (
-      matchesKey(data, Key.right) ||
-      this.keybindings.matches(data, "tui.editor.cursorRight")
-    ) {
+    if (matchesKey(data, Key.right) || this.keybindings.matches(data, "tui.editor.cursorRight")) {
       this.moveQuestion(1);
       return;
     }
@@ -383,37 +366,26 @@ export class AskUserForm implements Component, Focusable {
       this.theme.fg("muted", `${this.questionIndex + 1}. `),
       this.theme.fg("text", this.theme.bold(question.question)),
     );
-    appendWrapped(
-      lines,
-      renderWidth,
-      " ",
-      this.theme.fg("dim", "Select one."),
-    );
+    appendWrapped(lines, renderWidth, " ", this.theme.fg("dim", "Select one."));
     lines.push("");
 
     for (let optionIndex = 0; optionIndex <= question.options.length; optionIndex++) {
       const isOther = optionIndex === question.options.length;
       const option = question.options[optionIndex];
       const focused = optionIndex === focusedOption;
-      const checked = isOther
-        ? Boolean(answer.customAnswer)
-        : answer.optionIndex === optionIndex;
+      const checked = isOther ? Boolean(answer.customAnswer) : answer.optionIndex === optionIndex;
       const cursor = focused ? this.theme.fg("accent", "› ") : "  ";
       // Arrow marks the single selection (pi-native list style); brackets
       // would read as a multi-select checkbox.
       const selection = checked ? this.theme.fg("success", "→ ") : "  ";
       const prefix = `${cursor}${selection}`;
       const label = isOther ? OTHER_LABEL : option.label;
-      const description = isOther
-        ? answer.customAnswer ?? OTHER_DESCRIPTION
-        : option.description;
+      const description = isOther ? (answer.customAnswer ?? OTHER_DESCRIPTION) : option.description;
       const labelColor = focused ? "accent" : checked ? "text" : "muted";
       const descriptionColor = focused ? "accent" : "dim";
       const body =
         this.theme.fg(labelColor, label) +
-        (description
-          ? this.theme.fg(descriptionColor, ` — ${description}`)
-          : "");
+        (description ? this.theme.fg(descriptionColor, ` — ${description}`) : "");
       appendWrapped(lines, renderWidth, prefix, body);
     }
 
