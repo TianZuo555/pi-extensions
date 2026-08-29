@@ -214,7 +214,14 @@ test("TokensPanel scrolls top models with up/down and j/k keys", async () => {
       sessionLine(`msg-${i}`, now - 1000 * i, {
         provider: "p",
         model: `model-${String(i).padStart(2, "0")}`,
-        usage: { input: (9 - i) * 1000, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: (9 - i) * 1000, cost: { total: 0.01 } },
+        usage: {
+          input: (9 - i) * 1000,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: (9 - i) * 1000,
+          cost: { total: 0.01 },
+        },
       }),
     );
   }
