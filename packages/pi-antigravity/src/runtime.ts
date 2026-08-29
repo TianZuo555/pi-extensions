@@ -9,9 +9,36 @@
  */
 
 import { Context, Data, Effect, Layer, ManagedRuntime, Exit, Cause, Result } from "effect";
-import { runAgyTurn, type AgyTurnRequest } from "../lib/agy-client.ts";
+import { AgyStallError, runAgyTurn, type AgyTurnRequest } from "../lib/agy-client.ts";
 import type { AgyTurnOutcome } from "../lib/reducer.ts";
+import { stallContinuationPrompt } from "../lib/prompt.ts";
 import { AgyTurnController } from "../lib/turn.ts";
+
+function envInt(name: string, fallback: number): number {
+  const parsed = Number(process.env[name]);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
+function waitForRetryBackoff(ms: number, signal: AbortSignal): Promise<boolean> {
+  return new Promise((resolve) => {
+    if (signal.aborted) {
+      resolve(false);
+      return;
+    }
+    let timer: NodeJS.Timeout | undefined;
+    const onAbort = () => {
+      if (timer !== undefined) clearTimeout(timer);
+      resolve(false);
+    };
+    timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve(true);
+    }, ms);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+const STALL_MAX_RETRIES = 2;
 
 export class AntigravitySpawnError extends Data.TaggedError("AntigravitySpawnError")<{
   readonly message: string;
@@ -49,9 +76,11 @@ export interface AntigravityRuntimeShape {
     /** Active pi-branch history used only when a fresh agy conversation needs restoring. */
     readonly historyBootstrap?: string;
     /**
-     * Extra prompt text appended ONLY when this request spawns a fresh agy
-     * process (bootstrap). Ignored on re-attach, and excluded from the
-     * re-attach prompt match, which uses the base prompt.
+     * Extra prompt text appended ONLY when this request starts a fresh agy
+     * conversation (bootstrap). agy keeps full conversation history, so
+     * re-sending it on `--conversation` resumes would duplicate the block on
+     * every user turn. Ignored on re-attach, and excluded from the re-attach
+     * prompt match, which uses the base prompt.
      */
     readonly bootstrapSuffix?: string;
     readonly modelId: string;
@@ -98,6 +127,7 @@ const makeRuntime = (turnRunner: AgyTurnRunner) =>
     let activeTurnAbort: AbortController | undefined;
     let generation = 0;
     let restoreHistoryOnNextConversation = false;
+    let lastBootstrappedSkillsSuffix: string | undefined;
 
     const invalidateActiveTurn = () => {
       generation += 1;
@@ -129,6 +159,7 @@ const makeRuntime = (turnRunner: AgyTurnRunner) =>
                 conversationCwd = undefined;
                 turns = 0;
                 restoreHistoryOnNextConversation = true;
+                lastBootstrappedSkillsSuffix = undefined;
               }
             }),
           ),
@@ -155,11 +186,13 @@ const makeRuntime = (turnRunner: AgyTurnRunner) =>
                 conversationId = undefined;
                 conversationCwd = undefined;
                 restoreHistoryOnNextConversation = true;
+                lastBootstrappedSkillsSuffix = undefined;
               }
               if (model !== undefined && model !== request.modelId) {
                 conversationId = undefined;
                 conversationCwd = undefined;
                 restoreHistoryOnNextConversation = true;
+                lastBootstrappedSkillsSuffix = undefined;
               }
               model = request.modelId;
               const controller = new AgyTurnController(request.prompt);
@@ -179,15 +212,27 @@ const makeRuntime = (turnRunner: AgyTurnRunner) =>
                   ? request.historyBootstrap
                   : undefined;
               restoreHistoryOnNextConversation = false;
+              // Direct-mode skill paths ride the prompt when the bridge is
+              // disabled or registration failed. If the bridge was active
+              // initially and later fails mid-conversation, or if the skill
+              // catalog changes, the new suffix is appended even when an agy
+              // conversation already exists. Suffixes already sent to the
+              // current conversation are not duplicated on every turn.
+              const bootstrapSuffix =
+                request.bootstrapSuffix && request.bootstrapSuffix !== lastBootstrappedSkillsSuffix
+                  ? request.bootstrapSuffix
+                  : undefined;
               const spawnRequest: AgyTurnRequest = {
-                prompt: [historyBootstrap, request.prompt, request.bootstrapSuffix]
+                prompt: [historyBootstrap, request.prompt, bootstrapSuffix]
                   .filter((part): part is string => Boolean(part))
                   .join("\n\n"),
                 conversationId,
                 model: request.modelId,
                 effort: request.effort,
                 cwd,
-                timeoutMs: 600_000,
+                timeoutMs: envInt("AGY_TURN_TIMEOUT_MS", 600_000),
+                inactivityTimeoutMs: envInt("AGY_STALL_TIMEOUT_MS", 120_000),
+                toolInactivityTimeoutMs: envInt("AGY_TOOL_STALL_TIMEOUT_MS", 300_000),
                 signal: turnAbort.signal,
                 onConversation: (id) => {
                   if (turnGeneration !== generation) return;
@@ -195,12 +240,63 @@ const makeRuntime = (turnRunner: AgyTurnRunner) =>
                   // resolve, and /agy-tasks needs the id meanwhile.
                   conversationId = id;
                   conversationCwd = cwd;
+                  // Prompt reached the conversation: commit the bootstrap suffix.
+                  if (bootstrapSuffix) {
+                    lastBootstrappedSkillsSuffix = bootstrapSuffix;
+                  }
                 },
                 onActivity: (activity) => {
                   if (turnGeneration === generation) controller.push(activity);
                 },
               };
-              void turnRunner(spawnRequest)
+              /**
+               * A stalled stream is recoverable: agy still holds the full
+               * conversation server-side, so each retry resumes it with a
+               * continuation prompt instead of re-bootstrapping pi history.
+               * If no resumable conversation id exists (e.g. stalled before
+               * init), retry with the original prompt instead of sending a
+               * continuation-only prompt to a blank conversation.
+               * Only AgyStallError retries — spawn/auth failures would just
+               * fail identically again. Aborts are left to the signal path.
+               */
+              const runTurnWithStallRetries = async (): Promise<AgyTurnOutcome> => {
+                let retry = 0;
+                for (;;) {
+                  if (turnAbort.signal.aborted) throw new Error("agy turn was aborted.");
+                  const resumableConversationId = conversationId ?? spawnRequest.conversationId;
+                  const attempt =
+                    retry === 0
+                      ? spawnRequest
+                      : {
+                          ...spawnRequest,
+                          prompt: resumableConversationId
+                            ? stallContinuationPrompt()
+                            : spawnRequest.prompt,
+                          conversationId: resumableConversationId,
+                        };
+                  try {
+                    return await turnRunner(attempt);
+                  } catch (error) {
+                    if (turnAbort.signal.aborted) throw new Error("agy turn was aborted.");
+                    if (!(error instanceof AgyStallError) || retry >= STALL_MAX_RETRIES) {
+                      throw error;
+                    }
+                    retry += 1;
+                    controller.push({
+                      type: "stall",
+                      retry,
+                      maxRetries: STALL_MAX_RETRIES,
+                      stalledMs: error.stalledMs,
+                      toolActive: error.toolActive,
+                    });
+                    const backoffMs = envInt("AGY_STALL_RETRY_BACKOFF_MS", 3_000);
+                    if (!(await waitForRetryBackoff(backoffMs, turnAbort.signal))) {
+                      throw new Error("agy turn was aborted.");
+                    }
+                  }
+                }
+              };
+              void runTurnWithStallRetries()
                 .then((outcome: AgyTurnOutcome) => {
                   if (turnGeneration !== generation) {
                     controller.close();
@@ -208,10 +304,16 @@ const makeRuntime = (turnRunner: AgyTurnRunner) =>
                   }
                   turns += 1;
                   if (outcome.conversationId) conversationId = outcome.conversationId;
+                  if (bootstrapSuffix) {
+                    lastBootstrappedSkillsSuffix = bootstrapSuffix;
+                  }
                   controller.close();
                 })
                 .catch((cause: unknown) => {
-                  if (turnGeneration !== generation) return;
+                  if (turnGeneration !== generation) {
+                    controller.close();
+                    return;
+                  }
                   controller.fail(cause instanceof Error ? cause : new Error(String(cause)));
                 });
               return controller;
@@ -237,6 +339,7 @@ const makeRuntime = (turnRunner: AgyTurnRunner) =>
             conversationCwd = undefined;
             turns = 0;
             restoreHistoryOnNextConversation = false;
+            lastBootstrappedSkillsSuffix = undefined;
           }),
         ),
       ),
@@ -252,6 +355,7 @@ const makeRuntime = (turnRunner: AgyTurnRunner) =>
               closed = true;
               conversationId = undefined;
               conversationCwd = undefined;
+              lastBootstrappedSkillsSuffix = undefined;
               // Kill any in-flight agy child process immediately.
               invalidateActiveTurn();
             }),

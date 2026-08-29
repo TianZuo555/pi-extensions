@@ -13,6 +13,7 @@ import {
   type PlannedCommitResult,
 } from "../src/git-workflow.ts";
 import { createCommitRuntime, runCommit } from "../src/runtime.ts";
+import { hermeticGitEnv } from "./git-env.ts";
 
 const testExec = (command: string, args: string[], options?: { cwd?: string }) =>
   new Promise<ExecResult>((resolve) => {
@@ -24,6 +25,7 @@ const testExec = (command: string, args: string[], options?: { cwd?: string }) =
           cwd: options?.cwd,
           encoding: "utf8",
           maxBuffer: 16 * 1024 * 1024,
+          env: hermeticGitEnv(),
         },
         (error, stdout, stderr) => {
           const rawCode = error ? (error as NodeJS.ErrnoException).code : 0;
@@ -44,6 +46,7 @@ function git(cwd: string, args: string[]): string {
     cwd,
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
+    env: hermeticGitEnv(),
   }).trim();
 }
 

@@ -6,7 +6,8 @@
  * zero tokens (it is a command, not a model turn).
  */
 
-import { execFile } from "node:child_process";
+import { spawn } from "node:child_process";
+import { killAgyTree, trackAgyChild, untrackAgyChild } from "./agy-children.ts";
 import { AGY_BINARY } from "./agy-client.ts";
 
 export const USAGE_TIMEOUT_MS = 30_000;
@@ -205,9 +206,74 @@ function defaultExec(
   options: { timeout?: number; signal?: AbortSignal; encoding?: string; maxBuffer?: number },
   callback: (error: Error | null, stdout: string, stderr: string) => void,
 ): void {
-  execFile(file, [...args], { ...options, encoding: "utf8" }, (error, stdout, stderr) => {
-    callback(error, String(stdout), String(stderr));
+  let settled = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let out = "";
+  let errOut = "";
+  const settle = (fn: () => void) => {
+    if (settled) return;
+    settled = true;
+    if (timer) clearTimeout(timer);
+    fn();
+  };
+  // Raw spawn (execFile drops `detached`): own process group + tracked, so
+  // timeout/abort reaps agy's whole tree instead of the direct child only.
+  const child = spawn(file, [...args], {
+    stdio: ["ignore", "pipe", "pipe"],
+    detached: true,
+    signal: options.signal,
   });
+  trackAgyChild(child);
+  child.stdout?.setEncoding("utf8");
+  child.stdout?.on("data", (chunk: string) => {
+    out += chunk;
+    if (options.maxBuffer !== undefined && out.length > options.maxBuffer) {
+      settle(() => {
+        killAgyTree(child);
+        callback(new Error("stdout maxBuffer exceeded"), "", "");
+      });
+    }
+  });
+  child.stderr?.setEncoding("utf8");
+  child.stderr?.on("data", (chunk: string) => {
+    errOut += chunk;
+  });
+  child.on("error", (error) => {
+    settle(() => {
+      untrackAgyChild(child);
+      callback(error, "", "");
+    });
+  });
+  child.on("close", (code) => {
+    settle(() => {
+      untrackAgyChild(child);
+      callback(
+        code === 0
+          ? null
+          : new Error(errOut.trim() || `${file} exited with code ${code ?? "signal"}`),
+        out,
+        errOut,
+      );
+    });
+  });
+  options.signal?.addEventListener(
+    "abort",
+    () => {
+      settle(() => {
+        killAgyTree(child);
+        callback(new Error("aborted"), "", "");
+      });
+    },
+    { once: true },
+  );
+  if (options.timeout !== undefined) {
+    timer = setTimeout(() => {
+      settle(() => {
+        killAgyTree(child);
+        callback(new Error(`${file} timed out after ${options.timeout}ms`), "", "");
+      });
+    }, options.timeout);
+  }
 }
 
 /** Run `agy --print /usage` and parse the structured quota payload. */

@@ -8,7 +8,7 @@ Use **Google Antigravity** (`agy`) models inside the [pi coding agent](https://p
 
 - **Antigravity models in pi's model picker** — `antigravity/gemini-3.7-flash` and friends, with automatic model discovery.
 - **Native rendering, not mimicry** — agy's read-only tools (`view_file`, `grep_search`, `find_by_name`, `list_dir`) are re-executed as real pi builtins (`read` / `grep` / `find` / `ls`), so their cards use pi's own renderers and show live, accurate output. Everything else renders through one display-only `antigravity` wrapper.
-- **Skills & MCP bridge** — your global pi Agent Skills become callable tools inside agy turns (`pi__p<pid>__skill__grilling`, …), and pi's MCP servers (via the `pi-mcp-adapter` tools) are reachable from agy with pi's permissions, hooks, and rendering. Per-session tool names keep concurrent pi sessions fully isolated.
+- **Skills & MCP bridge** — your global pi Agent Skills are one `pi__p<pid>__activate_skill` tool (pass `{ name }` from the tool's enum), and pi's MCP servers (via the `pi-mcp-adapter` tools) are reachable from agy with pi's permissions, hooks, and rendering. Per-session tool names keep concurrent pi sessions fully isolated.
 - **Background-task manager** — long-running agy commands are tracked in a dashboard and stoppable with one keystroke (`/agy-tasks`).
 - **Artifact browser** — images and files agy creates are listed and openable via `/agy-artifacts`, with a status-bar hint when new ones appear.
 - **Model quotas** — `/agy-usage` ports agy's `/usage` into the same Refresh/Close menu as `/usage`: weekly and 5-hour remaining bars per model group, refreshed without spending tokens.
@@ -40,7 +40,7 @@ flowchart TB
     UI -- "pi executes the REAL tool" --> Mcp
     Mcp -- "result" --> Prov
     Prov -- "result back to agy" --> Bridge
-    Skills -- "global skills become\npi__p<pid>__skill__<name> tools" --> Bridge
+    Skills -- "global skills become\npi__p<pid>__activate_skill" --> Bridge
 ```
 
 **Tool rendering** splits into two paths:
@@ -73,12 +73,12 @@ Requires the `agy` CLI installed and logged in (v1.1.17+). Override the binary w
 
 ### Skills & MCP bridge
 
-On session start, the extension runs a small local MCP server and registers it with agy as `pi-bridge-<pid>`. Two kinds of pi surface are bridged:
+When an Antigravity model is selected, the extension runs a small local MCP server and registers it with agy as `pi-bridge-<pid>`; switching to any other model (or closing pi) deregisters it and evicts its manifest cache, so non-Antigravity sessions never touch agy. Two kinds of pi surface are bridged:
 
-- **Skills** — each global pi skill becomes a `pi__p<pid>__skill__<name>` tool that returns its full `SKILL.md` plus bundled resource paths. The catalog advertises the exact callable name, and sanitized name collisions receive stable suffixes.
+- **Skills** — one `pi__p<pid>__activate_skill` tool whose JSON-schema enum is the catalog and whose description carries each skill's one-liner, so agy can tell when a skill applies. Calling it with `{ "name": "grilling" }` returns that skill's full `SKILL.md` plus bundled resource paths. The catalog is not appended to the user prompt: agy sees it in tools/list on every spawn, including after pi compaction.
 - **MCP** — tools pi got from `pi-mcp-adapter` (the `mcp`/`mcpScript` gateways and per-server direct tools) are exposed with the same prefix.
 
-agy's MCP registry is **global** while bridge servers are per-pi-session, so concurrent sessions' tools all appear in every agy turn's tools/list. The per-session prefix (`pi__p<pid>__`) makes tool→server routing unambiguous: a tool name maps to exactly one session's bridge, so a call can only ever execute in the session that advertised it — never silently in another. Stale registrations from crashed sessions are pruned at startup. Calls still fail safe: no active turn, unknown tool, or a 480-second timeout returns an error to agy instead of hanging.
+agy's MCP registry is **global** while bridge servers are per-pi-session, so concurrent sessions' tools all appear in every agy turn's tools/list. The per-session prefix (`pi__p<pid>__`) makes tool→server routing unambiguous: a tool name maps to exactly one session's bridge, so a call can only ever execute in the session that advertised it — never silently in another. Stale registrations and manifest-cache leftovers from crashed sessions are pruned whenever a session registers its bridge. Calls still fail safe: no active turn, unknown tool, or a 480-second timeout returns an error to agy instead of hanging.
 
 An MCP call flows like this:
 
@@ -93,7 +93,7 @@ Nothing else of pi's surface is bridged: builtins (`read`, `bash`, …) and pi's
 Your pi skills work inside agy turns:
 
 - **Workspace skills** (`.agents/skills/` in the project) need nothing — agy discovers and activates them natively.
-- **Global skills** (`~/.pi/agent/skills/`, `~/.agents/skills/`) are bridged as described above.
+- **Global skills** (`~/.pi/agent/skills/`, `~/.agents/skills/`) are bridged as `pi__p<pid>__activate_skill`. If the bridge is off (`PI_ANTIGRAVITY_PI_TOOL_BRIDGE=0`) or fails to register with agy, a path catalog is appended directly to the prompt (on a fresh conversation or as a fallback on turns where the bridge is unregistered), so headless agy can read `SKILL.md` directly without losing skill visibility.
 - Skills respect pi's own config: `--no-skills`, `pi config` toggles, `/reload`. Skills marked `disable-model-invocation` are skipped.
 
 ### Background tasks (`/agy-tasks`)
@@ -149,8 +149,12 @@ Claude and GPT models
 
 | Flag | Effect |
 | --- | --- |
-| `PI_ANTIGRAVITY_PI_TOOL_BRIDGE=0` | Turn the bridge off. Skills fall back to direct file reads. |
+| `PI_ANTIGRAVITY_PI_TOOL_BRIDGE=0` | Turn the bridge off. Skills fall back to a direct path catalog and direct `SKILL.md` reads. |
 | `AGY_BINARY=/path/to/agy` | Use a specific agy binary. |
+| `AGY_TURN_TIMEOUT_MS=600000` | Overall budget per agy turn (also sets agy's `--print-timeout`). |
+| `AGY_STALL_TIMEOUT_MS=120000` | Kill the turn when the stream produces no bytes for this long and retry by resuming the conversation. `0` disables the watchdog. |
+| `AGY_TOOL_STALL_TIMEOUT_MS=300000` | Stall budget while a tool step is ACTIVE — a quiet foreground tool is legitimate, so silence inside a tool gets a longer leash. |
+| `AGY_STALL_RETRY_BACKOFF_MS=3000` | Pause before each stall retry. Stalls retry at most twice, rendered as a collapsed "agy stream stalled … restarting the turn" thinking line. |
 
 ## Good to know
 

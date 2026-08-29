@@ -12,6 +12,7 @@ import {
 import { AgyTurnController } from "../lib/turn.ts";
 import { AgyReplayStore } from "../lib/replay.ts";
 import { AgyPiBridge } from "../lib/bridge.ts";
+import { assertDeltasMatchPartial } from "./delta-replay.ts";
 import { Effect } from "effect";
 import type { Context, Model } from "@earendil-works/pi-ai";
 
@@ -112,6 +113,7 @@ test("mapUsage maps agy usage fields to pi usage", () => {
   });
   assert.equal(usage.input, 44909);
   assert.equal(usage.output, 610);
+  assert.equal(usage.reasoning, 395);
   assert.equal(usage.cacheRead, 7);
   assert.equal(usage.cacheWrite, 0);
   assert.equal(usage.totalTokens, 45519);
@@ -270,6 +272,7 @@ test("streamAntigravity chooses native execution only after a successful agy too
   assert.equal(toolCall?.name, "read");
   assert.deepEqual(toolCall?.arguments, { path: "/tmp/a.ts" });
   assert.equal(replay.size, 0);
+  assertDeltasMatchPartial(events);
 });
 
 test("streamAntigravity replays native-tool errors instead of re-executing them", async () => {
@@ -295,6 +298,7 @@ test("streamAntigravity replays native-tool errors instead of re-executing them"
   assert.equal(toolCall?.name, "antigravity");
   assert.equal(replay.take(toolCall.id)?.error, "not found");
   assert.equal(replay.size, 0);
+  assertDeltasMatchPartial(events);
 });
 
 test("streamAntigravity reports cumulative agy usage exactly once across tool cards", async () => {
@@ -370,19 +374,20 @@ test("streamAntigravity treats result with ERROR status as success when response
     doneEvent.message.content[0].text,
     "All custom agent integration features are fully implemented.",
   );
+  assertDeltasMatchPartial(events);
 });
 
-test("streamAntigravity snaps text_end to the authoritative response when deltas drift", async () => {
+test("streamAntigravity emits the missing tail as a delta when the response drifts", async () => {
   const { controller, collect } = makeStreamHarness();
   const eventsPromise = collect();
 
-  // Streamed deltas drift from agy's authoritative final response.
-  controller.push({ type: "text", delta: "streamed partial" });
+  // agy's authoritative response extends the streamed deltas (dropped tail).
+  controller.push({ type: "text", delta: "streamed " });
   controller.push({
     type: "result",
     status: "OK",
     error: undefined,
-    response: "authoritative final text",
+    response: "streamed partial plus tail",
     usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
   });
 
@@ -391,9 +396,132 @@ test("streamAntigravity snaps text_end to the authoritative response when deltas
   const doneEvent = events.find((e) => e.type === "done");
 
   assert.ok(textEnd, "Expected a text_end event");
-  assert.equal(textEnd.content, "authoritative final text");
+  assert.equal(textEnd.content, "streamed partial plus tail");
   assert.ok(doneEvent);
-  assert.equal(doneEvent.message.content[0].text, "authoritative final text");
+  // content[0] is the reserved (empty) thought slot; the answer follows it.
+  assert.equal(doneEvent.message.content[1].text, "streamed partial plus tail");
+  // The tail must arrive as a real delta, not a silent rewrite of the block.
+  assertDeltasMatchPartial(events);
+});
+
+test("streamAntigravity keeps streamed text when the response truly diverges", async () => {
+  const { controller, collect } = makeStreamHarness();
+  const eventsPromise = collect();
+
+  controller.push({ type: "text", delta: "streamed partial" });
+  controller.push({
+    type: "result",
+    status: "OK",
+    error: undefined,
+    response: "completely different text",
+    usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
+  });
+
+  const events = await eventsPromise;
+  const textEnd = events.find((e) => e.type === "text_end");
+  // Streamed deltas cannot be retracted, so consumers keep what they saw.
+  assert.equal(textEnd.content, "streamed partial");
+  assertDeltasMatchPartial(events);
+});
+
+test("streamAntigravity renders a Thought marker above the answer it introduces", async () => {
+  const { controller, collect } = makeStreamHarness();
+  const eventsPromise = collect();
+
+  controller.push({ type: "text", delta: "the answer" });
+  controller.push({ type: "thought", tokens: 289, durationSeconds: 3.4 });
+  controller.push({
+    type: "result",
+    status: "OK",
+    error: undefined,
+    response: "the answer",
+    usage: { input_tokens: 10, output_tokens: 5, thinking_tokens: 289, total_tokens: 15 },
+  });
+
+  const events = await eventsPromise;
+  const thinkingEnd = events.find((e) => e.type === "thinking_end");
+  const textEnd = events.find((e) => e.type === "text_end");
+  const doneEvent = events.find((e) => e.type === "done");
+
+  assert.ok(thinkingEnd, "Expected a thinking_end event");
+  assert.equal(thinkingEnd.content, "Thought for 3s, 289 tokens");
+  // The slot is reserved ahead of the text run, so the marker sits above the
+  // answer without ever moving an announced index.
+  assert.equal(thinkingEnd.contentIndex, 0);
+  assert.ok(textEnd);
+  assert.equal(textEnd.contentIndex, 1);
+  assert.equal(doneEvent.message.content[0].type, "thinking");
+  assert.equal(doneEvent.message.content[1].text, "the answer");
+  assertDeltasMatchPartial(events);
+});
+
+test("streamAntigravity appends the Thought marker when the segment had no text", async () => {
+  const { controller, collect } = makeStreamHarness();
+  const eventsPromise = collect();
+
+  controller.push({ type: "thought", tokens: 40, durationSeconds: 1.2 });
+  controller.push({
+    type: "result",
+    status: "OK",
+    error: undefined,
+    response: "",
+    usage: { input_tokens: 10, output_tokens: 5, thinking_tokens: 40, total_tokens: 15 },
+  });
+
+  const events = await eventsPromise;
+  const doneEvent = events.find((e) => e.type === "done");
+  assert.equal(doneEvent.message.content.length, 1);
+  assert.equal(doneEvent.message.content[0].type, "thinking");
+  assert.equal(doneEvent.message.content[0].thinking, "Thought for 1s, 40 tokens");
+  assertDeltasMatchPartial(events);
+});
+
+test("streamAntigravity closes an unfilled thought slot as an empty block", async () => {
+  const { controller, collect } = makeStreamHarness();
+  const eventsPromise = collect();
+
+  // Non-thinking model: text streams, but no thought activity ever arrives.
+  controller.push({ type: "text", delta: "plain answer" });
+  controller.push({
+    type: "result",
+    status: "OK",
+    error: undefined,
+    response: "plain answer",
+    usage: { input_tokens: 10, output_tokens: 5, thinking_tokens: 0, total_tokens: 15 },
+  });
+
+  const events = await eventsPromise;
+  const doneEvent = events.find((e) => e.type === "done");
+  // The reserved slot stays (indices are immutable) but is blank, and pi's
+  // renderer trims and skips empty thinking blocks.
+  assert.equal(doneEvent.message.content[0].type, "thinking");
+  assert.equal(doneEvent.message.content[0].thinking, "");
+  assert.equal(doneEvent.message.content[1].text, "plain answer");
+  assertDeltasMatchPartial(events);
+});
+
+test("streamAntigravity keeps a Thought marker legal across a tool call", async () => {
+  const { controller, collect } = makeStreamHarness();
+  const eventsPromise = collect();
+
+  // Thought + text, then a tool step ends the message: the reserved slot must
+  // be closed before the tool card claims the next index.
+  controller.push({ type: "text", delta: "working on it" });
+  controller.push({ type: "thought", tokens: 12, durationSeconds: 2 });
+  controller.push({
+    type: "tool_done",
+    stepId: 3,
+    name: "run_command",
+    args: { CommandLine: "ls" },
+    output: "a\nb",
+  });
+
+  const events = await eventsPromise;
+  const content = assertDeltasMatchPartial(events);
+  assert.deepEqual(
+    content.map((block) => block.type),
+    ["thinking", "text", "toolCall"],
+  );
 });
 
 test("streamAntigravity fails turn when result has ERROR status and no response", async () => {
@@ -417,6 +545,7 @@ test("streamAntigravity fails turn when result has ERROR status and no response"
   assert.ok(errorEvent, "Expected error event when response is empty");
   assert.equal(errorEvent.error.stopReason, "error");
   assert.ok(errorEvent.error.errorMessage.includes("permission check failed"));
+  assertDeltasMatchPartial(events);
 });
 
 test("streamAntigravity fails turn when ERROR is not a recovered interruption, even with response text", async () => {
@@ -440,4 +569,43 @@ test("streamAntigravity fails turn when ERROR is not a recovered interruption, e
   assert.ok(errorEvent, "Expected error event for non-interruption ERROR despite response text");
   assert.equal(errorEvent.error.stopReason, "error");
   assert.ok(errorEvent.error.errorMessage.includes("timeout waiting for response"));
+  assertDeltasMatchPartial(events);
+});
+
+test("streamAntigravity renders a stall/retry as a thinking marker before the answer", async () => {
+  const { controller, collect } = makeStreamHarness();
+  const eventsPromise = collect();
+  controller.push({
+    type: "stall",
+    retry: 1,
+    maxRetries: 2,
+    stalledMs: 120_000,
+    toolActive: false,
+  });
+  controller.push({
+    type: "result",
+    status: "OK",
+    response: "recovered answer",
+    error: undefined,
+    usage: undefined,
+  });
+  const events = await eventsPromise;
+
+  const thinkingStart = events.find((event) => event.type === "thinking_start");
+  const thinkingDelta = events.find((event) => event.type === "thinking_delta");
+  const thinkingEnd = events.find((event) => event.type === "thinking_end");
+  assert.ok(thinkingStart && thinkingDelta && thinkingEnd, "emits a complete thinking block");
+  assert.match(thinkingDelta.delta, /stalled for 120s/);
+  assert.match(thinkingDelta.delta, /retry 1 of 2/);
+  assert.equal(thinkingStart.contentIndex, thinkingEnd.contentIndex);
+
+  const done = events.find((event) => event.type === "done");
+  assert.equal(done.reason, "stop");
+  const message = done.message;
+  const thinking = message.content.find((block: any) => block.type === "thinking");
+  assert.match(thinking.thinking, /stalled for 120s.*retry 1 of 2/s);
+  const text = message.content.find((block: any) => block.type === "text");
+  assert.equal(text.text, "recovered answer");
+  // The marker must be delta-replay legal (append-only indices).
+  assertDeltasMatchPartial(events);
 });

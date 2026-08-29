@@ -15,6 +15,9 @@ import {
   type WorktreeInfo,
 } from "../lib/worktree.ts";
 import { assertPrivateMode, posixOnly } from "./platform.ts";
+import { hermeticGitProcessEnv } from "./git-env.ts";
+
+hermeticGitProcessEnv();
 
 const FIXTURE = path.join(
   path.dirname(fileURLToPath(import.meta.url)),

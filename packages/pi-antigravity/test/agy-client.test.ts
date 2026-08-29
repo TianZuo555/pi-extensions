@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
+import { spawn, spawnSync } from "node:child_process";
 import { test } from "node:test";
-import { buildAgyArgs, runAgyTurn } from "../lib/agy-client.ts";
+import { AgyStallError, buildAgyArgs, runAgyTurn } from "../lib/agy-client.ts";
+import { getAgyChildrenRegistry, killAllAgyTrees } from "../lib/agy-children.ts";
 import { agyIncompleteToolError } from "../src/provider.ts";
-import { OK_CAPTURE, REAL_CAPTURE } from "./fixtures.ts";
+import { CONVERSATION_ID, OK_CAPTURE, REAL_CAPTURE } from "./fixtures.ts";
 
 type FakeChild = {
   stdout: { setEncoding: (e: string) => void; on: (ev: string, fn: (c: string) => void) => void };
@@ -175,4 +177,338 @@ test("controller rejects waiters after a failed turn", async () => {
   // Post-failure pushes are dropped; next() keeps rejecting.
   controller.push({ type: "text", delta: "late" });
   await assert.rejects(() => controller.next(), /agy turn failed/);
+});
+
+test("runAgyTurn rejects when the process never responds", async () => {
+  const stream = () => ({ setEncoding: () => {}, on: () => {} });
+  const child: FakeChild = {
+    stdout: stream(),
+    stderr: stream(),
+    on: () => {},
+    kill: () => {},
+  };
+  await assert.rejects(
+    runAgyTurn({ prompt: "hi", timeoutMs: 60, spawnOverride: (() => child) as never }),
+    /agy turn timed out/,
+  );
+});
+
+/** A child whose stdout handlers can be driven by hand, on demand. */
+function manualChild(): FakeChild & {
+  emitStdout: (chunk: string) => void;
+  emitStderr: (chunk: string) => void;
+  close: (code: number) => void;
+} {
+  const stdoutFns: Array<(c: string) => void> = [];
+  const stderrFns: Array<(c: string) => void> = [];
+  const closeFns: Array<(arg?: unknown) => void> = [];
+  const child: FakeChild = {
+    stdout: {
+      setEncoding: () => {},
+      on: (_ev, fn) => {
+        stdoutFns.push(fn);
+      },
+    },
+    stderr: {
+      setEncoding: () => {},
+      on: (_ev, fn) => {
+        stderrFns.push(fn);
+      },
+    },
+    on: (ev, fn) => {
+      if (ev === "close") closeFns.push(fn);
+    },
+    kill: () => {},
+  };
+  return Object.assign(child, {
+    emitStdout: (chunk: string) => {
+      for (const fn of [...stdoutFns]) fn(chunk);
+    },
+    emitStderr: (chunk: string) => {
+      for (const fn of [...stderrFns]) fn(chunk);
+    },
+    close: (code: number) => {
+      for (const fn of [...closeFns]) fn(code);
+    },
+  });
+}
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+test("stall watchdog kills a silent stream with AgyStallError", async () => {
+  const child = manualChild();
+  const started = Date.now();
+  const promise = runAgyTurn({
+    prompt: "hi",
+    timeoutMs: 10_000,
+    inactivityTimeoutMs: 50,
+    spawnOverride: (() => child) as never,
+  });
+  child.emitStdout(`${JSON.stringify({ event: "init", conversation_id: "c-stall", init: {} })}\n`);
+  await assert.rejects(
+    () => promise,
+    (error: unknown) => {
+      assert.ok(error instanceof AgyStallError, `expected AgyStallError, got ${error}`);
+      assert.equal(error.toolActive, false);
+      assert.match(error.message, /stalled: no events for 0s/);
+      return true;
+    },
+  );
+  assert.ok(Date.now() - started >= 45, "fired on the inactivity budget");
+});
+
+test("stall watchdog resets on stream activity and lets a chatty turn finish", async () => {
+  const child = manualChild();
+  const promise = runAgyTurn({
+    prompt: "hi",
+    timeoutMs: 10_000,
+    inactivityTimeoutMs: 90,
+    spawnOverride: (() => child) as never,
+  });
+  // Lines every 40ms — each under the 90ms budget, but the total far exceeds it.
+  for (let i = 0; i < 5; i++) {
+    child.emitStdout(
+      `${JSON.stringify({
+        event: "step_update",
+        step_update: {
+          conversation_id: CONVERSATION_ID,
+          step_index: i,
+          state: "ACTIVE",
+          step_type: "agent_response",
+          text_delta: `chunk ${i}`,
+        },
+      })}\n`,
+    );
+    await sleep(40);
+  }
+  child.emitStdout(`${OK_CAPTURE}\n`);
+  child.close(0);
+  const outcome = await promise;
+  assert.equal(outcome.status, "OK");
+});
+
+test("stall watchdog uses the longer tool budget while a tool step is ACTIVE", async () => {
+  const child = manualChild();
+  const started = Date.now();
+  const promise = runAgyTurn({
+    prompt: "hi",
+    timeoutMs: 10_000,
+    inactivityTimeoutMs: 50,
+    toolInactivityTimeoutMs: 250,
+    spawnOverride: (() => child) as never,
+  });
+  child.emitStdout(
+    `${[
+      JSON.stringify({ event: "init", conversation_id: "c-tool-stall", init: {} }),
+      JSON.stringify({
+        event: "step_update",
+        step_update: {
+          conversation_id: "c-tool-stall",
+          step_index: 0,
+          state: "ACTIVE",
+          step_type: "tool",
+          tool_name: "run_command",
+          tool_info: { name: "run_command", parameters: { CommandLine: "sleep 60" } },
+        },
+      }),
+    ].join("\n")}\n`,
+  );
+  await assert.rejects(
+    () => promise,
+    (error: unknown) => {
+      assert.ok(error instanceof AgyStallError);
+      assert.equal(error.toolActive, true);
+      assert.match(error.message, /while a tool step was active/);
+      return true;
+    },
+  );
+  // The 50ms base budget must NOT have fired; only the 250ms tool budget.
+  assert.ok(Date.now() - started >= 200, "waited for the tool budget");
+});
+
+test("stderr output counts as liveness for the stall watchdog", async () => {
+  const child = manualChild();
+  const promise = runAgyTurn({
+    prompt: "hi",
+    timeoutMs: 10_000,
+    inactivityTimeoutMs: 120,
+    spawnOverride: (() => child) as never,
+  });
+  child.emitStderr("downloading model…\n");
+  await sleep(60);
+  child.emitStderr("still working…\n");
+  await sleep(60);
+  child.emitStdout(`${OK_CAPTURE}\n`);
+  child.close(0);
+  const outcome = await promise;
+  assert.equal(outcome.status, "OK");
+});
+
+test("terminal result disarms stall watchdog and resolves even when stdio stays open", async () => {
+  const child = manualChild();
+  const promise = runAgyTurn({
+    prompt: "hi",
+    timeoutMs: 10_000,
+    inactivityTimeoutMs: 50,
+    spawnOverride: (() => child) as never,
+  });
+
+  child.emitStdout(`${OK_CAPTURE}\n`);
+  // NOTE: child.close(0) is deliberately NOT called here, simulating a grandchild
+  // holding stdout open after agy completed and emitted SUCCESS result.
+
+  // Wait longer than inactivityTimeoutMs (50ms) to ensure stall watchdog does not fire.
+  await sleep(100);
+
+  const outcome = await promise;
+  assert.equal(outcome.status, "OK");
+  assert.equal(outcome.response, "Hello from agy!");
+  assert.equal(outcome.finished, true);
+});
+
+function processGone(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+function cleanPid(pid: number | undefined) {
+  if (pid === undefined || !Number.isSafeInteger(pid) || pid <= 0) return;
+  try {
+    if (process.platform === "win32") {
+      spawnSync("taskkill", ["/F", "/T", "/PID", String(pid)], { stdio: "ignore" });
+    } else {
+      process.kill(-pid, "SIGKILL");
+    }
+  } catch {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {}
+  }
+}
+
+async function pollUntil(check: () => boolean, timeoutMs = 5_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (!check()) {
+    if (Date.now() > deadline) return false;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  return true;
+}
+
+test("real child process: terminal result resolves early and child close callback naturally untracks when child finishes", async () => {
+  // Script prints init and result, then exits naturally after a safe delay
+  const script = `
+    const { spawn } = require("node:child_process");
+    const grandchild = spawn(process.execPath, ["-e", "setTimeout(() => {}, 800)"], {
+      stdio: "inherit",
+    });
+    console.log(JSON.stringify({ event: "init", conversation_id: "c-natural-close", init: {} }));
+    console.log(JSON.stringify({
+      event: "result",
+      conversation_id: "c-natural-close",
+      result: {
+        status: "SUCCESS",
+        response: "Resolved early before natural close!",
+        conversation_id: "c-natural-close"
+      }
+    }));
+    setTimeout(() => {}, 800);
+  `;
+
+  const child = spawn(process.execPath, ["-e", script], {
+    detached: true,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  const pid = child.pid!;
+  assert.ok(Number.isSafeInteger(pid) && pid > 0);
+
+  try {
+    const promise = runAgyTurn({
+      prompt: "hi",
+      timeoutMs: 10_000,
+      inactivityTimeoutMs: 500,
+      spawnOverride: (() => child) as never,
+    });
+
+    const outcome = await promise;
+    assert.equal(outcome.status, "OK");
+    assert.equal(outcome.response, "Resolved early before natural close!");
+    assert.equal(outcome.finished, true);
+
+    const registry = getAgyChildrenRegistry();
+    // Initially tracked
+    assert.equal(registry.live.has(pid), true, "child PID is tracked upon logical settlement");
+
+    // The child and its streams close naturally; the production child.on("close") must untrack it!
+    assert.ok(
+      await pollUntil(() => !registry.live.has(pid)),
+      "production close callback automatically untracked child PID",
+    );
+    assert.ok(await pollUntil(() => processGone(pid)), "child process exited");
+  } finally {
+    cleanPid(pid);
+  }
+});
+
+test("real child process: terminal result resolves early, held-open process remains tracked, and killAllAgyTrees sweeps it", async () => {
+  // Script spawns a detached grandchild holding stdout pipe and keeps running
+  const script = `
+    const { spawn } = require("node:child_process");
+    const grandchild = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+      stdio: "inherit",
+    });
+    console.log(JSON.stringify({ event: "init", conversation_id: "c-sweep-test", init: {} }));
+    console.log(JSON.stringify({
+      event: "result",
+      conversation_id: "c-sweep-test",
+      result: {
+        status: "SUCCESS",
+        response: "Resolved early; grandchild holding stream!",
+        conversation_id: "c-sweep-test"
+      }
+    }));
+    setInterval(() => {}, 1000);
+  `;
+
+  const child = spawn(process.execPath, ["-e", script], {
+    detached: true,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  const pid = child.pid!;
+  assert.ok(Number.isSafeInteger(pid) && pid > 0);
+
+  try {
+    const promise = runAgyTurn({
+      prompt: "hi",
+      timeoutMs: 10_000,
+      inactivityTimeoutMs: 500,
+      spawnOverride: (() => child) as never,
+    });
+
+    const outcome = await promise;
+    assert.equal(outcome.status, "OK");
+    assert.equal(outcome.response, "Resolved early; grandchild holding stream!");
+    assert.equal(outcome.finished, true);
+
+    // Child remains tracked in the death hook registry while alive
+    const registry = getAgyChildrenRegistry();
+    assert.equal(registry.live.has(pid), true, "child PID remains tracked");
+    assert.equal(processGone(pid), false, "child is still running in background");
+
+    // Explicit shutdown sweep: killAllAgyTrees sweeps every remaining tracked tree
+    killAllAgyTrees();
+    assert.equal(registry.live.has(pid), false, "untracked after killAllAgyTrees sweep");
+    assert.ok(
+      await pollUntil(() => processGone(pid)),
+      "held-open child process tree was swept and killed",
+    );
+  } finally {
+    cleanPid(pid);
+  }
 });

@@ -28,3 +28,17 @@ export function restoredPiContextPrompt(transcript: string): string {
     "## Current user request",
   ].join("\n");
 }
+
+/**
+ * Prompt for resuming a conversation whose turn stalled: the stream died
+ * mid-turn, the client killed the process, and this follow-up runs against
+ * the same `--conversation` id where agy still holds the full history.
+ */
+export function stallContinuationPrompt(): string {
+  return (
+    "The stream was interrupted before your previous turn completed. " +
+    "Continue the task you were working on from where it stopped. " +
+    "Tool calls that already reported a result are done — do not repeat them; " +
+    "re-run only work whose result you never received."
+  );
+}

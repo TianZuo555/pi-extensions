@@ -13,6 +13,9 @@ import {
 } from "../lib/patch-apply.ts";
 import { finalizeWorktree, createWorktree } from "../lib/worktree.ts";
 import { SubagentSupervisor } from "../lib/supervisor.ts";
+import { hermeticGitProcessEnv } from "./git-env.ts";
+
+hermeticGitProcessEnv();
 
 const FIXTURE = path.join(
   path.dirname(fileURLToPath(import.meta.url)),

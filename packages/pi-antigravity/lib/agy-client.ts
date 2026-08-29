@@ -9,6 +9,7 @@
  */
 
 import { spawn } from "node:child_process";
+import { killAgyTree, trackAgyChild, untrackAgyChild } from "./agy-children.ts";
 import { parseAgyLine } from "./events.ts";
 import { applyEvent, newTurnOutcome, type AgyActivity, type AgyTurnOutcome } from "./reducer.ts";
 
@@ -29,6 +30,17 @@ export interface AgyTurnRequest {
   cwd?: string;
   /** Overall turn timeout; agy's own --print-timeout is set from this. */
   timeoutMs?: number;
+  /**
+   * Kill the turn when the stream produces no bytes for this long (stall
+   * watchdog). 0 disables it; the overall timeoutMs still applies.
+   */
+  inactivityTimeoutMs?: number;
+  /**
+   * Stall budget while a tool step is ACTIVE — a quiet foreground tool is
+   * legitimate, so silence inside a tool gets a longer leash than silence
+   * between steps. Defaults to max(inactivityTimeoutMs, 300_000).
+   */
+  toolInactivityTimeoutMs?: number;
   signal?: AbortSignal;
   /** Called with each structured activity event as tool steps stream in. */
   onActivity?: (activity: AgyActivity) => void;
@@ -49,6 +61,27 @@ export class AgySpawnError extends Error {
     super(message);
     this.name = "AgySpawnError";
     this.stderr = stderr;
+  }
+}
+
+/**
+ * The stream went silent: the process is alive but produced no bytes within
+ * the inactivity budget. Retryable — the runtime resumes the conversation
+ * with a continuation prompt instead of failing the whole pi turn.
+ */
+export class AgyStallError extends Error {
+  readonly stalledMs: number;
+  readonly toolActive: boolean;
+
+  constructor(stalledMs: number, toolActive: boolean) {
+    super(
+      `agy stream stalled: no events for ${Math.round(stalledMs / 1000)}s${
+        toolActive ? " while a tool step was active" : ""
+      }`,
+    );
+    this.name = "AgyStallError";
+    this.stalledMs = stalledMs;
+    this.toolActive = toolActive;
   }
 }
 
@@ -83,26 +116,54 @@ export function buildAgyArgs(request: AgyTurnRequest): string[] {
  */
 export function runAgyTurn(request: AgyTurnRequest): Promise<AgyTurnOutcome> {
   return new Promise((resolve, reject) => {
+    if (request.signal?.aborted) {
+      const outcome = newTurnOutcome();
+      outcome.status = "ERROR";
+      outcome.error = "agy turn was aborted.";
+      outcome.finished = true;
+      resolve(outcome);
+      return;
+    }
     const doSpawn = request.spawnOverride ?? spawn;
     const child = doSpawn(AGY_BINARY, buildAgyArgs(request), {
       cwd: request.cwd,
       stdio: ["ignore", "pipe", "pipe"],
+      // Own process group so one negative-pid SIGKILL reaps agy's whole
+      // tree on timeout/abort instead of leaving grandchildren running.
+      detached: true,
     });
+    trackAgyChild(child);
     const outcome = newTurnOutcome();
     let stdoutBuf = "";
     let stderrBuf = "";
+    /** True between a tool_start activity and its terminal event. */
+    let toolActive = false;
 
-    const finish = (fn: () => void) => {
+    let settled = false;
+    let untracked = false;
+    let stallTimer: NodeJS.Timeout | undefined;
+
+    const untrack = () => {
+      if (untracked) return;
+      untracked = true;
+      untrackAgyChild(child);
+    };
+
+    const finishLogical = (fn: () => void) => {
       if (settled) return;
       settled = true;
       clearTimeout(killTimer);
+      if (stallTimer !== undefined) {
+        clearTimeout(stallTimer);
+        stallTimer = undefined;
+      }
       fn();
     };
-    let settled = false;
 
     const killTimer = setTimeout(() => {
-      finish(() => {
-        child.kill("SIGKILL");
+      killAgyTree(child);
+      untrack();
+      finishLogical(() => {
         reject(
           new AgySpawnError(
             `agy turn timed out after ${Math.round((request.timeoutMs ?? 600_000) / 1000)}s`,
@@ -112,11 +173,37 @@ export function runAgyTurn(request: AgyTurnRequest): Promise<AgyTurnOutcome> {
       });
     }, request.timeoutMs ?? 600_000);
 
+    // Stall watchdog: any stdout/stderr bytes count as liveness (chunk level,
+    // not parsed events — unknown shapes must still reset the timer). A tool
+    // step that is legitimately quiet gets the longer tool budget.
+    const stallBaseMs = request.inactivityTimeoutMs ?? 120_000;
+    const stallToolMs = request.toolInactivityTimeoutMs ?? Math.max(stallBaseMs, 300_000);
+    let rearmStall: () => void = () => {};
+    if (stallBaseMs > 0) {
+      const armStall = () => {
+        if (settled || outcome.finished) return;
+        if (stallTimer !== undefined) clearTimeout(stallTimer);
+        const budgetMs = toolActive ? stallToolMs : stallBaseMs;
+        stallTimer = setTimeout(() => {
+          killAgyTree(child);
+          untrack();
+          finishLogical(() => {
+            reject(new AgyStallError(budgetMs, toolActive));
+          });
+        }, budgetMs);
+      };
+      rearmStall = armStall;
+      armStall();
+      child.stdout?.on("data", armStall);
+      child.stderr?.on("data", armStall);
+    }
+
     request.signal?.addEventListener(
       "abort",
       () => {
-        finish(() => {
-          child.kill("SIGKILL");
+        killAgyTree(child);
+        untrack();
+        finishLogical(() => {
           outcome.status = "ERROR";
           outcome.error = "agy turn was aborted.";
           outcome.finished = true;
@@ -128,6 +215,7 @@ export function runAgyTurn(request: AgyTurnRequest): Promise<AgyTurnOutcome> {
 
     let conversationReported = false;
     const handleParsed = (parsed: ReturnType<typeof parseAgyLine>) => {
+      if (settled) return;
       if (!conversationReported) {
         const id =
           parsed.kind === "init"
@@ -143,12 +231,31 @@ export function runAgyTurn(request: AgyTurnRequest): Promise<AgyTurnOutcome> {
         }
       }
       for (const activity of applyEvent(outcome, parsed)) {
+        if (activity.type === "tool_start") toolActive = true;
+        else if (activity.type === "tool_done" || activity.type === "tool_error")
+          toolActive = false;
         request.onActivity?.(activity);
       }
+      if (outcome.finished) {
+        // Resolve the logical turn immediately so callers are not blocked on
+        // grandchildren holding stdio pipes. The child process remains tracked
+        // in the global death hook registry until actual close/error/sweep.
+        stdoutBuf = "";
+        finishLogical(() => resolve(outcome));
+        return;
+      }
+      // A tool-start/done flip changes the stall budget (the liveness
+      // listener re-armed before this parse ran), so re-arm with the new
+      // toolActive state.
+      rearmStall();
     };
 
     child.stdout?.setEncoding("utf-8");
     child.stdout?.on("data", (chunk: string) => {
+      if (settled || outcome.finished) {
+        stdoutBuf = "";
+        return;
+      }
       stdoutBuf += chunk;
       for (;;) {
         const nl = stdoutBuf.indexOf("\n");
@@ -161,12 +268,17 @@ export function runAgyTurn(request: AgyTurnRequest): Promise<AgyTurnOutcome> {
 
     child.stderr?.setEncoding("utf-8");
     child.stderr?.on("data", (chunk: string) => {
+      if (settled || outcome.finished) {
+        stderrBuf = "";
+        return;
+      }
       stderrBuf += chunk;
       if (stderrBuf.length > 8_192) stderrBuf = stderrBuf.slice(-8_192);
     });
 
     child.on("error", (err) => {
-      finish(() =>
+      untrack();
+      finishLogical(() =>
         reject(
           new AgySpawnError(
             `failed to start agy (${err.message}). Install it or set AGY_BINARY.`,
@@ -178,10 +290,11 @@ export function runAgyTurn(request: AgyTurnRequest): Promise<AgyTurnOutcome> {
 
     child.on("close", (code) => {
       // Flush any trailing line without a newline.
-      if (stdoutBuf.trim()) {
+      if (!settled && stdoutBuf.trim()) {
         handleParsed(parseAgyLine(stdoutBuf));
       }
-      finish(() => {
+      untrack();
+      finishLogical(() => {
         if (outcome.finished) {
           resolve(outcome);
           return;

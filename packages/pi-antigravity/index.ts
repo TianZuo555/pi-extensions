@@ -18,22 +18,33 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { execFile } from "node:child_process";
+import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { piConfigDir, readJson, writeJson } from "./lib/config.ts";
 import { AGY_BINARY } from "./lib/agy-client.ts";
+import {
+  installAgyDeathHooks,
+  killAgyTree,
+  killAllAgyTrees,
+  trackAgyChild,
+  untrackAgyChild,
+} from "./lib/agy-children.ts";
+import { pruneBridgeMcpCache, removeMcpCacheEntry } from "./lib/mcp-cache.ts";
 import {
   AgyPiBridge,
   BRIDGE_SERVER_NAME,
   selectBridgedTools,
   type PiToolInfo,
 } from "./lib/bridge.ts";
+import { createBridgeLifecycleManager } from "./lib/bridge-lifecycle.ts";
 import {
-  assignSkillToolNames,
-  formatSkillCatalog,
+  ACTIVATE_SKILL_TOOL_NAME,
+  activateSkillDescription,
+  activateSkillParameters,
+  handleActivateSkill,
   nonWorkspaceSkills,
-  readSkillBundle,
+  usableSkillCatalog,
   type SkillLite,
 } from "./lib/skills.ts";
 import {
@@ -65,14 +76,58 @@ const DISCOVERY_TIMEOUT_MS = 15_000;
 // --- Pi-tool bridge ---------------------------------------------------------
 
 const BRIDGE_ENABLED = process.env.PI_ANTIGRAVITY_PI_TOOL_BRIDGE !== "0";
-const MAX_SKILL_TOOL_DESCRIPTION = 200;
+
+/** Timeout for shutdown-path agy calls — fast enough not to stall closing pi. */
+const SHUTDOWN_AGY_TIMEOUT_MS = 5_000;
 
 function execAgy(args: string[], timeoutMs = DISCOVERY_TIMEOUT_MS): Promise<string> {
   return new Promise((resolve, reject) => {
-    execFile(AGY_BINARY, args, { timeout: timeoutMs }, (err, stdout, stderr) => {
-      if (err) reject(new Error(stderr.trim() || err.message));
-      else resolve(stdout);
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let out = "";
+    let errOut = "";
+    const settle = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      fn();
+    };
+    const child = spawn(AGY_BINARY, args, {
+      stdio: ["ignore", "pipe", "pipe"],
+      // Own process group so killAgyTree's negative-pid SIGKILL reaps the
+      // whole tree on timeout. Raw spawn because execFile drops `detached`.
+      detached: true,
     });
+    trackAgyChild(child);
+    child.stdout?.setEncoding("utf8");
+    child.stdout?.on("data", (chunk: string) => {
+      out += chunk;
+    });
+    child.stderr?.setEncoding("utf8");
+    child.stderr?.on("data", (chunk: string) => {
+      errOut += chunk;
+    });
+    child.on("error", (err) => {
+      settle(() => {
+        untrackAgyChild(child);
+        reject(new Error(err.message));
+      });
+    });
+    child.on("close", (code) => {
+      settle(() => {
+        untrackAgyChild(child);
+        if (code === 0) resolve(out);
+        else {
+          reject(new Error(errOut.trim() || `agy ${args[0]} exited with code ${code ?? "signal"}`));
+        }
+      });
+    });
+    timer = setTimeout(() => {
+      settle(() => {
+        killAgyTree(child);
+        reject(new Error(`agy ${args[0]} timed out after ${Math.round(timeoutMs / 1000)}s`));
+      });
+    }, timeoutMs);
   });
 }
 
@@ -82,6 +137,9 @@ function execAgy(args: string[], timeoutMs = DISCOVERY_TIMEOUT_MS): Promise<stri
  * are per-pi-session: crashed sessions leak registrations forever, and every
  * live session's tools are merged into every agy turn's tools/list. Pruning
  * dead entries on startup keeps cross-session pollution to live sessions.
+ * agy also caches tool manifests on disk per server
+ * (`~/.gemini/antigravity-cli/mcp/<name>/`) and never evicts them, so the
+ * same sweep prunes cache entries with no live server left.
  */
 async function pruneStaleBridgeRegistrations(): Promise<void> {
   let list: string;
@@ -91,6 +149,7 @@ async function pruneStaleBridgeRegistrations(): Promise<void> {
     return; // agy unavailable — registration below will warn instead
   }
   const stale: string[] = [];
+  const live: string[] = [];
   for (const line of list.split("\n").slice(1)) {
     const columns = line.trim().split(/\s+/);
     const name = columns[0] ?? "";
@@ -106,11 +165,16 @@ async function pruneStaleBridgeRegistrations(): Promise<void> {
         signal: AbortSignal.timeout(1_500),
       });
       // Any HTTP answer (even 403/404) means a server is still listening.
+      live.push(name);
     } catch {
       stale.push(name);
     }
   }
   await Promise.all(stale.map((name) => execAgy(["mcp", "remove", name]).catch(() => {})));
+  // `agy mcp remove` deregisters but leaves the on-disk manifest cache
+  // behind; entries whose registration is already gone never reappear in
+  // `agy mcp list`, so prune the cache against the live set here.
+  await pruneBridgeMcpCache({ liveServers: live });
 }
 
 interface ModelCache {
@@ -147,13 +211,12 @@ function normalizeModels(models: AgyModelInfo[]): AgyModelInfo[] {
   return out;
 }
 
-function listAgyModels(): Promise<AgyModelInfo[]> {
-  return new Promise((resolve) => {
-    execFile(AGY_BINARY, ["models"], { timeout: DISCOVERY_TIMEOUT_MS }, (err, stdout) => {
-      if (err) resolve([]);
-      else resolve(parseAgyModels(stdout));
-    });
-  });
+async function listAgyModels(): Promise<AgyModelInfo[]> {
+  try {
+    return parseAgyModels(await execAgy(["models"]));
+  } catch {
+    return [];
+  }
 }
 
 function getInitialModelCache(): ModelCache {
@@ -192,6 +255,7 @@ async function discoverModels(refresh = false): Promise<ModelCache> {
 }
 
 export default function antigravityExtension(pi: ExtensionAPI): void {
+  installAgyDeathHooks();
   const runtime = createAntigravityRuntime();
   const service = runtime.runSync(AntigravityRuntime);
   const replay = new AgyReplayStore();
@@ -209,6 +273,48 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
   const bridgeToolPrefix = `pi__p${process.pid}__`;
   bridge.setToolPrefix(bridgeToolPrefix);
   bridge.setOnCall((call) => service.pushBridgeCall(call));
+
+  const bridgeManager = createBridgeLifecycleManager({
+    bridge,
+    bridgeToken,
+    enabled: BRIDGE_ENABLED,
+    pruneStaleRegistrations: pruneStaleBridgeRegistrations,
+    addMcpServer: async (serverName, url, token) => {
+      await execAgy([
+        "mcp",
+        "add",
+        "--type",
+        "http",
+        "--header",
+        `x-pi-bridge-token: ${token}`,
+        serverName,
+        url,
+      ]);
+    },
+    removeMcpServer: async (serverName) => {
+      await execAgy(["mcp", "remove", serverName], SHUTDOWN_AGY_TIMEOUT_MS);
+    },
+    evictMcpCache: removeMcpCacheEntry,
+  });
+
+  /**
+   * Register the pi-tool bridge with agy. Idempotent: no-op when disabled or
+   * already registered. Registration must precede the first agy spawn of the
+   * session — agy eagerly connects to MCP servers at startup (verified
+   * 2026-08-21) — so this runs as soon as an Antigravity model is selected.
+   */
+  async function ensureBridgeRegistered(ui?: ExtensionUIContext): Promise<void> {
+    await bridgeManager.ensureRegistered((warning) => ui?.notify(warning, "warning"));
+  }
+
+  /**
+   * Deregister the pi-tool bridge and evict its manifest cache. No-op when
+   * the bridge is not registered or running. Runs when the session leaves
+   * Antigravity models and on shutdown.
+   */
+  async function teardownBridge(): Promise<void> {
+    await bridgeManager.teardown();
+  }
 
   // --- Skill passing (Phase 2) ----------------------------------------------
   // pi's loaded skills, refreshed per turn via before_agent_start so /reload
@@ -230,30 +336,32 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
       }));
   }
 
-  const getBootstrapSuffix = () =>
-    formatSkillCatalog(
-      // agy injects workspace .agents/skills itself — only bridge the rest.
-      nonWorkspaceSkills(loadedSkills, tasksSessionCwd),
-      BRIDGE_ENABLED ? "bridge" : "direct",
-      bridgeToolPrefix,
-    );
+  const bridgedSkills = () => usableSkillCatalog(nonWorkspaceSkills(loadedSkills, tasksSessionCwd));
 
-  /** Publish one bridge tool per global pi skill: `pi__p<pid>__skill__<name>`. */
+  /**
+   * Bridge mode keeps the catalog in activate_skill's schema (refreshed on
+   * every agy spawn), so nothing is appended to the prompt. When the bridge is
+   * off OR failed to register with agy, fall back to the direct-mode path
+   * catalog so skills never become silently invisible.
+   */
+  const getBootstrapSuffix = () => bridgeManager.getBootstrapSuffix(bridgedSkills());
+
+  /** Publish one `pi__p<pid>__activate_skill` tool for global pi skills. */
   function refreshSkillTools(): void {
     if (!BRIDGE_ENABLED) return;
-    bridge.setDynamicTools(
-      assignSkillToolNames(nonWorkspaceSkills(loadedSkills, tasksSessionCwd)).map(
-        ({ skill, toolName }) => ({
-          name: toolName,
-          description:
-            (skill.description.replace(/\s+/g, " ").trim().slice(0, MAX_SKILL_TOOL_DESCRIPTION) ||
-              `pi Agent Skill "${skill.name}"`) +
-            " (pi Agent Skill — calling this tool activates the skill: returns its full SKILL.md and bundled resource paths)",
-          parameters: { type: "object", properties: {} },
-          handler: () => readSkillBundle(skill),
-        }),
-      ),
-    );
+    const skills = bridgedSkills();
+    if (skills.length === 0) {
+      bridge.setDynamicTools([]);
+      return;
+    }
+    bridge.setDynamicTools([
+      {
+        name: ACTIVATE_SKILL_TOOL_NAME,
+        description: activateSkillDescription(skills),
+        parameters: activateSkillParameters(skills),
+        handler: (args) => handleActivateSkill(skills, args),
+      },
+    ]);
   }
 
   bridge.setToolSource(() => {
@@ -269,8 +377,8 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
     return selectBridgedTools(allTools, activeNames);
   });
 
-  // Bridge-virtual tools are gone; per-skill tools are published dynamically
-  // via refreshSkillTools() on every skills capture.
+  // Per-skill tools are gone; one activate_skill tool is published on every
+  // skills capture via refreshSkillTools().
 
   // --- Status-bar hint for live agy background tasks -----------------------
 
@@ -546,34 +654,22 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
     if (ctx.hasUI) tasksUi = ctx.ui;
     tasksSessionCwd = ctx.cwd;
     updateAgyTasksWidget();
-    // Bridge must be registered before the first agy spawn of the session:
-    // agy eagerly connects to MCP servers at startup (verified 2026-08-21).
-    if (BRIDGE_ENABLED) {
-      try {
-        await pruneStaleBridgeRegistrations();
-        await bridge.start();
-        await execAgy([
-          "mcp",
-          "add",
-          "--type",
-          "http",
-          "--header",
-          `x-pi-bridge-token: ${bridgeToken}`,
-          bridge.serverName,
-          bridge.url!,
-        ]);
-        bridge.refreshTools();
-      } catch (error) {
-        ctx.ui.notify(
-          `antigravity: pi-tool bridge unavailable (${error instanceof Error ? error.message : error}).`,
-          "warning",
-        );
-      }
+    // The pi-tool bridge is only useful while an Antigravity model is
+    // selected: register lazily here (session resumed on an agy model) and on
+    // model_select; non-agy sessions never touch agy at all.
+    if (ctx.model?.provider === "antigravity") {
+      await ensureBridgeRegistered(ctx.ui);
     }
   });
 
-  pi.on("model_select", (event) => {
+  pi.on("model_select", async (event, ctx) => {
     syncWrapperToolActivation(event.model?.provider);
+    // The bridge exists only while an Antigravity model is selected.
+    if (event.model?.provider === "antigravity") {
+      await ensureBridgeRegistered(ctx?.ui);
+    } else {
+      await teardownBridge();
+    }
   });
 
   pi.on("session_tree", async (_event, ctx: ExtensionContext) => {
@@ -612,13 +708,8 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
     } catch {
       // Already closed.
     }
-    if (bridge.running) {
-      try {
-        await execAgy(["mcp", "remove", bridge.serverName]);
-      } catch {
-        // Registration may already be gone.
-      }
-      await bridge.close();
+    if (bridgeManager.isRegistered() || bridgeManager.isRunning()) {
+      await teardownBridge();
     }
     try {
       tasksUi?.setWidget(AGY_TASKS_WIDGET_KEY, undefined);
@@ -635,6 +726,9 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
     } catch {
       // Disposed gracefully
     }
+    // Sweep any remaining tracked agy process trees (including earlier turns
+    // that finished logically while grandchildren held stdio open).
+    killAllAgyTrees();
   });
 
   pi.registerCommand("agy", {

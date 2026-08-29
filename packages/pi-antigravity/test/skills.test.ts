@@ -4,11 +4,15 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import {
-  assignSkillToolNames,
+  ACTIVATE_SKILL_TOOL_NAME,
+  activateSkillDescription,
+  activateSkillParameters,
+  findSkillByName,
   formatSkillCatalog,
+  handleActivateSkill,
   nonWorkspaceSkills,
   readSkillBundle,
-  skillToolName,
+  usableSkillCatalog,
   type SkillLite,
 } from "../lib/skills.ts";
 
@@ -19,56 +23,98 @@ const SKILL: SkillLite = {
   baseDir: "/skills/grilling",
 };
 
-test("formatSkillCatalog lists name, one-liner, and path", () => {
-  const block = formatSkillCatalog([SKILL], "bridge");
+test("activate_skill schema enum is the catalog", () => {
+  const other: SkillLite = { ...SKILL, name: "herdr", filePath: "/skills/herdr/SKILL.md" };
+  const schema = activateSkillParameters([SKILL, other]);
+  assert.equal(ACTIVATE_SKILL_TOOL_NAME, "activate_skill");
+  assert.deepEqual(schema, {
+    type: "object",
+    properties: {
+      name: {
+        type: "string",
+        description: "Skill name to activate (from this tool's enum).",
+        enum: ["grilling", "herdr"],
+      },
+    },
+    required: ["name"],
+  });
+});
+
+test("activateSkillDescription carries each skill's one-liner", () => {
+  const other: SkillLite = {
+    ...SKILL,
+    name: "herdr",
+    description: "Control Herdr, a terminal multiplexer for coding agents.",
+    filePath: "/skills/herdr/SKILL.md",
+  };
+  const description = activateSkillDescription([SKILL, other]);
+  // Progressive disclosure: agy must be able to tell WHEN a skill applies
+  // from tools/list alone, not just from its bare name in the enum.
+  assert.match(description, /Pass `name` from this tool's enum/);
+  assert.match(description, /- grilling: Interview the user relentlessly/);
+  assert.match(description, /- herdr: Control Herdr, a terminal multiplexer/);
+});
+
+test("activateSkillDescription truncates one-liners and omits an empty catalog", () => {
+  const long: SkillLite = { ...SKILL, description: "x".repeat(500) };
+  const description = activateSkillDescription([long]);
+  assert.ok(description.length < 400);
+  assert.ok(!activateSkillDescription([]).includes("Available skills:"));
+});
+
+test("usableSkillCatalog skips empty paths and keeps the first name", () => {
+  const dup: SkillLite = { ...SKILL, filePath: "/other/grilling/SKILL.md" };
+  const empty: SkillLite = { ...SKILL, name: "ghost", filePath: "" };
+  assert.deepEqual(
+    usableSkillCatalog([SKILL, dup, empty]).map((skill) => skill.filePath),
+    [SKILL.filePath],
+  );
+  assert.equal(findSkillByName([SKILL, dup], " grilling "), SKILL);
+});
+
+test("formatSkillCatalog lists name, one-liner, and path for direct reads", () => {
+  const block = formatSkillCatalog([SKILL]);
   assert.ok(block);
   assert.ok(block.includes("## pi Agent Skills"));
   assert.ok(block.includes("- grilling: Interview the user relentlessly"));
   assert.ok(block.includes("/skills/grilling/SKILL.md"));
-  assert.ok(block.includes("tool: pi__skill__grilling"));
-  assert.ok(!block.includes("read its SKILL.md file directly"));
-});
-
-test("formatSkillCatalog advertises the session's bridge prefix exactly", () => {
-  const block = formatSkillCatalog([SKILL], "bridge", "pi__p4242__");
-  assert.ok(block);
-  assert.ok(block.includes("tool: pi__p4242__skill__grilling"));
-  assert.ok(!block.includes("tool: pi__skill__grilling"));
-});
-
-test("skillToolName reserves a namespace and sanitizes to MCP-safe characters", () => {
-  assert.equal(skillToolName(SKILL), "skill__grilling");
-  assert.equal(
-    skillToolName({ ...SKILL, name: "pro360 workflow v2!" }),
-    "skill__pro360_workflow_v2_",
-  );
-});
-
-test("assignSkillToolNames gives sanitization collisions stable unique names", () => {
-  const first = { ...SKILL, name: "a b", filePath: "/one/SKILL.md" };
-  const second = { ...SKILL, name: "a?b", filePath: "/two/SKILL.md" };
-  const assigned = assignSkillToolNames([first, second]);
-  assert.equal(new Set(assigned.map(({ toolName }) => toolName)).size, 2);
-  assert.ok(assigned.every(({ toolName }) => /^skill__a_b__[a-f0-9]{8}$/.test(toolName)));
-  assert.deepEqual(assignSkillToolNames([first, second]), assigned);
-  assert.deepEqual(assignSkillToolNames([first, { ...first }]), [
-    { skill: first, toolName: "skill__a_b" },
-  ]);
-});
-
-test("formatSkillCatalog direct mode instructs reading the file", () => {
-  const block = formatSkillCatalog([SKILL], "direct");
-  assert.ok(block);
   assert.ok(block.includes("read its SKILL.md file directly"));
-  assert.ok(!block.includes("pi__activate_skill"));
+  assert.ok(!block.includes("pi__skill__"));
+  assert.ok(!block.includes("activate_skill"));
 });
 
 test("formatSkillCatalog truncates long descriptions and returns undefined when empty", () => {
   const long: SkillLite = { ...SKILL, description: "x".repeat(500) };
-  const block = formatSkillCatalog([long], "bridge");
+  const block = formatSkillCatalog([long]);
   assert.ok(block);
   assert.ok(block.length < 700);
-  assert.equal(formatSkillCatalog([], "bridge"), undefined);
+  assert.equal(formatSkillCatalog([]), undefined);
+});
+
+test("handleActivateSkill returns the bundle or lists available names", async () => {
+  const dir = await mkdtemp(path.join(tmpdir(), "agy-skill-activate-"));
+  try {
+    await writeFile(path.join(dir, "SKILL.md"), "Do the grilling.\n");
+    const skill: SkillLite = {
+      ...SKILL,
+      filePath: path.join(dir, "SKILL.md"),
+      baseDir: dir,
+    };
+    const ok = await handleActivateSkill([skill], { name: "grilling" });
+    assert.equal(ok.isError, false);
+    assert.ok(ok.content.includes("Do the grilling."));
+
+    const missing = await handleActivateSkill([skill], { name: "nope" });
+    assert.equal(missing.isError, true);
+    assert.match(missing.content, /skill "nope" is not available/);
+    assert.match(missing.content, /Available: grilling/);
+
+    const blank = await handleActivateSkill([skill], { name: "  " });
+    assert.equal(blank.isError, true);
+    assert.match(blank.content, /no skill name was provided/);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test("readSkillBundle returns SKILL.md body and absolute resource paths", async () => {
