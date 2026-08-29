@@ -7,6 +7,8 @@ import {
   resolveBridgeResultsFromContext,
   selectBridgedTools,
 } from "../lib/bridge.ts";
+import { createBridgeLifecycleManager } from "../lib/bridge-lifecycle.ts";
+import type { SkillLite } from "../lib/skills.ts";
 
 const TOOL_DEFS = [
   {
@@ -431,4 +433,122 @@ test("selectBridgedTools bridges only MCP adapter tools", () => {
   // MCP adapter tools only — no builtins, no pi-session extension tools,
   // no replay wrapper, no inactive tools, no unknown sources.
   assert.deepEqual(bridged, ["mcp", "mcpScript", "github_search_issues"]);
+});
+
+test("createBridgeLifecycleManager handles start-success/add-failure, retry, teardown, and fallback", async () => {
+  const bridge = new AgyPiBridge("pi-bridge-lifecycle");
+  let mcpAddShouldFail = true;
+  let addCalls = 0;
+  let removeCalls = 0;
+  let evictCalls = 0;
+  let pruneCalls = 0;
+  const warnings: string[] = [];
+
+  const skills: SkillLite[] = [
+    {
+      name: "herdr",
+      description: "Herdr subagents",
+      filePath: "/skills/herdr/SKILL.md",
+      baseDir: "/skills/herdr",
+    },
+  ];
+
+  const manager = createBridgeLifecycleManager({
+    bridge,
+    bridgeToken: "test-token",
+    enabled: true,
+    pruneStaleRegistrations: async () => {
+      pruneCalls++;
+    },
+    addMcpServer: async (_name, _url, _token) => {
+      addCalls++;
+      if (mcpAddShouldFail) {
+        throw new Error("agy mcp add connection refused");
+      }
+    },
+    removeMcpServer: async (_name) => {
+      removeCalls++;
+    },
+    evictMcpCache: async (_name) => {
+      evictCalls++;
+    },
+    notifyWarning: (msg) => warnings.push(msg),
+  });
+
+  try {
+    // 1. Initial attempt: bridge starts listening, but addMcpServer fails
+    const firstResult = await manager.ensureRegistered();
+    assert.equal(firstResult, false, "ensureRegistered reports failure");
+    assert.equal(manager.isRunning(), true, "HTTP listener started successfully");
+    assert.equal(manager.isRegistered(), false, "not marked as registered");
+    assert.equal(pruneCalls, 1);
+    assert.equal(addCalls, 1);
+    assert.equal(warnings.length, 1);
+    assert.match(warnings[0], /pi-tool bridge unavailable/);
+
+    // Fallback: direct skill catalog is provided because registration failed
+    const fallbackSuffix = manager.getBootstrapSuffix(skills);
+    assert.ok(fallbackSuffix);
+    assert.match(fallbackSuffix, /## pi Agent Skills/);
+    assert.match(fallbackSuffix, /herdr/);
+
+    // 2. Retry attempt: addMcpServer succeeds
+    mcpAddShouldFail = false;
+    const secondResult = await manager.ensureRegistered();
+    assert.equal(secondResult, true, "ensureRegistered reports success on retry");
+    assert.equal(manager.isRunning(), true);
+    assert.equal(manager.isRegistered(), true, "marked as registered");
+    assert.equal(addCalls, 2);
+
+    // When registered: bootstrap suffix is suppressed (empty/undefined)
+    assert.equal(manager.getBootstrapSuffix(skills), undefined);
+
+    // Idempotent: calling ensureRegistered again when already registered is a no-op
+    const thirdResult = await manager.ensureRegistered();
+    assert.equal(thirdResult, true);
+    assert.equal(addCalls, 2, "did not call addMcpServer again");
+
+    // 3. Teardown
+    await manager.teardown();
+    assert.equal(manager.isRunning(), false, "bridge closed");
+    assert.equal(manager.isRegistered(), false, "marked as unregistered");
+    assert.equal(removeCalls, 1, "removeMcpServer called");
+    assert.equal(evictCalls, 1, "evictMcpCache called");
+
+    // Post-teardown: fallback catalog is provided again
+    assert.ok(manager.getBootstrapSuffix(skills));
+  } finally {
+    await manager.teardown();
+  }
+});
+
+test("createBridgeLifecycleManager respects disabled setting", async () => {
+  const bridge = new AgyPiBridge("pi-bridge-disabled");
+  let addCalled = false;
+  const manager = createBridgeLifecycleManager({
+    bridge,
+    bridgeToken: "test-token",
+    enabled: false,
+    addMcpServer: async () => {
+      addCalled = true;
+    },
+    removeMcpServer: async () => {},
+    evictMcpCache: async () => {},
+  });
+
+  const skills: SkillLite[] = [
+    {
+      name: "herdr",
+      description: "Herdr subagents",
+      filePath: "/skills/herdr/SKILL.md",
+      baseDir: "/skills/herdr",
+    },
+  ];
+
+  const result = await manager.ensureRegistered();
+  assert.equal(result, false);
+  assert.equal(addCalled, false, "did not attempt MCP registration");
+  assert.equal(manager.isRunning(), false);
+  assert.equal(manager.isRegistered(), false);
+  assert.ok(manager.getBootstrapSuffix(skills));
 });

@@ -127,6 +127,7 @@ const makeRuntime = (turnRunner: AgyTurnRunner) =>
     let activeTurnAbort: AbortController | undefined;
     let generation = 0;
     let restoreHistoryOnNextConversation = false;
+    let lastBootstrappedSkillsSuffix: string | undefined;
 
     const invalidateActiveTurn = () => {
       generation += 1;
@@ -158,6 +159,7 @@ const makeRuntime = (turnRunner: AgyTurnRunner) =>
                 conversationCwd = undefined;
                 turns = 0;
                 restoreHistoryOnNextConversation = true;
+                lastBootstrappedSkillsSuffix = undefined;
               }
             }),
           ),
@@ -184,11 +186,13 @@ const makeRuntime = (turnRunner: AgyTurnRunner) =>
                 conversationId = undefined;
                 conversationCwd = undefined;
                 restoreHistoryOnNextConversation = true;
+                lastBootstrappedSkillsSuffix = undefined;
               }
               if (model !== undefined && model !== request.modelId) {
                 conversationId = undefined;
                 conversationCwd = undefined;
                 restoreHistoryOnNextConversation = true;
+                lastBootstrappedSkillsSuffix = undefined;
               }
               model = request.modelId;
               const controller = new AgyTurnController(request.prompt);
@@ -208,13 +212,16 @@ const makeRuntime = (turnRunner: AgyTurnRunner) =>
                   ? request.historyBootstrap
                   : undefined;
               restoreHistoryOnNextConversation = false;
-              // Extra bootstrap text (direct-mode skill paths) rides only
-              // the first turn of a conversation. Bridge mode leaves this
-              // empty: activate_skill's schema enum is the catalog, and
-              // tools/list is rebuilt on every agy spawn — including after
-              // pi compaction — so re-appending would only stack prompt
-              // junk the way the old per-turn catalog did.
-              const bootstrapSuffix = conversationId ? undefined : request.bootstrapSuffix;
+              // Direct-mode skill paths ride the prompt when the bridge is
+              // disabled or registration failed. If the bridge was active
+              // initially and later fails mid-conversation, or if the skill
+              // catalog changes, the new suffix is appended even when an agy
+              // conversation already exists. Suffixes already sent to the
+              // current conversation are not duplicated on every turn.
+              const bootstrapSuffix =
+                request.bootstrapSuffix && request.bootstrapSuffix !== lastBootstrappedSkillsSuffix
+                  ? request.bootstrapSuffix
+                  : undefined;
               const spawnRequest: AgyTurnRequest = {
                 prompt: [historyBootstrap, request.prompt, bootstrapSuffix]
                   .filter((part): part is string => Boolean(part))
@@ -233,6 +240,10 @@ const makeRuntime = (turnRunner: AgyTurnRunner) =>
                   // resolve, and /agy-tasks needs the id meanwhile.
                   conversationId = id;
                   conversationCwd = cwd;
+                  // Prompt reached the conversation: commit the bootstrap suffix.
+                  if (bootstrapSuffix) {
+                    lastBootstrappedSkillsSuffix = bootstrapSuffix;
+                  }
                 },
                 onActivity: (activity) => {
                   if (turnGeneration === generation) controller.push(activity);
@@ -242,6 +253,9 @@ const makeRuntime = (turnRunner: AgyTurnRunner) =>
                * A stalled stream is recoverable: agy still holds the full
                * conversation server-side, so each retry resumes it with a
                * continuation prompt instead of re-bootstrapping pi history.
+               * If no resumable conversation id exists (e.g. stalled before
+               * init), retry with the original prompt instead of sending a
+               * continuation-only prompt to a blank conversation.
                * Only AgyStallError retries — spawn/auth failures would just
                * fail identically again. Aborts are left to the signal path.
                */
@@ -249,13 +263,16 @@ const makeRuntime = (turnRunner: AgyTurnRunner) =>
                 let retry = 0;
                 for (;;) {
                   if (turnAbort.signal.aborted) throw new Error("agy turn was aborted.");
+                  const resumableConversationId = conversationId ?? spawnRequest.conversationId;
                   const attempt =
                     retry === 0
                       ? spawnRequest
                       : {
                           ...spawnRequest,
-                          prompt: stallContinuationPrompt(),
-                          conversationId: conversationId ?? spawnRequest.conversationId,
+                          prompt: resumableConversationId
+                            ? stallContinuationPrompt()
+                            : spawnRequest.prompt,
+                          conversationId: resumableConversationId,
                         };
                   try {
                     return await turnRunner(attempt);
@@ -287,6 +304,9 @@ const makeRuntime = (turnRunner: AgyTurnRunner) =>
                   }
                   turns += 1;
                   if (outcome.conversationId) conversationId = outcome.conversationId;
+                  if (bootstrapSuffix) {
+                    lastBootstrappedSkillsSuffix = bootstrapSuffix;
+                  }
                   controller.close();
                 })
                 .catch((cause: unknown) => {
@@ -319,6 +339,7 @@ const makeRuntime = (turnRunner: AgyTurnRunner) =>
             conversationCwd = undefined;
             turns = 0;
             restoreHistoryOnNextConversation = false;
+            lastBootstrappedSkillsSuffix = undefined;
           }),
         ),
       ),
@@ -334,6 +355,7 @@ const makeRuntime = (turnRunner: AgyTurnRunner) =>
               closed = true;
               conversationId = undefined;
               conversationCwd = undefined;
+              lastBootstrappedSkillsSuffix = undefined;
               // Kill any in-flight agy child process immediately.
               invalidateActiveTurn();
             }),

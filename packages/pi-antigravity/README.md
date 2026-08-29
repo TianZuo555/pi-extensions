@@ -93,7 +93,7 @@ Nothing else of pi's surface is bridged: builtins (`read`, `bash`, …) and pi's
 Your pi skills work inside agy turns:
 
 - **Workspace skills** (`.agents/skills/` in the project) need nothing — agy discovers and activates them natively.
-- **Global skills** (`~/.pi/agent/skills/`, `~/.agents/skills/`) are bridged as `pi__p<pid>__activate_skill`. If the bridge is off (`PI_ANTIGRAVITY_PI_TOOL_BRIDGE=0`) or fails to register with agy, a path catalog is appended on the first turn of a fresh agy conversation instead, so headless agy can read `SKILL.md` directly.
+- **Global skills** (`~/.pi/agent/skills/`, `~/.agents/skills/`) are bridged as `pi__p<pid>__activate_skill`. If the bridge is off (`PI_ANTIGRAVITY_PI_TOOL_BRIDGE=0`) or fails to register with agy, a path catalog is appended directly to the prompt (on a fresh conversation or as a fallback on turns where the bridge is unregistered), so headless agy can read `SKILL.md` directly without losing skill visibility.
 - Skills respect pi's own config: `--no-skills`, `pi config` toggles, `/reload`. Skills marked `disable-model-invocation` are skipped.
 
 ### Background tasks (`/agy-tasks`)
@@ -149,7 +149,7 @@ Claude and GPT models
 
 | Flag | Effect |
 | --- | --- |
-| `PI_ANTIGRAVITY_PI_TOOL_BRIDGE=0` | Turn the bridge off. Skills fall back to a first-turn path catalog and direct `SKILL.md` reads. |
+| `PI_ANTIGRAVITY_PI_TOOL_BRIDGE=0` | Turn the bridge off. Skills fall back to a direct path catalog and direct `SKILL.md` reads. |
 | `AGY_BINARY=/path/to/agy` | Use a specific agy binary. |
 | `AGY_TURN_TIMEOUT_MS=600000` | Overall budget per agy turn (also sets agy's `--print-timeout`). |
 | `AGY_STALL_TIMEOUT_MS=120000` | Kill the turn when the stream produces no bytes for this long and retry by resuming the conversation. `0` disables the watchdog. |

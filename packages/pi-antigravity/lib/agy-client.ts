@@ -140,19 +140,30 @@ export function runAgyTurn(request: AgyTurnRequest): Promise<AgyTurnOutcome> {
     let toolActive = false;
 
     let settled = false;
+    let untracked = false;
     let stallTimer: NodeJS.Timeout | undefined;
-    const finish = (fn: () => void) => {
+
+    const untrack = () => {
+      if (untracked) return;
+      untracked = true;
+      untrackAgyChild(child);
+    };
+
+    const finishLogical = (fn: () => void) => {
       if (settled) return;
       settled = true;
       clearTimeout(killTimer);
-      if (stallTimer !== undefined) clearTimeout(stallTimer);
-      untrackAgyChild(child);
+      if (stallTimer !== undefined) {
+        clearTimeout(stallTimer);
+        stallTimer = undefined;
+      }
       fn();
     };
 
     const killTimer = setTimeout(() => {
-      finish(() => {
-        killAgyTree(child);
+      killAgyTree(child);
+      untrack();
+      finishLogical(() => {
         reject(
           new AgySpawnError(
             `agy turn timed out after ${Math.round((request.timeoutMs ?? 600_000) / 1000)}s`,
@@ -170,12 +181,13 @@ export function runAgyTurn(request: AgyTurnRequest): Promise<AgyTurnOutcome> {
     let rearmStall: () => void = () => {};
     if (stallBaseMs > 0) {
       const armStall = () => {
-        if (settled) return;
+        if (settled || outcome.finished) return;
         if (stallTimer !== undefined) clearTimeout(stallTimer);
         const budgetMs = toolActive ? stallToolMs : stallBaseMs;
         stallTimer = setTimeout(() => {
-          finish(() => {
-            killAgyTree(child);
+          killAgyTree(child);
+          untrack();
+          finishLogical(() => {
             reject(new AgyStallError(budgetMs, toolActive));
           });
         }, budgetMs);
@@ -189,8 +201,9 @@ export function runAgyTurn(request: AgyTurnRequest): Promise<AgyTurnOutcome> {
     request.signal?.addEventListener(
       "abort",
       () => {
-        finish(() => {
-          killAgyTree(child);
+        killAgyTree(child);
+        untrack();
+        finishLogical(() => {
           outcome.status = "ERROR";
           outcome.error = "agy turn was aborted.";
           outcome.finished = true;
@@ -223,6 +236,14 @@ export function runAgyTurn(request: AgyTurnRequest): Promise<AgyTurnOutcome> {
           toolActive = false;
         request.onActivity?.(activity);
       }
+      if (outcome.finished) {
+        // Resolve the logical turn immediately so callers are not blocked on
+        // grandchildren holding stdio pipes. The child process remains tracked
+        // in the global death hook registry until actual close/error/sweep.
+        stdoutBuf = "";
+        finishLogical(() => resolve(outcome));
+        return;
+      }
       // A tool-start/done flip changes the stall budget (the liveness
       // listener re-armed before this parse ran), so re-arm with the new
       // toolActive state.
@@ -231,6 +252,10 @@ export function runAgyTurn(request: AgyTurnRequest): Promise<AgyTurnOutcome> {
 
     child.stdout?.setEncoding("utf-8");
     child.stdout?.on("data", (chunk: string) => {
+      if (settled || outcome.finished) {
+        stdoutBuf = "";
+        return;
+      }
       stdoutBuf += chunk;
       for (;;) {
         const nl = stdoutBuf.indexOf("\n");
@@ -243,12 +268,17 @@ export function runAgyTurn(request: AgyTurnRequest): Promise<AgyTurnOutcome> {
 
     child.stderr?.setEncoding("utf-8");
     child.stderr?.on("data", (chunk: string) => {
+      if (settled || outcome.finished) {
+        stderrBuf = "";
+        return;
+      }
       stderrBuf += chunk;
       if (stderrBuf.length > 8_192) stderrBuf = stderrBuf.slice(-8_192);
     });
 
     child.on("error", (err) => {
-      finish(() =>
+      untrack();
+      finishLogical(() =>
         reject(
           new AgySpawnError(
             `failed to start agy (${err.message}). Install it or set AGY_BINARY.`,
@@ -260,10 +290,11 @@ export function runAgyTurn(request: AgyTurnRequest): Promise<AgyTurnOutcome> {
 
     child.on("close", (code) => {
       // Flush any trailing line without a newline.
-      if (stdoutBuf.trim()) {
+      if (!settled && stdoutBuf.trim()) {
         handleParsed(parseAgyLine(stdoutBuf));
       }
-      finish(() => {
+      untrack();
+      finishLogical(() => {
         if (outcome.finished) {
           resolve(outcome);
           return;

@@ -1,74 +1,105 @@
+import { spawnSync } from "node:child_process";
+
 /**
  * Tracking and process-group cleanup for agy subprocesses.
  *
  * agy runs as a process tree; signaling only the direct child (node's
  * default timeout/kill behavior) leaves grandchildren running. Worse, when
- * pi itself dies first — closing a terminal pane delivers SIGHUP and node's
- * default is instant death — every pending timeout timer dies with it and
- * nothing kills the child: a wedged `agy mcp remove` from shutdown then
- * lingers forever, reparented to init.
+ * pi itself dies first — closing a terminal pane delivers SIGHUP — pending
+ * timeouts die with it and nothing kills the child: a wedged `agy mcp remove`
+ * from shutdown could linger forever.
  *
- * Children are therefore spawned detached (own process group), so one
- * negative-pid SIGKILL reaps the whole tree, and exit/SIGHUP hooks sweep
- * every tracked group synchronously before the process goes away.
+ * Children are spawned detached (own process group), so one negative-pid
+ * SIGKILL (or taskkill /T on Windows) reaps the whole tree, and exit/SIGHUP
+ * hooks sweep every tracked group synchronously before the process goes away.
  */
 
-const live = new Set<number>();
+const AGY_CHILDREN_REGISTRY_SYMBOL = Symbol.for("pi-antigravity.agy-children");
+
+export interface AgyChildrenRegistry {
+  live: Set<number>;
+  hooksInstalled: boolean;
+}
+
+export function getAgyChildrenRegistry(): AgyChildrenRegistry {
+  const globalObj = globalThis as unknown as {
+    [AGY_CHILDREN_REGISTRY_SYMBOL]?: AgyChildrenRegistry;
+  };
+  if (!globalObj[AGY_CHILDREN_REGISTRY_SYMBOL]) {
+    globalObj[AGY_CHILDREN_REGISTRY_SYMBOL] = {
+      live: new Set<number>(),
+      hooksInstalled: false,
+    };
+  }
+  return globalObj[AGY_CHILDREN_REGISTRY_SYMBOL];
+}
 
 export interface TrackableChild {
   pid?: number;
 }
 
+export function killProcessTreeSync(pid: number): void {
+  if (process.platform === "win32") {
+    try {
+      spawnSync("taskkill", ["/F", "/T", "/PID", String(pid)], {
+        stdio: "ignore",
+        timeout: 5_000,
+        windowsHide: true,
+      });
+    } catch {
+      // Process may already be gone or taskkill unavailable.
+    }
+    return;
+  }
+
+  try {
+    process.kill(-pid, "SIGKILL");
+    return;
+  } catch {
+    // Process group may already be gone; try leader as fallback.
+  }
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch {
+    // Already exited.
+  }
+}
+
 export function trackAgyChild(child: TrackableChild): void {
   if (child.pid === undefined) return;
-  live.add(child.pid);
+  getAgyChildrenRegistry().live.add(child.pid);
 }
 
 export function untrackAgyChild(child: TrackableChild): void {
   if (child.pid === undefined) return;
-  live.delete(child.pid);
+  getAgyChildrenRegistry().live.delete(child.pid);
 }
 
-/** SIGKILL a child's whole process group (direct child as fallback). */
+/** Synchronously terminate a child's whole process tree. */
 export function killAgyTree(child: TrackableChild): void {
   if (child.pid === undefined) return;
   untrackAgyChild(child);
-  try {
-    process.kill(-child.pid, "SIGKILL");
-  } catch {
-    try {
-      process.kill(child.pid, "SIGKILL");
-    } catch {
-      // Already gone.
-    }
-  }
+  killProcessTreeSync(child.pid);
 }
 
-/** SIGKILL every tracked process group. Synchronous — signal-handler safe. */
+/** Synchronously terminate every tracked process tree. Signal-handler safe. */
 export function killAllAgyTrees(): void {
-  for (const pgid of [...live]) {
-    try {
-      process.kill(-pgid, "SIGKILL");
-    } catch {
-      // Already gone.
-    }
+  const registry = getAgyChildrenRegistry();
+  for (const pid of [...registry.live]) {
+    killProcessTreeSync(pid);
   }
-  live.clear();
+  registry.live.clear();
 }
-
-let hooksInstalled = false;
 
 /**
  * Reap agy trees when this pi process dies. `exit` covers graceful
- * shutdown; SIGHUP (terminal/pane close) has no default exit handlers in
- * node, so the handler sweeps and exits with HUP's conventional status.
+ * shutdown; SIGHUP reaps our children without terminating the host process
+ * so Pi's async graceful shutdown/session_shutdown is not preempted.
  */
 export function installAgyDeathHooks(): void {
-  if (hooksInstalled) return;
-  hooksInstalled = true;
+  const registry = getAgyChildrenRegistry();
+  if (registry.hooksInstalled) return;
+  registry.hooksInstalled = true;
   process.on("exit", killAllAgyTrees);
-  process.on("SIGHUP", () => {
-    killAllAgyTrees();
-    process.exit(129);
-  });
+  process.on("SIGHUP", killAllAgyTrees);
 }

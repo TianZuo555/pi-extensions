@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
+import { spawn, spawnSync } from "node:child_process";
 import { test } from "node:test";
 import { AgyStallError, buildAgyArgs, runAgyTurn } from "../lib/agy-client.ts";
+import { getAgyChildrenRegistry, killAllAgyTrees } from "../lib/agy-children.ts";
 import { agyIncompleteToolError } from "../src/provider.ts";
 import { CONVERSATION_ID, OK_CAPTURE, REAL_CAPTURE } from "./fixtures.ts";
 
@@ -340,4 +342,173 @@ test("stderr output counts as liveness for the stall watchdog", async () => {
   child.close(0);
   const outcome = await promise;
   assert.equal(outcome.status, "OK");
+});
+
+test("terminal result disarms stall watchdog and resolves even when stdio stays open", async () => {
+  const child = manualChild();
+  const promise = runAgyTurn({
+    prompt: "hi",
+    timeoutMs: 10_000,
+    inactivityTimeoutMs: 50,
+    spawnOverride: (() => child) as never,
+  });
+
+  child.emitStdout(`${OK_CAPTURE}\n`);
+  // NOTE: child.close(0) is deliberately NOT called here, simulating a grandchild
+  // holding stdout open after agy completed and emitted SUCCESS result.
+
+  // Wait longer than inactivityTimeoutMs (50ms) to ensure stall watchdog does not fire.
+  await sleep(100);
+
+  const outcome = await promise;
+  assert.equal(outcome.status, "OK");
+  assert.equal(outcome.response, "Hello from agy!");
+  assert.equal(outcome.finished, true);
+});
+
+function processGone(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch {
+    return true;
+  }
+}
+
+function cleanPid(pid: number | undefined) {
+  if (pid === undefined || !Number.isSafeInteger(pid) || pid <= 0) return;
+  try {
+    if (process.platform === "win32") {
+      spawnSync("taskkill", ["/F", "/T", "/PID", String(pid)], { stdio: "ignore" });
+    } else {
+      process.kill(-pid, "SIGKILL");
+    }
+  } catch {
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {}
+  }
+}
+
+async function pollUntil(check: () => boolean, timeoutMs = 5_000): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (!check()) {
+    if (Date.now() > deadline) return false;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  return true;
+}
+
+test("real child process: terminal result resolves early and child close callback naturally untracks when child finishes", async () => {
+  // Script prints init and result, then exits naturally after a safe delay
+  const script = `
+    const { spawn } = require("node:child_process");
+    const grandchild = spawn(process.execPath, ["-e", "setTimeout(() => {}, 800)"], {
+      stdio: "inherit",
+    });
+    console.log(JSON.stringify({ event: "init", conversation_id: "c-natural-close", init: {} }));
+    console.log(JSON.stringify({
+      event: "result",
+      conversation_id: "c-natural-close",
+      result: {
+        status: "SUCCESS",
+        response: "Resolved early before natural close!",
+        conversation_id: "c-natural-close"
+      }
+    }));
+    setTimeout(() => {}, 800);
+  `;
+
+  const child = spawn(process.execPath, ["-e", script], {
+    detached: true,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  const pid = child.pid!;
+  assert.ok(Number.isSafeInteger(pid) && pid > 0);
+
+  try {
+    const promise = runAgyTurn({
+      prompt: "hi",
+      timeoutMs: 10_000,
+      inactivityTimeoutMs: 500,
+      spawnOverride: (() => child) as never,
+    });
+
+    const outcome = await promise;
+    assert.equal(outcome.status, "OK");
+    assert.equal(outcome.response, "Resolved early before natural close!");
+    assert.equal(outcome.finished, true);
+
+    const registry = getAgyChildrenRegistry();
+    // Initially tracked
+    assert.equal(registry.live.has(pid), true, "child PID is tracked upon logical settlement");
+
+    // The child and its streams close naturally; the production child.on("close") must untrack it!
+    assert.ok(
+      await pollUntil(() => !registry.live.has(pid)),
+      "production close callback automatically untracked child PID",
+    );
+    assert.ok(await pollUntil(() => processGone(pid)), "child process exited");
+  } finally {
+    cleanPid(pid);
+  }
+});
+
+test("real child process: terminal result resolves early, held-open process remains tracked, and killAllAgyTrees sweeps it", async () => {
+  // Script spawns a detached grandchild holding stdout pipe and keeps running
+  const script = `
+    const { spawn } = require("node:child_process");
+    const grandchild = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+      stdio: "inherit",
+    });
+    console.log(JSON.stringify({ event: "init", conversation_id: "c-sweep-test", init: {} }));
+    console.log(JSON.stringify({
+      event: "result",
+      conversation_id: "c-sweep-test",
+      result: {
+        status: "SUCCESS",
+        response: "Resolved early; grandchild holding stream!",
+        conversation_id: "c-sweep-test"
+      }
+    }));
+    setInterval(() => {}, 1000);
+  `;
+
+  const child = spawn(process.execPath, ["-e", script], {
+    detached: true,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  const pid = child.pid!;
+  assert.ok(Number.isSafeInteger(pid) && pid > 0);
+
+  try {
+    const promise = runAgyTurn({
+      prompt: "hi",
+      timeoutMs: 10_000,
+      inactivityTimeoutMs: 500,
+      spawnOverride: (() => child) as never,
+    });
+
+    const outcome = await promise;
+    assert.equal(outcome.status, "OK");
+    assert.equal(outcome.response, "Resolved early; grandchild holding stream!");
+    assert.equal(outcome.finished, true);
+
+    // Child remains tracked in the death hook registry while alive
+    const registry = getAgyChildrenRegistry();
+    assert.equal(registry.live.has(pid), true, "child PID remains tracked");
+    assert.equal(processGone(pid), false, "child is still running in background");
+
+    // Explicit shutdown sweep: killAllAgyTrees sweeps every remaining tracked tree
+    killAllAgyTrees();
+    assert.equal(registry.live.has(pid), false, "untracked after killAllAgyTrees sweep");
+    assert.ok(
+      await pollUntil(() => processGone(pid)),
+      "held-open child process tree was swept and killed",
+    );
+  } finally {
+    cleanPid(pid);
+  }
 });
