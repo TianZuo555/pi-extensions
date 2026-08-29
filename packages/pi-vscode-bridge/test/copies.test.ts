@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 
-const root = new URL("..", import.meta.url).pathname;
+// `URL.pathname` yields `/D:/...` on Windows, which `join` turns into `D:\D:\...`.
+const root = fileURLToPath(new URL("..", import.meta.url));
 
 test("lib/protocol.ts matches vscode/src/protocol.ts byte-for-byte", () => {
   const lib = readFileSync(join(root, "lib/protocol.ts"));

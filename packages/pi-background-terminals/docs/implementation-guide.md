@@ -131,6 +131,8 @@ src/domain.ts               Snapshot/status/error types
 src/manager.ts              Effect service and process lifecycle
 src/output.ts               Bounded head+tail stream retention
 src/process-tracker.ts      Synchronous abnormal-exit process-tree safety net
+src/win32-job.ts            Native named Job Object creation and membership
+src/win32-child.mjs         Plain-JS pre-shell launcher that joins the job first
 src/prompt.ts               Tool metadata and model-facing formatting
 src/result-delivery.ts      Drain-once completion delivery map
 src/runtime.ts              ManagedRuntime and Effect→Promise boundary
@@ -189,8 +191,12 @@ manager.start(...)
 manager.waitForSettlement(id, yield_time_ms)
 ```
 
-`start` is uninterruptible between `spawn()` and registry insertion. This avoids
-an abort window where a live child exists without a manager entry or scope.
+`start` is uninterruptible between process creation and registry insertion. This
+avoids an abort window where a live child exists without a manager entry or
+scope. On Windows it first creates and tracks an empty named Job Object, then
+starts a small launcher. The launcher joins that job before spawning the real
+Bash process, so no command process can run outside the job. POSIX starts Bash
+directly as before.
 
 During the initial wait, a per-terminal subscription emits bounded progress
 updates at most every 100 ms. The custom renderer shows a sanitized preview of
@@ -421,8 +427,18 @@ so paging always advances.
 Children use separate stdout/stderr pipes and no interactive stdin. On POSIX,
 `detached: true` gives the child its own process group. Windows has no portable
 graceful process-tree signal, so termination uses `taskkill /F /T` on the first
-attempt. A non-forced `taskkill` can remove the shell while leaving descendants
-alive, which destroys the stable tree root before escalation can find them.
+attempt — a non-forced `taskkill` can remove the shell while leaving
+descendants alive, destroying the stable tree root before escalation can find
+them. Before spawning anything, the manager creates a named Job Object with
+`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` through Koffi. It then starts a small Node
+launcher, which joins itself to that job before it is allowed to spawn Bash.
+Bash and every descendant inherit membership from process creation onward;
+there is no window where a fast shell can launch an untracked child before a
+post-spawn assignment. Manager startup probes the complete create → launcher
+join path once. If native job creation is unavailable, or an outer host Job
+Object (for example a restrictive CI runner) forbids nesting, terminals degrade
+to the previous direct-spawn/taskkill path without starting a command during
+the probe.
 
 Termination is:
 
@@ -435,17 +451,20 @@ bounded final close/settle wait
 Exit metadata is recorded on Node's `exit` event, but settlement occurs on
 `close` so output has reached EOF. If descendants inherit the pipes and hold
 them open after the shell exits, bounded cleanup closes the entry scope and
-reaps the process group.
+reaps the process group — on Windows, closing the job kills the survivors and
+releases the pipes they hold.
 
 The entry scope is the single cleanup path for `/ps` stop, hard timeout,
 pruning, internal kill calls, and runtime disposal.
 
 Pi's detached-child tracker is internal and not exported. The manager therefore
 registers its own synchronous Node `exit` listener while live, tracks every
-spawned pid until close/scope cleanup, and sends a best-effort process-tree
-SIGKILL (`taskkill /F /T` on Windows) if an uncaught crash or emergency terminal
-exit bypasses `session_shutdown`. Runtime disposal removes the listener and
-sweeps any residual pid after normal bounded teardown.
+spawned pid and open job until close/scope cleanup, and closes every tracked job
+object followed by a best-effort process-tree SIGKILL (`taskkill /F /T` on
+Windows) if an uncaught crash or emergency terminal exit bypasses
+`session_shutdown`. Closed jobs are untracked immediately, so long sessions do
+not retain one handle object per historical command. Runtime disposal removes
+the listener and sweeps any residual pid after normal bounded teardown.
 
 ## 14. Capacity and pruning
 
@@ -545,7 +564,8 @@ The package test suite covers:
 - hard timeout status and tree termination;
 - Bash-specific syntax on the resolved shell;
 - abort leaving eventual completion deliverable;
-- process-tree kill, SIGKILL escalation, and abnormal process-exit cleanup;
+- process-tree kill, pre-shell Windows job membership, reload-safe native FFI,
+  SIGKILL escalation, and abnormal process-exit cleanup;
 - session disposal, spill-directory cleanup, and per-entry pruning cleanup;
 - output head stability, rolling tail, UTF-8 boundaries, and omission counts;
 - complete spill capture beyond the memory cap;

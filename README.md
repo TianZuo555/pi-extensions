@@ -85,14 +85,23 @@ publishable extension change, run `pnpm changeset`, select the package and
 semantic version bump, and commit the generated release-note file. Do not bump
 package versions manually.
 
-On pushes to `main`, the [`Publish`](.github/workflows/publish.yml) workflow
-runs all checks and opens or updates a release PR. Merging that PR publishes
-each changed package to npm, updates its package-specific `CHANGELOG.md`, and
-creates a separate tagged GitHub release. npm trusted publishing supplies OIDC
-provenance without a token secret. The workflow can also be run manually from
-*Actions → Publish* in dry-run mode to preview pending releases. The repository
-must allow GitHub Actions to create pull requests under *Settings → Actions →
-General → Workflow permissions*.
+Two workflows automate quality and delivery. [`CI`](.github/workflows/ci.yml)
+runs on every pull request and push to `main`: typecheck, Effect checks, lint,
+and a packing dry run on Ubuntu, plus the full test suite on Ubuntu, Windows,
+and macOS. Make its `CI` summary job a required status check on `main`.
+
+On pushes to `main`, [`Release`](.github/workflows/release.yml) reuses that same
+CI workflow as a gate and then opens or updates a release PR. Merging that PR
+publishes each changed package to npm, updates its package-specific
+`CHANGELOG.md`, and creates a separate tagged GitHub release. npm trusted
+publishing supplies OIDC provenance without a token secret. The workflow can
+also be run manually from *Actions → Release* in dry-run mode to preview pending
+releases. The repository must allow GitHub Actions to create pull requests under
+*Settings → Actions → General → Workflow permissions*.
+
+The release PR is created with the default `GITHUB_TOKEN`, so it never triggers
+`pull_request` CI — that is why `Release` runs the checks itself instead of
+relying on the PR's status.
 
 ```bash
 pnpm changeset          # add release notes for changed packages

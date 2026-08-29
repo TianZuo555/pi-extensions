@@ -44,7 +44,9 @@ test("RepoModelRuntime preserves spaces in Git worktree paths", async () => {
   try {
     execFileSync("git", ["init", "--quiet", repoDir]);
     const meta = await runRepoModel(runtime, service.getRepoMeta(repoDir));
-    assert.equal(meta.key, fs.realpathSync(repoDir));
+    // The runtime canonicalizes through `realpathSync.native`, which also expands
+    // Windows 8.3 short names (`RUNNER~1`) that the JS `realpathSync` keeps.
+    assert.equal(meta.key, fs.realpathSync.native(repoDir));
     assert.equal(meta.name, "repo with spaces");
   } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });

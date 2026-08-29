@@ -30,6 +30,8 @@ function isolatedAgentDir(): string {
 
 function initGitRepo(dir: string): void {
   execFileSync("git", ["init"], { cwd: dir, stdio: "pipe" });
+  // Windows CI runners default to core.autocrlf=true; keep fixtures byte-exact.
+  execFileSync("git", ["config", "core.autocrlf", "false"], { cwd: dir, stdio: "pipe" });
   execFileSync("git", ["config", "user.name", "pi-subagents test"], { cwd: dir, stdio: "pipe" });
   execFileSync("git", ["config", "user.email", "pi-subagents-test@example.invalid"], {
     cwd: dir,

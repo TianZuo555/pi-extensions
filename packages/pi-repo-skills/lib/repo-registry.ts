@@ -22,6 +22,16 @@ export interface RepoMeta {
 
 const repoMetaCache = new Map<string, RepoMeta>();
 
+/** Git prints slash-normalized paths on Windows; canonicalize to the native
+ * real path so registry keys match Node-side paths and stay stable. */
+function toRepoKey(gitPath: string): string {
+  try {
+    return fs.realpathSync.native(gitPath);
+  } catch {
+    return path.normalize(gitPath);
+  }
+}
+
 function execGit(cwd: string, args: string[]): string | null {
   try {
     return execFileSync("git", args, {
@@ -50,9 +60,10 @@ export function getRepoMeta(cwd: string): RepoMeta {
   const worktreeList = execGit(abs, ["worktree", "list", "--porcelain"]);
   const worktreeLine = worktreeList?.split("\n").find((line) => line.startsWith("worktree "));
   const mainRoot = worktreeLine?.slice("worktree ".length);
-  const root = mainRoot ?? gitRoot ?? abs;
+  const root = mainRoot ?? gitRoot;
+  const key = root ? toRepoKey(root) : abs;
 
-  const meta: RepoMeta = { key: root, name: path.basename(root) };
+  const meta: RepoMeta = { key, name: path.basename(key) };
   repoMetaCache.set(abs, meta);
   return meta;
 }

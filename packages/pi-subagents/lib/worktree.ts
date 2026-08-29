@@ -167,7 +167,11 @@ function resolveWorktreeRoots(
 
   let subdir: string;
   try {
-    subdir = relative(realpathSync(root.out), realpathSync(cwd));
+    // `.native` collapses both of git's Windows quirks — slash-normalized output
+    // and 8.3 short names — onto one canonical form. Plain `realpathSync` keeps
+    // them, which made `relative()` invent a bogus subdir and place the
+    // worktree work path outside the worktree.
+    subdir = relative(realpathSync.native(root.out), realpathSync.native(cwd));
   } catch {
     return undefined;
   }
