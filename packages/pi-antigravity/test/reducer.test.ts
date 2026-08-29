@@ -131,6 +131,22 @@ test("reducer emits a thought marker for response steps that burned thinking tok
   assert.equal(thought.durationSeconds, 3.4);
 });
 
+test("reducer suppresses incidental tiny thinking-token traces", () => {
+  const outcome = reduceAgyStream(
+    JSON.stringify({
+      event: "step_update",
+      step_update: {
+        step_index: 1,
+        state: "DONE",
+        step_type: "agent_response",
+        duration_seconds: 1.2,
+        usage: { input_tokens: 100, output_tokens: 20, thinking_tokens: 40, total_tokens: 120 },
+      },
+    }),
+  );
+  assert.ok(!outcome.activities.some((a) => a.type === "thought"));
+});
+
 test("reducer emits no thought marker without thinking tokens", () => {
   const outcome = reduceAgyStream(
     [

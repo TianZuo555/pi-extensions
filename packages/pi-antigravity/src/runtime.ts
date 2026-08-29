@@ -9,8 +9,13 @@
  */
 
 import { Context, Data, Effect, Layer, ManagedRuntime, Exit, Cause, Result } from "effect";
-import { AgyStallError, runAgyTurn, type AgyTurnRequest } from "../lib/agy-client.ts";
-import type { AgyTurnOutcome } from "../lib/reducer.ts";
+import {
+  AgySpawnError,
+  AgyStallError,
+  runAgyTurn,
+  type AgyTurnRequest,
+} from "../lib/agy-client.ts";
+import type { AgyTurnOutcome, AgyUsage } from "../lib/reducer.ts";
 import { stallContinuationPrompt } from "../lib/prompt.ts";
 import { AgyTurnController } from "../lib/turn.ts";
 
@@ -40,6 +45,18 @@ function waitForRetryBackoff(ms: number, signal: AbortSignal): Promise<boolean> 
 
 const STALL_MAX_RETRIES = 2;
 
+function isMissingConversationFailure(value: unknown): boolean {
+  const text =
+    value instanceof AgySpawnError
+      ? `${value.message}\n${value.stderr}`
+      : value instanceof Error
+        ? value.message
+        : String(value);
+  return /conversation.{0,80}(?:not found|does not exist|missing|failed to (?:load|resume))|(?:not found|missing).{0,80}conversation/i.test(
+    text,
+  );
+}
+
 export class AntigravitySpawnError extends Data.TaggedError("AntigravitySpawnError")<{
   readonly message: string;
   readonly stderr: string;
@@ -53,11 +70,20 @@ export class AntigravityRuntimeClosedError extends Data.TaggedError(
 
 export type AntigravityRuntimeError = AntigravitySpawnError | AntigravityRuntimeClosedError;
 
+export interface RestoredAntigravityConversation {
+  conversationId: string;
+  modelId: string;
+  cwd: string;
+  turns: number;
+  usage: AgyUsage;
+}
+
 export interface AntigravityStateSnapshot {
   conversationId: string | undefined;
   model: string | undefined;
   cwd: string | undefined;
   turns: number;
+  conversationUsage: AgyUsage;
 }
 
 export interface AntigravityRuntimeShape {
@@ -65,6 +91,10 @@ export interface AntigravityRuntimeShape {
     cwd: string,
     modelId: string | undefined,
     restoreFromPiContext?: boolean,
+  ) => Effect.Effect<void, AntigravityRuntimeClosedError>;
+  /** Restore a persisted native agy conversation owned by this Pi session. */
+  readonly restoreConversation: (
+    state: RestoredAntigravityConversation,
   ) => Effect.Effect<void, AntigravityRuntimeClosedError>;
   /**
    * Start a new agy turn or re-attach to the active one. Re-attachment
@@ -114,6 +144,8 @@ export type AgyTurnRunner = (request: AgyTurnRequest) => Promise<AgyTurnOutcome>
 const makeRuntime = (turnRunner: AgyTurnRunner) =>
   Effect.gen(function* () {
     let conversationId: string | undefined;
+    /** Terminal usage counters from the last turn; agy reports them cumulatively on resume. */
+    let conversationUsage: AgyUsage = {};
     /** The cwd the conversation was created in — agy pins conversations to their workspace. */
     let conversationCwd: string | undefined;
     let model: string | undefined;
@@ -127,6 +159,7 @@ const makeRuntime = (turnRunner: AgyTurnRunner) =>
     let activeTurnAbort: AbortController | undefined;
     let generation = 0;
     let restoreHistoryOnNextConversation = false;
+    let restoredConversationPending = false;
     let lastBootstrappedSkillsSuffix: string | undefined;
 
     const invalidateActiveTurn = () => {
@@ -156,11 +189,31 @@ const makeRuntime = (turnRunner: AgyTurnRunner) =>
               if (restoreFromPiContext) {
                 invalidateActiveTurn();
                 conversationId = undefined;
+                conversationUsage = {};
                 conversationCwd = undefined;
                 turns = 0;
                 restoreHistoryOnNextConversation = true;
+                restoredConversationPending = false;
                 lastBootstrappedSkillsSuffix = undefined;
               }
+            }),
+          ),
+        ),
+
+      restoreConversation: (state) =>
+        ensureOpen.pipe(
+          Effect.andThen(
+            Effect.sync(() => {
+              invalidateActiveTurn();
+              conversationId = state.conversationId;
+              conversationUsage = { ...state.usage };
+              conversationCwd = state.cwd;
+              model = state.modelId;
+              cwd = state.cwd;
+              turns = state.turns;
+              restoreHistoryOnNextConversation = false;
+              restoredConversationPending = true;
+              lastBootstrappedSkillsSuffix = undefined;
             }),
           ),
         ),
@@ -184,18 +237,22 @@ const makeRuntime = (turnRunner: AgyTurnRunner) =>
               // changed instead of carrying a stale workspace binding.
               if (conversationId && conversationCwd !== cwd) {
                 conversationId = undefined;
+                conversationUsage = {};
                 conversationCwd = undefined;
                 restoreHistoryOnNextConversation = true;
+                restoredConversationPending = false;
                 lastBootstrappedSkillsSuffix = undefined;
               }
               if (model !== undefined && model !== request.modelId) {
                 conversationId = undefined;
+                conversationUsage = {};
                 conversationCwd = undefined;
                 restoreHistoryOnNextConversation = true;
+                restoredConversationPending = false;
                 lastBootstrappedSkillsSuffix = undefined;
               }
               model = request.modelId;
-              const controller = new AgyTurnController(request.prompt);
+              const controller = new AgyTurnController(request.prompt, conversationUsage);
               active = controller;
               // Compose pi's request signal with our own so close() can kill
               // the agy child even when pi's signal never fires.
@@ -207,6 +264,8 @@ const makeRuntime = (turnRunner: AgyTurnRunner) =>
                 else
                   request.signal.addEventListener("abort", () => turnAbort.abort(), { once: true });
               }
+              const resumingPersistedConversation =
+                restoredConversationPending && conversationId !== undefined;
               const historyBootstrap =
                 !conversationId && restoreHistoryOnNextConversation
                   ? request.historyBootstrap
@@ -222,6 +281,11 @@ const makeRuntime = (turnRunner: AgyTurnRunner) =>
                 request.bootstrapSuffix && request.bootstrapSuffix !== lastBootstrappedSkillsSuffix
                   ? request.bootstrapSuffix
                   : undefined;
+              let restoredAttemptActive = resumingPersistedConversation;
+              let restoredResultMissing = false;
+              const freshRestorePrompt = [request.historyBootstrap, request.prompt, bootstrapSuffix]
+                .filter((part): part is string => Boolean(part))
+                .join("\n\n");
               const spawnRequest: AgyTurnRequest = {
                 prompt: [historyBootstrap, request.prompt, bootstrapSuffix]
                   .filter((part): part is string => Boolean(part))
@@ -246,7 +310,19 @@ const makeRuntime = (turnRunner: AgyTurnRunner) =>
                   }
                 },
                 onActivity: (activity) => {
-                  if (turnGeneration === generation) controller.push(activity);
+                  if (turnGeneration !== generation) return;
+                  if (
+                    restoredAttemptActive &&
+                    activity.type === "result" &&
+                    activity.status === "ERROR" &&
+                    isMissingConversationFailure(activity.error)
+                  ) {
+                    // Do not expose a recoverable stale-resume error to Pi; the
+                    // runner retries below with bounded branch history.
+                    restoredResultMissing = true;
+                    return;
+                  }
+                  controller.push(activity);
                 },
               };
               /**
@@ -261,23 +337,57 @@ const makeRuntime = (turnRunner: AgyTurnRunner) =>
                */
               const runTurnWithStallRetries = async (): Promise<AgyTurnOutcome> => {
                 let retry = 0;
+                let freshFallback = false;
                 for (;;) {
                   if (turnAbort.signal.aborted) throw new Error("agy turn was aborted.");
                   const resumableConversationId = conversationId ?? spawnRequest.conversationId;
-                  const attempt =
-                    retry === 0
-                      ? spawnRequest
-                      : {
+                  const attempt: AgyTurnRequest =
+                    freshFallback && retry === 0
+                      ? {
                           ...spawnRequest,
-                          prompt: resumableConversationId
-                            ? stallContinuationPrompt()
-                            : spawnRequest.prompt,
-                          conversationId: resumableConversationId,
-                        };
+                          prompt: freshRestorePrompt,
+                          conversationId: undefined,
+                        }
+                      : retry === 0
+                        ? spawnRequest
+                        : {
+                            ...spawnRequest,
+                            prompt: resumableConversationId
+                              ? stallContinuationPrompt()
+                              : spawnRequest.prompt,
+                            conversationId: resumableConversationId,
+                          };
                   try {
-                    return await turnRunner(attempt);
+                    const outcome = await turnRunner(attempt);
+                    if (resumingPersistedConversation && !freshFallback && restoredResultMissing) {
+                      restoredAttemptActive = false;
+                      controller.push({ type: "conversation_fallback" });
+                      conversationId = undefined;
+                      conversationUsage = {};
+                      conversationCwd = undefined;
+                      restoredConversationPending = false;
+                      freshFallback = true;
+                      retry = 0;
+                      continue;
+                    }
+                    return outcome;
                   } catch (error) {
                     if (turnAbort.signal.aborted) throw new Error("agy turn was aborted.");
+                    if (
+                      resumingPersistedConversation &&
+                      !freshFallback &&
+                      isMissingConversationFailure(error)
+                    ) {
+                      restoredAttemptActive = false;
+                      controller.push({ type: "conversation_fallback" });
+                      conversationId = undefined;
+                      conversationUsage = {};
+                      conversationCwd = undefined;
+                      restoredConversationPending = false;
+                      freshFallback = true;
+                      retry = 0;
+                      continue;
+                    }
                     if (!(error instanceof AgyStallError) || retry >= STALL_MAX_RETRIES) {
                       throw error;
                     }
@@ -304,6 +414,8 @@ const makeRuntime = (turnRunner: AgyTurnRunner) =>
                   }
                   turns += 1;
                   if (outcome.conversationId) conversationId = outcome.conversationId;
+                  if (outcome.usage) conversationUsage = { ...outcome.usage };
+                  restoredConversationPending = false;
                   if (bootstrapSuffix) {
                     lastBootstrappedSkillsSuffix = bootstrapSuffix;
                   }
@@ -336,16 +448,26 @@ const makeRuntime = (turnRunner: AgyTurnRunner) =>
           Effect.sync(() => {
             invalidateActiveTurn();
             conversationId = undefined;
+            conversationUsage = {};
             conversationCwd = undefined;
             turns = 0;
             restoreHistoryOnNextConversation = false;
+            restoredConversationPending = false;
             lastBootstrappedSkillsSuffix = undefined;
           }),
         ),
       ),
 
       snapshot: Effect.suspend(() =>
-        ensureOpen.pipe(Effect.map(() => ({ conversationId, model, cwd, turns }))),
+        ensureOpen.pipe(
+          Effect.map(() => ({
+            conversationId,
+            model,
+            cwd,
+            turns,
+            conversationUsage: { ...conversationUsage },
+          })),
+        ),
       ),
 
       close: Effect.suspend(() =>
@@ -354,7 +476,9 @@ const makeRuntime = (turnRunner: AgyTurnRunner) =>
             Effect.sync(() => {
               closed = true;
               conversationId = undefined;
+              conversationUsage = {};
               conversationCwd = undefined;
+              restoredConversationPending = false;
               lastBootstrappedSkillsSuffix = undefined;
               // Kill any in-flight agy child process immediately.
               invalidateActiveTurn();

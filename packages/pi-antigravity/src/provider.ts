@@ -32,7 +32,12 @@ import type { AgyActivity, AgyUsage } from "../lib/reducer.ts";
 import type { AgyReplayStore } from "../lib/replay.ts";
 import { mapAgyToolToNative } from "../lib/native-tools.ts";
 import { restoredPiContextPrompt, WRAPPER_TOOL_NAME } from "../lib/prompt.ts";
-import type { AntigravityRuntimeInstance, AntigravityRuntimeShape } from "./runtime.ts";
+import {
+  AntigravityRuntime,
+  createAntigravityRuntime,
+  type AntigravityRuntimeInstance,
+  type AntigravityRuntimeShape,
+} from "./runtime.ts";
 
 interface TextPart {
   type: "text";
@@ -67,7 +72,11 @@ export function latestUserPrompt(context: Context): { prompt: string; images: nu
   return { prompt: "", images: 0 };
 }
 
-const MAX_RESTORED_HISTORY_CHARS = 24_000;
+// A fresh fallback conversation can safely receive roughly 60k transcript
+// tokens while leaving agy's ~185k working window room for system/tools and
+// the next response. Normal reloads resume the persisted native conversation;
+// this larger tail is for forks, stale/missing conversations, and branch moves.
+const MAX_RESTORED_HISTORY_CHARS = 240_000;
 
 /** Serialize the active pi branch before its latest user request. */
 export function piHistoryBootstrap(context: Context): string | undefined {
@@ -131,11 +140,10 @@ export function mapUsage(u: AgyUsage | undefined): AssistantMessage["usage"] {
 /**
  * pi's compaction and branch summarization arrive as standalone requests
  * whose only user message is `<conversation>\n…</conversation>\n\n` plus
- * instructions. The agy turn that summarizes it reports the transcript's
- * cached re-reads as usage (observed: 456k context churning 23M cache-read
- * tokens), and agy is subscription-billed anyway — so the resulting
- * per-token dollar figure is fictional. Report no usage for these requests
- * so the `[compaction]` card never shows an inflated bill.
+ * instructions. They run in disposable agy conversations so internal summary
+ * prompts never become fake user input in the real conversation. Their cached
+ * transcript re-reads also produce fictional per-token costs (agy is
+ * subscription-billed), so these requests report no usage.
  */
 export function isSummarizationRequest(prompt: string): boolean {
   return prompt.startsWith("<conversation>\n");
@@ -223,6 +231,8 @@ export function streamAntigravity(
   /** Live activity side channel for task/artifact UI that must not wait for
    * the provider message to settle. */
   onActivity?: (activity: AgyActivity) => void,
+  /** Test seam for disposable compaction/branch-summary conversations. */
+  createIsolatedRuntime: () => AntigravityRuntimeInstance = createAntigravityRuntime,
 ) {
   return (
     model: Model<string>,
@@ -243,9 +253,25 @@ export function streamAntigravity(
         timestamp: Date.now(),
       };
 
+      let turnRuntime = runtime;
+      let turnService = service;
+      let isolatedRuntime: AntigravityRuntimeInstance | undefined;
+      let turnCleared = false;
+
       const clearTurn = () => {
-        runtime.runPromise(service.finishTurn).catch(() => {});
-        onSettled?.();
+        if (turnCleared) return;
+        turnCleared = true;
+        const finished = turnRuntime.runPromise(turnService.finishTurn).catch(() => {});
+        if (!isolatedRuntime) {
+          onSettled?.();
+          return;
+        }
+        // A summarizer has no continuity to preserve. Abort any unfinished
+        // child, then dispose its private Effect runtime without touching the
+        // user's real agy conversation.
+        void finished
+          .then(() => turnRuntime.runPromise(turnService.close).catch(() => {}))
+          .finally(() => isolatedRuntime?.dispose().catch(() => {}));
       };
 
       const fail = (message: string) => {
@@ -266,23 +292,40 @@ export function streamAntigravity(
         if (!prompt) {
           throw new Error("antigravity: no user text found in the request context.");
         }
-        const unbillable = isSummarizationRequest(prompt);
+        const summaryRequest = isSummarizationRequest(prompt);
 
-        const controller = await runtime.runPromise(
-          service.beginStreamTurn({
+        if (summaryRequest) {
+          // Pi invokes compaction and branch summarization as provider calls.
+          // Resuming the user's agy conversation would record the serialized
+          // transcript as a fake USER_INPUT. Run that internal request in a
+          // disposable conversation so `agy --conversation <id>` shows only
+          // messages the user actually sent.
+          const snapshot = await runtime.runPromise(service.snapshot);
+          isolatedRuntime = createIsolatedRuntime();
+          turnRuntime = isolatedRuntime;
+          turnService = isolatedRuntime.runSync(AntigravityRuntime);
+          await turnRuntime.runPromise(
+            turnService.setSession(snapshot.cwd ?? process.cwd(), model.id, false),
+          );
+        }
+
+        const controller = await turnRuntime.runPromise(
+          turnService.beginStreamTurn({
             prompt,
-            historyBootstrap: piHistoryBootstrap(context),
-            bootstrapSuffix: getBootstrapSuffix?.(),
+            historyBootstrap: summaryRequest ? undefined : piHistoryBootstrap(context),
+            bootstrapSuffix: summaryRequest ? undefined : getBootstrapSuffix?.(),
             modelId: model.id,
             effort: mapThinkingToEffort(options?.reasoning),
             signal: options?.signal,
           }),
         );
 
-        // Refresh the exposed-tool snapshot per request and hand back the
-        // results of bridged tools pi executed since the previous request.
-        bridge.refreshTools();
-        resolveBridgeResultsFromContext(bridge, context.messages);
+        if (!summaryRequest) {
+          // Refresh the exposed-tool snapshot per request and hand back the
+          // results of bridged tools pi executed since the previous request.
+          bridge.refreshTools();
+          resolveBridgeResultsFromContext(bridge, context.messages);
+        }
 
         let usage: AgyUsage | undefined;
         let textIndex: number | null = null;
@@ -338,7 +381,7 @@ export function streamAntigravity(
         };
 
         const attachUsage = (u: AgyUsage | undefined, final: boolean) => {
-          if (unbillable) return; // summarization turns carry no billable usage
+          if (summaryRequest) return; // summarization turns carry no billable usage
           output.usage = mapUsage(controller.claimUsage(u, final));
           calculateCost(model, output.usage);
         };
@@ -525,8 +568,9 @@ export function streamAntigravity(
          * text, so synthesize the same summary into the reserved slot once the
          * response step reports its token count. The step duration covers
          * thinking plus writing — the closest signal agy exposes to its own
-         * thought timer. A thought-only segment (no text this response) has no
-         * reservation, so it appends its own block.
+         * thought timer. Only the first substantive response step in a logical
+         * agy turn gets a marker, avoiding a repeated row before every tool
+         * phase. A thought-only segment has no reservation, so it appends one.
          */
         const emitThoughtMarker = (activity: Extract<AgyActivity, { type: "thought" }>): void => {
           const seconds =
@@ -597,17 +641,21 @@ export function streamAntigravity(
           }
 
           try {
-            onActivity?.(activity);
+            if (!summaryRequest) onActivity?.(activity);
           } catch {
             // UI side channels are best-effort and must never fail the turn.
           }
           switch (activity.type) {
+            case "conversation_fallback": {
+              // Runtime/index side channel only; no assistant content.
+              break;
+            }
             case "usage": {
               usage = activity.usage;
               break;
             }
             case "thought": {
-              emitThoughtMarker(activity);
+              if (controller.claimThought()) emitThoughtMarker(activity);
               break;
             }
             case "stall": {
@@ -688,7 +736,15 @@ export function streamAntigravity(
                 endWithToolUse();
                 return;
               }
-              attachUsage(activity.usage, true);
+              // A result carries conversation-cumulative counters, which can
+              // represent millions of tokens across agy's internal agent loop.
+              // Pi interprets one assistant message's usage as live context and
+              // would auto-compact after nearly every user turn. Prefer the
+              // latest response step — the actual model call represented by
+              // this message — and use the cumulative result only when agy did
+              // not expose a response-step usage event.
+              if (usage) attachUsage(usage, false);
+              else attachUsage(activity.usage, true);
 
               if (activity.response) {
                 if (textIndex !== null) {

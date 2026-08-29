@@ -1,6 +1,6 @@
 // antigravity — use Google Antigravity (agy) models inside the pi coding
-// agent via the agy stream-json RPC. pi stays the UI: model picker, sessions,
-// compaction, and rendering; agy runs the selected Antigravity model underneath with
+// agent via the agy stream-json RPC. pi stays the UI: model picker, portable
+// sessions, and rendering; agy owns native context and runs the selected model with
 // --dangerously-skip-permissions always enabled (headless agy turns
 // auto-deny tools that would need a permission prompt otherwise).
 //
@@ -57,6 +57,20 @@ import {
   type AgyModelInfo,
 } from "./lib/models.ts";
 import type { AgyActivity } from "./lib/reducer.ts";
+import {
+  AGY_COMPACTION_ENTRY,
+  agyContextTokens,
+  detectAgyCompaction,
+  formatAgyContextTokens,
+  type AgyCompactionMarker,
+} from "./lib/agy-compaction.ts";
+import {
+  AGY_CONVERSATION_STATE_ENTRY,
+  agyConversationExists,
+  restorableAgyConversation,
+  type PersistedAgyConversation,
+  type PersistedAgyReset,
+} from "./lib/conversation-state.ts";
 import { AgyReplayStore, type RecordedAgyTool } from "./lib/replay.ts";
 import { findAgyTask, listAgyTasks, stopAgyTask } from "./lib/tasks.ts";
 import { findAgyArtifact, listAgyArtifacts } from "./lib/artifacts.ts";
@@ -260,6 +274,63 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
   const service = runtime.runSync(AntigravityRuntime);
   const replay = new AgyReplayStore();
   let currentCache = getInitialModelCache();
+  let observedContextTokens: number | undefined;
+  let persistedConversationKey: string | undefined;
+  let selectedModelKey: string | undefined;
+
+  pi.registerEntryRenderer(AGY_COMPACTION_ENTRY, (entry, _options, theme) => {
+    const marker = entry.data as AgyCompactionMarker;
+    const text =
+      theme.fg("dim", "── ") +
+      theme.fg("accent", "agy compacted context") +
+      theme.fg(
+        "dim",
+        ` · ~${formatAgyContextTokens(marker.beforeTokens)} → ~${formatAgyContextTokens(marker.afterTokens)} ──`,
+      );
+    return {
+      render: (width: number) => [truncateToWidth(text, width, "")],
+      invalidate: () => {},
+    };
+  });
+
+  const conversationStateKey = (state: {
+    conversationId: string;
+    modelId: string;
+    turns: number;
+  }): string => `${state.conversationId}:${state.modelId}:${state.turns}`;
+
+  async function persistConversationState(ctx: ExtensionContext, force = false): Promise<void> {
+    if (ctx.model?.provider !== "antigravity") return;
+    const snapshot = await runAntigravity(runtime, service.snapshot);
+    if (!snapshot.conversationId || !snapshot.model || snapshot.cwd !== ctx.cwd) return;
+    const state: PersistedAgyConversation = {
+      version: 1,
+      kind: "conversation",
+      sessionId: ctx.sessionManager.getSessionId(),
+      conversationId: snapshot.conversationId,
+      cwd: ctx.cwd,
+      modelId: snapshot.model,
+      turns: snapshot.turns,
+      usage: snapshot.conversationUsage,
+      contextTokens: observedContextTokens,
+    };
+    const key = conversationStateKey(state);
+    if (!force && key === persistedConversationKey) return;
+    pi.appendEntry(AGY_CONVERSATION_STATE_ENTRY, state);
+    persistedConversationKey = key;
+  }
+
+  function appendConversationReset(ctx: ExtensionContext): void {
+    const reset: PersistedAgyReset = {
+      version: 1,
+      kind: "reset",
+      sessionId: ctx.sessionManager.getSessionId(),
+      cwd: ctx.cwd,
+    };
+    pi.appendEntry(AGY_CONVERSATION_STATE_ENTRY, reset);
+    observedContextTokens = undefined;
+    persistedConversationKey = undefined;
+  }
 
   // --- Pi-tool bridge setup -------------------------------------------------
 
@@ -505,6 +576,25 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
   }
 
   function handleAgyActivity(activity: AgyActivity): void {
+    if (activity.type === "conversation_fallback") {
+      observedContextTokens = undefined;
+      persistedConversationKey = undefined;
+      return;
+    }
+    if (activity.type === "usage") {
+      const nextContextTokens = agyContextTokens(activity.usage);
+      const compaction = detectAgyCompaction(observedContextTokens, nextContextTokens);
+      if (compaction) {
+        const marker: AgyCompactionMarker = {
+          version: 1,
+          ...compaction,
+          detectedAt: new Date().toISOString(),
+        };
+        pi.appendEntry(AGY_COMPACTION_ENTRY, marker);
+      }
+      observedContextTokens = nextContextTokens;
+      return;
+    }
     if (
       (activity.type === "tool_start" ||
         activity.type === "tool_done" ||
@@ -650,7 +740,42 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
 
   pi.on("session_start", async (event, ctx: ExtensionContext) => {
     syncWrapperToolActivation(ctx.model?.provider);
-    await runAntigravity(runtime, service.setSession(ctx.cwd, undefined, event.reason !== "new"));
+    selectedModelKey = ctx.model ? `${ctx.model.provider}:${ctx.model.id}` : undefined;
+    const restored =
+      event.reason !== "fork" && ctx.model?.provider === "antigravity"
+        ? restorableAgyConversation(
+            ctx.sessionManager.getBranch(),
+            ctx.sessionManager.getSessionId(),
+            ctx.cwd,
+          )
+        : undefined;
+    const compatibleRestore =
+      restored &&
+      restored.modelId === ctx.model?.id &&
+      (await agyConversationExists(restored.conversationId))
+        ? restored
+        : undefined;
+    await runAntigravity(
+      runtime,
+      service.setSession(ctx.cwd, undefined, !compatibleRestore && event.reason !== "new"),
+    );
+    if (compatibleRestore) {
+      await runAntigravity(
+        runtime,
+        service.restoreConversation({
+          conversationId: compatibleRestore.conversationId,
+          modelId: compatibleRestore.modelId,
+          cwd: compatibleRestore.cwd,
+          turns: compatibleRestore.turns,
+          usage: compatibleRestore.usage,
+        }),
+      );
+      observedContextTokens = compatibleRestore.contextTokens;
+      persistedConversationKey = conversationStateKey(compatibleRestore);
+    } else {
+      observedContextTokens = undefined;
+      persistedConversationKey = undefined;
+    }
     if (ctx.hasUI) tasksUi = ctx.ui;
     tasksSessionCwd = ctx.cwd;
     updateAgyTasksWidget();
@@ -664,6 +789,16 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
 
   pi.on("model_select", async (event, ctx) => {
     syncWrapperToolActivation(event.model?.provider);
+    const nextModelKey = event.model ? `${event.model.provider}:${event.model.id}` : undefined;
+    if (selectedModelKey?.startsWith("antigravity:") && selectedModelKey !== nextModelKey) {
+      // Another provider/model can add context that the mutable agy
+      // conversation never saw. Force a branch bootstrap when agy is selected
+      // again instead of silently resuming stale native history.
+      await runAntigravity(runtime, service.setSession(ctx.cwd, undefined, true));
+      observedContextTokens = undefined;
+      persistedConversationKey = undefined;
+    }
+    selectedModelKey = nextModelKey;
     // The bridge exists only while an Antigravity model is selected.
     if (event.model?.provider === "antigravity") {
       await ensureBridgeRegistered(ctx?.ui);
@@ -676,8 +811,19 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
     // An agy conversation cannot be rewound to match a different pi branch.
     // Restart it and bootstrap the selected branch on the next provider call.
     await runAntigravity(runtime, service.setSession(ctx.cwd, undefined, true));
+    appendConversationReset(ctx);
     setAgyTasksWidget(0);
     setAgyArtifactsWidget(0);
+  });
+
+  pi.on("agent_settled", async (_event, ctx: ExtensionContext) => {
+    await persistConversationState(ctx);
+  });
+
+  pi.on("session_compact", async (_event, ctx: ExtensionContext) => {
+    // Pi manual/overflow compaction changes the session branch but not agy's
+    // native conversation. Re-anchor the same owner after the compaction entry.
+    await persistConversationState(ctx, true);
   });
 
   pi.on("session_shutdown", async () => {
@@ -737,6 +883,7 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
       const sub = args.trim().toLowerCase();
       if (sub === "reset") {
         await runAntigravity(runtime, service.reset);
+        appendConversationReset(ctx);
         ctx.ui.notify("antigravity: conversation reset; next turn starts fresh.", "info");
         return;
       }
@@ -756,8 +903,12 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
       }
       const snapshot = await runAntigravity(runtime, service.snapshot);
       const id = snapshot.conversationId ?? "(none — next turn starts fresh)";
+      const context =
+        observedContextTokens === undefined
+          ? ""
+          : ` · native context: ~${formatAgyContextTokens(observedContextTokens)}/185k`;
       ctx.ui.notify(
-        `antigravity: conversation ${id}\nmodel: ${snapshot.model ?? "unselected"} · turns: ${snapshot.turns} · models: ${currentCache.models.length} (${currentCache.source})`,
+        `antigravity: conversation ${id}\nmodel: ${snapshot.model ?? "unselected"} · turns: ${snapshot.turns}${context} · models: ${currentCache.models.length} (${currentCache.source})`,
         "info",
       );
     },
