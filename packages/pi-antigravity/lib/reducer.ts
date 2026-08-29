@@ -36,6 +36,16 @@ export type AgyActivity =
       name: string;
       args: Record<string, unknown>;
     }
+  | {
+      /** Synthetic — pushed by the runtime when a stalled agy turn is killed
+       * and retried. Never produced by applyEvent. */
+      type: "stall";
+      /** 1-based retry number. */
+      retry: number;
+      maxRetries: number;
+      stalledMs: number;
+      toolActive: boolean;
+    }
   | { type: "text"; delta: string }
   | {
       /** agy's own collapsed reasoning line — thought text is never streamed,

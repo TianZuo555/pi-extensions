@@ -11,6 +11,9 @@ import type { BackendRunInput } from "../lib/backend.ts";
 import type { ProfileDefinition } from "../lib/domain.ts";
 import { reportPathFor } from "../lib/report-file.ts";
 import { finalizeWorktree } from "../lib/worktree.ts";
+import { hermeticGitProcessEnv } from "./git-env.ts";
+
+hermeticGitProcessEnv();
 
 const FIXTURE = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -80,11 +83,24 @@ function runInput(
 }
 
 function initGitRepo(dir: string): void {
-  const env = {
+  const env: NodeJS.ProcessEnv = {
     ...process.env,
     GIT_CONFIG_GLOBAL: "/dev/null",
     GIT_CONFIG_SYSTEM: "/dev/null",
   };
+  // Hooks export GIT_DIR (and friends); without stripping them every git
+  // call below would target the repository running the hook instead of this
+  // fixture directory. See pi-commit's test/git-env.ts for the full story.
+  for (const key of [
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_NAMESPACE",
+  ] as const) {
+    delete env[key];
+  }
   execFileSync("git", ["init"], { cwd: dir, stdio: "pipe", env });
   execFileSync("git", ["config", "user.name", "pi-herdr test"], { cwd: dir, stdio: "pipe", env });
   execFileSync("git", ["config", "user.email", "pi-herdr-test@example.invalid"], {

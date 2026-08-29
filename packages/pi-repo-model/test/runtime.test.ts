@@ -6,6 +6,23 @@ import path from "node:path";
 import test from "node:test";
 import { createRepoModelRuntime, RepoModelRuntime, runRepoModel } from "../src/runtime.ts";
 
+// git exports GIT_DIR (and friends) to hook subprocesses, and lefthook's
+// pre-push passes them through to `pnpm test`. Left in place, they redirect
+// every git invocation — including repo-registry's own rev-parse — to the
+// repository being pushed instead of these fixtures. Delete them so git
+// resolves from the working directory again (see pi-commit/test/git-env.ts
+// for the incident this class of leak caused).
+for (const key of [
+  "GIT_DIR",
+  "GIT_WORK_TREE",
+  "GIT_INDEX_FILE",
+  "GIT_OBJECT_DIRECTORY",
+  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+  "GIT_NAMESPACE",
+] as const) {
+  delete process.env[key];
+}
+
 test("RepoModelRuntime getRepoMeta resolves directory metadata", async () => {
   const runtime = createRepoModelRuntime();
   const service = runtime.runSync(RepoModelRuntime);

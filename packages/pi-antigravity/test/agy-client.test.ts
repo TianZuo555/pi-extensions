@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { buildAgyArgs, runAgyTurn } from "../lib/agy-client.ts";
+import { AgyStallError, buildAgyArgs, runAgyTurn } from "../lib/agy-client.ts";
 import { agyIncompleteToolError } from "../src/provider.ts";
-import { OK_CAPTURE, REAL_CAPTURE } from "./fixtures.ts";
+import { CONVERSATION_ID, OK_CAPTURE, REAL_CAPTURE } from "./fixtures.ts";
 
 type FakeChild = {
   stdout: { setEncoding: (e: string) => void; on: (ev: string, fn: (c: string) => void) => void };
@@ -189,4 +189,155 @@ test("runAgyTurn rejects when the process never responds", async () => {
     runAgyTurn({ prompt: "hi", timeoutMs: 60, spawnOverride: (() => child) as never }),
     /agy turn timed out/,
   );
+});
+
+/** A child whose stdout handlers can be driven by hand, on demand. */
+function manualChild(): FakeChild & {
+  emitStdout: (chunk: string) => void;
+  emitStderr: (chunk: string) => void;
+  close: (code: number) => void;
+} {
+  const stdoutFns: Array<(c: string) => void> = [];
+  const stderrFns: Array<(c: string) => void> = [];
+  const closeFns: Array<(arg?: unknown) => void> = [];
+  const child: FakeChild = {
+    stdout: {
+      setEncoding: () => {},
+      on: (_ev, fn) => {
+        stdoutFns.push(fn);
+      },
+    },
+    stderr: {
+      setEncoding: () => {},
+      on: (_ev, fn) => {
+        stderrFns.push(fn);
+      },
+    },
+    on: (ev, fn) => {
+      if (ev === "close") closeFns.push(fn);
+    },
+    kill: () => {},
+  };
+  return Object.assign(child, {
+    emitStdout: (chunk: string) => {
+      for (const fn of [...stdoutFns]) fn(chunk);
+    },
+    emitStderr: (chunk: string) => {
+      for (const fn of [...stderrFns]) fn(chunk);
+    },
+    close: (code: number) => {
+      for (const fn of [...closeFns]) fn(code);
+    },
+  });
+}
+
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
+
+test("stall watchdog kills a silent stream with AgyStallError", async () => {
+  const child = manualChild();
+  const started = Date.now();
+  const promise = runAgyTurn({
+    prompt: "hi",
+    timeoutMs: 10_000,
+    inactivityTimeoutMs: 50,
+    spawnOverride: (() => child) as never,
+  });
+  child.emitStdout(`${JSON.stringify({ event: "init", conversation_id: "c-stall", init: {} })}\n`);
+  await assert.rejects(
+    () => promise,
+    (error: unknown) => {
+      assert.ok(error instanceof AgyStallError, `expected AgyStallError, got ${error}`);
+      assert.equal(error.toolActive, false);
+      assert.match(error.message, /stalled: no events for 0s/);
+      return true;
+    },
+  );
+  assert.ok(Date.now() - started >= 45, "fired on the inactivity budget");
+});
+
+test("stall watchdog resets on stream activity and lets a chatty turn finish", async () => {
+  const child = manualChild();
+  const promise = runAgyTurn({
+    prompt: "hi",
+    timeoutMs: 10_000,
+    inactivityTimeoutMs: 90,
+    spawnOverride: (() => child) as never,
+  });
+  // Lines every 40ms — each under the 90ms budget, but the total far exceeds it.
+  for (let i = 0; i < 5; i++) {
+    child.emitStdout(
+      `${JSON.stringify({
+        event: "step_update",
+        step_update: {
+          conversation_id: CONVERSATION_ID,
+          step_index: i,
+          state: "ACTIVE",
+          step_type: "agent_response",
+          text_delta: `chunk ${i}`,
+        },
+      })}\n`,
+    );
+    await sleep(40);
+  }
+  child.emitStdout(`${OK_CAPTURE}\n`);
+  child.close(0);
+  const outcome = await promise;
+  assert.equal(outcome.status, "OK");
+});
+
+test("stall watchdog uses the longer tool budget while a tool step is ACTIVE", async () => {
+  const child = manualChild();
+  const started = Date.now();
+  const promise = runAgyTurn({
+    prompt: "hi",
+    timeoutMs: 10_000,
+    inactivityTimeoutMs: 50,
+    toolInactivityTimeoutMs: 250,
+    spawnOverride: (() => child) as never,
+  });
+  child.emitStdout(
+    `${[
+      JSON.stringify({ event: "init", conversation_id: "c-tool-stall", init: {} }),
+      JSON.stringify({
+        event: "step_update",
+        step_update: {
+          conversation_id: "c-tool-stall",
+          step_index: 0,
+          state: "ACTIVE",
+          step_type: "tool",
+          tool_name: "run_command",
+          tool_info: { name: "run_command", parameters: { CommandLine: "sleep 60" } },
+        },
+      }),
+    ].join("\n")}\n`,
+  );
+  await assert.rejects(
+    () => promise,
+    (error: unknown) => {
+      assert.ok(error instanceof AgyStallError);
+      assert.equal(error.toolActive, true);
+      assert.match(error.message, /while a tool step was active/);
+      return true;
+    },
+  );
+  // The 50ms base budget must NOT have fired; only the 250ms tool budget.
+  assert.ok(Date.now() - started >= 200, "waited for the tool budget");
+});
+
+test("stderr output counts as liveness for the stall watchdog", async () => {
+  const child = manualChild();
+  const promise = runAgyTurn({
+    prompt: "hi",
+    timeoutMs: 10_000,
+    inactivityTimeoutMs: 120,
+    spawnOverride: (() => child) as never,
+  });
+  child.emitStderr("downloading model…\n");
+  await sleep(60);
+  child.emitStderr("still working…\n");
+  await sleep(60);
+  child.emitStdout(`${OK_CAPTURE}\n`);
+  child.close(0);
+  const outcome = await promise;
+  assert.equal(outcome.status, "OK");
 });

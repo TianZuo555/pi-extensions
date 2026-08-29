@@ -555,6 +555,37 @@ export function streamAntigravity(
           thoughtIndex = null;
         };
 
+        /**
+         * Render a runtime stall/retry as a collapsed thinking line so the
+         * user sees why a turn restarted instead of a silent multi-minute
+         * spinner. Uses the same reserved-slot mechanism as thought markers
+         * so the event stream stays delta-replay legal.
+         */
+        const emitStallMarker = (activity: Extract<AgyActivity, { type: "stall" }>): void => {
+          closeText();
+          const seconds = Math.max(1, Math.round(activity.stalledMs / 1000));
+          const summary =
+            `agy stream stalled for ${seconds}s with no events` +
+            `${activity.toolActive ? " while a tool step was active" : ""}` +
+            ` — restarting the turn (retry ${activity.retry} of ${activity.maxRetries})`;
+          const index = reserveThought();
+          const block = output.content[index];
+          if (block.type === "thinking") block.thinking = summary;
+          stream.push({
+            type: "thinking_delta",
+            contentIndex: index,
+            delta: summary,
+            partial: output,
+          });
+          stream.push({
+            type: "thinking_end",
+            contentIndex: index,
+            content: summary,
+            partial: output,
+          });
+          thoughtIndex = null;
+        };
+
         while (true) {
           const activity = await controller.next();
           if (activity === null) {
@@ -577,6 +608,10 @@ export function streamAntigravity(
             }
             case "thought": {
               emitThoughtMarker(activity);
+              break;
+            }
+            case "stall": {
+              emitStallMarker(activity);
               break;
             }
             case "tool_start": {

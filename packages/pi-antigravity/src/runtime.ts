@@ -9,9 +9,36 @@
  */
 
 import { Context, Data, Effect, Layer, ManagedRuntime, Exit, Cause, Result } from "effect";
-import { runAgyTurn, type AgyTurnRequest } from "../lib/agy-client.ts";
+import { AgyStallError, runAgyTurn, type AgyTurnRequest } from "../lib/agy-client.ts";
 import type { AgyTurnOutcome } from "../lib/reducer.ts";
+import { stallContinuationPrompt } from "../lib/prompt.ts";
 import { AgyTurnController } from "../lib/turn.ts";
+
+function envInt(name: string, fallback: number): number {
+  const parsed = Number(process.env[name]);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback;
+}
+
+function waitForRetryBackoff(ms: number, signal: AbortSignal): Promise<boolean> {
+  return new Promise((resolve) => {
+    if (signal.aborted) {
+      resolve(false);
+      return;
+    }
+    let timer: NodeJS.Timeout | undefined;
+    const onAbort = () => {
+      if (timer !== undefined) clearTimeout(timer);
+      resolve(false);
+    };
+    timer = setTimeout(() => {
+      signal.removeEventListener("abort", onAbort);
+      resolve(true);
+    }, ms);
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
+const STALL_MAX_RETRIES = 2;
 
 export class AntigravitySpawnError extends Data.TaggedError("AntigravitySpawnError")<{
   readonly message: string;
@@ -196,7 +223,9 @@ const makeRuntime = (turnRunner: AgyTurnRunner) =>
                 model: request.modelId,
                 effort: request.effort,
                 cwd,
-                timeoutMs: 600_000,
+                timeoutMs: envInt("AGY_TURN_TIMEOUT_MS", 600_000),
+                inactivityTimeoutMs: envInt("AGY_STALL_TIMEOUT_MS", 120_000),
+                toolInactivityTimeoutMs: envInt("AGY_TOOL_STALL_TIMEOUT_MS", 300_000),
                 signal: turnAbort.signal,
                 onConversation: (id) => {
                   if (turnGeneration !== generation) return;
@@ -209,7 +238,48 @@ const makeRuntime = (turnRunner: AgyTurnRunner) =>
                   if (turnGeneration === generation) controller.push(activity);
                 },
               };
-              void turnRunner(spawnRequest)
+              /**
+               * A stalled stream is recoverable: agy still holds the full
+               * conversation server-side, so each retry resumes it with a
+               * continuation prompt instead of re-bootstrapping pi history.
+               * Only AgyStallError retries — spawn/auth failures would just
+               * fail identically again. Aborts are left to the signal path.
+               */
+              const runTurnWithStallRetries = async (): Promise<AgyTurnOutcome> => {
+                let retry = 0;
+                for (;;) {
+                  if (turnAbort.signal.aborted) throw new Error("agy turn was aborted.");
+                  const attempt =
+                    retry === 0
+                      ? spawnRequest
+                      : {
+                          ...spawnRequest,
+                          prompt: stallContinuationPrompt(),
+                          conversationId: conversationId ?? spawnRequest.conversationId,
+                        };
+                  try {
+                    return await turnRunner(attempt);
+                  } catch (error) {
+                    if (turnAbort.signal.aborted) throw new Error("agy turn was aborted.");
+                    if (!(error instanceof AgyStallError) || retry >= STALL_MAX_RETRIES) {
+                      throw error;
+                    }
+                    retry += 1;
+                    controller.push({
+                      type: "stall",
+                      retry,
+                      maxRetries: STALL_MAX_RETRIES,
+                      stalledMs: error.stalledMs,
+                      toolActive: error.toolActive,
+                    });
+                    const backoffMs = envInt("AGY_STALL_RETRY_BACKOFF_MS", 3_000);
+                    if (!(await waitForRetryBackoff(backoffMs, turnAbort.signal))) {
+                      throw new Error("agy turn was aborted.");
+                    }
+                  }
+                }
+              };
+              void runTurnWithStallRetries()
                 .then((outcome: AgyTurnOutcome) => {
                   if (turnGeneration !== generation) {
                     controller.close();
@@ -220,7 +290,10 @@ const makeRuntime = (turnRunner: AgyTurnRunner) =>
                   controller.close();
                 })
                 .catch((cause: unknown) => {
-                  if (turnGeneration !== generation) return;
+                  if (turnGeneration !== generation) {
+                    controller.close();
+                    return;
+                  }
                   controller.fail(cause instanceof Error ? cause : new Error(String(cause)));
                 });
               return controller;

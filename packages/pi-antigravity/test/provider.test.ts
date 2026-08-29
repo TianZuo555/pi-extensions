@@ -571,3 +571,41 @@ test("streamAntigravity fails turn when ERROR is not a recovered interruption, e
   assert.ok(errorEvent.error.errorMessage.includes("timeout waiting for response"));
   assertDeltasMatchPartial(events);
 });
+
+test("streamAntigravity renders a stall/retry as a thinking marker before the answer", async () => {
+  const { controller, collect } = makeStreamHarness();
+  const eventsPromise = collect();
+  controller.push({
+    type: "stall",
+    retry: 1,
+    maxRetries: 2,
+    stalledMs: 120_000,
+    toolActive: false,
+  });
+  controller.push({
+    type: "result",
+    status: "OK",
+    response: "recovered answer",
+    error: undefined,
+    usage: undefined,
+  });
+  const events = await eventsPromise;
+
+  const thinkingStart = events.find((event) => event.type === "thinking_start");
+  const thinkingDelta = events.find((event) => event.type === "thinking_delta");
+  const thinkingEnd = events.find((event) => event.type === "thinking_end");
+  assert.ok(thinkingStart && thinkingDelta && thinkingEnd, "emits a complete thinking block");
+  assert.match(thinkingDelta.delta, /stalled for 120s/);
+  assert.match(thinkingDelta.delta, /retry 1 of 2/);
+  assert.equal(thinkingStart.contentIndex, thinkingEnd.contentIndex);
+
+  const done = events.find((event) => event.type === "done");
+  assert.equal(done.reason, "stop");
+  const message = done.message;
+  const thinking = message.content.find((block: any) => block.type === "thinking");
+  assert.match(thinking.thinking, /stalled for 120s.*retry 1 of 2/s);
+  const text = message.content.find((block: any) => block.type === "text");
+  assert.equal(text.text, "recovered answer");
+  // The marker must be delta-replay legal (append-only indices).
+  assertDeltasMatchPartial(events);
+});

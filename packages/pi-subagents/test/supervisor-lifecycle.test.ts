@@ -7,6 +7,9 @@ import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 import { createDeferredResultDelivery } from "../lib/result-delivery.ts";
 import { SubagentSupervisor } from "../lib/supervisor.ts";
+import { hermeticGitProcessEnv } from "./git-env.ts";
+
+hermeticGitProcessEnv();
 
 const FIXTURE = path.join(
   path.dirname(fileURLToPath(import.meta.url)),

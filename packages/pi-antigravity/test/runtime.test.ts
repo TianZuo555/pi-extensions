@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { AgyTurnRequest } from "../lib/agy-client.ts";
+import { AgyStallError, type AgyTurnRequest } from "../lib/agy-client.ts";
+import { stallContinuationPrompt } from "../lib/prompt.ts";
 import { newTurnOutcome, type AgyTurnOutcome } from "../lib/reducer.ts";
 import { AntigravityRuntime, createAntigravityRuntime, runAntigravity } from "../src/runtime.ts";
 
@@ -113,6 +114,132 @@ test("runtime reset aborts the active process and clears conversation state", as
       cwd: "/repo",
       turns: 0,
     });
+  } finally {
+    await runtime.dispose();
+  }
+});
+
+test("runtime retries a stalled turn by resuming the conversation", async (t) => {
+  process.env.AGY_STALL_RETRY_BACKOFF_MS = "1";
+  t.after(() => {
+    delete process.env.AGY_STALL_RETRY_BACKOFF_MS;
+  });
+  const requests: AgyTurnRequest[] = [];
+  let call = 0;
+  const runtime = createAntigravityRuntime(async (request) => {
+    requests.push(request);
+    call += 1;
+    if (call === 1) {
+      // The stalled attempt still reveals the conversation id.
+      request.onConversation?.("c-stall");
+      throw new AgyStallError(120_000, false);
+    }
+    return completedOutcome("c-stall");
+  });
+  const service = runtime.runSync(AntigravityRuntime);
+  try {
+    await runAntigravity(runtime, service.setSession("/repo", undefined));
+    const controller = await runAntigravity(
+      runtime,
+      service.beginStreamTurn({ prompt: "slow turn", modelId: "gemini-3.7-flash" }),
+    );
+    const stall = await controller.next();
+    assert.equal(stall?.type, "stall");
+    assert.deepEqual(stall, {
+      type: "stall",
+      retry: 1,
+      maxRetries: 2,
+      stalledMs: 120_000,
+      toolActive: false,
+    });
+    assert.equal(await controller.next(), null);
+
+    // Exactly two attempts; the retry resumes the conversation with the
+    // continuation prompt instead of re-sending pi history.
+    assert.equal(requests.length, 2);
+    assert.equal(requests[1]?.conversationId, "c-stall");
+    assert.equal(requests[1]?.prompt, stallContinuationPrompt());
+  } finally {
+    await runtime.dispose();
+  }
+});
+
+test("runtime aborts a stalled retry during backoff without starting another attempt", async (t) => {
+  process.env.AGY_STALL_RETRY_BACKOFF_MS = "50";
+  t.after(() => {
+    delete process.env.AGY_STALL_RETRY_BACKOFF_MS;
+  });
+  const abort = new AbortController();
+  const requests: AgyTurnRequest[] = [];
+  const runtime = createAntigravityRuntime(async (request) => {
+    requests.push(request);
+    request.onConversation?.("c-stall");
+    throw new AgyStallError(120_000, false);
+  });
+  const service = runtime.runSync(AntigravityRuntime);
+  try {
+    await runAntigravity(runtime, service.setSession("/repo", undefined));
+    const turn = await runAntigravity(
+      runtime,
+      service.beginStreamTurn({
+        prompt: "cancelled turn",
+        modelId: "gemini-3.7-flash",
+        signal: abort.signal,
+      }),
+    );
+    assert.equal((await turn.next())?.type, "stall");
+    abort.abort();
+    await assert.rejects(() => turn.next(), /agy turn was aborted/);
+    await new Promise<void>((resolve) => setTimeout(resolve, 75));
+    assert.equal(requests.length, 1);
+  } finally {
+    await runtime.dispose();
+  }
+});
+
+test("runtime fails the turn after exhausting stall retries", async (t) => {
+  process.env.AGY_STALL_RETRY_BACKOFF_MS = "1";
+  t.after(() => {
+    delete process.env.AGY_STALL_RETRY_BACKOFF_MS;
+  });
+  const requests: AgyTurnRequest[] = [];
+  const runtime = createAntigravityRuntime(async (request) => {
+    requests.push(request);
+    throw new AgyStallError(120_000, true);
+  });
+  const service = runtime.runSync(AntigravityRuntime);
+  try {
+    await runAntigravity(runtime, service.setSession("/repo", undefined));
+    const controller = await runAntigravity(
+      runtime,
+      service.beginStreamTurn({ prompt: "doomed turn", modelId: "gemini-3.7-flash" }),
+    );
+    assert.equal((await controller.next())?.type, "stall");
+    const second = await controller.next();
+    assert.equal(second?.type, "stall");
+    assert.equal((second as { retry?: number }).retry, 2);
+    await assert.rejects(() => controller.next(), /agy stream stalled/);
+    assert.equal(requests.length, 3);
+  } finally {
+    await runtime.dispose();
+  }
+});
+
+test("runtime does not retry non-stall failures", async () => {
+  const requests: AgyTurnRequest[] = [];
+  const runtime = createAntigravityRuntime(async (request) => {
+    requests.push(request);
+    throw new Error("agy exited with code 1 before producing a result");
+  });
+  const service = runtime.runSync(AntigravityRuntime);
+  try {
+    await runAntigravity(runtime, service.setSession("/repo", undefined));
+    const controller = await runAntigravity(
+      runtime,
+      service.beginStreamTurn({ prompt: "broken agy", modelId: "gemini-3.7-flash" }),
+    );
+    await assert.rejects(() => controller.next(), /exited with code 1/);
+    assert.equal(requests.length, 1);
   } finally {
     await runtime.dispose();
   }

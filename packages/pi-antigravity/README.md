@@ -151,6 +151,10 @@ Claude and GPT models
 | --- | --- |
 | `PI_ANTIGRAVITY_PI_TOOL_BRIDGE=0` | Turn the bridge off. Skills fall back to a first-turn path catalog and direct `SKILL.md` reads. |
 | `AGY_BINARY=/path/to/agy` | Use a specific agy binary. |
+| `AGY_TURN_TIMEOUT_MS=600000` | Overall budget per agy turn (also sets agy's `--print-timeout`). |
+| `AGY_STALL_TIMEOUT_MS=120000` | Kill the turn when the stream produces no bytes for this long and retry by resuming the conversation. `0` disables the watchdog. |
+| `AGY_TOOL_STALL_TIMEOUT_MS=300000` | Stall budget while a tool step is ACTIVE — a quiet foreground tool is legitimate, so silence inside a tool gets a longer leash. |
+| `AGY_STALL_RETRY_BACKOFF_MS=3000` | Pause before each stall retry. Stalls retry at most twice, rendered as a collapsed "agy stream stalled … restarting the turn" thinking line. |
 
 ## Good to know
 

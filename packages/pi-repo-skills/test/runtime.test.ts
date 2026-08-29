@@ -7,6 +7,22 @@ import test from "node:test";
 import type { Skill } from "@earendil-works/pi-coding-agent";
 import { ALL, createRepoSkillsRuntime, RepoSkillsRuntime, runRepoSkills } from "../src/runtime.ts";
 
+// git exports GIT_DIR (and friends) to hook subprocesses, and lefthook's
+// pre-push passes them through to `pnpm test`. Left in place, repo-registry's
+// rev-parse resolves the repository being pushed instead of these fixtures.
+// Delete them so git resolves from the working directory again (see
+// pi-commit/test/git-env.ts for the incident this class of leak caused).
+for (const key of [
+  "GIT_DIR",
+  "GIT_WORK_TREE",
+  "GIT_INDEX_FILE",
+  "GIT_OBJECT_DIRECTORY",
+  "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+  "GIT_NAMESPACE",
+] as const) {
+  delete process.env[key];
+}
+
 test("RepoSkillsRuntime preserves spaces in Git worktree paths", async () => {
   const runtime = createRepoSkillsRuntime();
   const service = runtime.runSync(RepoSkillsRuntime);
