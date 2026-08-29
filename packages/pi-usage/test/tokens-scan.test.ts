@@ -205,3 +205,49 @@ test("TokensPanel shows today's records in the 1d window", async () => {
   assert.ok(text.includes("2.2K tokens"), "today's two records sum up");
   assert.ok(text.includes("Today ("), "1d window labels today");
 });
+
+test("TokensPanel scrolls top models with up/down and j/k keys", async () => {
+  const now = Date.now();
+  const lines: string[] = [];
+  for (let i = 1; i <= 8; i++) {
+    lines.push(
+      sessionLine(`msg-${i}`, now - 1000 * i, {
+        provider: "p",
+        model: `model-${String(i).padStart(2, "0")}`,
+        usage: { input: (9 - i) * 1000, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: (9 - i) * 1000, cost: { total: 0.01 } },
+      }),
+    );
+  }
+  const root = fixtureDir({ "--models--": lines });
+  const { Effect } = await import("effect");
+  const snapshot = await Effect.runPromise(
+    scanLocalUsage({ sessionsDir: root, sinceMs: now - 7 * 24 * HOUR }),
+  );
+  fs.rmSync(root, { recursive: true, force: true });
+
+  const { panel } = panelHarness(snapshot);
+  const initial = panel.render(80).join("\n");
+  assert.ok(initial.includes("top models by tokens (1–5 of 8 · ↑/↓ scroll)"));
+  assert.ok(initial.includes("1. p/model-01"));
+  assert.ok(initial.includes("5. p/model-05"));
+  assert.ok(!initial.includes("6. p/model-06"));
+
+  // Scroll down with arrow down
+  panel.handleInput("\x1b[B");
+  const scrolledDown = panel.render(80).join("\n");
+  assert.ok(scrolledDown.includes("top models by tokens (2–6 of 8 · ↑/↓ scroll)"));
+  assert.ok(!scrolledDown.includes("1. p/model-01"));
+  assert.ok(scrolledDown.includes("6. p/model-06"));
+
+  // Scroll down with vim 'j'
+  panel.handleInput("j");
+  assert.ok(panel.render(80).join("\n").includes("top models by tokens (3–7 of 8 · ↑/↓ scroll)"));
+
+  // Scroll up with vim 'k'
+  panel.handleInput("k");
+  assert.ok(panel.render(80).join("\n").includes("top models by tokens (2–6 of 8 · ↑/↓ scroll)"));
+
+  // Scroll up with arrow up
+  panel.handleInput("\x1b[A");
+  assert.ok(panel.render(80).join("\n").includes("top models by tokens (1–5 of 8 · ↑/↓ scroll)"));
+});

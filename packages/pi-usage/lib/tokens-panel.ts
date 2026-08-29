@@ -51,7 +51,8 @@ interface DayBucket {
 }
 
 const DEFAULT_WINDOW: WindowKey = "7d";
-const MODEL_ROWS = 3;
+const MAX_TOP_MODELS = 10;
+const VISIBLE_MODEL_ROWS = 5;
 
 export class TokensPanel {
   private readonly tui: { requestRender(): void };
@@ -65,6 +66,7 @@ export class TokensPanel {
   private now: Date;
   private windowIndex = Math.max(0, WINDOW_ORDER.indexOf(DEFAULT_WINDOW));
   private metric: Metric = "tokens";
+  private modelOffset = 0;
   private refreshing = false;
   private cachedWidth: number | undefined;
   private cachedLines: string[] | undefined;
@@ -89,22 +91,52 @@ export class TokensPanel {
     // and the Kitty keyboard protocol — raw "\x1b[D" comparisons do not.
     if (matchesKey(data, Key.left) || data === "h") {
       this.windowIndex = (this.windowIndex - 1 + WINDOW_ORDER.length) % WINDOW_ORDER.length;
+      this.modelOffset = 0;
       this.redraw();
       return true;
     }
     if (matchesKey(data, Key.right) || data === "l") {
       this.windowIndex = (this.windowIndex + 1) % WINDOW_ORDER.length;
+      this.modelOffset = 0;
+      this.redraw();
+      return true;
+    }
+    if (matchesKey(data, Key.up) || data === "k") {
+      this.scrollModels(-1);
+      return true;
+    }
+    if (matchesKey(data, Key.down) || data === "j") {
+      this.scrollModels(1);
+      return true;
+    }
+    if (matchesKey(data, Key.pageUp)) {
+      this.scrollModels(-VISIBLE_MODEL_ROWS);
+      return true;
+    }
+    if (matchesKey(data, Key.pageDown)) {
+      this.scrollModels(VISIBLE_MODEL_ROWS);
+      return true;
+    }
+    if (matchesKey(data, Key.home)) {
+      this.modelOffset = 0;
+      this.redraw();
+      return true;
+    }
+    if (matchesKey(data, Key.end)) {
+      this.modelOffset = MAX_TOP_MODELS;
       this.redraw();
       return true;
     }
     const digit = Number(data);
     if (digit >= 1 && digit <= WINDOW_ORDER.length) {
       this.windowIndex = digit - 1;
+      this.modelOffset = 0;
       this.redraw();
       return true;
     }
     if (matchesKey(data, Key.tab)) {
       this.metric = this.metric === "tokens" ? "cost" : "tokens";
+      this.modelOffset = 0;
       this.redraw();
       return true;
     }
@@ -140,7 +172,7 @@ export class TokensPanel {
     lines.push(clip(` ${this.windowTabs()}`, renderWidth));
     lines.push(
       clip(
-        ` ${t.fg("muted", "←/→ or h/l window · 1-4 jump · Tab tokens/cost · r rescan · Esc close")}`,
+        ` ${t.fg("muted", "←/→ or h/l window · ↑/↓ or j/k scroll · 1-4 jump · Tab · r rescan · Esc close")}`,
         renderWidth,
       ),
     );
@@ -203,11 +235,22 @@ export class TokensPanel {
     for (const line of chartLines) lines.push(clip(` ${line}`, renderWidth));
     lines.push("");
 
-    const models = topModels(aggregate.models, this.metric, MODEL_ROWS);
+    const models = topModels(aggregate.models, this.metric, MAX_TOP_MODELS);
     if (models.length > 0) {
-      lines.push(clip(` ${t.fg("muted", `top models by ${this.metric}`)}`, renderWidth));
-      for (const [model, usage] of models) {
-        const row = `${model}  ${formatTokensCompact(usage.totalTokens)}  ${formatCostCompact(usage.costUSD)}`;
+      const maxOffset = Math.max(0, models.length - VISIBLE_MODEL_ROWS);
+      const safeOffset = Math.min(this.modelOffset, maxOffset);
+      const visibleModels = models.slice(safeOffset, safeOffset + VISIBLE_MODEL_ROWS);
+
+      const headerText =
+        models.length > VISIBLE_MODEL_ROWS
+          ? `top models by ${this.metric} (${safeOffset + 1}–${safeOffset + visibleModels.length} of ${models.length} · ↑/↓ scroll)`
+          : `top models by ${this.metric}`;
+
+      lines.push(clip(` ${t.fg("muted", headerText)}`, renderWidth));
+      for (let i = 0; i < visibleModels.length; i++) {
+        const [model, usage] = visibleModels[i]!;
+        const rank = safeOffset + i + 1;
+        const row = `${rank}. ${model}  ${formatTokensCompact(usage.totalTokens)}  ${formatCostCompact(usage.costUSD)}`;
         lines.push(clip(`   ${row}`, renderWidth));
       }
     }
@@ -237,6 +280,18 @@ export class TokensPanel {
     this.tui.requestRender();
   }
 
+  private scrollModels(delta: number): void {
+    const window = WINDOW_ORDER[this.windowIndex] ?? DEFAULT_WINDOW;
+    const aggregate = aggregateWindow(window, this.now, this.dayIndex);
+    const totalModels = Math.min(aggregate.models.size, MAX_TOP_MODELS);
+    const maxOffset = Math.max(0, totalModels - VISIBLE_MODEL_ROWS);
+    const nextOffset = Math.min(maxOffset, Math.max(0, this.modelOffset + delta));
+    if (nextOffset !== this.modelOffset) {
+      this.modelOffset = nextOffset;
+      this.redraw();
+    }
+  }
+
   private async rescan(): Promise<void> {
     if (this.refreshing) return;
     this.refreshing = true;
@@ -247,6 +302,7 @@ export class TokensPanel {
         this.snapshot = next;
         this.now = new Date();
         this.dayIndex = buildDayIndex(next.records);
+        this.modelOffset = 0;
       }
     } finally {
       this.refreshing = false;
