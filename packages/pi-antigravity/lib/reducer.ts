@@ -11,6 +11,14 @@
 import type { AgyUsage, ParsedAgyEvent } from "./events.ts";
 import { parseAgyLine } from "./events.ts";
 
+/**
+ * Print mode reports tiny `thinking_tokens` counts even for planner/tool glue
+ * that agy's interactive TUI renders without a Thought row. The observed TUI
+ * boundary is not part of stream-json, so suppress only the clearly incidental
+ * traces; substantive reasoning summaries remain visible.
+ */
+const MIN_VISIBLE_THOUGHT_TOKENS = 64;
+
 export type AgyActivity =
   | { type: "tool_start"; stepId?: number; name: string; args: Record<string, unknown> }
   | {
@@ -35,6 +43,11 @@ export type AgyActivity =
       id: string;
       name: string;
       args: Record<string, unknown>;
+    }
+  | {
+      /** Synthetic — a persisted native conversation disappeared, so the
+       * runtime started fresh from the bounded Pi branch history. */
+      type: "conversation_fallback";
     }
   | {
       /** Synthetic — pushed by the runtime when a stalled agy turn is killed
@@ -154,7 +167,11 @@ export function applyEvent(outcome: AgyTurnOutcome, event: ParsedAgyEvent): AgyA
           outcome.usage = step.usage;
           activities.push({ type: "usage", usage: step.usage });
           const thoughtTokens = step.usage.thinking_tokens;
-          if (step.state === "DONE" && typeof thoughtTokens === "number" && thoughtTokens > 0) {
+          if (
+            step.state === "DONE" &&
+            typeof thoughtTokens === "number" &&
+            thoughtTokens >= MIN_VISIBLE_THOUGHT_TOKENS
+          ) {
             activities.push({
               type: "thought",
               tokens: thoughtTokens,

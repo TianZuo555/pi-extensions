@@ -19,10 +19,15 @@ export class AgyTurnController {
   #closed = false;
   #failure: Error | undefined;
   #incompleteTools = new Map<string, Extract<AgyActivity, { type: "tool_start" }>>();
-  #reportedUsage: AgyUsage = {};
+  #reportedUsage: AgyUsage;
+  #thoughtReported = false;
 
-  constructor(prompt: string) {
+  constructor(prompt: string, conversationUsage: AgyUsage = {}) {
     this.prompt = prompt;
+    // agy's terminal result counters are cumulative across every resumed turn
+    // in the conversation. Begin at the previous result so a result-only turn
+    // claims only its new work instead of the whole conversation again.
+    this.#reportedUsage = { ...conversationUsage };
   }
 
   isClosed(): boolean {
@@ -57,15 +62,29 @@ export class AgyTurnController {
     return tools;
   }
 
+  /** Show at most one synthetic thought summary per logical agy turn. */
+  claimThought(): boolean {
+    if (this.#thoughtReported) return false;
+    this.#thoughtReported = true;
+    return true;
+  }
+
   /**
    * Attribute usage exactly once across the several pi messages that make up
-   * one agy turn. Step usage is incremental; the result usage is cumulative.
+   * one agy turn. Step usage is per response; the result usage is cumulative
+   * across the resumed agy conversation.
    */
   claimUsage(usage: AgyUsage | undefined, final: boolean): AgyUsage | undefined {
     if (!usage) return undefined;
-    const claimed = final ? subtractUsage(usage, this.#reportedUsage) : { ...usage };
-    this.#reportedUsage = addUsage(this.#reportedUsage, claimed);
-    return claimed;
+    if (final) {
+      const claimed = subtractUsage(usage, this.#reportedUsage);
+      // The result is the authoritative conversation total. Assign it rather
+      // than adding the delta so counter resets after agy's own compaction heal.
+      this.#reportedUsage = { ...usage };
+      return claimed;
+    }
+    this.#reportedUsage = addUsage(this.#reportedUsage, usage);
+    return { ...usage };
   }
 
   close(): void {
@@ -134,7 +153,10 @@ function subtractUsage(total: AgyUsage, reported: AgyUsage): AgyUsage {
   const out: AgyUsage = {};
   for (const key of USAGE_KEYS) {
     if (total[key] === undefined) continue;
-    out[key] = Math.max(0, total[key] - (reported[key] ?? 0));
+    const previous = reported[key] ?? 0;
+    // agy can reset counters when it compacts internally. In that case the
+    // current value is all new usage rather than a negative delta.
+    out[key] = total[key] < previous ? total[key] : total[key] - previous;
   }
   return out;
 }

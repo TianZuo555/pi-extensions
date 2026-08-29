@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { AgyStallError, type AgyTurnRequest } from "../lib/agy-client.ts";
+import { AgySpawnError, AgyStallError, type AgyTurnRequest } from "../lib/agy-client.ts";
 import { stallContinuationPrompt } from "../lib/prompt.ts";
 import { newTurnOutcome, type AgyTurnOutcome } from "../lib/reducer.ts";
 import { AntigravityRuntime, createAntigravityRuntime, runAntigravity } from "../src/runtime.ts";
@@ -79,6 +79,183 @@ test("runtime restores the selected pi branch only when starting a fresh convers
   }
 });
 
+test("runtime carries cumulative agy usage into the next resumed turn", async () => {
+  let call = 0;
+  const runtime = createAntigravityRuntime(async (request) => {
+    call += 1;
+    const conversationId = "conversation-usage";
+    request.onConversation?.(conversationId);
+    return {
+      ...completedOutcome(conversationId),
+      usage:
+        call === 1
+          ? { input_tokens: 1_000, output_tokens: 100, total_tokens: 1_100 }
+          : { input_tokens: 1_300, output_tokens: 140, total_tokens: 1_440 },
+    };
+  });
+  const service = runtime.runSync(AntigravityRuntime);
+  try {
+    await runAntigravity(runtime, service.setSession("/repo", undefined));
+    const first = await runAntigravity(
+      runtime,
+      service.beginStreamTurn({ prompt: "first", modelId: "gemini-3.7-flash" }),
+    );
+    assert.equal(await first.next(), null);
+    await runAntigravity(runtime, service.finishTurn);
+
+    const second = await runAntigravity(
+      runtime,
+      service.beginStreamTurn({ prompt: "second", modelId: "gemini-3.7-flash" }),
+    );
+    assert.equal(await second.next(), null);
+    assert.deepEqual(
+      second.claimUsage({ input_tokens: 1_300, output_tokens: 140, total_tokens: 1_440 }, true),
+      { input_tokens: 300, output_tokens: 40, total_tokens: 340 },
+    );
+  } finally {
+    await runtime.dispose();
+  }
+});
+
+test("runtime restores a persisted native conversation and cumulative usage", async () => {
+  const requests: AgyTurnRequest[] = [];
+  const runtime = createAntigravityRuntime(async (request) => {
+    requests.push(request);
+    request.onConversation?.("persisted-conversation");
+    return {
+      ...completedOutcome("persisted-conversation"),
+      usage: { input_tokens: 1_250, output_tokens: 125, total_tokens: 1_375 },
+    };
+  });
+  const service = runtime.runSync(AntigravityRuntime);
+  try {
+    await runAntigravity(runtime, service.setSession("/repo", undefined));
+    await runAntigravity(
+      runtime,
+      service.restoreConversation({
+        conversationId: "persisted-conversation",
+        modelId: "gemini-3.7-flash",
+        cwd: "/repo",
+        turns: 7,
+        usage: { input_tokens: 1_000, output_tokens: 100, total_tokens: 1_100 },
+      }),
+    );
+    const controller = await runAntigravity(
+      runtime,
+      service.beginStreamTurn({
+        prompt: "continue",
+        historyBootstrap: "PI FALLBACK HISTORY",
+        modelId: "gemini-3.7-flash",
+      }),
+    );
+    assert.equal(await controller.next(), null);
+    assert.equal(requests[0].conversationId, "persisted-conversation");
+    assert.equal(requests[0].prompt, "continue");
+    assert.deepEqual(await runAntigravity(runtime, service.snapshot), {
+      conversationId: "persisted-conversation",
+      model: "gemini-3.7-flash",
+      cwd: "/repo",
+      turns: 8,
+      conversationUsage: { input_tokens: 1_250, output_tokens: 125, total_tokens: 1_375 },
+    });
+  } finally {
+    await runtime.dispose();
+  }
+});
+
+test("runtime falls back to bounded Pi history when a persisted conversation disappeared", async () => {
+  const requests: AgyTurnRequest[] = [];
+  const runtime = createAntigravityRuntime(async (request) => {
+    requests.push(request);
+    if (requests.length === 1) {
+      throw new AgySpawnError("conversation persisted-conversation not found", "");
+    }
+    request.onConversation?.("replacement-conversation");
+    return completedOutcome("replacement-conversation");
+  });
+  const service = runtime.runSync(AntigravityRuntime);
+  try {
+    await runAntigravity(runtime, service.setSession("/repo", undefined));
+    await runAntigravity(
+      runtime,
+      service.restoreConversation({
+        conversationId: "persisted-conversation",
+        modelId: "gemini-3.7-flash",
+        cwd: "/repo",
+        turns: 7,
+        usage: { total_tokens: 10_000 },
+      }),
+    );
+    const controller = await runAntigravity(
+      runtime,
+      service.beginStreamTurn({
+        prompt: "continue",
+        historyBootstrap: "PI FALLBACK HISTORY",
+        bootstrapSuffix: "SKILL CATALOG",
+        modelId: "gemini-3.7-flash",
+      }),
+    );
+    assert.deepEqual(await controller.next(), { type: "conversation_fallback" });
+    assert.equal(await controller.next(), null);
+    assert.equal(requests[0].conversationId, "persisted-conversation");
+    assert.equal(requests[1].conversationId, undefined);
+    assert.equal(requests[1].prompt, "PI FALLBACK HISTORY\n\ncontinue\n\nSKILL CATALOG");
+  } finally {
+    await runtime.dispose();
+  }
+});
+
+test("runtime suppresses a missing-conversation result before fresh fallback", async () => {
+  let call = 0;
+  const runtime = createAntigravityRuntime(async (request) => {
+    call += 1;
+    if (call === 1) {
+      const failure: AgyTurnOutcome = {
+        ...completedOutcome("persisted-conversation"),
+        status: "ERROR",
+        error: "conversation persisted-conversation does not exist",
+      };
+      request.onActivity?.({
+        type: "result",
+        status: "ERROR",
+        response: "",
+        error: failure.error,
+        usage: undefined,
+      });
+      return failure;
+    }
+    request.onConversation?.("replacement-conversation");
+    return completedOutcome("replacement-conversation");
+  });
+  const service = runtime.runSync(AntigravityRuntime);
+  try {
+    await runAntigravity(runtime, service.setSession("/repo", undefined));
+    await runAntigravity(
+      runtime,
+      service.restoreConversation({
+        conversationId: "persisted-conversation",
+        modelId: "gemini-3.7-flash",
+        cwd: "/repo",
+        turns: 1,
+        usage: {},
+      }),
+    );
+    const controller = await runAntigravity(
+      runtime,
+      service.beginStreamTurn({
+        prompt: "continue",
+        historyBootstrap: "PI FALLBACK HISTORY",
+        modelId: "gemini-3.7-flash",
+      }),
+    );
+    assert.deepEqual(await controller.next(), { type: "conversation_fallback" });
+    assert.equal(await controller.next(), null);
+    assert.equal(call, 2);
+  } finally {
+    await runtime.dispose();
+  }
+});
+
 test("runtime reset aborts the active process and clears conversation state", async () => {
   let captured: AgyTurnRequest | undefined;
   const runtime = createAntigravityRuntime(
@@ -113,6 +290,7 @@ test("runtime reset aborts the active process and clears conversation state", as
       model: "gemini-3.7-flash",
       cwd: "/repo",
       turns: 0,
+      conversationUsage: {},
     });
   } finally {
     await runtime.dispose();

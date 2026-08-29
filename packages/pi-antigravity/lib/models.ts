@@ -96,37 +96,29 @@ export function pricingForModel(modelId: string): ModelPricing {
 }
 
 /**
- * agy governs context with a working window, not vendor limits: a ~200k
- * working ceiling with a 185k hard safety cap (`--agent-max-context=185000`,
- * beyond which requests fail with HTTP 400). Report the hard cap as the
- * context window so pi's compaction trigger (window − reserveTokens,
- * default 16,384 ≈ 168.6k) and `/context` percentages track agy's real
- * behavior instead of the raw 1M/2M vendor numbers. Models whose native
- * window is already smaller are unaffected.
+ * Pi scheduling window, deliberately larger than agy's private ~185k working
+ * window. agy owns and persists its native context compaction; advertising the
+ * smaller working cap made Pi summarize the same conversation first. This is
+ * not a claim about raw model capacity — `/agy` reports the observed native
+ * footprint while Pi uses this value only for its compaction scheduler.
  */
-export const AGY_CONTEXT_CEILING = 185_000;
+export const AGY_PI_SCHEDULING_CONTEXT_WINDOW = 1_000_000;
 
 /** Vendor-specific limits for models present in agy's current catalog. */
 export function capabilitiesForModel(modelId: string): ModelCapabilities {
-  let contextWindow: number;
   let maxTokens: number;
   if (/^gpt-oss-120b/i.test(modelId)) {
-    contextWindow = 131_072;
     maxTokens = 131_072;
   } else if (/^claude-opus-4-6/i.test(modelId)) {
-    contextWindow = 1_000_000;
     maxTokens = 128_000;
   } else if (/^claude-sonnet-4-6/i.test(modelId)) {
-    contextWindow = 1_000_000;
     maxTokens = 64_000;
   } else if (/^gemini-/i.test(modelId)) {
-    contextWindow = 1_048_576;
     maxTokens = 65_536;
   } else {
-    contextWindow = 128_000;
     maxTokens = 32_768;
   }
-  return { contextWindow: Math.min(contextWindow, AGY_CONTEXT_CEILING), maxTokens };
+  return { contextWindow: AGY_PI_SCHEDULING_CONTEXT_WINDOW, maxTokens };
 }
 
 /** Cache lifetime for a discovery result: live catalogs hold a day. */

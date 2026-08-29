@@ -93,14 +93,14 @@ test("piHistoryBootstrap is absent for a first-turn request and bounds old histo
   );
   const restored = piHistoryBootstrap(
     contextWith([
-      { role: "user", content: [{ type: "text", text: "x".repeat(30_000) }] },
+      { role: "user", content: [{ type: "text", text: "x".repeat(300_000) }] },
       { role: "assistant", content: [{ type: "text", text: "tail" }] },
       { role: "user", content: [{ type: "text", text: "now" }] },
     ]),
   );
   assert.ok(restored);
   assert.match(restored, /Earlier history omitted/);
-  assert.ok(restored.length < 25_000);
+  assert.ok(restored.length < 241_000);
 });
 
 test("mapUsage maps agy usage fields to pi usage", () => {
@@ -162,10 +162,16 @@ test("agyIncompleteToolError explains agy background tasks for run_command", () 
 });
 
 /** Harness for stream-level tests: a turn controller behind a fake runtime. */
-function makeStreamHarness() {
-  const controller = new AgyTurnController("hello");
+function makeStreamHarness(options: { prompt?: string; createIsolatedRuntime?: () => any } = {}) {
+  const prompt = options.prompt ?? "hello";
+  const controller = new AgyTurnController(prompt);
+  let sharedBeginCount = 0;
   const fakeService = {
-    beginStreamTurn: () => Effect.succeed(controller),
+    beginStreamTurn: () =>
+      Effect.sync(() => {
+        sharedBeginCount += 1;
+        return controller;
+      }),
     finishTurn: Effect.void,
     pushBridgeCall: () => false,
     reset: Effect.void,
@@ -178,13 +184,20 @@ function makeStreamHarness() {
     close: Effect.void,
     setSession: () => Effect.void,
   };
-  const fakeRuntime = { runPromise: () => Promise.resolve(controller) };
+  const fakeRuntime = {
+    runPromise: (effect: Effect.Effect<any, any>) => Effect.runPromise(effect),
+  };
   const replay = new AgyReplayStore();
   const streamFn = streamAntigravity(
     fakeRuntime as any,
     fakeService as any,
     replay,
     new AgyPiBridge("test-bridge"),
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    options.createIsolatedRuntime,
   );
   const model: Model<string> = {
     id: "gemini-3.7-flash",
@@ -195,7 +208,7 @@ function makeStreamHarness() {
   } as any;
 
   const createStream = () => {
-    const ctx = contextWith([{ role: "user", content: [{ type: "text", text: "hello" }] }]);
+    const ctx = contextWith([{ role: "user", content: [{ type: "text", text: prompt }] }]);
     return streamFn(model, ctx);
   };
   /** Start a turn; resolves with all events once the stream ends. */
@@ -204,8 +217,66 @@ function makeStreamHarness() {
     for await (const event of createStream()) events.push(event);
     return events;
   };
-  return { controller, collect, createStream, replay };
+  return {
+    controller,
+    collect,
+    createStream,
+    replay,
+    getSharedBeginCount: () => sharedBeginCount,
+  };
 }
+
+test("streamAntigravity isolates pi summarization from the resumed agy conversation", async () => {
+  const summaryPrompt =
+    "<conversation>\nuser: real request\nassistant: result\n</conversation>\n\nSummarize the conversation above.";
+  const isolatedController = new AgyTurnController(summaryPrompt);
+  const isolatedPrompts: string[] = [];
+  let isolatedBeginCount = 0;
+  let disposed = false;
+  const isolatedService = {
+    beginStreamTurn: (request: { prompt: string }) =>
+      Effect.sync(() => {
+        isolatedBeginCount += 1;
+        isolatedPrompts.push(request.prompt);
+        return isolatedController;
+      }),
+    finishTurn: Effect.void,
+    setSession: () => Effect.void,
+    snapshot: Effect.succeed({}),
+    reset: Effect.void,
+    close: Effect.void,
+  };
+  const isolatedRuntime = {
+    runSync: () => isolatedService,
+    runPromise: (effect: Effect.Effect<any, any>) => Effect.runPromise(effect),
+    dispose: async () => {
+      disposed = true;
+    },
+  };
+  const harness = makeStreamHarness({
+    prompt: summaryPrompt,
+    createIsolatedRuntime: () => isolatedRuntime as any,
+  });
+  const eventsPromise = harness.collect();
+
+  isolatedController.push({
+    type: "result",
+    status: "OK",
+    response: "Compact summary",
+    error: undefined,
+    usage: { input_tokens: 20_000, output_tokens: 200, total_tokens: 20_200 },
+  });
+
+  const events = await eventsPromise;
+  assert.equal(harness.getSharedBeginCount(), 0);
+  assert.equal(isolatedBeginCount, 1);
+  assert.deepEqual(isolatedPrompts, [summaryPrompt]);
+  const done = events.find((event) => event.type === "done");
+  assert.equal(done?.message.content[0]?.text, "Compact summary");
+  assert.equal(done?.message.usage.totalTokens, 0);
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(disposed, true);
+});
 
 test("streamAntigravity renders a pending bash card on run_command ACTIVE", async () => {
   const { controller, createStream, replay } = makeStreamHarness();
@@ -348,6 +419,52 @@ test("streamAntigravity reports cumulative agy usage exactly once across tool ca
   );
 });
 
+test("streamAntigravity reports the final response step instead of conversation-cumulative result usage", async () => {
+  const { controller, collect } = makeStreamHarness();
+  const eventsPromise = collect();
+
+  controller.push({
+    type: "usage",
+    usage: {
+      input_tokens: 5_000,
+      output_tokens: 100,
+      thinking_tokens: 80,
+      cache_read_tokens: 25_000,
+      total_tokens: 5_100,
+    },
+  });
+  controller.push({ type: "text", delta: "done" });
+  controller.push({ type: "thought", tokens: 80, durationSeconds: 2 });
+  controller.push({
+    type: "result",
+    status: "OK",
+    response: "done",
+    error: undefined,
+    // agy reports totals for the whole resumed conversation here. These are
+    // accounting totals, not the context represented by this pi message.
+    usage: {
+      input_tokens: 250_000,
+      output_tokens: 20_000,
+      thinking_tokens: 8_000,
+      cache_read_tokens: 1_900_000,
+      total_tokens: 270_000,
+    },
+  });
+
+  const events = await eventsPromise;
+  const done = events.find((event) => event.type === "done");
+  assert.deepEqual(
+    {
+      input: done.message.usage.input,
+      output: done.message.usage.output,
+      reasoning: done.message.usage.reasoning,
+      cacheRead: done.message.usage.cacheRead,
+      totalTokens: done.message.usage.totalTokens,
+    },
+    { input: 5_000, output: 100, reasoning: 80, cacheRead: 25_000, totalTokens: 5_100 },
+  );
+});
+
 test("streamAntigravity treats result with ERROR status as success when response is present (recovered stream interruption)", async () => {
   const { controller, collect } = makeStreamHarness();
   const eventsPromise = collect();
@@ -474,6 +591,25 @@ test("streamAntigravity appends the Thought marker when the segment had no text"
   assert.equal(doneEvent.message.content[0].type, "thinking");
   assert.equal(doneEvent.message.content[0].thinking, "Thought for 1s, 40 tokens");
   assertDeltasMatchPartial(events);
+});
+
+test("streamAntigravity emits at most one synthetic Thought marker per logical turn", async () => {
+  const { controller, collect } = makeStreamHarness();
+  const eventsPromise = collect();
+  controller.push({ type: "thought", tokens: 100, durationSeconds: 1 });
+  controller.push({ type: "thought", tokens: 250, durationSeconds: 3 });
+  controller.push({
+    type: "result",
+    status: "OK",
+    response: "",
+    error: undefined,
+    usage: { thinking_tokens: 350, total_tokens: 350 },
+  });
+
+  const events = await eventsPromise;
+  const done = events.find((event) => event.type === "done");
+  const thoughts = done.message.content.filter((part: any) => part.type === "thinking");
+  assert.deepEqual(thoughts, [{ type: "thinking", thinking: "Thought for 1s, 100 tokens" }]);
 });
 
 test("streamAntigravity closes an unfilled thought slot as an empty block", async () => {
