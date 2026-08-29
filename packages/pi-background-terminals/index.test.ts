@@ -644,7 +644,6 @@ test("a hard timeout is reported as an unsuccessful bash call", async () => {
         {
           command: command("setInterval(() => {}, 1000)"),
           timeout: 0.1,
-          yield_time_ms: 1_000,
         },
         undefined,
         undefined,
