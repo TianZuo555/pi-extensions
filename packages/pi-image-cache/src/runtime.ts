@@ -37,9 +37,9 @@ import {
   CACHE_TTL_MS,
   detectMimeType,
   displayPathFor,
+  EMPTY_CACHE_GRACE_MS,
   fileStem,
   findByHash,
-  formatPlaceholder,
   hashBytes,
   imageExtension,
   isInsideTmpDir,
@@ -49,6 +49,7 @@ import {
   normalizeMimeType,
   previewEntryData,
 } from "../lib/helpers.ts";
+import { formatPlaceholder } from "../lib/prompt.ts";
 import type {
   CachedImage,
   ClipboardImages,
@@ -398,10 +399,11 @@ const makeImageCacheRuntime = (config: ResolvedImageCacheRuntimeConfig) =>
           }
         }
 
-        if (config.postWriteGate) {
-          config.postWriteGate.onImageFileWritten();
+        const postWriteGate = config.postWriteGate;
+        if (postWriteGate) {
+          postWriteGate.onImageFileWritten();
           yield* Effect.tryPromise({
-            try: () => config.postWriteGate!.waitUntilReleased(),
+            try: () => postWriteGate.waitUntilReleased(),
             catch: (cause) =>
               new ImageCacheRuntimeClosedError({
                 message: cause instanceof Error ? cause.message : String(cause),
@@ -539,7 +541,9 @@ const makeImageCacheRuntime = (config: ResolvedImageCacheRuntimeConfig) =>
                   const expired = now - info.mtimeMs > CACHE_TTL_MS;
                   const isEmpty = contents.length === 0;
                   const onlyManifest = contents.length === 1 && contents[0] === "manifest.json";
-                  if (expired || isEmpty || onlyManifest) {
+                  const isStaleEmpty =
+                    (isEmpty || onlyManifest) && now - info.mtimeMs > EMPTY_CACHE_GRACE_MS;
+                  if (expired || isStaleEmpty) {
                     await rm(fullPath, { recursive: true, force: true });
                   }
                 } catch {
