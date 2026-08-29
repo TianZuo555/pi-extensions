@@ -7,7 +7,7 @@ import type { CachedImage } from "./types.ts";
 export const EXTENSION_ID = "image-cache";
 export const ENTRY_TYPE = "image-cache-preview";
 export const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
-export const PLACEHOLDER_RE = /\[Image#(\d{3,})\]/g;
+export const EMPTY_CACHE_GRACE_MS = 10 * 60 * 1000;
 
 /** Inline images larger than this are dropped rather than sent to the provider. */
 export const MAX_INLINE_BYTES = 4.5 * 1024 * 1024;
@@ -50,10 +50,6 @@ export const MODEL_SUPPORTED_MIMES = new Set([
  */
 export const PI_CLIPBOARD_PATH_RE =
   /(?:^|[\s"'`(<])((?:[A-Za-z]:)?[\\/][^\s"'`<>)]*pi-clipboard-[A-Za-z0-9-]+\.(?:png|jpe?g|gif|webp|tiff?|heic|heif))(?=$|[\s"'`)>.,;:!?])/gi;
-
-export function formatPlaceholder(id: number): string {
-  return `[Image#${String(id).padStart(3, "0")}]`;
-}
 
 /** `[Image#001]` -> `Image-001`, safe for use as a filename on every platform. */
 export function fileStem(placeholder: string): string {
@@ -137,15 +133,6 @@ export function isInsideTmpDir(candidate: string): boolean {
 export function isPathWithin(root: string, candidate: string): boolean {
   const rel = relative(root, candidate);
   return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
-}
-
-export function findPlaceholders(text: string): string[] {
-  const found: string[] = [];
-  for (const match of text.matchAll(PLACEHOLDER_RE)) {
-    const placeholder = match[0];
-    if (!found.includes(placeholder)) found.push(placeholder);
-  }
-  return found;
 }
 
 export function previewEntryData(cached: CachedImage) {

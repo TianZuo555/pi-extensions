@@ -16,10 +16,10 @@ import {
   displayPathFor,
   ENTRY_TYPE,
   EXTENSION_ID,
-  findPlaceholders,
   isInsideTmpDir,
   PI_CLIPBOARD_PATH_RE,
 } from "./lib/helpers.ts";
+import { findPlaceholders, formatAttachmentNote, formatImageNotesBlock } from "./lib/prompt.ts";
 import type { CachedImage, PreviewEntryData } from "./lib/types.ts";
 import {
   createImageCacheRuntime,
@@ -29,8 +29,19 @@ import {
   type ImageCacheRuntimeShape,
 } from "./src/runtime.ts";
 
-/** Terminal-displayable bytes keyed by the file they were read from. */
+/** Terminal-displayable bytes keyed by the file they were read from (LRU, capped at 50 entries). */
+const MAX_DISPLAY_CACHE_ENTRIES = 50;
 const displayDataByPath = new Map<string, { data: string; mimeType: string }>();
+
+function setDisplayData(path: string, display: { data: string; mimeType: string }): void {
+  // Re-insert so repeated hits refresh recency; eviction below is true LRU.
+  displayDataByPath.delete(path);
+  if (displayDataByPath.size >= MAX_DISPLAY_CACHE_ENTRIES) {
+    const oldest = displayDataByPath.keys().next().value;
+    if (oldest !== undefined) displayDataByPath.delete(oldest);
+  }
+  displayDataByPath.set(path, display);
+}
 
 function loadDisplayData(entry: PreviewEntryData): { data: string; mimeType: string } | undefined {
   const protocol = getCapabilities().images;
@@ -47,7 +58,7 @@ function loadDisplayData(entry: PreviewEntryData): { data: string; mimeType: str
       data: readFileSync(path).toString("base64"),
       mimeType: needsPng ? "image/png" : entry.mimeType,
     };
-    displayDataByPath.set(path, display);
+    setDisplayData(path, display);
     return display;
   } catch {
     return undefined;
@@ -120,6 +131,19 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("session_start", async (_event, ctx) => {
+    displayDataByPath.clear();
+    if (cacheRuntime) {
+      try {
+        if (cacheService) await run(cacheService.close);
+      } catch {
+        // Ignore errors during previous runtime close
+      } finally {
+        await cacheRuntime.dispose().catch(() => {});
+        cacheRuntime = undefined;
+        cacheService = undefined;
+      }
+    }
+
     cacheRuntime = createImageCacheRuntime();
     cacheService = cacheRuntime.runSync(ImageCacheRuntime);
     const sessionId = ctx.sessionManager.getSessionId?.() ?? `process-${process.pid}`;
@@ -131,6 +155,7 @@ export default function (pi: ExtensionAPI) {
   });
 
   pi.on("session_shutdown", async () => {
+    displayDataByPath.clear();
     if (!cacheRuntime || !cacheService) return;
     if (closing) {
       await closing.catch(() => {});
@@ -229,9 +254,7 @@ export default function (pi: ExtensionAPI) {
           continue;
         }
         attached.push(result.content);
-        notes.push(
-          `${placeholder} = attachment ${attached.length}${result.note ? ` (${result.note})` : ""}`,
-        );
+        notes.push(formatAttachmentNote(placeholder, attached.length, result.note));
       } catch {
         ctx.ui.notify(`Could not attach ${placeholder} from cache`, "warning");
       }
@@ -244,7 +267,7 @@ export default function (pi: ExtensionAPI) {
     }
 
     if (notes.length > 0) {
-      text += `\n\n<image-cache-notes>\n${notes.join("\n")}\n</image-cache-notes>`;
+      text += formatImageNotesBlock(notes);
     }
 
     const count = await run(service().imageCount);

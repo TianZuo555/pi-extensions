@@ -1,9 +1,15 @@
 import assert from "node:assert/strict";
-import { access, readdir, writeFile } from "node:fs/promises";
+import { access, mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import { join, parse } from "node:path";
 import test from "node:test";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import { hashBytes, isPathWithin } from "../lib/helpers.ts";
+import {
+  findPlaceholders,
+  formatAttachmentNote,
+  formatImageNotesBlock,
+  formatPlaceholder,
+} from "../lib/prompt.ts";
 import {
   createImageCacheRuntime,
   createImageFileWrittenGate,
@@ -300,4 +306,48 @@ test("ImageCacheRuntime close rejects mutations started after admission stops", 
 
   assert.equal(await pathExists(cacheDir), false);
   await runtime.dispose();
+});
+
+test("ImageCacheRuntime cleanup preserves recent concurrent session cache directories", async () => {
+  const concurrentSessionId = `concurrent-${Date.now()}`;
+  const concurrentDir = join(CACHE_ROOT, concurrentSessionId);
+  await mkdir(concurrentDir, { recursive: true });
+  await writeFile(join(concurrentDir, "manifest.json"), JSON.stringify({ version: 1, images: [] }));
+
+  const runtime = createImageCacheRuntime();
+  const cache = runtime.runSync(ImageCacheRuntime);
+  const mySessionId = `session-${Date.now()}`;
+
+  try {
+    await runImageCache(runtime, cache.init(mySessionId));
+    // The concurrent session dir was created recently with only manifest.json;
+    // it must not be prematurely deleted by my session's init cleanup.
+    assert.equal(await pathExists(concurrentDir), true);
+  } finally {
+    await runImageCache(runtime, cache.close);
+    await runtime.dispose();
+    await rm(concurrentDir, { recursive: true, force: true });
+  }
+});
+
+test("prompt helpers format and parse placeholders correctly", () => {
+  assert.equal(formatPlaceholder(1), "[Image#001]");
+  assert.equal(formatPlaceholder(42), "[Image#042]");
+  assert.equal(formatPlaceholder(1000), "[Image#1000]");
+
+  const text = "Check out [Image#001] and [Image#002] but not [Image#01]";
+  const placeholders = findPlaceholders(text);
+  assert.deepEqual(placeholders, ["[Image#001]", "[Image#002]"]);
+
+  assert.equal(
+    formatAttachmentNote("[Image#001]", 1, "image resized to 100x100"),
+    "[Image#001] = attachment 1 (image resized to 100x100)",
+  );
+  assert.equal(formatAttachmentNote("[Image#002]", 2), "[Image#002] = attachment 2");
+
+  assert.equal(
+    formatImageNotesBlock(["[Image#001] = attachment 1"]),
+    "\n\n<image-cache-notes>\n[Image#001] = attachment 1\n</image-cache-notes>",
+  );
+  assert.equal(formatImageNotesBlock([]), "");
 });
