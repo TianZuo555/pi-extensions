@@ -23,7 +23,12 @@ import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { piConfigDir, readJson, writeJson } from "./lib/config.ts";
 import { AGY_BINARY } from "./lib/agy-client.ts";
-import { installAgyDeathHooks, killAgyTree, trackAgyChild, untrackAgyChild } from "./lib/agy-children.ts";
+import {
+  installAgyDeathHooks,
+  killAgyTree,
+  trackAgyChild,
+  untrackAgyChild,
+} from "./lib/agy-children.ts";
 import { pruneBridgeMcpCache, removeMcpCacheEntry } from "./lib/mcp-cache.ts";
 import {
   AgyPiBridge,

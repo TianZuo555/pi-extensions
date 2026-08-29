@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { killAllAgyTrees, killAgyTree, trackAgyChild, untrackAgyChild } from "../lib/agy-children.ts";
+import {
+  killAllAgyTrees,
+  killAgyTree,
+  trackAgyChild,
+  untrackAgyChild,
+} from "../lib/agy-children.ts";
 
 test("tracking tolerates children without a pid", () => {
   trackAgyChild({});

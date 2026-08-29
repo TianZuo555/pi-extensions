@@ -248,7 +248,9 @@ function defaultExec(
     settle(() => {
       untrackAgyChild(child);
       callback(
-        code === 0 ? null : new Error(errOut.trim() || `${file} exited with code ${code ?? "signal"}`),
+        code === 0
+          ? null
+          : new Error(errOut.trim() || `${file} exited with code ${code ?? "signal"}`),
         out,
         errOut,
       );
