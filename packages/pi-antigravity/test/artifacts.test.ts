@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { mkdir, mkdtemp, rm, utimes, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { findAgyArtifact, listAgyArtifacts, type AgyArtifact } from "../lib/artifacts.ts";
@@ -34,6 +34,40 @@ test("listAgyArtifacts lists generated and uploaded files, newest first", async 
     assert.equal(artifacts[1].kind, "uploaded");
     assert.equal(artifacts[1].mediaType, "pdf");
     assert.equal(artifacts[0].bytes, 9);
+  } finally {
+    await rm(brainDir, { recursive: true, force: true });
+  }
+});
+
+test("listAgyArtifacts includes root markdown and excludes internal, metadata, and symlink entries", async () => {
+  const brainDir = await makeBrain();
+  const root = path.join(brainDir, CONV);
+  try {
+    await writeFile(path.join(root, "plan.md"), "# Plan\n\n- [x] done\n- [ ] next\n");
+    await writeFile(path.join(root, "plan.metadata.json"), "{}");
+    await mkdir(path.join(root, "scratch"), { recursive: true });
+    await writeFile(path.join(root, "scratch", "secret.md"), "secret");
+    await mkdir(path.join(root, ".system_generated"), { recursive: true });
+    await writeFile(path.join(root, ".system_generated", "content.md"), "internal");
+    await symlink(path.join(root, "plan.md"), path.join(root, "linked.md"));
+
+    const artifacts = await listAgyArtifacts(CONV, { brainDir });
+    const plan = artifacts.find((artifact) => artifact.name === "plan.md");
+    assert.equal(plan?.kind, "conversation");
+    assert.equal(plan?.mediaType, "markdown");
+    assert.ok(!artifacts.some((artifact) => artifact.name === "plan.metadata.json"));
+    assert.ok(!artifacts.some((artifact) => artifact.name === "secret.md"));
+    assert.ok(!artifacts.some((artifact) => artifact.name === "content.md"));
+    assert.ok(!artifacts.some((artifact) => artifact.name === "linked.md"));
+  } finally {
+    await rm(brainDir, { recursive: true, force: true });
+  }
+});
+
+test("listAgyArtifacts rejects conversation path traversal", async () => {
+  const brainDir = await makeBrain();
+  try {
+    assert.deepEqual(await listAgyArtifacts("../outside", { brainDir }), []);
   } finally {
     await rm(brainDir, { recursive: true, force: true });
   }

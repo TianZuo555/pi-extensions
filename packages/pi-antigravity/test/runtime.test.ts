@@ -3,6 +3,7 @@ import { test } from "node:test";
 import { AgySpawnError, AgyStallError, type AgyTurnRequest } from "../lib/agy-client.ts";
 import { stallContinuationPrompt } from "../lib/prompt.ts";
 import { newTurnOutcome, type AgyTurnOutcome } from "../lib/reducer.ts";
+import type { AgyTurnExecutor } from "../lib/agy-driver.ts";
 import { AntigravityRuntime, createAntigravityRuntime, runAntigravity } from "../src/runtime.ts";
 
 function completedOutcome(conversationId: string): AgyTurnOutcome {
@@ -13,6 +14,98 @@ function completedOutcome(conversationId: string): AgyTurnOutcome {
     finished: true,
   };
 }
+
+test("runtime owns and recycles its executor on reset, restore, and shutdown", async () => {
+  const closes: string[] = [];
+  const executor: AgyTurnExecutor = {
+    run: async (request) => {
+      request.onConversation?.("owned-conversation");
+      return completedOutcome("owned-conversation");
+    },
+    snapshot: () => ({ mode: "persistent", state: "ready", pid: 123, lifecycle: [] }),
+    close: async (reason, cause) => {
+      closes.push(`${reason}:${cause ?? "none"}`);
+    },
+  };
+  const runtime = createAntigravityRuntime(executor);
+  const service = runtime.runSync(AntigravityRuntime);
+  try {
+    await runAntigravity(runtime, service.setSession("/repo", undefined));
+    closes.length = 0;
+    const turn = await runAntigravity(
+      runtime,
+      service.beginStreamTurn({ prompt: "one", modelId: "gemini-3.7-flash" }),
+    );
+    assert.equal(await turn.next(), null);
+    await runAntigravity(runtime, service.finishTurn);
+    await runAntigravity(runtime, service.reset);
+    assert.deepEqual(closes, ["recycle:reset"]);
+
+    await runAntigravity(
+      runtime,
+      service.restoreConversation({
+        conversationId: "restored",
+        modelId: "gemini-3.7-flash",
+        cwd: "/repo",
+        turns: 1,
+        usage: {},
+      }),
+    );
+    assert.deepEqual(closes, ["recycle:reset", "recycle:restore"]);
+    await runAntigravity(runtime, service.close);
+    assert.deepEqual(closes, ["recycle:reset", "recycle:restore", "shutdown:none"]);
+  } finally {
+    await runtime.dispose();
+  }
+});
+
+test("runtime re-entry keeps the active driver turn despite a newer bridge revision", async () => {
+  let runs = 0;
+  const closes: string[] = [];
+  let resolveRun: ((outcome: AgyTurnOutcome) => void) | undefined;
+  const executor: AgyTurnExecutor = {
+    run: async () => {
+      runs += 1;
+      return new Promise<AgyTurnOutcome>((resolve) => {
+        resolveRun = resolve;
+      });
+    },
+    snapshot: () => ({ mode: "persistent", state: "running", lifecycle: [] }),
+    close: async (reason) => {
+      closes.push(reason);
+    },
+  };
+  const runtime = createAntigravityRuntime(executor);
+  const service = runtime.runSync(AntigravityRuntime);
+  try {
+    const first = await runAntigravity(
+      runtime,
+      service.beginStreamTurn({
+        prompt: "same user turn",
+        modelId: "gemini-3.7-flash",
+        bridgeRevision: "1:1",
+      }),
+    );
+    const reentered = await runAntigravity(
+      runtime,
+      service.beginStreamTurn({
+        prompt: "same user turn",
+        modelId: "gemini-3.7-flash",
+        bridgeRevision: "1:2",
+      }),
+    );
+    assert.equal(reentered, first);
+    assert.equal(runs, 1);
+    assert.deepEqual(closes, []);
+
+    resolveRun?.(completedOutcome("reentry-conversation"));
+    assert.equal(await first.next(), null);
+    await runAntigravity(runtime, service.close);
+    assert.deepEqual(closes, ["shutdown"]);
+  } finally {
+    await runtime.dispose();
+  }
+});
 
 test("runtime restores the selected pi branch only when starting a fresh conversation", async () => {
   const requests: AgyTurnRequest[] = [];
@@ -157,6 +250,7 @@ test("runtime restores a persisted native conversation and cumulative usage", as
       cwd: "/repo",
       turns: 8,
       conversationUsage: { input_tokens: 1_250, output_tokens: 125, total_tokens: 1_375 },
+      executor: { mode: "one-shot", state: "idle", lifecycle: [] },
     });
   } finally {
     await runtime.dispose();
@@ -291,6 +385,7 @@ test("runtime reset aborts the active process and clears conversation state", as
       cwd: "/repo",
       turns: 0,
       conversationUsage: {},
+      executor: { mode: "one-shot", state: "idle", lifecycle: [] },
     });
   } finally {
     await runtime.dispose();

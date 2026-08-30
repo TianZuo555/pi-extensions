@@ -6,11 +6,13 @@ Use **Google Antigravity** (`agy`) models inside the [pi coding agent](https://p
 
 ## Highlights
 
-- **Antigravity models in pi's model picker** — `antigravity/gemini-3.7-flash` and friends, with automatic model discovery.
+- **Antigravity models in pi's model picker** — `antigravity/gemini-3.7-flash` and friends, with automatic model discovery and effort-correct launches.
+- **Persistent stream driver** — ordinary user turns reuse one healthy `agy` process; conversation, model, workspace, agent, mode, and bridge changes recycle it safely.
+- **Actionable diagnostics** — `/agy doctor` explains executable selection, checks every candidate and the minimum version, and reports models, driver spawn/recycle counters, bridge revision, conversation database, and display metadata without spending model tokens.
 - **Native rendering, not mimicry** — agy's read-only tools (`view_file`, `grep_search`, `find_by_name`, `list_dir`) are re-executed as real pi builtins (`read` / `grep` / `find` / `ls`), so their cards use pi's own renderers and show live, accurate output. Everything else renders through one display-only `antigravity` wrapper.
 - **Skills & MCP bridge** — your global pi Agent Skills are one `pi__p<pid>__activate_skill` tool (pass `{ name }` from the tool's enum), and pi's MCP servers (via the `pi-mcp-adapter` tools) are reachable from agy with pi's permissions, hooks, and rendering. Per-session tool names keep concurrent pi sessions fully isolated.
 - **Background-task manager** — long-running agy commands are tracked in a dashboard and stoppable with one keystroke (`/agy-tasks`).
-- **Artifact browser** — images and files agy creates are listed and openable via `/agy-artifacts`, with a status-bar hint when new ones appear.
+- **Artifact browser** — direct conversation files, generated media, and uploads are listed via `/agy-artifacts`; markdown plans/reports have a bounded read-only preview with checklist progress.
 - **Model quotas** — `/agy-usage` ports agy's `/usage` into the same Refresh/Close menu as `/usage`: weekly and 5-hour remaining bars per model group, refreshed without spending tokens.
 
 ## How it works
@@ -19,7 +21,7 @@ Use **Google Antigravity** (`agy`) models inside the [pi coding agent](https://p
 flowchart TB
     subgraph pi["pi coding agent (the UI)"]
         UI["You: chat, tool cards,\npermissions, sessions"]
-        Prov["antigravity provider\n(one agy turn per request)"]
+        Prov["antigravity provider\n(persistent stream-json driver)"]
         Native["pi builtins\n(read / grep / find / ls)\nre-execute read-only steps"]
         Bridge["skills & MCP bridge\n(local MCP server on 127.0.0.1)"]
         Skills["pi Agent Skills"]
@@ -27,11 +29,13 @@ flowchart TB
     end
 
     subgraph agy["agy CLI (the agent loop)"]
-        Agent["Antigravity model\nbuilt-in tools"]
+        Agent["Antigravity model\nbuilt-in tools\n(one process across user turns)"]
+        Summary["Disposable agy process\nPi summaries only"]
     end
 
     UI <-- "stream events:\ntext, tool cards, usage" --> Prov
-    Prov -- "spawn / resume:\nagy --print ... --output-format stream-json" --> Agent
+    Prov -- "NDJSON user events:\n--input-format stream-json" --> Agent
+    Prov -. "compaction / branch summary" .-> Summary
     Agent -- "read-only step done:\nemit native toolCall" --> Native
     Prov -- "mutating/specialty step done:\ndisplay-only antigravity card" --> UI
     Agent -- "wants a skill or pi MCP tool:\ncall pi__p<pid>__<name> (MCP)" --> Bridge
@@ -67,7 +71,7 @@ pi --model antigravity/gemini-3.7-flash
 
 Try from a checkout: `pi -e ./packages/pi-antigravity --model antigravity/gemini-3.7-flash`
 
-Requires the `agy` CLI installed and logged in (v1.1.17+). Override the binary with `AGY_BINARY`.
+Requires the `agy` CLI installed and logged in (**v1.1.22+**). `AGY_BINARY` is a strict override. Without it, the extension checks both `agy` on `PATH` and the existing VS Code-managed `~/.gemini/bin/agy`, then selects the newest compatible stable version (or highest prerelease if no stable build exists); a `dev`/`HEAD` build is used only when no compatible versioned candidate exists. Successful checks are cached but automatically invalidated when a candidate path or file signature changes. The extension never downloads or updates executables.
 
 ## Features
 
@@ -114,7 +118,7 @@ Images and files agy creates land in a per-conversation artifact store. A hint a
 ◆ 1 agy artifact • /agy-artifacts to view
 ```
 
-The dashboard shows name, type, size, and origin (`generated` vs `uploaded`). Press `o` to open a file with the system default app. Non-interactive: `/agy-artifacts open <name>`.
+The dashboard shows name, type, size, and origin (`conversation`, `generated`, or `uploaded`). Direct files under the conversation root are included; `.system_generated`, `scratch`, metadata sidecars, directories, and symlinks are excluded. On markdown, press enter/`v` for a bounded (256 KiB), fatal-UTF-8, read-only preview with exact checklist counts when the complete file was read; esc returns to the list. Press `o` to open a file with the system default app. Non-interactive: `/agy-artifacts open <name>`.
 
 ### Model quotas (`/agy-usage`)
 
@@ -138,9 +142,11 @@ Claude and GPT models
 
 | Command | What it does |
 | --- | --- |
-| `/agy` | Conversation status (id, model, turns) |
-| `/agy reset` | Drop the agy conversation; next turn starts fresh |
+| `/agy` | Conversation title/status (id, model, turns, process, native context) |
+| `/agy reset` | Drop the agy conversation and driver; next turn starts fresh |
 | `/agy models` | Re-discover models and re-register the provider |
+| `/agy agents` | List configured custom agy agents without inference |
+| `/agy doctor` | Diagnose all binary candidates/selection, models, driver spawn/recycle counters, bridge, and conversation state |
 | `/agy-tasks` | Background-task dashboard (`stop <task-id> | all` for scripts) |
 | `/agy-artifacts` | Artifact browser (`open <name>` for scripts) |
 | `/agy-usage` | Model quotas (weekly and 5-hour remaining per group) |
@@ -150,8 +156,11 @@ Claude and GPT models
 | Flag | Effect |
 | --- | --- |
 | `PI_ANTIGRAVITY_PI_TOOL_BRIDGE=0` | Turn the bridge off. Skills fall back to a direct path catalog and direct `SKILL.md` reads. |
-| `AGY_BINARY=/path/to/agy` | Use a specific agy binary. |
-| `AGY_TURN_TIMEOUT_MS=600000` | Overall budget per agy turn (also sets agy's `--print-timeout`). |
+| `PI_ANTIGRAVITY_DRIVER=0` | Operational rollback: spawn one `agy --print` process per logical turn. |
+| `PI_ANTIGRAVITY_AGENT=<name>` | Select a custom agy agent. Empty, control-character-containing, and overlong values are rejected before spawn. |
+| `PI_ANTIGRAVITY_MODE=plan\|accept-edits` | Select agy's stable CLI execution mode. Other values fail before spawn. |
+| `AGY_BINARY=/path/to/agy` | Strictly use a specific agy binary; no fallback if it fails. |
+| `AGY_TURN_TIMEOUT_MS=600000` | Pi-owned overall budget per active agy turn. Persistent mode intentionally does not pass `--print-timeout`. |
 | `AGY_STALL_TIMEOUT_MS=120000` | Kill the turn when the stream produces no bytes for this long and retry by resuming the conversation. `0` disables the watchdog. |
 | `AGY_TOOL_STALL_TIMEOUT_MS=300000` | Stall budget while a tool step is ACTIVE — a quiet foreground tool is legitimate, so silence inside a tool gets a longer leash. |
 | `AGY_STALL_RETRY_BACKOFF_MS=3000` | Pause before each stall retry. Stalls retry at most twice, rendered as a collapsed "agy stream stalled … restarting the turn" thinking line. |
@@ -162,13 +171,17 @@ Claude and GPT models
 - **Artifact review:** headless runs cannot show agy's review panel, so image generation would abort after creating the file. Set `"artifactReviewMode": "always-proceed"` in the same `settings.json` to let artifacts through (applies to interactive agy too).
 - **Image generation errors:** `generate_image` can hit Google-side 429 rate limits; agy retries and usually succeeds — failed attempts show on the card with the real reason.
 - **Conversation memory:** lives on agy's side and is reused across turns. The native conversation id and cumulative usage baseline are persisted as branch-local Pi state, so reloading or resuming the same Pi session continues the exact compacted agy conversation. Forks receive a new Pi session id and branch/model/project changes cannot rewind agy's mutable history, so those start fresh from Pi's active summary plus a bounded recent-history tail. A missing persisted agy conversation falls back the same way. `/agy reset` writes a durable reset marker and intentionally starts with no restored history.
-- **Thinking level** maps to `agy --effort`: unset omits the flag, low → `low`, medium → `medium`, high and above → `high`.
+- **Thinking level** maps to `agy --effort`: low/minimal → `low`, medium → `medium`, high and above → `high`. Discovery retains each model's supported variants; an unsupported request falls back to that model's discovered default (for example Gemini `high`, GPT-OSS `medium`) instead of launching an invalid normalized model id.
 - **Context ownership:** agy governs its real context with a ~200k working window and a 185k safety cap, compacting and persisting the native conversation itself. Models advertise a 1M **Pi scheduling window** so Pi does not summarize first at ~168.6k; this value is not a claim about agy's raw capacity. `/agy` reports the latest observed native footprint. agy's terminal counters accumulate over an entire resumed conversation, while the provider reports the latest response step to Pi.
 - **Native compaction display:** agy's documented stream-json protocol does not expose the exact compaction-boundary event used by its TUI. The extension conservatively detects a high-context collapse from response-step input plus cache-read usage and appends a durable `agy compacted context · ~178k → ~36k` divider. Ordinary cache/phase variation is filtered by strict minimum-size, reclaimed-token, and ratio thresholds.
-- **Pi compaction fallback:** manual `/compact`, overflow recovery, branch summaries, or eventual Pi scheduling still run in disposable agy conversations. The active native conversation therefore contains only real user prompts, not Pi's serialized `<conversation>…</conversation>` summary requests. These fallback summaries report zero usage because agy is subscription-billed.
+- **Pi compaction fallback:** manual `/compact`, overflow recovery, branch summaries, or eventual Pi scheduling run in disposable agy processes and conversations. The active persistent driver therefore contains only real user prompts, not Pi's serialized `<conversation>…</conversation>` summary requests. These fallback summaries report zero usage because agy is subscription-billed.
+- **Driver deadlines:** `agy --print-timeout` is deliberately omitted from persistent mode. agy 1.1.22 can remain alive yet stop producing later results after that process-wide budget elapses. Pi arms overall and inactivity watchdogs only while a user event is active and leaves no timer running while the driver is idle.
+- **Driver recycling:** selected binary path/version, workspace, model, resolved effort, custom agent, execution mode, and canonical bridge catalog revision form the process fingerprint. Changes recycle between turns and resume the branch-owned conversation; a pending bridged Pi tool call is never interrupted. `/agy doctor` reports total spawns/respawns, submitted and reused turns, recycle count, current-process turns, and per-cause recycle counters, making accidental per-turn churn visible. Leaving Antigravity closes the driver before bridge teardown.
 - **Thinking display:** substantive agy reasoning keeps one collapsed `Thought for …` row per logical turn rather than repeating before every tool phase. Tiny token-only planner/tool traces that native agy does not render as a thought row are suppressed.
 - **Cost display** uses model-specific public API reference prices for Gemini and Claude (agy is subscription-billed); open or unknown models stay at zero rather than borrowing another model's price. Override per model in `~/.pi/agent/models.json` under `providers.antigravity.modelOverrides`.
 - The print interface is text-only; images in context are replaced by an omission note. Model discovery caches live lists for 24h; fallback snapshots (discovery failed or timed out) expire after 5 minutes so live discovery is retried promptly.
+- Conversation metadata from `~/.gemini/antigravity-cli/cache/conversation_metadata.json` enriches `/agy` with a title/steps/update time only. It is bounded, tolerant, and never controls restore; the readable conversation `.db` plus agy's runtime response remain authoritative.
+- Hub/Connect RPC, `agentapi`, embedded webviews, passive editor context, executable auto-updates, arbitrary global-conversation switching, and inline accept/reject diffs are intentionally unsupported private/unsafe surfaces from the VS Code extension.
 - If an older globally installed copy exists, remove it first: `pi remove npm:@tian.zuo/pi-antigravity`.
 
 ## Development

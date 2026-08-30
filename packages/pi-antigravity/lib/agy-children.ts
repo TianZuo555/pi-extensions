@@ -75,6 +75,26 @@ export function untrackAgyChild(child: TrackableChild): void {
   getAgyChildrenRegistry().live.delete(child.pid);
 }
 
+/** Send a signal to a detached process tree without removing it from tracking. */
+export function signalAgyTree(child: TrackableChild, signal: NodeJS.Signals): void {
+  if (child.pid === undefined) return;
+  if (process.platform === "win32") {
+    // Windows has no process-group SIGTERM equivalent; callers escalate with taskkill.
+    return;
+  }
+  try {
+    process.kill(-child.pid, signal);
+    return;
+  } catch {
+    // Process group may already be gone; try the leader.
+  }
+  try {
+    process.kill(child.pid, signal);
+  } catch {
+    // Already exited.
+  }
+}
+
 /** Synchronously terminate a child's whole process tree. */
 export function killAgyTree(child: TrackableChild): void {
   if (child.pid === undefined) return;

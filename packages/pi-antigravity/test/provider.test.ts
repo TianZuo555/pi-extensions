@@ -226,6 +226,76 @@ function makeStreamHarness(options: { prompt?: string; createIsolatedRuntime?: (
   };
 }
 
+test("streamAntigravity refreshes bridge state and passes effort, profile, and revision before begin", async () => {
+  const prompt = "configured turn";
+  const controller = new AgyTurnController(prompt);
+  const bridge = new AgyPiBridge("test-config-bridge");
+  bridge.setToolSource(() => [
+    { name: "mcp", description: "gateway", parameters: { type: "object" } },
+  ]);
+  let captured: Record<string, unknown> | undefined;
+  const service = {
+    beginStreamTurn: (request: Record<string, unknown>) =>
+      Effect.sync(() => {
+        captured = request;
+        return controller;
+      }),
+    finishTurn: Effect.void,
+    snapshot: Effect.succeed({ cwd: "/repo" }),
+    setSession: () => Effect.void,
+    close: Effect.void,
+  };
+  const runtime = { runPromise: (effect: Effect.Effect<any, any>) => Effect.runPromise(effect) };
+  const streamFn = streamAntigravity(
+    runtime as any,
+    service as any,
+    new AgyReplayStore(),
+    bridge,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    () => ({
+      id: "gemini-3.7-flash",
+      name: "Gemini 3.7 Flash",
+      supportedEfforts: ["high", "low"],
+      defaultEffort: "high",
+    }),
+    () => ({ agent: "reviewer", mode: "plan" }),
+    () => `2:${bridge.catalogRevision}`,
+  );
+  const model = {
+    id: "gemini-3.7-flash",
+    provider: "antigravity",
+    api: "antigravity-stream-json",
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+  } as any;
+  const eventsPromise = (async () => {
+    const events = [];
+    for await (const event of streamFn(
+      model,
+      contextWith([{ role: "user", content: [{ type: "text", text: prompt }] }]),
+      { reasoning: "medium" },
+    )) {
+      events.push(event);
+    }
+    return events;
+  })();
+  controller.push({
+    type: "result",
+    status: "OK",
+    response: "done",
+    error: undefined,
+    usage: undefined,
+  });
+  await eventsPromise;
+  assert.equal(captured?.effort, "high", "unsupported medium falls back to discovered default");
+  assert.equal(captured?.agent, "reviewer");
+  assert.equal(captured?.mode, "plan");
+  assert.equal(captured?.bridgeRevision, "2:1");
+});
+
 test("streamAntigravity isolates pi summarization from the resumed agy conversation", async () => {
   const summaryPrompt =
     "<conversation>\nuser: real request\nassistant: result\n</conversation>\n\nSummarize the conversation above.";

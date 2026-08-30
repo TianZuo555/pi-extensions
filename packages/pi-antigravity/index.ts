@@ -5,9 +5,11 @@
 // auto-deny tools that would need a permission prompt otherwise).
 //
 // Commands:
-//   /agy            show agy conversation status (id, model, turns)
+//   /agy            show agy conversation and persistent-driver status
 //   /agy reset      drop the current agy conversation (next turn starts fresh)
 //   /agy models     re-discover models from `agy models` and re-register
+//   /agy agents     list configured custom agents
+//   /agy doctor     diagnose binary, models, driver, bridge, and local state
 //   /agy-usage      show Antigravity model quotas (weekly and 5-hour limits)
 
 import type {
@@ -16,20 +18,14 @@ import type {
   ExtensionUIContext,
   ProviderModelConfig,
 } from "@earendil-works/pi-coding-agent";
-import { Text, truncateToWidth } from "@earendil-works/pi-tui";
+import { stripTerminalSequences, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { piConfigDir, readJson, writeJson } from "./lib/config.ts";
-import { AGY_BINARY } from "./lib/agy-client.ts";
-import {
-  installAgyDeathHooks,
-  killAgyTree,
-  killAllAgyTrees,
-  trackAgyChild,
-  untrackAgyChild,
-} from "./lib/agy-children.ts";
+import { installAgyDeathHooks, killAllAgyTrees } from "./lib/agy-children.ts";
+import { checkAgyBinary, MIN_AGY_VERSION, runAgyCommand } from "./lib/agy-diagnostics.ts";
+import { parseAgyAgents, readAgyProcessProfile } from "./lib/agy-profile.ts";
 import { pruneBridgeMcpCache, removeMcpCacheEntry } from "./lib/mcp-cache.ts";
 import {
   AgyPiBridge,
@@ -50,10 +46,11 @@ import {
 import {
   capabilitiesForModel,
   FALLBACK_MODELS,
+  mergeAgyModels,
   modelCacheTtlMs,
-  normalizeAgyModelId,
   parseAgyModels,
   pricingForModel,
+  resolveAgyModelEffort,
   type AgyModelInfo,
 } from "./lib/models.ts";
 import type { AgyActivity } from "./lib/reducer.ts";
@@ -71,6 +68,7 @@ import {
   type PersistedAgyConversation,
   type PersistedAgyReset,
 } from "./lib/conversation-state.ts";
+import { readAgyConversationMetadata } from "./lib/conversation-metadata.ts";
 import { AgyReplayStore, type RecordedAgyTool } from "./lib/replay.ts";
 import { findAgyTask, listAgyTasks, stopAgyTask } from "./lib/tasks.ts";
 import { findAgyArtifact, listAgyArtifacts } from "./lib/artifacts.ts";
@@ -81,11 +79,24 @@ import { openAgyTasksPicker } from "./src/tasks-ui.ts";
 import { openArtifact, openAgyArtifactsPicker } from "./src/artifacts-ui.ts";
 import { openAgyUsagePicker } from "./src/usage-ui.ts";
 import { agyToolLabel, formatAgyCall, summarizeAgyResult } from "./lib/render.ts";
-import { streamAntigravity } from "./src/provider.ts";
-import { AntigravityRuntime, createAntigravityRuntime, runAntigravity } from "./src/runtime.ts";
+import { mapThinkingToEffort, streamAntigravity } from "./src/provider.ts";
+import {
+  AntigravityRuntime,
+  createAntigravityRuntime,
+  runAntigravity,
+  type AntigravityStateSnapshot,
+} from "./src/runtime.ts";
 
 const MODEL_CACHE_FILE = path.join(piConfigDir("antigravity"), "model-list.json");
 const DISCOVERY_TIMEOUT_MS = 15_000;
+
+function statusOneLine(value: string, maxLength = 160): string {
+  return stripTerminalSequences(value)
+    .replace(/[\x00-\x1f\x7f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, maxLength);
+}
 
 // --- Pi-tool bridge ---------------------------------------------------------
 
@@ -94,55 +105,8 @@ const BRIDGE_ENABLED = process.env.PI_ANTIGRAVITY_PI_TOOL_BRIDGE !== "0";
 /** Timeout for shutdown-path agy calls — fast enough not to stall closing pi. */
 const SHUTDOWN_AGY_TIMEOUT_MS = 5_000;
 
-function execAgy(args: string[], timeoutMs = DISCOVERY_TIMEOUT_MS): Promise<string> {
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    let out = "";
-    let errOut = "";
-    const settle = (fn: () => void) => {
-      if (settled) return;
-      settled = true;
-      if (timer) clearTimeout(timer);
-      fn();
-    };
-    const child = spawn(AGY_BINARY, args, {
-      stdio: ["ignore", "pipe", "pipe"],
-      // Own process group so killAgyTree's negative-pid SIGKILL reaps the
-      // whole tree on timeout. Raw spawn because execFile drops `detached`.
-      detached: true,
-    });
-    trackAgyChild(child);
-    child.stdout?.setEncoding("utf8");
-    child.stdout?.on("data", (chunk: string) => {
-      out += chunk;
-    });
-    child.stderr?.setEncoding("utf8");
-    child.stderr?.on("data", (chunk: string) => {
-      errOut += chunk;
-    });
-    child.on("error", (err) => {
-      settle(() => {
-        untrackAgyChild(child);
-        reject(new Error(err.message));
-      });
-    });
-    child.on("close", (code) => {
-      settle(() => {
-        untrackAgyChild(child);
-        if (code === 0) resolve(out);
-        else {
-          reject(new Error(errOut.trim() || `agy ${args[0]} exited with code ${code ?? "signal"}`));
-        }
-      });
-    });
-    timer = setTimeout(() => {
-      settle(() => {
-        killAgyTree(child);
-        reject(new Error(`agy ${args[0]} timed out after ${Math.round(timeoutMs / 1000)}s`));
-      });
-    }, timeoutMs);
-  });
+async function execAgy(args: string[], timeoutMs = DISCOVERY_TIMEOUT_MS): Promise<string> {
+  return (await runAgyCommand(args, { timeoutMs })).stdout;
 }
 
 /**
@@ -217,12 +181,17 @@ function toProviderModel(model: AgyModelInfo): ProviderModelConfig {
 
 /** Collapse effort variants and dedupe (also heals pre-0.2.0 caches). */
 function normalizeModels(models: AgyModelInfo[]): AgyModelInfo[] {
-  const out: AgyModelInfo[] = [];
-  for (const m of models) {
-    const n = normalizeAgyModelId(m.id, m.name);
-    if (!out.some((x) => x.id === n.id)) out.push(n);
-  }
-  return out;
+  return mergeAgyModels(models).map((model) => {
+    if (model.supportedEfforts.length > 0) return model;
+    const fallback = FALLBACK_MODELS.find((candidate) => candidate.id === model.id);
+    return fallback?.supportedEfforts.length
+      ? {
+          ...model,
+          supportedEfforts: [...fallback.supportedEfforts],
+          defaultEffort: fallback.defaultEffort,
+        }
+      : model;
+  });
 }
 
 async function listAgyModels(): Promise<AgyModelInfo[]> {
@@ -680,25 +649,26 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
         getBootstrapSuffix,
         isActiveTool,
         handleAgyActivity,
+        createAntigravityRuntime,
+        (modelId) => currentCache.models.find((candidate) => candidate.id === modelId),
+        readAgyProcessProfile,
+        bridgeManager.processRevision,
       ),
     });
   };
 
   registerAntigravityProvider(currentCache.models);
 
-  // Refresh model catalog non-blockingly in the background when stale or on fallback
-  if (
-    !currentCache.fetchedAt ||
-    Date.now() - currentCache.fetchedAt >= modelCacheTtlMs(currentCache.source)
-  ) {
-    void discoverModels(true)
-      .then((fresh) => {
-        currentCache = fresh;
-        registerAntigravityProvider(fresh.models);
-      })
-      .catch(() => {
-        // Cache is best-effort
-      });
+  async function refreshStaleModelsWhenSelected(): Promise<void> {
+    if (
+      currentCache.fetchedAt &&
+      Date.now() - currentCache.fetchedAt < modelCacheTtlMs(currentCache.source)
+    ) {
+      return;
+    }
+    const fresh = await discoverModels(true);
+    currentCache = fresh;
+    registerAntigravityProvider(fresh.models);
   }
 
   pi.on("before_agent_start", (event) => {
@@ -784,6 +754,7 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
     // model_select; non-agy sessions never touch agy at all.
     if (ctx.model?.provider === "antigravity") {
       await ensureBridgeRegistered(ctx.ui);
+      await refreshStaleModelsWhenSelected();
     }
   });
 
@@ -802,6 +773,7 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
     // The bridge exists only while an Antigravity model is selected.
     if (event.model?.provider === "antigravity") {
       await ensureBridgeRegistered(ctx?.ui);
+      await refreshStaleModelsWhenSelected();
     } else {
       await teardownBridge();
     }
@@ -878,7 +850,7 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
   });
 
   pi.registerCommand("agy", {
-    description: "Manage the agy backend: status | reset | models",
+    description: "Manage the agy backend: status | reset | models | agents | doctor",
     handler: async (args, ctx) => {
       const sub = args.trim().toLowerCase();
       if (sub === "reset") {
@@ -897,18 +869,169 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
         );
         return;
       }
+      if (sub === "agents") {
+        try {
+          const agents = parseAgyAgents(await execAgy(["agents"]));
+          ctx.ui.notify(
+            agents.length > 0
+              ? `antigravity custom agents:\n${agents.map((agent) => `• ${agent}`).join("\n")}`
+              : "antigravity: no custom agents configured.",
+            "info",
+          );
+        } catch (error) {
+          ctx.ui.notify(
+            `antigravity: failed to list agents (${error instanceof Error ? error.message : String(error)}).`,
+            "error",
+          );
+        }
+        return;
+      }
+      if (sub === "doctor") {
+        const lines = ["antigravity doctor"];
+        const binary = await checkAgyBinary({ refresh: true });
+        if (binary.ok) {
+          lines.push(
+            `binary: ${binary.binary} (${binary.version}, ${binary.source})`,
+            `binary selection: ${binary.selectionReason ?? "compatible candidate"}`,
+            `minimum: ${MIN_AGY_VERSION}`,
+          );
+        } else {
+          lines.push(
+            `binary: ERROR [${binary.category}] ${binary.message}`,
+            `minimum: ${MIN_AGY_VERSION}`,
+          );
+        }
+        for (const candidate of binary.candidates ?? []) {
+          const selected =
+            binary.ok && candidate.binary === binary.binary ? "selected" : "candidate";
+          lines.push(
+            `binary ${selected}: ${candidate.source} ${candidate.binary} · ${
+              candidate.ok
+                ? candidate.development
+                  ? (candidate.version ?? "development")
+                  : (candidate.version ?? "unknown")
+                : `ERROR [${candidate.category ?? "unknown"}]`
+            }`,
+          );
+        }
+
+        try {
+          const discovered = parseAgyModels((await runAgyCommand(["models"])).stdout);
+          if (discovered.length === 0) throw new Error("no valid model rows returned");
+          currentCache = { fetchedAt: Date.now(), source: "live", models: discovered };
+          registerAntigravityProvider(discovered);
+          lines.push(`models: ${discovered.length} (live)`);
+        } catch (error) {
+          lines.push(
+            `models: ERROR ${error instanceof Error ? error.message : String(error)}; ${currentCache.models.length} cached (${currentCache.source})`,
+          );
+        }
+
+        let snapshot: AntigravityStateSnapshot | undefined;
+        try {
+          snapshot = await runAntigravity(runtime, service.snapshot);
+          const executor = snapshot.executor;
+          const config = executor.config;
+          lines.push(
+            `driver: ${executor.mode} · ${executor.state}${executor.pid ? ` · pid ${executor.pid}` : ""}`,
+            `driver binary: ${config?.binary ?? "none"}${config?.binaryVersion ? ` · ${config.binaryVersion}` : ""}`,
+            `driver config: model=${config?.model ?? "none"} effort=${config?.effort ?? "none"} agent=${config?.agent ?? "none"} mode=${config?.mode ?? "default"}`,
+          );
+          if (executor.stats) {
+            const stats = executor.stats;
+            const reasons = Object.entries(stats.recycleReasons)
+              .map(([reason, count]) => `${reason}=${count}`)
+              .join(", ");
+            lines.push(
+              executor.mode === "persistent"
+                ? `driver stats: spawns=${stats.spawnCount} respawns=${Math.max(0, stats.spawnCount - 1)} turns=${stats.submittedTurns} reused=${stats.reusedTurns} recycles=${stats.recycleCount} current=${stats.currentProcessTurns}`
+                : `driver stats: one-shot launches=${stats.spawnCount} turns=${stats.submittedTurns}`,
+              `driver recycle reasons: ${reasons || "none"}`,
+            );
+          }
+        } catch (error) {
+          lines.push(`driver: ERROR ${error instanceof Error ? error.message : String(error)}`);
+        }
+
+        const selected = currentCache.models.find((model) => model.id === ctx.model?.id);
+        let profile = "agent=none mode=default";
+        try {
+          const configured = readAgyProcessProfile();
+          profile = `agent=${configured.agent ?? "none"} mode=${configured.mode ?? "default"}`;
+          lines.push(
+            `selection: ${ctx.model?.id ?? "none"} · effort ${
+              resolveAgyModelEffort(
+                selected,
+                ctx.thinkingLevel === "off"
+                  ? undefined
+                  : mapThinkingToEffort(
+                      ctx.thinkingLevel as Exclude<typeof ctx.thinkingLevel, "off">,
+                    ),
+              ) ?? "none"
+            }`,
+          );
+        } catch (error) {
+          lines.push(`profile: ERROR ${error instanceof Error ? error.message : String(error)}`);
+        }
+        lines.push(`profile: ${profile}`);
+        lines.push(
+          `bridge: enabled=${BRIDGE_ENABLED} running=${bridgeManager.isRunning()} registered=${bridgeManager.isRegistered()} revision=${bridgeManager.processRevision()}`,
+        );
+
+        const conversationId = snapshot?.conversationId;
+        if (conversationId) {
+          const [exists, metadata] = await Promise.all([
+            agyConversationExists(conversationId),
+            readAgyConversationMetadata(conversationId),
+          ]);
+          lines.push(
+            `conversation: ${conversationId} · db ${exists ? "readable" : "missing/unreadable"}`,
+            `metadata: ${metadata.status}`,
+          );
+        } else {
+          lines.push("conversation: none", "metadata: not applicable");
+        }
+        ctx.ui.notify(lines.join("\n"), binary.ok ? "info" : "error");
+        return;
+      }
       if (sub) {
-        ctx.ui.notify(`antigravity: unknown argument "${sub}". Use reset | models.`, "error");
+        ctx.ui.notify(
+          `antigravity: unknown argument "${sub}". Use reset | models | agents | doctor.`,
+          "error",
+        );
         return;
       }
       const snapshot = await runAntigravity(runtime, service.snapshot);
-      const id = snapshot.conversationId ?? "(none — next turn starts fresh)";
-      const context =
+      const id = snapshot.conversationId;
+      const metadata = id ? await readAgyConversationMetadata(id) : undefined;
+      const metadataTitle = metadata?.metadata?.title
+        ? statusOneLine(metadata.metadata.title)
+        : undefined;
+      const title = metadataTitle || (id ? id.slice(0, 12) : "none — next turn starts fresh");
+      const updated = metadata?.metadata?.updatedAt
+        ? new Date(metadata.metadata.updatedAt).toLocaleString()
+        : undefined;
+      const details = [
+        `model: ${snapshot.model ?? "unselected"}`,
+        `turns: ${snapshot.turns}`,
+        `driver: ${snapshot.executor.mode}/${snapshot.executor.state}${snapshot.executor.pid ? ` pid=${snapshot.executor.pid}` : ""}`,
         observedContextTokens === undefined
-          ? ""
-          : ` · native context: ~${formatAgyContextTokens(observedContextTokens)}/185k`;
+          ? undefined
+          : `native context: ~${formatAgyContextTokens(observedContextTokens)}/185k`,
+        metadata?.metadata?.numSteps === undefined
+          ? undefined
+          : `native steps: ${metadata.metadata.numSteps}`,
+        updated ? `updated: ${updated}` : undefined,
+      ].filter((part): part is string => part !== undefined);
+      let profile = "agent: none · mode: default";
+      try {
+        const configured = readAgyProcessProfile();
+        profile = `agent: ${configured.agent ?? "none"} · mode: ${configured.mode ?? "default"}`;
+      } catch (error) {
+        profile = `profile error: ${error instanceof Error ? error.message : String(error)}`;
+      }
       ctx.ui.notify(
-        `antigravity: conversation ${id}\nmodel: ${snapshot.model ?? "unselected"} · turns: ${snapshot.turns}${context} · models: ${currentCache.models.length} (${currentCache.source})`,
+        `antigravity: ${title}\nconversation: ${id ?? "none"}\n${details.join(" · ")}\n${profile}`,
         "info",
       );
     },

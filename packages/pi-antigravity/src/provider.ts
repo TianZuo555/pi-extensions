@@ -28,6 +28,8 @@ import {
 } from "@earendil-works/pi-ai";
 import type { AgyEffort } from "../lib/agy-client.ts";
 import { type AgyPiBridge, resolveBridgeResultsFromContext } from "../lib/bridge.ts";
+import { resolveAgyModelEffort, type AgyModelInfo } from "../lib/models.ts";
+import { readAgyProcessProfile, type AgyProcessProfile } from "../lib/agy-profile.ts";
 import type { AgyActivity, AgyUsage } from "../lib/reducer.ts";
 import type { AgyReplayStore } from "../lib/replay.ts";
 import { mapAgyToolToNative } from "../lib/native-tools.ts";
@@ -233,6 +235,12 @@ export function streamAntigravity(
   onActivity?: (activity: AgyActivity) => void,
   /** Test seam for disposable compaction/branch-summary conversations. */
   createIsolatedRuntime: () => AntigravityRuntimeInstance = createAntigravityRuntime,
+  /** Current discovery metadata used to resolve a valid required effort. */
+  getModelInfo: (modelId: string) => AgyModelInfo | undefined = () => undefined,
+  /** Validated process profile; read per turn so env changes recycle safely. */
+  getProcessProfile: () => AgyProcessProfile = readAgyProcessProfile,
+  /** Combined bridge registration/catalog revision. */
+  getBridgeRevision: () => string | undefined = () => undefined,
 ) {
   return (
     model: Model<string>,
@@ -309,23 +317,33 @@ export function streamAntigravity(
           );
         }
 
+        let bridgeRevision: string | undefined;
+        let processProfile: AgyProcessProfile = {};
+        if (!summaryRequest) {
+          // Refresh and resolve before the driver fingerprint is evaluated.
+          // Re-entry into a pending bridge turn returns the existing controller,
+          // so a changed revision is deferred safely to the next user turn.
+          bridge.refreshTools();
+          resolveBridgeResultsFromContext(bridge, context.messages);
+          bridgeRevision = getBridgeRevision();
+          processProfile = getProcessProfile();
+        }
+        const requestedEffort = mapThinkingToEffort(options?.reasoning);
+        const effort = resolveAgyModelEffort(getModelInfo(model.id), requestedEffort);
+
         const controller = await turnRuntime.runPromise(
           turnService.beginStreamTurn({
             prompt,
             historyBootstrap: summaryRequest ? undefined : piHistoryBootstrap(context),
             bootstrapSuffix: summaryRequest ? undefined : getBootstrapSuffix?.(),
             modelId: model.id,
-            effort: mapThinkingToEffort(options?.reasoning),
+            effort,
+            agent: processProfile.agent,
+            mode: processProfile.mode,
+            bridgeRevision,
             signal: options?.signal,
           }),
         );
-
-        if (!summaryRequest) {
-          // Refresh the exposed-tool snapshot per request and hand back the
-          // results of bridged tools pi executed since the previous request.
-          bridge.refreshTools();
-          resolveBridgeResultsFromContext(bridge, context.messages);
-        }
 
         let usage: AgyUsage | undefined;
         let textIndex: number | null = null;

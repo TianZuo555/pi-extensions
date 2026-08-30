@@ -6,20 +6,33 @@ import {
   modelCacheTtlMs,
   parseAgyModels,
   pricingForModel,
+  resolveAgyModelEffort,
 } from "../lib/models.ts";
 import { MODELS_OUTPUT } from "./fixtures.ts";
 
 test("parseAgyModels parses tab-separated model lines, collapses effort variants, and skips noise", () => {
   const models = parseAgyModels(MODELS_OUTPUT);
   assert.equal(models.length, 7);
-  assert.deepEqual(models[0], { id: "gemini-3.7-flash", name: "Gemini 3.7 Flash" });
+  assert.deepEqual(models[0], {
+    id: "gemini-3.7-flash",
+    name: "Gemini 3.7 Flash",
+    supportedEfforts: ["high", "medium"],
+    defaultEffort: "high",
+  });
   assert.equal(models[1].id, "gemini-3.6-flash");
   assert.deepEqual(models[4], {
     id: "claude-sonnet-4-6",
     name: "Claude Sonnet 4.6 (Thinking)",
+    supportedEfforts: [],
+    defaultEffort: undefined,
   });
   assert.equal(models[5].id, "claude-opus-4-6-thinking");
-  assert.deepEqual(models[6], { id: "gpt-oss-120b", name: "GPT-OSS 120B" });
+  assert.deepEqual(models[6], {
+    id: "gpt-oss-120b",
+    name: "GPT-OSS 120B",
+    supportedEfforts: ["medium"],
+    defaultEffort: "medium",
+  });
 });
 
 test("parseAgyModels dedupes ids and rejects malformed lines", () => {
@@ -34,6 +47,14 @@ test("parseAgyModels dedupes ids and rejects malformed lines", () => {
 
 test("parseAgyModels returns empty for empty output", () => {
   assert.deepEqual(parseAgyModels(""), []);
+});
+
+test("resolveAgyModelEffort never launches a normalized model with an invalid effort", () => {
+  const [gemini, , , pro, claude, , gpt] = FALLBACK_MODELS;
+  assert.equal(resolveAgyModelEffort(gemini, "low"), "low");
+  assert.equal(resolveAgyModelEffort(pro, "medium"), "high");
+  assert.equal(resolveAgyModelEffort(claude, "high"), undefined);
+  assert.equal(resolveAgyModelEffort(gpt, "high"), "medium");
 });
 
 test("pricingForModel uses vendor-specific reference rates and no cross-vendor fallback", () => {

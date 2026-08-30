@@ -39,7 +39,9 @@
     "test": "node --test --experimental-strip-types test/*.test.ts"
   },
   "dependencies": {
-    "effect": "4.0.0-beta.101"
+    "effect": "4.0.0-beta.101",
+    "semver": "^7.8.5",
+    "which": "^7.0.0"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
@@ -47,6 +49,8 @@
   },
   "devDependencies": {
     "@effect/language-service": "^0.87.2",
+    "@types/semver": "^7.8.0",
+    "@types/which": "^3.0.4",
     "typescript": "^7.0.2"
   },
   "publishConfig": {

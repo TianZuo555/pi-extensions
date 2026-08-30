@@ -9,12 +9,14 @@
  */
 
 import { Context, Data, Effect, Layer, ManagedRuntime, Exit, Cause, Result } from "effect";
+import { AgySpawnError, AgyStallError, type AgyTurnRequest } from "../lib/agy-client.ts";
 import {
-  AgySpawnError,
-  AgyStallError,
-  runAgyTurn,
-  type AgyTurnRequest,
-} from "../lib/agy-client.ts";
+  createAgyTurnExecutor,
+  type AgyExecutorSnapshot,
+  type AgyRecycleCause,
+  type AgyTurnExecutor,
+} from "../lib/agy-driver.ts";
+import type { AgyExecutionMode } from "../lib/agy-profile.ts";
 import type { AgyTurnOutcome, AgyUsage } from "../lib/reducer.ts";
 import { stallContinuationPrompt } from "../lib/prompt.ts";
 import { AgyTurnController } from "../lib/turn.ts";
@@ -84,6 +86,7 @@ export interface AntigravityStateSnapshot {
   cwd: string | undefined;
   turns: number;
   conversationUsage: AgyUsage;
+  executor: AgyExecutorSnapshot;
 }
 
 export interface AntigravityRuntimeShape {
@@ -115,6 +118,9 @@ export interface AntigravityRuntimeShape {
     readonly bootstrapSuffix?: string;
     readonly modelId: string;
     readonly effort?: "low" | "medium" | "high";
+    readonly agent?: string;
+    readonly mode?: AgyExecutionMode;
+    readonly bridgeRevision?: string;
     readonly signal?: AbortSignal;
   }) => Effect.Effect<AgyTurnController, AntigravityRuntimeClosedError>;
   /** Clear the active controller once a provider turn reached a terminal state. */
@@ -141,7 +147,15 @@ export class AntigravityRuntime extends Context.Service<
 
 export type AgyTurnRunner = (request: AgyTurnRequest) => Promise<AgyTurnOutcome>;
 
-const makeRuntime = (turnRunner: AgyTurnRunner) =>
+function runnerExecutor(turnRunner: AgyTurnRunner): AgyTurnExecutor {
+  return {
+    run: turnRunner,
+    snapshot: () => ({ mode: "one-shot", state: "idle", lifecycle: [] }),
+    close: async () => {},
+  };
+}
+
+const makeRuntime = (executor: AgyTurnExecutor) =>
   Effect.gen(function* () {
     let conversationId: string | undefined;
     /** Terminal usage counters from the last turn; agy reports them cumulatively on resume. */
@@ -169,6 +183,14 @@ const makeRuntime = (turnRunner: AgyTurnRunner) =>
       active = undefined;
     };
 
+    const recycle = async (
+      reason: "recycle" | "abort" | "shutdown" = "recycle",
+      cause?: AgyRecycleCause,
+    ) => {
+      invalidateActiveTurn();
+      await executor.close(reason, cause);
+    };
+
     const ensureOpen: Effect.Effect<void, AntigravityRuntimeClosedError> = Effect.suspend(() =>
       closed
         ? Effect.fail(
@@ -183,11 +205,19 @@ const makeRuntime = (turnRunner: AgyTurnRunner) =>
       setSession: (sessionCwd, modelId, restoreFromPiContext = false) =>
         ensureOpen.pipe(
           Effect.andThen(
-            Effect.sync(() => {
+            Effect.promise(async () => {
+              const cwdChanged = cwd !== sessionCwd;
+              const modelChanged =
+                modelId !== undefined && model !== undefined && model !== modelId;
               cwd = sessionCwd;
               if (modelId !== undefined) model = modelId;
+              if (restoreFromPiContext || cwdChanged || modelChanged) {
+                await recycle(
+                  "recycle",
+                  restoreFromPiContext ? "session-tree" : cwdChanged ? "cwd" : "model",
+                );
+              }
               if (restoreFromPiContext) {
-                invalidateActiveTurn();
                 conversationId = undefined;
                 conversationUsage = {};
                 conversationCwd = undefined;
@@ -203,8 +233,8 @@ const makeRuntime = (turnRunner: AgyTurnRunner) =>
       restoreConversation: (state) =>
         ensureOpen.pipe(
           Effect.andThen(
-            Effect.sync(() => {
-              invalidateActiveTurn();
+            Effect.promise(async () => {
+              await recycle("recycle", "restore");
               conversationId = state.conversationId;
               conversationUsage = { ...state.usage };
               conversationCwd = state.cwd;
@@ -259,10 +289,13 @@ const makeRuntime = (turnRunner: AgyTurnRunner) =>
               const turnAbort = new AbortController();
               activeTurnAbort = turnAbort;
               const turnGeneration = generation;
+              let requestAbortHandler: (() => void) | undefined;
               if (request.signal) {
                 if (request.signal.aborted) turnAbort.abort();
-                else
-                  request.signal.addEventListener("abort", () => turnAbort.abort(), { once: true });
+                else {
+                  requestAbortHandler = () => turnAbort.abort();
+                  request.signal.addEventListener("abort", requestAbortHandler, { once: true });
+                }
               }
               const resumingPersistedConversation =
                 restoredConversationPending && conversationId !== undefined;
@@ -293,6 +326,9 @@ const makeRuntime = (turnRunner: AgyTurnRunner) =>
                 conversationId,
                 model: request.modelId,
                 effort: request.effort,
+                agent: request.agent,
+                mode: request.mode,
+                bridgeRevision: request.bridgeRevision,
                 cwd,
                 timeoutMs: envInt("AGY_TURN_TIMEOUT_MS", 600_000),
                 inactivityTimeoutMs: envInt("AGY_STALL_TIMEOUT_MS", 120_000),
@@ -358,7 +394,7 @@ const makeRuntime = (turnRunner: AgyTurnRunner) =>
                             conversationId: resumableConversationId,
                           };
                   try {
-                    const outcome = await turnRunner(attempt);
+                    const outcome = await executor.run(attempt);
                     if (resumingPersistedConversation && !freshFallback && restoredResultMissing) {
                       restoredAttemptActive = false;
                       controller.push({ type: "conversation_fallback" });
@@ -427,6 +463,12 @@ const makeRuntime = (turnRunner: AgyTurnRunner) =>
                     return;
                   }
                   controller.fail(cause instanceof Error ? cause : new Error(String(cause)));
+                })
+                .finally(() => {
+                  if (requestAbortHandler) {
+                    request.signal?.removeEventListener("abort", requestAbortHandler);
+                  }
+                  if (activeTurnAbort === turnAbort) activeTurnAbort = undefined;
                 });
               return controller;
             }),
@@ -445,8 +487,8 @@ const makeRuntime = (turnRunner: AgyTurnRunner) =>
 
       reset: ensureOpen.pipe(
         Effect.andThen(
-          Effect.sync(() => {
-            invalidateActiveTurn();
+          Effect.promise(async () => {
+            await recycle("recycle", "reset");
             conversationId = undefined;
             conversationUsage = {};
             conversationCwd = undefined;
@@ -466,6 +508,7 @@ const makeRuntime = (turnRunner: AgyTurnRunner) =>
             cwd,
             turns,
             conversationUsage: { ...conversationUsage },
+            executor: executor.snapshot(),
           })),
         ),
       ),
@@ -473,15 +516,14 @@ const makeRuntime = (turnRunner: AgyTurnRunner) =>
       close: Effect.suspend(() =>
         ensureOpen.pipe(
           Effect.andThen(
-            Effect.sync(() => {
+            Effect.promise(async () => {
               closed = true;
               conversationId = undefined;
               conversationUsage = {};
               conversationCwd = undefined;
               restoredConversationPending = false;
               lastBootstrappedSkillsSuffix = undefined;
-              // Kill any in-flight agy child process immediately.
-              invalidateActiveTurn();
+              await recycle("shutdown");
             }),
           ),
         ),
@@ -489,13 +531,19 @@ const makeRuntime = (turnRunner: AgyTurnRunner) =>
     });
   });
 
-const runtimeLayer = (turnRunner: AgyTurnRunner): Layer.Layer<AntigravityRuntime> =>
-  Layer.effect(AntigravityRuntime, makeRuntime(turnRunner));
+const runtimeLayer = (executor: AgyTurnExecutor): Layer.Layer<AntigravityRuntime> =>
+  Layer.effect(AntigravityRuntime, makeRuntime(executor));
 
-export const AntigravityRuntimeLive: Layer.Layer<AntigravityRuntime> = runtimeLayer(runAgyTurn);
+export const AntigravityRuntimeLive: Layer.Layer<AntigravityRuntime> = runtimeLayer(
+  createAgyTurnExecutor(),
+);
 
-export function createAntigravityRuntime(turnRunner: AgyTurnRunner = runAgyTurn) {
-  return ManagedRuntime.make(runtimeLayer(turnRunner));
+export function createAntigravityRuntime(
+  executorOrRunner: AgyTurnExecutor | AgyTurnRunner = createAgyTurnExecutor(),
+) {
+  const executor =
+    typeof executorOrRunner === "function" ? runnerExecutor(executorOrRunner) : executorOrRunner;
+  return ManagedRuntime.make(runtimeLayer(executor));
 }
 
 export type AntigravityRuntimeInstance = ReturnType<typeof createAntigravityRuntime>;

@@ -67,12 +67,16 @@ test("buildAgyArgs always skips permissions and puts the prompt directly after -
     effort: "medium",
     cwd: "/tmp/w",
     timeoutMs: 90_000,
+    agent: "reviewer",
+    mode: "plan",
   });
   assert.equal(full[full.indexOf("--conversation") + 1], "c1");
   assert.equal(full[full.indexOf("--model") + 1], "m1");
   assert.equal(full[full.indexOf("--effort") + 1], "medium");
   assert.equal(full[full.indexOf("--add-dir") + 1], "/tmp/w");
   assert.equal(full[full.indexOf("--print-timeout") + 1], "90s");
+  assert.equal(full[full.indexOf("--agent") + 1], "reviewer");
+  assert.equal(full[full.indexOf("--mode") + 1], "plan");
 });
 
 test("runAgyTurn reduces a successful stream", async () => {

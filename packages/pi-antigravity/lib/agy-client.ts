@@ -1,7 +1,7 @@
 /**
- * Imperative agy CLI client — spawns `agy --print` turns with stream-json
- * output, parses NDJSON, and folds events into an AgyTurnOutcome. The Effect
- * service in src/runtime.ts wraps this for typed lifecycle and abort handling.
+ * agy CLI request contract plus the one-shot `agy --print` rollback client.
+ * The default persistent implementation lives in agy-driver.ts; both paths
+ * parse NDJSON into the same AgyTurnOutcome contract.
  *
  * Every invocation hard-codes --dangerously-skip-permissions: headless agy
  * turns auto-deny any tool that needs a permission prompt, so skipping is
@@ -10,10 +10,10 @@
 
 import { spawn } from "node:child_process";
 import { killAgyTree, trackAgyChild, untrackAgyChild } from "./agy-children.ts";
+import { getAgyBinary } from "./agy-diagnostics.ts";
+import type { AgyExecutionMode } from "./agy-profile.ts";
 import { parseAgyLine } from "./events.ts";
 import { applyEvent, newTurnOutcome, type AgyActivity, type AgyTurnOutcome } from "./reducer.ts";
-
-export const AGY_BINARY = process.env.AGY_BINARY ?? "agy";
 
 /** agy reasoning effort, as accepted by `agy --effort`. */
 export type AgyEffort = "low" | "medium" | "high";
@@ -28,7 +28,7 @@ export interface AgyTurnRequest {
   effort?: AgyEffort;
   /** Working directory for the agy process. */
   cwd?: string;
-  /** Overall turn timeout; agy's own --print-timeout is set from this. */
+  /** Overall turn timeout owned by Pi. One-shot mode also passes --print-timeout. */
   timeoutMs?: number;
   /**
    * Kill the turn when the stream produces no bytes for this long (stall
@@ -42,6 +42,14 @@ export interface AgyTurnRequest {
    */
   toolInactivityTimeoutMs?: number;
   signal?: AbortSignal;
+  /** Optional custom agy agent selected for this process. */
+  agent?: string;
+  /** Stable agy execution mode. */
+  mode?: AgyExecutionMode;
+  /** Non-argv bridge/catalog fingerprint used by persistent executors. */
+  bridgeRevision?: string;
+  /** Preflight-selected absolute binary. Normally resolved lazily. */
+  binary?: string;
   /** Called with each structured activity event as tool steps stream in. */
   onActivity?: (activity: AgyActivity) => void;
   /**
@@ -85,36 +93,58 @@ export class AgyStallError extends Error {
   }
 }
 
-export function buildAgyArgs(request: AgyTurnRequest): string[] {
-  const timeout = Math.ceil((request.timeoutMs ?? 600_000) / 1000);
-  // NOTE: agy's --print consumes the NEXT token as the prompt value (it is
-  // not a boolean flag). The prompt MUST come immediately after --print,
-  // otherwise the first following flag string becomes the prompt.
-  const args = [
-    "--print",
-    request.prompt,
-    "--dangerously-skip-permissions",
-    "--disable-slash-commands",
-    "--output-format",
-    "stream-json",
-    // agy's print mode does not treat the process cwd as the workspace; the
-    // working directory must be registered explicitly via --add-dir.
-    ...(request.cwd ? ["--add-dir", request.cwd] : []),
-    "--print-timeout",
-    `${timeout}s`,
-  ];
+function appendProcessArgs(args: string[], request: AgyTurnRequest): string[] {
+  if (request.cwd) args.push("--add-dir", request.cwd);
   if (request.conversationId) args.push("--conversation", request.conversationId);
   if (request.model) args.push("--model", request.model);
   if (request.effort) args.push("--effort", request.effort);
+  if (request.agent) args.push("--agent", request.agent);
+  if (request.mode) args.push("--mode", request.mode);
   return args;
 }
+
+export function buildOneShotAgyArgs(request: AgyTurnRequest): string[] {
+  const timeout = Math.ceil((request.timeoutMs ?? 600_000) / 1000);
+  // --print consumes the next token, so the prompt must remain adjacent.
+  return appendProcessArgs(
+    [
+      "--print",
+      request.prompt,
+      "--dangerously-skip-permissions",
+      "--disable-slash-commands",
+      "--output-format",
+      "stream-json",
+      "--print-timeout",
+      `${timeout}s`,
+    ],
+    request,
+  );
+}
+
+export function buildDriverAgyArgs(request: Omit<AgyTurnRequest, "prompt">): string[] {
+  return appendProcessArgs(
+    [
+      "--input-format",
+      "stream-json",
+      "--output-format",
+      "stream-json",
+      "--dangerously-skip-permissions",
+      "--disable-slash-commands",
+    ],
+    { ...request, prompt: "" },
+  );
+}
+
+/** Kept as the public one-shot argument builder used by existing callers. */
+export const buildAgyArgs = buildOneShotAgyArgs;
 
 /**
  * Run one agy turn. Resolves with the reduced outcome once the process exits
  * or the result event arrives. Rejects with AgySpawnError when the process
  * fails before producing any result event (missing binary, auth failure, …).
  */
-export function runAgyTurn(request: AgyTurnRequest): Promise<AgyTurnOutcome> {
+export async function runAgyTurn(request: AgyTurnRequest): Promise<AgyTurnOutcome> {
+  const binary = request.binary ?? (request.spawnOverride ? "agy" : await getAgyBinary());
   return new Promise((resolve, reject) => {
     if (request.signal?.aborted) {
       const outcome = newTurnOutcome();
@@ -125,7 +155,7 @@ export function runAgyTurn(request: AgyTurnRequest): Promise<AgyTurnOutcome> {
       return;
     }
     const doSpawn = request.spawnOverride ?? spawn;
-    const child = doSpawn(AGY_BINARY, buildAgyArgs(request), {
+    const child = doSpawn(binary, buildOneShotAgyArgs(request), {
       cwd: request.cwd,
       stdio: ["ignore", "pipe", "pipe"],
       // Own process group so one negative-pid SIGKILL reaps agy's whole
@@ -149,6 +179,7 @@ export function runAgyTurn(request: AgyTurnRequest): Promise<AgyTurnOutcome> {
       untrackAgyChild(child);
     };
 
+    let abortHandler: (() => void) | undefined;
     const finishLogical = (fn: () => void) => {
       if (settled) return;
       settled = true;
@@ -157,6 +188,7 @@ export function runAgyTurn(request: AgyTurnRequest): Promise<AgyTurnOutcome> {
         clearTimeout(stallTimer);
         stallTimer = undefined;
       }
+      if (abortHandler) request.signal?.removeEventListener("abort", abortHandler);
       fn();
     };
 
@@ -198,20 +230,17 @@ export function runAgyTurn(request: AgyTurnRequest): Promise<AgyTurnOutcome> {
       child.stderr?.on("data", armStall);
     }
 
-    request.signal?.addEventListener(
-      "abort",
-      () => {
-        killAgyTree(child);
-        untrack();
-        finishLogical(() => {
-          outcome.status = "ERROR";
-          outcome.error = "agy turn was aborted.";
-          outcome.finished = true;
-          resolve(outcome);
-        });
-      },
-      { once: true },
-    );
+    abortHandler = () => {
+      killAgyTree(child);
+      untrack();
+      finishLogical(() => {
+        outcome.status = "ERROR";
+        outcome.error = "agy turn was aborted.";
+        outcome.finished = true;
+        resolve(outcome);
+      });
+    };
+    request.signal?.addEventListener("abort", abortHandler, { once: true });
 
     let conversationReported = false;
     const handleParsed = (parsed: ReturnType<typeof parseAgyLine>) => {
@@ -281,7 +310,7 @@ export function runAgyTurn(request: AgyTurnRequest): Promise<AgyTurnOutcome> {
       finishLogical(() =>
         reject(
           new AgySpawnError(
-            `failed to start agy (${err.message}). Install it or set AGY_BINARY.`,
+            `failed to start agy (${err.message}). Install agy 1.1.22+ or set AGY_BINARY.`,
             stderrBuf,
           ),
         ),

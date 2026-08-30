@@ -8,7 +8,7 @@
 
 import { spawn } from "node:child_process";
 import { killAgyTree, trackAgyChild, untrackAgyChild } from "./agy-children.ts";
-import { AGY_BINARY } from "./agy-client.ts";
+import { getAgyBinary } from "./agy-diagnostics.ts";
 
 export const USAGE_TIMEOUT_MS = 30_000;
 
@@ -208,12 +208,14 @@ function defaultExec(
 ): void {
   let settled = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let abortHandler: (() => void) | undefined;
   let out = "";
   let errOut = "";
   const settle = (fn: () => void) => {
     if (settled) return;
     settled = true;
     if (timer) clearTimeout(timer);
+    if (abortHandler) options.signal?.removeEventListener("abort", abortHandler);
     fn();
   };
   // Raw spawn (execFile drops `detached`): own process group + tracked, so
@@ -236,7 +238,7 @@ function defaultExec(
   });
   child.stderr?.setEncoding("utf8");
   child.stderr?.on("data", (chunk: string) => {
-    errOut += chunk;
+    errOut = (errOut + chunk).slice(-8_192);
   });
   child.on("error", (error) => {
     settle(() => {
@@ -256,16 +258,13 @@ function defaultExec(
       );
     });
   });
-  options.signal?.addEventListener(
-    "abort",
-    () => {
-      settle(() => {
-        killAgyTree(child);
-        callback(new Error("aborted"), "", "");
-      });
-    },
-    { once: true },
-  );
+  abortHandler = () => {
+    settle(() => {
+      killAgyTree(child);
+      callback(new Error("aborted"), "", "");
+    });
+  };
+  options.signal?.addEventListener("abort", abortHandler, { once: true });
   if (options.timeout !== undefined) {
     timer = setTimeout(() => {
       settle(() => {
@@ -277,8 +276,8 @@ function defaultExec(
 }
 
 /** Run `agy --print /usage` and parse the structured quota payload. */
-export function fetchAgyUsage(options: FetchAgyUsageOptions = {}): Promise<AgyUsageReport> {
-  const binary = options.binary ?? AGY_BINARY;
+export async function fetchAgyUsage(options: FetchAgyUsageOptions = {}): Promise<AgyUsageReport> {
+  const binary = options.binary ?? (options.execFileOverride ? "agy" : await getAgyBinary());
   const timeoutMs = options.timeoutMs ?? USAGE_TIMEOUT_MS;
   const run = options.execFileOverride ?? defaultExec;
   return new Promise((resolve, reject) => {
