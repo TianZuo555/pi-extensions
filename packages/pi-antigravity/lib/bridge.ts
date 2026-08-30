@@ -18,7 +18,7 @@
  * the provider hands back the executed result, or times out (fail closed).
  */
 
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { WRAPPER_TOOL_NAME } from "./prompt.ts";
 
@@ -107,6 +107,21 @@ interface JsonRpcRequest {
   };
 }
 
+function canonicalValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalValue);
+  if (typeof value !== "object" || value === null) return value;
+  const object = value as Record<string, unknown>;
+  return Object.fromEntries(
+    Object.keys(object)
+      .sort()
+      .map((key) => [key, canonicalValue(object[key])]),
+  );
+}
+
+export function canonicalJson(value: unknown): string {
+  return JSON.stringify(canonicalValue(value));
+}
+
 export class AgyPiBridge {
   #tools: BridgeToolDef[] = [];
   #server: Server | undefined;
@@ -131,6 +146,8 @@ export class AgyPiBridge {
   #toolSource: (() => BridgeToolDef[]) | undefined;
   /** Replaced wholesale on every skills refresh (activate_skill, or empty). */
   #dynamic = new Map<string, DynamicTool>();
+  #catalogDigest = createHash("sha256").update("[]").digest("hex");
+  #catalogRevision = 0;
 
   constructor(serverName: string = BRIDGE_SERVER_NAME) {
     this.serverName = serverName;
@@ -144,6 +161,7 @@ export class AgyPiBridge {
   /** Set the per-session tool-name prefix (e.g. `pi__p1234__`). */
   setToolPrefix(prefix: string): void {
     this.#toolPrefix = prefix;
+    this.#updateCatalogRevision();
   }
 
   setOnCall(onCall: (call: BridgeCall) => boolean): void {
@@ -154,9 +172,14 @@ export class AgyPiBridge {
     this.#toolSource = toolSource;
   }
 
-  /** Refresh the exposed-tool snapshot from the configured source. */
-  refreshTools(): void {
+  /** Refresh the exposed-tool snapshot and report whether canonical content changed. */
+  refreshTools(): boolean {
     this.#tools = this.#toolSource?.() ?? [];
+    return this.#updateCatalogRevision();
+  }
+
+  get catalogRevision(): number {
+    return this.#catalogRevision;
   }
 
   /**
@@ -173,6 +196,30 @@ export class AgyPiBridge {
     }>,
   ): void {
     this.#dynamic = new Map(tools.map((tool) => [tool.name, { ...tool }]));
+    this.#updateCatalogRevision();
+  }
+
+  #updateCatalogRevision(): boolean {
+    const catalog = [
+      ...this.#tools
+        .filter((tool) => !this.#dynamic.has(tool.name))
+        .map((tool) => ({
+          name: `${this.#toolPrefix}${tool.name}`,
+          description:
+            tool.description || `pi tool "${tool.name}" bridged into agy by ${BRIDGE_SERVER_NAME}.`,
+          inputSchema: tool.parameters,
+        })),
+      ...[...this.#dynamic].map(([name, definition]) => ({
+        name: `${this.#toolPrefix}${name}`,
+        description: definition.description,
+        inputSchema: definition.parameters,
+      })),
+    ].sort((a, b) => a.name.localeCompare(b.name));
+    const digest = createHash("sha256").update(canonicalJson(catalog)).digest("hex");
+    if (digest === this.#catalogDigest) return false;
+    this.#catalogDigest = digest;
+    this.#catalogRevision += 1;
+    return true;
   }
 
   get url(): string | undefined {

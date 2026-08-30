@@ -1,28 +1,14 @@
-/**
- * Discovery of agy conversation artifacts.
- *
- * agy stores per-conversation files under
- * `~/.gemini/antigravity-cli/brain/<conversation-id>/`:
- *   - `.tempmediaStorage/` — media/files the agent created (artifacts);
- *   - `.user_uploaded/`    — files the user uploaded into the conversation.
- *
- * The stream-json RPC never reports these, so — like background tasks —
- * this module reads them from the filesystem. Transcripts reference them
- * as `[ARTIFACT: <name>]` markers with `file://` paths.
- */
+/** Safe discovery of user-facing files in an agy conversation brain directory. */
 
-import { promises as fs } from "node:fs";
+import { promises as fs, type Dirent } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
 export interface AgyArtifact {
-  /** File name, e.g. "media_1786774158854.png". */
   name: string;
   absolutePath: string;
-  /** created-by-agent vs uploaded-by-user. */
-  kind: "generated" | "uploaded";
-  /** Rough media type from the extension. */
-  mediaType: "image" | "audio" | "video" | "pdf" | "other";
+  kind: "conversation" | "generated" | "uploaded";
+  mediaType: "image" | "audio" | "video" | "pdf" | "markdown" | "other";
   bytes: number;
   modifiedMs: number;
 }
@@ -45,48 +31,94 @@ const MEDIA_TYPES: Record<string, AgyArtifact["mediaType"]> = {
   webm: "video",
   mov: "video",
   pdf: "pdf",
+  md: "markdown",
+  markdown: "markdown",
 };
 
 function mediaTypeFor(name: string): AgyArtifact["mediaType"] {
   return MEDIA_TYPES[name.split(".").pop()?.toLowerCase() ?? ""] ?? "other";
 }
 
-async function listDir(dir: string, kind: AgyArtifact["kind"]): Promise<AgyArtifact[]> {
-  let entries: string[];
-  try {
-    entries = await fs.readdir(dir);
-  } catch {
-    return []; // Directory absent — the conversation created no artifacts.
-  }
-  return Promise.all(
-    entries
-      .filter((name) => !name.startsWith("."))
-      .map(async (name): Promise<AgyArtifact> => {
-        const absolutePath = path.join(dir, name);
-        const stat = await fs.stat(absolutePath).catch(() => undefined);
-        return {
-          name,
-          absolutePath,
-          kind,
-          mediaType: mediaTypeFor(name),
-          bytes: stat?.size ?? 0,
-          modifiedMs: stat?.mtimeMs ?? 0,
-        };
-      }),
+function isContained(parent: string, candidate: string): boolean {
+  const relative = path.relative(parent, candidate);
+  return (
+    relative === "" ||
+    (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative))
   );
 }
 
-/** List every artifact recorded for an agy conversation, newest first. */
+function isVisibleArtifactName(name: string): boolean {
+  return !name.startsWith(".") && !name.toLowerCase().endsWith(".metadata.json");
+}
+
+async function listDirectFiles(
+  dir: string,
+  conversationRoot: string,
+  kind: AgyArtifact["kind"],
+): Promise<AgyArtifact[]> {
+  let entries: Dirent[];
+  try {
+    entries = await fs.readdir(dir, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const artifacts: AgyArtifact[] = [];
+  for (const entry of entries) {
+    if (!isVisibleArtifactName(entry.name) || !entry.isFile() || entry.isSymbolicLink()) continue;
+    const candidate = path.resolve(dir, entry.name);
+    if (!isContained(conversationRoot, candidate)) continue;
+    try {
+      const [stat, canonical] = await Promise.all([fs.lstat(candidate), fs.realpath(candidate)]);
+      if (!stat.isFile() || stat.isSymbolicLink() || !isContained(conversationRoot, canonical))
+        continue;
+      artifacts.push({
+        name: entry.name,
+        absolutePath: canonical,
+        kind,
+        mediaType: mediaTypeFor(entry.name),
+        bytes: stat.size,
+        modifiedMs: stat.mtimeMs,
+      });
+    } catch {
+      // Atomic replacement or unreadable entry: omit it from this scan.
+    }
+  }
+  return artifacts;
+}
+
+/** List safe direct artifacts for one agy conversation, newest first. */
 export async function listAgyArtifacts(
   conversationId: string,
   options: { brainDir?: string } = {},
 ): Promise<AgyArtifact[]> {
-  const base = path.join(options.brainDir ?? agyBrainDir(), conversationId);
-  const [generated, uploaded] = await Promise.all([
-    listDir(path.join(base, ".tempmediaStorage"), "generated"),
-    listDir(path.join(base, ".user_uploaded"), "uploaded"),
+  const brain = path.resolve(options.brainDir ?? agyBrainDir());
+  const base = path.resolve(brain, conversationId);
+  if (!isContained(brain, base) || base === brain) return [];
+
+  let canonicalBrain: string;
+  let canonicalBase: string;
+  try {
+    [canonicalBrain, canonicalBase] = await Promise.all([fs.realpath(brain), fs.realpath(base)]);
+  } catch {
+    return [];
+  }
+  if (!isContained(canonicalBrain, canonicalBase) || canonicalBase === canonicalBrain) return [];
+
+  const [conversation, generated, uploaded] = await Promise.all([
+    listDirectFiles(canonicalBase, canonicalBase, "conversation"),
+    listDirectFiles(path.join(canonicalBase, ".tempmediaStorage"), canonicalBase, "generated"),
+    listDirectFiles(path.join(canonicalBase, ".user_uploaded"), canonicalBase, "uploaded"),
   ]);
-  return [...generated, ...uploaded].sort((a, b) => b.modifiedMs - a.modifiedMs);
+  const deduped = new Map<string, AgyArtifact>();
+  for (const artifact of [...conversation, ...generated, ...uploaded]) {
+    if (!deduped.has(artifact.absolutePath)) deduped.set(artifact.absolutePath, artifact);
+  }
+  return [...deduped.values()].sort(
+    (a, b) =>
+      b.modifiedMs - a.modifiedMs ||
+      a.name.localeCompare(b.name) ||
+      a.absolutePath.localeCompare(b.absolutePath),
+  );
 }
 
 /** Resolve an artifact reference by exact name or unique prefix. */

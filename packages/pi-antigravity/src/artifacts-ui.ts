@@ -7,13 +7,19 @@
  */
 
 import { execFile } from "node:child_process";
+import { open as openFile } from "node:fs/promises";
 import type {
   ExtensionCommandContext,
   KeybindingsManager,
   Theme,
 } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
-import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import {
+  stripTerminalSequences,
+  truncateToWidth,
+  visibleWidth,
+  wrapTextWithAnsi,
+} from "@earendil-works/pi-tui";
 import type { AgyArtifact } from "../lib/artifacts.ts";
 
 function oneLine(text: string) {
@@ -51,6 +57,54 @@ export interface AgyArtifactsModel {
   refresh(): Promise<void>;
 }
 
+export const MARKDOWN_PREVIEW_MAX_BYTES = 256 * 1024;
+
+export interface AgyMarkdownPreview {
+  text: string;
+  truncated: boolean;
+  completed: number;
+  total: number;
+}
+
+export async function readMarkdownPreview(
+  absolutePath: string,
+  maxBytes = MARKDOWN_PREVIEW_MAX_BYTES,
+): Promise<AgyMarkdownPreview> {
+  const handle = await openFile(absolutePath, "r");
+  try {
+    const buffer = Buffer.alloc(maxBytes + 1);
+    let bytesReadTotal = 0;
+    while (bytesReadTotal < buffer.length) {
+      const { bytesRead } = await handle.read(
+        buffer,
+        bytesReadTotal,
+        buffer.length - bytesReadTotal,
+        bytesReadTotal,
+      );
+      if (bytesRead === 0) break;
+      bytesReadTotal += bytesRead;
+    }
+    const truncated = bytesReadTotal > maxBytes;
+    const bytes = buffer.subarray(0, Math.min(bytesReadTotal, maxBytes));
+    // Streaming decode on a truncated prefix drops only an incomplete final
+    // code point; malformed UTF-8 anywhere else still fails closed.
+    const text = new TextDecoder("utf-8", { fatal: true }).decode(bytes, {
+      stream: truncated,
+    });
+    let completed = 0;
+    let total = 0;
+    for (const line of text.split(/\r?\n/)) {
+      const match = line.match(/^\s*-\s+\[([ xX])\]\s+/);
+      if (!match) continue;
+      total += 1;
+      if (match[1]?.toLowerCase() === "x") completed += 1;
+    }
+    return { text, truncated, completed, total };
+  } finally {
+    await handle.close();
+  }
+}
+
 /** Open a file with the OS default handler. Resolves after launch. */
 export function openArtifact(absolutePath: string): Promise<void> {
   const command = process.platform === "darwin" ? "open" : "xdg-open";
@@ -80,7 +134,9 @@ export async function openAgyArtifactsPicker(
   };
   await ctx.ui.custom<null>(
     (tui, theme, keybindings, done) =>
-      new AgyArtifactsDashboard(tui, theme, keybindings, model, selection, done),
+      new AgyArtifactsDashboard(tui, theme, keybindings, model, selection, done, (message) =>
+        ctx.ui.notify(message, "error"),
+      ),
     {
       overlay: true,
       overlayOptions: { anchor: "center", width: "100%", maxHeight: "100%" },
@@ -97,6 +153,10 @@ export class AgyArtifactsDashboard implements Component {
   private done: (value: null) => void;
   private closed = false;
   private busy = false;
+  private preview:
+    | { artifact: AgyArtifact; content: AgyMarkdownPreview; scroll: number }
+    | undefined;
+  private notifyError: (message: string) => void;
 
   constructor(
     tui: TUI,
@@ -105,6 +165,7 @@ export class AgyArtifactsDashboard implements Component {
     model: AgyArtifactsModel,
     selection: AgyArtifactsSelection,
     done: (value: null) => void,
+    notifyError: (message: string) => void = () => {},
   ) {
     this.tui = tui;
     this.theme = theme;
@@ -112,6 +173,7 @@ export class AgyArtifactsDashboard implements Component {
     this.model = model;
     this.selection = selection;
     this.done = done;
+    this.notifyError = notifyError;
   }
 
   private close() {
@@ -132,6 +194,26 @@ export class AgyArtifactsDashboard implements Component {
     if (this.busy) return;
     const artifacts = this.model.getArtifacts();
     reconcileAgyArtifactsSelection(this.selection, artifacts);
+
+    if (this.preview) {
+      if (this.keybindings.matches(data, "tui.select.cancel")) {
+        this.preview = undefined;
+        this.tui.requestRender();
+        return;
+      }
+      if (this.keybindings.matches(data, "tui.select.up") || data === "k") {
+        this.preview.scroll = Math.max(0, this.preview.scroll - 1);
+        this.tui.requestRender();
+        return;
+      }
+      if (this.keybindings.matches(data, "tui.select.down") || data === "j") {
+        this.preview.scroll += 1;
+        this.tui.requestRender();
+        return;
+      }
+      if (data === "o") void this.open(this.preview.artifact.absolutePath);
+      return;
+    }
 
     if (this.keybindings.matches(data, "tui.select.cancel")) {
       this.close();
@@ -162,12 +244,34 @@ export class AgyArtifactsDashboard implements Component {
       if (artifact) void this.open(artifact.absolutePath);
       return;
     }
+    if (data === "v" || this.keybindings.matches(data, "tui.select.confirm")) {
+      const artifact = artifacts[this.selection.index];
+      if (artifact?.mediaType === "markdown") void this.loadPreview(artifact);
+      return;
+    }
   }
 
   private async rescan(): Promise<void> {
     this.busy = true;
     try {
       await this.model.refresh();
+    } finally {
+      this.busy = false;
+      this.tui.requestRender();
+    }
+  }
+
+  private async loadPreview(artifact: AgyArtifact): Promise<void> {
+    this.busy = true;
+    this.tui.requestRender();
+    try {
+      const content = await readMarkdownPreview(artifact.absolutePath);
+      this.preview = { artifact, content, scroll: 0 };
+    } catch (error) {
+      this.notifyError(
+        `agy-artifacts: cannot preview ${artifact.name} (${error instanceof Error ? error.message : String(error)}).`,
+      );
+      this.preview = undefined;
     } finally {
       this.busy = false;
       this.tui.requestRender();
@@ -214,22 +318,32 @@ export class AgyArtifactsDashboard implements Component {
 
     const lines: string[] = [];
 
-    const headerLeft = theme.fg("accent", theme.bold("agy artifacts"));
-    const headerRight = theme.fg("muted", `${artifacts.length}`);
+    const headerLeft = theme.fg(
+      "accent",
+      theme.bold(
+        this.preview ? `agy artifact · ${oneLine(this.preview.artifact.name)}` : "agy artifacts",
+      ),
+    );
+    const headerRight = theme.fg("muted", this.preview ? "markdown" : `${artifacts.length}`);
     const headerPad = Math.max(1, width - visibleWidth(headerLeft) - visibleWidth(headerRight) - 4);
     lines.push(truncateToWidth(`  ${headerLeft}${" ".repeat(headerPad)}${headerRight}  `, width));
 
     lines.push(
       truncateToWidth(
         theme.fg("border", "╭") +
-          this.borderSegment(innerWidth, this.busy ? "working…" : "artifacts") +
+          this.borderSegment(
+            innerWidth,
+            this.busy ? "working…" : this.preview ? this.previewChecklistLabel() : "artifacts",
+          ) +
           theme.fg("border", "╮"),
         width,
       ),
     );
 
     const divider = theme.fg("border", "│");
-    const rowLines = this.renderRows(artifacts, innerWidth, bodyHeight);
+    const rowLines = this.preview
+      ? this.renderPreview(innerWidth, bodyHeight)
+      : this.renderRows(artifacts, innerWidth, bodyHeight);
     for (let i = 0; i < bodyHeight; i++) {
       lines.push(
         truncateToWidth(divider + this.pad(rowLines[i] ?? "", innerWidth) + divider, width),
@@ -249,13 +363,43 @@ export class AgyArtifactsDashboard implements Component {
       truncateToWidth(
         theme.fg(
           "dim",
-          `  ${configuredKeys(this.keybindings, "tui.select.up")}/${configuredKeys(this.keybindings, "tui.select.down")}/jk select · o open · r rescan · ${configuredKeys(this.keybindings, "tui.select.cancel")} close`,
+          this.preview
+            ? `  ${configuredKeys(this.keybindings, "tui.select.up")}/${configuredKeys(this.keybindings, "tui.select.down")}/jk scroll · o open · ${configuredKeys(this.keybindings, "tui.select.cancel")} back`
+            : `  ${configuredKeys(this.keybindings, "tui.select.up")}/${configuredKeys(this.keybindings, "tui.select.down")}/jk select · enter/v preview markdown · o open · r rescan · ${configuredKeys(this.keybindings, "tui.select.cancel")} close`,
         ),
         width,
       ),
     );
 
     return lines;
+  }
+
+  private previewChecklistLabel(): string {
+    if (!this.preview) return "preview";
+    const { completed, total, truncated } = this.preview.content;
+    if (total === 0) return truncated ? "preview · truncated" : "preview";
+    return truncated
+      ? `preview · checklist ${completed}/${total} partial · truncated`
+      : `preview · checklist ${completed}/${total}`;
+  }
+
+  private renderPreview(width: number, height: number): string[] {
+    if (!this.preview) return [];
+    const marker = this.preview.content.truncated
+      ? "\n\n[Preview truncated at 256 KiB; checklist counts are partial.]"
+      : "";
+    const source = stripTerminalSequences(`${this.preview.content.text}${marker}`)
+      .replace(/\r\n?/g, "\n")
+      .replace(/\t/g, "    ")
+      .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "");
+    const wrapped = source
+      .split("\n")
+      .flatMap((line) => (line ? wrapTextWithAnsi(line, Math.max(1, width - 2)) : [""]));
+    const maxScroll = Math.max(0, wrapped.length - height);
+    this.preview.scroll = Math.min(this.preview.scroll, maxScroll);
+    return wrapped
+      .slice(this.preview.scroll, this.preview.scroll + height)
+      .map((line) => truncateToWidth(` ${line}`, width, ""));
   }
 
   private renderRows(
@@ -282,7 +426,11 @@ export class AgyArtifactsDashboard implements Component {
 
       const marker = isSelected ? theme.fg("accent", "❯") : " ";
       const glyph =
-        artifact.kind === "generated" ? theme.fg("success", "◆") : theme.fg("muted", "◇");
+        artifact.kind === "generated"
+          ? theme.fg("success", "◆")
+          : artifact.kind === "conversation"
+            ? theme.fg("accent", "◆")
+            : theme.fg("muted", "◇");
       const title = isSelected
         ? theme.fg("accent", oneLine(artifact.name))
         : theme.fg("text", oneLine(artifact.name));
@@ -292,7 +440,7 @@ export class AgyArtifactsDashboard implements Component {
       const rightParts = [
         theme.fg("muted", artifact.mediaType),
         theme.fg("muted", formatBytes(artifact.bytes)),
-        theme.fg("muted", artifact.kind === "generated" ? "generated" : "uploaded"),
+        theme.fg("muted", artifact.kind),
       ];
       const right = `${rightParts.join(dot)} `;
 

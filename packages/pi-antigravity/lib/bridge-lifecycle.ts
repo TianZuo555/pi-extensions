@@ -17,16 +17,21 @@ export interface BridgeLifecycleManager {
   readonly isRunning: () => boolean;
   readonly ensureRegistered: (notify?: (message: string) => void) => Promise<boolean>;
   readonly teardown: () => Promise<void>;
+  readonly registrationGeneration: () => number;
+  readonly processRevision: () => string;
   readonly getBootstrapSuffix: (skills: SkillLite[]) => string | undefined;
 }
 
 export function createBridgeLifecycleManager(deps: BridgeLifecycleDeps): BridgeLifecycleManager {
   const enabled = deps.enabled ?? true;
   let registered = false;
+  let generation = 0;
 
   return {
     isRegistered: () => registered,
     isRunning: () => deps.bridge.running,
+    registrationGeneration: () => generation,
+    processRevision: () => `${generation}:${deps.bridge.catalogRevision}`,
 
     ensureRegistered: async (notify?: (message: string) => void) => {
       if (!enabled) return false;
@@ -44,6 +49,7 @@ export function createBridgeLifecycleManager(deps: BridgeLifecycleDeps): BridgeL
         await deps.addMcpServer(deps.bridge.serverName, url, deps.bridgeToken);
         deps.bridge.refreshTools();
         registered = true;
+        generation += 1;
         return true;
       } catch (error) {
         registered = false;
@@ -60,6 +66,7 @@ export function createBridgeLifecycleManager(deps: BridgeLifecycleDeps): BridgeL
 
     teardown: async () => {
       if (!registered && !deps.bridge.running) return;
+      const changed = registered || deps.bridge.running;
       registered = false;
       try {
         await deps.removeMcpServer(deps.bridge.serverName);
@@ -74,6 +81,7 @@ export function createBridgeLifecycleManager(deps: BridgeLifecycleDeps): BridgeL
       if (deps.bridge.running) {
         await deps.bridge.close();
       }
+      if (changed) generation += 1;
     },
 
     getBootstrapSuffix: (skills: SkillLite[]) =>

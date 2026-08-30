@@ -39,6 +39,38 @@ function post(
   }).then(async (res) => ({ status: res.status, json: (await res.json()) as Record<string, any> }));
 }
 
+test("bridge catalog revision is stable across ordering and changes with canonical content", () => {
+  const bridge = new AgyPiBridge();
+  let tools = [
+    { name: "z", description: "z", parameters: { type: "object", properties: { b: {}, a: {} } } },
+    { name: "a", description: "a", parameters: { required: ["x", "y"], type: "object" } },
+  ];
+  bridge.setToolSource(() => tools);
+  assert.equal(bridge.refreshTools(), true);
+  const first = bridge.catalogRevision;
+
+  tools = [
+    { name: "a", description: "a", parameters: { type: "object", required: ["x", "y"] } },
+    { name: "z", description: "z", parameters: { properties: { a: {}, b: {} }, type: "object" } },
+  ];
+  assert.equal(bridge.refreshTools(), false);
+  assert.equal(bridge.catalogRevision, first);
+
+  tools[0] = { ...tools[0], description: "changed" };
+  assert.equal(bridge.refreshTools(), true);
+  assert.equal(bridge.catalogRevision, first + 1);
+
+  bridge.setDynamicTools([
+    {
+      name: "activate_skill",
+      description: "skills",
+      parameters: { type: "object", properties: { name: { enum: ["one"] } } },
+      handler: async () => ({ content: "ok", isError: false }),
+    },
+  ]);
+  assert.equal(bridge.catalogRevision, first + 2);
+});
+
 test("bridge responds to initialize and lists prefixed tools", async () => {
   const bridge = await startedBridge(() => false);
   try {
