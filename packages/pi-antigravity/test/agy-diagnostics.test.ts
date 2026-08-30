@@ -81,7 +81,10 @@ test("explicit AGY_BINARY is strict and PATH then managed fallback are ordered",
       return command;
     },
   });
-  assert.deepEqual(calls, ["agy", "/home/test/.gemini/bin/agy"]);
+  assert.deepEqual(calls, [
+    "agy",
+    path.join("/home/test", ".gemini", "bin", process.platform === "win32" ? "agy.exe" : "agy"),
+  ]);
   assert.equal(fallback.candidates[0]?.source, "managed");
 
   const windows = await resolveAgyBinary({
