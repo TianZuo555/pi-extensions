@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import path from "node:path";
 import { PassThrough } from "node:stream";
 import { test } from "node:test";
 import {
@@ -42,6 +43,9 @@ function fakeSpawn(options: FakeProcessOptions) {
 }
 
 const found = async (command: string) => `/resolved/${command.replaceAll("/", "_")}`;
+const pathBinary = path.resolve("/path/agy");
+const managedBinary = path.resolve("/home/test/.gemini/bin/agy");
+const selectedBinary = path.resolve("/selected/agy");
 
 test("extractAgyVersion recognizes stdout, stderr, dev, and HEAD", () => {
   assert.deepEqual(extractAgyVersion("1.1.22\n"), { version: "1.1.22", development: false });
@@ -142,12 +146,12 @@ test("automatic selection chooses the newest compatible stable candidate", async
       command === "agy" ? "/path/agy" : "/home/test/.gemini/bin/agy",
     spawnOverride: ((file: string) =>
       (
-        fakeSpawn({ stdout: file === "/path/agy" ? "1.1.22" : "1.4.0" }) as () => unknown
+        fakeSpawn({ stdout: file === pathBinary ? "1.1.22" : "1.4.0" }) as () => unknown
       )()) as never,
   });
   assert.equal(checked.ok, true);
   if (!checked.ok) return;
-  assert.equal(checked.binary, "/home/test/.gemini/bin/agy");
+  assert.equal(checked.binary, managedBinary);
   assert.equal(checked.version, "1.4.0");
   assert.match(checked.selectionReason ?? "", /highest compatible stable/);
   assert.deepEqual(
@@ -168,10 +172,10 @@ test("automatic selection prefers stable over a newer prerelease", async () => {
       command === "agy" ? "/path/agy" : "/home/test/.gemini/bin/agy",
     spawnOverride: ((file: string) =>
       (
-        fakeSpawn({ stdout: file === "/path/agy" ? "1.4.0" : "2.0.0-beta.1" }) as () => unknown
+        fakeSpawn({ stdout: file === pathBinary ? "1.4.0" : "2.0.0-beta.1" }) as () => unknown
       )()) as never,
   });
-  assert.equal(checked.ok && checked.binary, "/path/agy");
+  assert.equal(checked.ok && checked.binary, pathBinary);
   assert.match((checked.ok && checked.selectionReason) || "", /stable/);
 });
 
@@ -184,10 +188,10 @@ test("automatic selection bypasses an incompatible PATH binary", async () => {
       command === "agy" ? "/path/agy" : "/home/test/.gemini/bin/agy",
     spawnOverride: ((file: string) =>
       (
-        fakeSpawn({ stdout: file === "/path/agy" ? "1.1.21" : "1.2.0" }) as () => unknown
+        fakeSpawn({ stdout: file === pathBinary ? "1.1.21" : "1.2.0" }) as () => unknown
       )()) as never,
   });
-  assert.equal(checked.ok && checked.binary, "/home/test/.gemini/bin/agy");
+  assert.equal(checked.ok && checked.binary, managedBinary);
   assert.equal(checked.candidates?.[0]?.category, "unsupported-version");
 });
 
@@ -200,10 +204,10 @@ test("automatic selection prefers a compatible stable build over development", a
       command === "agy" ? "/path/agy" : "/home/test/.gemini/bin/agy",
     spawnOverride: ((file: string) =>
       (
-        fakeSpawn({ stdout: file === "/path/agy" ? "agy HEAD" : "1.2.0" }) as () => unknown
+        fakeSpawn({ stdout: file === pathBinary ? "agy HEAD" : "1.2.0" }) as () => unknown
       )()) as never,
   });
-  assert.equal(checked.ok && checked.binary, "/home/test/.gemini/bin/agy");
+  assert.equal(checked.ok && checked.binary, managedBinary);
 });
 
 test("auxiliary commands use the exact preflight-selected binary", async () => {
@@ -224,7 +228,7 @@ test("auxiliary commands use the exact preflight-selected binary", async () => {
       return commandSpawn();
     }) as never,
   });
-  assert.equal(invoked, "/selected/agy");
+  assert.equal(invoked, selectedBinary);
 });
 
 test("candidate file changes invalidate a cached compatibility result", async () => {
