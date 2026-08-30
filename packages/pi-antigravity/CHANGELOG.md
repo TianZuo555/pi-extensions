@@ -1,5 +1,15 @@
 # @tian.zuo/pi-antigravity
 
+## 0.9.0
+
+### Minor Changes
+
+- [#17](https://github.com/TianZuo555/pi-extensions/pull/17) [`4f82756`](https://github.com/TianZuo555/pi-extensions/commit/4f8275685d3b571216b83c32b7e663fc29eaae9d) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Require agy 1.1.22+, select the newest compatible installed stable binary with automatic cache invalidation, reuse a persistent stream-json driver across ordinary turns, report spawn/recycle counters and causes, recycle safely when model/profile/bridge configuration changes, add binary and model-effort diagnostics, expose custom agent and plan-mode configuration, enrich conversation status, and add safe direct markdown artifact previews.
+
+### Patch Changes
+
+- [#14](https://github.com/TianZuo555/pi-extensions/pull/14) [`f1ae49c`](https://github.com/TianZuo555/pi-extensions/commit/f1ae49c22e01e58b7b729f11e1faef75a27d0ca7) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Let agy own native context compaction through a 1M Pi scheduling window, persist safe same-session conversation resumes, render detected agy compaction boundaries, isolate Pi fallback summaries, report per-response usage, and show at most one substantive thought row per turn.
+
 ## 0.8.0
 
 ### Minor Changes

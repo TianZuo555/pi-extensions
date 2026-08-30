@@ -1,6 +1,6 @@
 {
   "name": "@tian.zuo/pi-image-cache",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Temporary pasted-image cache with compact placeholders for the pi coding agent.",
   "type": "module",
   "keywords": [
