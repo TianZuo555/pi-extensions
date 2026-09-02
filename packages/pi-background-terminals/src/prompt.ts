@@ -25,6 +25,8 @@ const PROGRESS_STDERR_MAX = 4 * 1024;
 /** Completion follow-up output. Keep this concise; /ps has the detailed view. */
 export const RESULT_STDOUT_MAX = 8 * 1024;
 export const RESULT_STDERR_MAX = 4 * 1024;
+/** Aggregate follow-ups retain every terminal summary without flooding context. */
+export const MAX_COMPLETION_BATCH_CONTENT_BYTES = 32 * 1024;
 const BASH_STDOUT_MAX_LINES = 400;
 const BASH_STDERR_MAX_LINES = 200;
 const PROGRESS_STDOUT_MAX_LINES = 100;
@@ -254,4 +256,38 @@ export function buildTerminalResultMessage(snap: TerminalSnapshot) {
     diagnostic ? BASH_STDERR_MAX : RESULT_STDERR_MAX,
     diagnostic ? BASH_STDERR_MAX_LINES : RESULT_STDERR_MAX_LINES,
   );
+}
+
+function truncateUtf8WithMarker(value: string, maximumBytes: number) {
+  if (Buffer.byteLength(value) <= maximumBytes) return value;
+  const marker = "\n[output truncated; use /ps for complete logs]";
+  const contentBudget = Math.max(0, maximumBytes - Buffer.byteLength(marker));
+  let result = "";
+  let usedBytes = 0;
+  for (const character of value) {
+    const characterBytes = Buffer.byteLength(character);
+    if (usedBytes + characterBytes > contentBudget) break;
+    result += character;
+    usedBytes += characterBytes;
+  }
+  return result + marker;
+}
+
+/** One follow-up for terminal completions that settle in the same quiet window. */
+export function buildTerminalResultBatchMessage(snaps: readonly TerminalSnapshot[]) {
+  if (snaps.length === 0) return "";
+  if (snaps.length === 1) return buildTerminalResultMessage(snaps[0]);
+
+  const header = `${snaps.length} background terminals completed.`;
+  const separator = "\n\n";
+  const messages = snaps.map(buildTerminalResultMessage);
+  const fixedBytes = Buffer.byteLength(header) + Buffer.byteLength(separator) * messages.length;
+  const perMessageBytes = Math.max(
+    0,
+    Math.floor((MAX_COMPLETION_BATCH_CONTENT_BYTES - fixedBytes) / messages.length),
+  );
+  const boundedMessages = messages.map((message) =>
+    truncateUtf8WithMarker(message, perMessageBytes),
+  );
+  return [header, ...boundedMessages].join(separator);
 }

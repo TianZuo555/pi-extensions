@@ -10,8 +10,10 @@ import {
   BASH_TOOL_DESCRIPTION,
   buildBashProgress,
   buildBashResult,
+  buildTerminalResultBatchMessage,
   buildTerminalResultMessage,
   deriveCommandTitle,
+  MAX_COMPLETION_BATCH_CONTENT_BYTES,
   TERMINAL_LOG_READ_PROMPT_SNIPPET,
   TERMINAL_LOG_READ_TOOL_DESCRIPTION,
 } from "./src/prompt.ts";
@@ -280,6 +282,34 @@ test("completion message reports kill vs exit", () => {
     }),
   );
   assert.match(timedOut, /timed out after/);
+});
+
+test("an isolated completion keeps the existing message shape", () => {
+  const terminal = snap();
+  assert.equal(buildTerminalResultBatchMessage([terminal]), buildTerminalResultMessage(terminal));
+});
+
+test("batched completions retain every terminal summary within one bounded message", () => {
+  const output = "界".repeat(10_000);
+  const terminals = Array.from({ length: 8 }, (_, index) =>
+    snap({
+      id: `bt-${index + 1}`,
+      title: `batch command ${index + 1}`,
+      stdout: view({
+        text: output,
+        head: output,
+        totalBytes: Buffer.byteLength(output),
+      }),
+    }),
+  );
+
+  const message = buildTerminalResultBatchMessage(terminals);
+  assert.ok(Buffer.byteLength(message) <= MAX_COMPLETION_BATCH_CONTENT_BYTES);
+  assert.match(message, /^8 background terminals completed\./);
+  for (const terminal of terminals) {
+    assert.match(message, new RegExp(`Background terminal ${terminal.id} `));
+  }
+  assert.match(message, /output truncated; use \/ps for complete logs/);
 });
 
 test("failed and timed-out completions keep the diagnostic output budget", () => {

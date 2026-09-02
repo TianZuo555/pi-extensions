@@ -33,6 +33,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { createCompletionBatchScheduler } from "./src/completion-batcher.ts";
 import { SpawnError, type TerminalSnapshot, type TerminalStatus } from "./src/domain.ts";
 import {
   duplicateCommandError,
@@ -55,7 +56,7 @@ import {
   BASH_TOOL_DESCRIPTION,
   buildBashProgress,
   buildBashResult,
-  buildTerminalResultMessage,
+  buildTerminalResultBatchMessage,
   deriveCommandTitle,
   describeTerminal,
   TERMINAL_LOG_READ_PARAMETER_DESCRIPTIONS,
@@ -258,48 +259,64 @@ export function createBackgroundTerminalsExtension(
       }
     };
 
-    const deliverResult = (snap: TerminalSnapshot) => {
+    const deliverResults = (snaps: readonly TerminalSnapshot[]) => {
+      if (snaps.length === 0) return true;
       try {
+        const results = snaps.map((snap) => ({
+          id: snap.id,
+          title: snap.title,
+          status: snap.status,
+          exitCode: snap.exitCode,
+          signal: snap.signal,
+        }));
         pi.sendMessage(
           {
             customType: "background-terminal-result",
-            content: buildTerminalResultMessage(snap),
+            content: buildTerminalResultBatchMessage(snaps),
             display: true,
-            details: {
-              id: snap.id,
-              title: snap.title,
-              status: snap.status,
-              exitCode: snap.exitCode,
-              signal: snap.signal,
-            },
+            details:
+              results.length === 1
+                ? results[0]
+                : {
+                    count: results.length,
+                    ids: results.map((result) => result.id),
+                    results,
+                  },
           },
           // followUp: queued until the agent has no more tool calls — never
           // interrupts a mid-turn stream. triggerTurn: wakes the model
           // immediately iff idle; if busy, the queued follow-up is delivered
-          // when the current run settles. Either way exactly one delivery.
+          // when the current run settles. Either way each terminal is delivered
+          // exactly once, with nearby settlements sharing one follow-up.
           { deliverAs: "followUp", triggerTurn: true },
         );
         return true;
       } catch (error) {
-        // Session may be shutting down, but retain the snapshot so any later
-        // agent-settled flush can retry instead of silently dropping it.
+        // Session may be shutting down, but retain every snapshot so any later
+        // agent-settled flush can retry instead of silently dropping the batch.
         if (sessionContext?.mode !== "tui") {
-          console.error("background-terminals: failed to deliver result", error);
+          console.error("background-terminals: failed to deliver results", error);
         }
         return false;
       }
     };
 
     const flushResults = () => {
-      for (const snap of resultDelivery.drain()) {
-        if (!deliverResult(snap)) resultDelivery.defer(snap);
+      const snaps = resultDelivery.drain();
+      if (!deliverResults(snaps)) {
+        for (const snap of snaps) resultDelivery.defer(snap);
       }
+    };
+    const resultBatchScheduler = createCompletionBatchScheduler(flushResults);
+    const scheduleResultFlush = () => {
+      if (resultDelivery.size() > 0) resultBatchScheduler.schedule();
     };
 
     const onSettled = (snap: TerminalSnapshot, consumed: boolean) => {
       if (consumed) {
         // The initial bash wait is returning this settlement itself.
         resultDelivery.consume([snap.id]);
+        if (resultDelivery.size() === 0) resultBatchScheduler.clear();
         return;
       }
       // Defer a deep-enough copy: the live snapshot's output views keep
@@ -309,7 +326,7 @@ export function createBackgroundTerminalsExtension(
         stdout: { ...snap.stdout },
         stderr: { ...snap.stderr },
       });
-      if (sessionContext?.isIdle()) flushResults();
+      if (sessionContext?.isIdle()) scheduleResultFlush();
     };
 
     pi.on("session_start", (_event, ctx) => {
@@ -323,10 +340,10 @@ export function createBackgroundTerminalsExtension(
     // user/follow-up run rather than per turn.
     pi.on("agent_start", resetTerminalLogBudget);
 
-    // Drain deferred results when the agent settles: together with the
-    // isIdle() fast path above and the Map-keyed delivery (drain clears),
-    // double delivery is structurally impossible — whoever drains first wins.
-    pi.on("agent_settled", flushResults);
+    // Start or slide one bounded batch when the agent settles. Together with
+    // the idle path above and Map-keyed delivery, this preserves exactly-once
+    // admission while coalescing terminals that finish close together.
+    pi.on("agent_settled", scheduleResultFlush);
 
     // /new, /resume, /fork, /reload, and quit all emit session_shutdown for
     // the old extension instance. Processes never survive a session
@@ -336,6 +353,7 @@ export function createBackgroundTerminalsExtension(
     pi.on("session_shutdown", async () => {
       sessionContext = undefined;
       resetTerminalLogBudget();
+      resultBatchScheduler.clear();
       resultDelivery.clear();
       unsubStatus?.();
       unsubStatus = undefined;
@@ -737,29 +755,49 @@ export function createBackgroundTerminalsExtension(
     // --- Result message rendering ------------------------------------------
 
     pi.registerMessageRenderer("background-terminal-result", (message, _options, theme) => {
-      const details = (message.details ?? {}) as {
-        id?: string;
-        status?: string;
-        exitCode?: number;
-        signal?: string;
+      interface ResultDetails {
+        readonly id?: string;
+        readonly status?: string;
+        readonly exitCode?: number;
+        readonly signal?: string;
+      }
+      const details = (message.details ?? {}) as ResultDetails & {
+        readonly results?: readonly ResultDetails[];
       };
-      const failed = details.status === "failed";
-      const timedOut = details.status === "timed_out";
-      const killed = details.status === "killed";
+      const results = details.results?.length ? details.results : [details];
+      const failedCount = results.filter((result) => result.status === "failed").length;
+      const timedOutCount = results.filter((result) => result.status === "timed_out").length;
+      const killedCount = results.filter((result) => result.status === "killed").length;
       const icon =
-        failed || timedOut
+        failedCount > 0 || timedOutCount > 0
           ? theme.fg("error", "x")
-          : killed
+          : killedCount === results.length
             ? theme.fg("muted", "■")
             : theme.fg("success", "■");
-      const how = killed
-        ? "killed"
-        : timedOut
-          ? "timed out"
-          : (details.signal ?? `exit ${details.exitCode ?? "?"}`);
+
+      let label: string;
+      let how: string;
+      if (results.length > 1) {
+        label = `${results.length} terminals`;
+        const outcomes = [
+          failedCount > 0 ? `${failedCount} failed` : undefined,
+          timedOutCount > 0 ? `${timedOutCount} timed out` : undefined,
+          killedCount > 0 ? `${killedCount} killed` : undefined,
+        ].filter(Boolean);
+        how = outcomes.length > 0 ? outcomes.join(", ") : "completed";
+      } else {
+        const result = results[0];
+        label = `terminal ${result.id ?? "?"}`;
+        how =
+          result.status === "killed"
+            ? "killed"
+            : result.status === "timed_out"
+              ? "timed out"
+              : (result.signal ?? `exit ${result.exitCode ?? "?"}`);
+      }
       const header =
         `${icon} ` +
-        theme.fg("accent", theme.bold(`terminal ${details.id ?? "?"}`)) +
+        theme.fg("accent", theme.bold(label)) +
         theme.fg("muted", ` · ${how} · `) +
         theme.fg("accent", "/ps") +
         theme.fg("dim", " to inspect");

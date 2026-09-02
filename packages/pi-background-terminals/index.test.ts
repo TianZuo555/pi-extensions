@@ -297,6 +297,27 @@ test("renderers distinguish quick bash from actually yielded terminals", async (
     const renderedCompletion = completion.render(120).join("\n").trimEnd();
     assert.match(renderedCompletion, /terminal bt-9.*\/ps to inspect/);
     assert.doesNotMatch(renderedCompletion, /stdout|later-output|server/);
+
+    const completionBatch = completionRenderer(
+      {
+        content: "3 background terminals completed.",
+        details: {
+          count: 3,
+          ids: ["bt-1", "bt-2", "bt-3"],
+          results: [
+            { id: "bt-1", status: "done", exitCode: 0 },
+            { id: "bt-2", status: "failed", exitCode: 1 },
+            { id: "bt-3", status: "done", exitCode: 0 },
+          ],
+        },
+      },
+      { expanded: true },
+      theme,
+    );
+    assert.match(
+      completionBatch.render(120).join("\n").trimEnd(),
+      /3 terminals.*1 failed.*\/ps to inspect/,
+    );
   } finally {
     await app.shutdown();
   }
@@ -747,6 +768,55 @@ test("yielded command returns an id then sends exactly one completion", async ()
     assert.equal(app.messages.length, 1);
     assert.equal(app.messages[0].message.customType, "background-terminal-result");
     assert.match(app.messages[0].message.content, /exited \(exit 0\)/);
+    assert.deepEqual(app.messages[0].options, {
+      deliverAs: "followUp",
+      triggerTurn: true,
+    });
+  } finally {
+    await app.shutdown();
+  }
+});
+
+test("near-simultaneous yielded completions share one follow-up", async () => {
+  const app = harness();
+  try {
+    const tool = app.tools.get("bash");
+    const finishAt = Date.now() + 2_500;
+    const results = await Promise.all(
+      Array.from({ length: 3 }, (_, index) =>
+        tool.execute(
+          `call-batch-${index + 1}`,
+          {
+            command: command(
+              `setTimeout(() => console.log("batch-${index + 1}"), Math.max(0, ${finishAt} - Date.now()))`,
+            ),
+            title: `batch command ${index + 1}`,
+            yield_time_ms: 250,
+          },
+          undefined,
+          undefined,
+          app.ctx,
+        ),
+      ),
+    );
+    const ids = results.map((result) => {
+      const id = /background terminal (bt-\d+)/.exec(result.content[0].text)?.[1];
+      assert.ok(id, result.content[0].text);
+      return id;
+    });
+
+    assert.equal(
+      await pollUntil(
+        () =>
+          app.messages.length === 1 &&
+          ids.every((id) => app.messages[0].message.content.includes(id)),
+      ),
+      true,
+      "one follow-up contains every nearby completion",
+    );
+    assert.equal(app.messages.length, 1);
+    assert.equal(app.messages[0].message.details.count, 3);
+    assert.deepEqual([...app.messages[0].message.details.ids].sort(), [...ids].sort());
     assert.deepEqual(app.messages[0].options, {
       deliverAs: "followUp",
       triggerTurn: true,

@@ -7,10 +7,12 @@ A managed replacement for Pi's built-in `bash` tool.
 Every model shell command follows one path: start it, wait briefly, and return
 its final output if it finishes. If it outlives the initial wait, return control
 to the model while the command continues as a session-scoped background
-terminal. Its final result is delivered automatically exactly once. Quick Bash
-calls show a bounded command/output preview in the main transcript; only calls
-that actually yield collapse to compact terminal rows. `/ps` retains complete
-invocation metadata and the detailed stdout/stderr viewer.
+terminal. Its final result is delivered automatically exactly once. Results
+that settle close together share one bounded follow-up; an isolated result keeps
+its existing message shape. Quick Bash calls show a bounded command/output
+preview in the main transcript; only calls that actually yield collapse to
+compact terminal rows. `/ps` retains complete invocation metadata and the
+detailed stdout/stderr viewer.
 
 ```text
 ■ 2 background terminals running • /ps to view
@@ -51,8 +53,10 @@ Behavior:
    errors. The TUI keeps the quick command visibly distinct from background work.
 5. If it remains alive, return an id such as `bt-1`. Only then does the row
    collapse to compact background-terminal status. The model should continue
-   rather than poll; a compact follow-up wakes it exactly once on exit, while
-   detailed stdout/stderr remain in `/ps`.
+   rather than poll. Nearby exits share one compact follow-up after a 1,000 ms
+   sliding quiet window, with a 3,000 ms maximum hold. An isolated exit keeps
+   the original message shape, and every terminal result remains exactly-once.
+   Detailed stdout/stderr remain in `/ps`.
 
 There are no model-facing status, list, kill, polling, or stdin tools. The
 read-only `terminal_log_read` tool only pages an opaque archive ref emitted by
@@ -115,9 +119,11 @@ While at least one terminal runs, a one-line widget renders above the editor.
   syntax (redirects, command substitution) always fails open. Every settled
   result also names the directory the command actually ran in, because the
   common mistake is assuming a cwd that was never set.
-- **Exactly-once completion.** A race-safe waiter token decides whether the
-  initial Bash call or the later follow-up owns settlement. A drain-once map
-  handles delivery retries without duplicates.
+- **Exactly-once batched completion.** A race-safe waiter token decides whether
+  the initial Bash call or a later follow-up owns settlement. A drain-once map
+  handles delivery retries without duplicates. A bounded quiet-window scheduler
+  combines nearby map entries into one follow-up, caps aggregate content at
+  32 KiB, and leaves isolated completion messages unchanged.
 - **Bounded head+tail memory plus full capture.** Each stdout/stderr stream
   retains a stable **256 KiB startup head** and rolling tail within a **2 MiB**
   cap. Omitted middle bytes are marked. Complete output spills from byte zero
