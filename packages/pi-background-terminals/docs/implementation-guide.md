@@ -17,8 +17,8 @@ Every model shell command goes through `bash`:
 5. If the process settles during that wait, return its final state and output in
    the Bash result. A non-zero exit, kill, or timeout is a tool error.
 6. Otherwise return a terminal id and leave the process running.
-7. When a yielded process settles, deliver its final result as an exactly-once
-   follow-up that wakes the model.
+7. When a yielded process settles, admit its final result exactly once. Results
+   that settle close together share one bounded follow-up that wakes the model.
 
 The model-facing tool result and completion message retain bounded stdout/stderr.
 Quick and initial-wait TUI rows show a sanitized bounded output preview plus a
@@ -300,10 +300,23 @@ The settle hook receives `(snapshot, consumed)`:
 - `consumed = false`: copy the final snapshot into the drain-once delivery map.
 
 The map is keyed by terminal id. `drain()` clears entries before delivery, so a
-result can be sent only once. A failed `pi.sendMessage` call re-defers the same
-id for a later `agent_settled` retry. Interactive mode does not write that
-failure through `console.error`, which would corrupt the active TUI frame;
-non-TUI modes retain the diagnostic.
+result can be sent only once. A failed `pi.sendMessage` call re-defers every id
+from the failed batch for a later `agent_settled` retry. Interactive mode does
+not write that failure through `console.error`, which would corrupt the active
+TUI frame; non-TUI modes retain the diagnostic.
+
+Idle settlements schedule delivery instead of sending immediately. The
+scheduler waits for a 1,000 ms quiet period after the latest admitted result and
+holds the first result for at most 3,000 ms. New results slide only the quiet
+deadline; they never extend the maximum hold. A busy agent keeps results in the
+map until `agent_settled` starts the same bounded window. Session shutdown
+cancels both deadlines before clearing the map.
+
+The timer group detaches before delivery, so a settlement triggered during a
+synchronous delivery callback starts a new group. Generation tokens make stale
+callbacks harmless even if timer cancellation races. If the initial Bash wait
+consumes the only deferred result during the start-to-wait race, the now-empty
+group is cancelled.
 
 Delivery uses:
 
@@ -314,10 +327,13 @@ pi.sendMessage(message, {
 });
 ```
 
-The custom message content includes bounded output for model context, while its
-message renderer always shows one status line with a `/ps` hint and ignores
-expanded mode. A busy agent receives the message after its current run settles.
-An idle agent is woken immediately. No model-driven polling is required.
+A singleton keeps the existing message content and detail shape. A batch carries
+all compact terminal details in settlement order and allocates its 32 KiB
+content budget across results so every terminal summary survives truncation. Its
+message renderer shows one status line with the terminal count, aggregate
+outcomes, and a `/ps` hint. A busy agent receives the message after its current
+run settles. An idle agent is woken when the quiet window closes. No model-driven
+polling is required.
 
 ## 11. Head+tail output retention
 
@@ -370,9 +386,12 @@ Automatic completion budgets:
 ```text
 stdout:  8 KiB / 40 lines
 stderr:  4 KiB / 20 lines
+batch:  32 KiB total content
 ```
 
-Every model-visible output remains bounded even if a child is a firehose.
+A multi-terminal batch divides the aggregate budget across its results and
+retains each status prefix before bounded output. Every model-visible output
+remains bounded even if a child is a firehose.
 
 ## 12. Spill files and backpressure
 
@@ -552,6 +571,9 @@ The package test suite covers:
 - registration of only the `bash` override plus `/ps`;
 - quick completion without a duplicate follow-up;
 - yielded completion with exactly one automatic delivery;
+- sliding quiet and maximum-hold batching deadlines, including cancellation;
+- synchronized yielded completions sharing one follow-up;
+- unchanged singleton messages and UTF-8-bounded aggregate content;
 - safe pre-spawn foreground fallback;
 - non-zero commands executing only once, without fallback retry;
 - Pi managed-bin `PATH`, session environment, and command-prefix preservation;
