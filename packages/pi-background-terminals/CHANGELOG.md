@@ -1,5 +1,13 @@
 # @tian.zuo/pi-background-terminals
 
+## 0.5.2
+
+### Patch Changes
+
+- [#18](https://github.com/TianZuo555/pi-extensions/pull/18) [`da8a245`](https://github.com/TianZuo555/pi-extensions/commit/da8a24508455894eacee56df69f71c9ce67e93bd) Thanks [@Alx8g](https://github.com/Alx8g)! - Batch background terminals that finish close together into one bounded completion follow-up while preserving exactly-once delivery and the existing singleton message shape.
+
+- [#20](https://github.com/TianZuo555/pi-extensions/pull/20) [`a45525c`](https://github.com/TianZuo555/pi-extensions/commit/a45525c4f64c0fec5e054366c4d0ffa4f37df2cd) Thanks [@Alx8g](https://github.com/Alx8g)! - Preserve the full quiet window for arrivals that follow a busy-held expiry, keep the maximum hold fixed, and charge truncation markers to the strict aggregate completion budget.
+
 ## 0.5.1
 
 ### Patch Changes
