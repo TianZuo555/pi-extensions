@@ -82,6 +82,62 @@ test("completion batching keeps sustained arrivals within the maximum hold", () 
   assert.equal(flushes, 1);
 });
 
+test("a quiet expiry held while busy flushes when the agent becomes idle", () => {
+  const timers = new ManualTimers();
+  let idle = false;
+  let flushes = 0;
+  const scheduler = createCompletionBatchScheduler(() => flushes++, {
+    timers,
+    isIdle: () => idle,
+  });
+
+  scheduler.schedule();
+  timers.advance(COMPLETION_BATCH_QUIET_MS);
+  assert.equal(flushes, 0);
+  idle = true;
+  assert.equal(scheduler.notifyIdle(), true);
+  assert.equal(flushes, 1);
+});
+
+test("arrivals after a busy quiet expiry start a fresh quiet window", () => {
+  const timers = new ManualTimers();
+  let idle = false;
+  let flushes = 0;
+  const scheduler = createCompletionBatchScheduler(() => flushes++, {
+    timers,
+    isIdle: () => idle,
+  });
+
+  scheduler.schedule();
+  timers.advance(COMPLETION_BATCH_QUIET_MS);
+  assert.equal(flushes, 0);
+
+  timers.advance(500);
+  scheduler.schedule();
+  idle = true;
+  assert.equal(scheduler.notifyIdle(), true);
+  assert.equal(flushes, 0);
+  timers.advance(COMPLETION_BATCH_QUIET_MS - 1);
+  assert.equal(flushes, 0);
+  timers.advance(1);
+  assert.equal(flushes, 1);
+});
+
+test("the maximum hold flushes even while the batch remains busy", () => {
+  const timers = new ManualTimers();
+  let flushes = 0;
+  const scheduler = createCompletionBatchScheduler(() => flushes++, {
+    timers,
+    isIdle: () => false,
+  });
+
+  scheduler.schedule();
+  timers.advance(COMPLETION_BATCH_QUIET_MS);
+  assert.equal(flushes, 0);
+  timers.advance(COMPLETION_BATCH_MAX_WAIT_MS - COMPLETION_BATCH_QUIET_MS);
+  assert.equal(flushes, 1);
+});
+
 test("clearing completion batching invalidates every pending deadline", () => {
   const timers = new ManualTimers();
   let flushes = 0;

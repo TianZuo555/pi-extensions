@@ -258,19 +258,24 @@ export function buildTerminalResultMessage(snap: TerminalSnapshot) {
   );
 }
 
-function truncateUtf8WithMarker(value: string, maximumBytes: number) {
-  if (Buffer.byteLength(value) <= maximumBytes) return value;
-  const marker = "\n[output truncated; use /ps for complete logs]";
-  const contentBudget = Math.max(0, maximumBytes - Buffer.byteLength(marker));
+function truncateUtf8(value: string, maximumBytes: number) {
   let result = "";
   let usedBytes = 0;
   for (const character of value) {
     const characterBytes = Buffer.byteLength(character);
-    if (usedBytes + characterBytes > contentBudget) break;
+    if (usedBytes + characterBytes > maximumBytes) break;
     result += character;
     usedBytes += characterBytes;
   }
-  return result + marker;
+  return result;
+}
+
+export function truncateUtf8WithMarker(value: string, maximumBytes: number) {
+  const byteLimit = Math.max(0, maximumBytes);
+  if (Buffer.byteLength(value) <= byteLimit) return value;
+  const marker = truncateUtf8("\n[output truncated; use /ps for complete logs]", byteLimit);
+  const contentBudget = byteLimit - Buffer.byteLength(marker);
+  return truncateUtf8(value, contentBudget) + marker;
 }
 
 /** One follow-up for terminal completions that settle in the same quiet window. */

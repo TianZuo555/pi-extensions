@@ -307,9 +307,14 @@ export function createBackgroundTerminalsExtension(
         for (const snap of snaps) resultDelivery.defer(snap);
       }
     };
-    const resultBatchScheduler = createCompletionBatchScheduler(flushResults);
+    const resultBatchScheduler = createCompletionBatchScheduler(flushResults, {
+      isIdle: () => sessionContext?.isIdle() === true,
+    });
     const scheduleResultFlush = () => {
       if (resultDelivery.size() > 0) resultBatchScheduler.schedule();
+    };
+    const settleResultFlush = () => {
+      if (!resultBatchScheduler.notifyIdle()) scheduleResultFlush();
     };
 
     const onSettled = (snap: TerminalSnapshot, consumed: boolean) => {
@@ -326,7 +331,7 @@ export function createBackgroundTerminalsExtension(
         stdout: { ...snap.stdout },
         stderr: { ...snap.stderr },
       });
-      if (sessionContext?.isIdle()) scheduleResultFlush();
+      scheduleResultFlush();
     };
 
     pi.on("session_start", (_event, ctx) => {
@@ -340,10 +345,10 @@ export function createBackgroundTerminalsExtension(
     // user/follow-up run rather than per turn.
     pi.on("agent_start", resetTerminalLogBudget);
 
-    // Start or slide one bounded batch when the agent settles. Together with
-    // the idle path above and Map-keyed delivery, this preserves exactly-once
-    // admission while coalescing terminals that finish close together.
-    pi.on("agent_settled", scheduleResultFlush);
+    // Release a quiet expiry held while the agent was busy. A later arrival
+    // rearms quiet first, so settling the agent cannot flush that new result
+    // before its own quiet window. A delivery retry starts a fresh group.
+    pi.on("agent_settled", settleResultFlush);
 
     // /new, /resume, /fork, /reload, and quit all emit session_shutdown for
     // the old extension instance. Processes never survive a session

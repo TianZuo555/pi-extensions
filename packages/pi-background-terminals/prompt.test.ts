@@ -16,6 +16,7 @@ import {
   MAX_COMPLETION_BATCH_CONTENT_BYTES,
   TERMINAL_LOG_READ_PROMPT_SNIPPET,
   TERMINAL_LOG_READ_TOOL_DESCRIPTION,
+  truncateUtf8WithMarker,
 } from "./src/prompt.ts";
 
 test("bash metadata states the managed-shell contract concisely", () => {
@@ -287,6 +288,14 @@ test("completion message reports kill vs exit", () => {
 test("an isolated completion keeps the existing message shape", () => {
   const terminal = snap();
   assert.equal(buildTerminalResultBatchMessage([terminal]), buildTerminalResultMessage(terminal));
+});
+
+test("the truncation marker stays inside an arbitrarily small UTF-8 budget", () => {
+  const maximumBytes = 17;
+  const truncated = truncateUtf8WithMarker("界".repeat(100), maximumBytes);
+
+  assert.ok(Buffer.byteLength(truncated) <= maximumBytes);
+  assert.doesNotMatch(truncated, /�/);
 });
 
 test("batched completions retain every terminal summary within one bounded message", () => {
