@@ -9,8 +9,10 @@ test("a result consumed by the initial bash wait is not delivered", () => {
   }>();
 
   delivery.defer({ id: "bt-1", output: "done" });
+  assert.equal(delivery.size(), 1);
   delivery.consume(["bt-1"]);
 
+  assert.equal(delivery.size(), 0);
   assert.deepEqual(delivery.drain(), []);
 });
 

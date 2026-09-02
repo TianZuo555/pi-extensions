@@ -20,6 +20,9 @@ export function createDeferredResultDelivery<T extends { id: string }>() {
       pending.clear();
       return results;
     },
+    size() {
+      return pending.size;
+    },
     clear() {
       pending.clear();
     },
