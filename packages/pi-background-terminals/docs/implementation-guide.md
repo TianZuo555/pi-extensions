@@ -305,11 +305,12 @@ from the failed batch for a later `agent_settled` retry. Interactive mode does
 not write that failure through `console.error`, which would corrupt the active
 TUI frame; non-TUI modes retain the diagnostic.
 
-Idle settlements schedule delivery instead of sending immediately. The
-scheduler waits for a 1,000 ms quiet period after the latest admitted result and
-holds the first result for at most 3,000 ms. New results slide only the quiet
-deadline; they never extend the maximum hold. A busy agent keeps results in the
-map until `agent_settled` starts the same bounded window. Session shutdown
+Every unconsumed settlement starts or slides a 1,000 ms quiet deadline while the
+first result keeps one fixed 3,000 ms maximum deadline. If quiet expires while
+the agent is busy, the scheduler holds that expiry without cancelling the
+maximum. `agent_settled` flushes the held group when no later result arrived. A
+later result instead clears the held expiry and starts its own full quiet window;
+settling the agent cannot flush that newer result early. Session shutdown
 cancels both deadlines before clearing the map.
 
 The timer group detaches before delivery, so a settlement triggered during a
@@ -390,8 +391,10 @@ batch:  32 KiB total content
 ```
 
 A multi-terminal batch divides the aggregate budget across its results and
-retains each status prefix before bounded output. Every model-visible output
-remains bounded even if a child is a firehose.
+retains each status prefix before bounded output. The truncation marker is
+charged to the same per-result share, including when an artificial share is
+shorter than the full marker. Every model-visible output remains bounded even if
+a child is a firehose.
 
 ## 12. Spill files and backpressure
 
@@ -572,8 +575,9 @@ The package test suite covers:
 - quick completion without a duplicate follow-up;
 - yielded completion with exactly one automatic delivery;
 - sliding quiet and maximum-hold batching deadlines, including cancellation;
+- busy-held quiet expiry, later-arrival rearming, and maximum-hold delivery;
 - synchronized yielded completions sharing one follow-up;
-- unchanged singleton messages and UTF-8-bounded aggregate content;
+- unchanged singleton messages and strict UTF-8 aggregate and marker budgets;
 - safe pre-spawn foreground fallback;
 - non-zero commands executing only once, without fallback retry;
 - Pi managed-bin `PATH`, session environment, and command-prefix preservation;
