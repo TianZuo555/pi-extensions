@@ -2,6 +2,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   AUTH_IDS,
   SEARCH_PROVIDER_ORDER,
+  availableSearchProviders,
   getProviderStatuses,
   inspectOpenAICodexAuth,
   loadProviderKey,
@@ -253,9 +254,9 @@ export default function webSearchExtension(pi: ExtensionAPI): void {
     description:
       "Reorder the web search fallback chain (enter grab • ↑↓ move • enter save • esc cancel)",
     handler: async (_args, ctx) => {
-      if (!ctx.hasUI) {
+      if (ctx.mode !== "tui") {
         ctx.ui.notify(
-          '/websearch-order needs an interactive session — edit "searchOrder" in ~/.pi/web-search.json instead',
+          '/websearch-order needs a TUI session — edit "searchOrder" in ~/.pi/web-search.json instead',
           "warning",
         );
         return;
@@ -263,6 +264,7 @@ export default function webSearchExtension(pi: ExtensionAPI): void {
 
       const config = loadStoredConfig();
       const chain = resolveSearchChain(undefined, config);
+      const available = availableSearchProviders(config);
       const list = [...chain, ...SEARCH_PROVIDER_ORDER.filter((p) => !chain.includes(p))];
 
       const order = await promptProviderOrder(
@@ -271,7 +273,7 @@ export default function webSearchExtension(pi: ExtensionAPI): void {
         list.map((id) => ({
           id,
           detail: searchProviderDetail(id, config),
-          active: chain.includes(id),
+          active: available.includes(id),
         })),
       );
       if (!order) return; // cancelled
@@ -282,10 +284,13 @@ export default function webSearchExtension(pi: ExtensionAPI): void {
 
       saveStoredConfig({
         ...config,
-        searchProvider: order[0] as SearchProviderName,
-        searchOrder: order.slice(1) as SearchProviderName[],
+        searchProvider: undefined,
+        searchOrder: order as SearchProviderName[],
       });
-      ctx.ui.notify(`search chain saved: ${order.join(" → ")}\n(~/.pi/web-search.json)`, "info");
+      ctx.ui.notify(
+        `search provider order saved: ${order.join(" → ")}\n(~/.pi/web-search.json)`,
+        "info",
+      );
     },
   });
 

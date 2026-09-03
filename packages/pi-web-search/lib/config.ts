@@ -176,8 +176,12 @@ function piThinkingToReasoning(
     (ctx?.model?.provider === "openai-codex" || ctx?.model?.provider === "openai"
       ? ctx.model
       : undefined);
-  const mapped = entry?.thinkingLevelMap?.[level] ?? level;
-  return mapped === "low" || mapped === "medium" || mapped === "high" ? mapped : undefined;
+  const mapped = entry?.thinkingLevelMap?.[level];
+  if (mapped === null) return undefined;
+  const effective = mapped ?? level;
+  return effective === "low" || effective === "medium" || effective === "high"
+    ? effective
+    : undefined;
 }
 
 export function resolveOpenAIConfig(
@@ -545,7 +549,11 @@ export function resolveSearchChain(
   config = loadStoredConfig(),
 ): SearchProviderName[] {
   const available = availableSearchProviders(config);
-  const head = requested ?? config.searchProvider;
+  const configuredHead =
+    config.searchProvider && available.includes(config.searchProvider)
+      ? config.searchProvider
+      : undefined;
+  const head = requested ?? configuredHead;
   const order = filterOrder(config.searchOrder, SEARCH_PROVIDER_ORDER).filter((p) =>
     available.includes(p),
   );
@@ -558,7 +566,11 @@ export function resolveFetchChain(
   config = loadStoredConfig(),
 ): FetchProviderName[] {
   const available = availableFetchProviders(config);
-  const head = requested ?? config.fetchProvider;
+  const configuredHead =
+    config.fetchProvider && available.includes(config.fetchProvider)
+      ? config.fetchProvider
+      : undefined;
+  const head = requested ?? configuredHead;
   const order = filterOrder(config.fetchOrder, FETCH_PROVIDER_ORDER).filter((p) =>
     available.includes(p),
   );

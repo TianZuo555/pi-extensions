@@ -167,10 +167,7 @@ test("resolveOpenAIConfig derives reasoning from the session thinking level", ()
       "low",
     );
     // model map nulls out an unsupported level → model default
-    assert.equal(
-      resolve(fakeCtx("minimal" as never, { minimal: null, low: null }), {}).reasoning,
-      undefined,
-    );
+    assert.equal(resolve(fakeCtx("low" as never, { low: null }), {}).reasoning, undefined);
     // off → undefined; xhigh (unsupported effort) → undefined
     assert.equal(resolve(fakeCtx("off" as never), {}).reasoning, undefined);
     assert.equal(resolve(fakeCtx("xhigh" as never), {}).reasoning, undefined);

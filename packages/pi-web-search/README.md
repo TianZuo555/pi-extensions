@@ -90,7 +90,7 @@ credentialed):
 session's thinking level (via pi's model registry), falling back to the model
 default; set `"low"` to always search ~40% faster.
 
-Prefer the interactive route? `/websearch-order` writes `searchProvider` +
+Prefer the interactive route? `/websearch-order` writes the complete
 `searchOrder` for you, and `/websearch-auth` manages Ollama's base URL — no
 hand-editing needed.
 
@@ -99,7 +99,7 @@ hand-editing needed.
 | Command            | Description                                                                                                                                                                 |
 | :----------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `/web-search`      | Show provider status: detected credentials (incl. auto-detected OpenAI) and the active search/fetch fallback chains                                                         |
-| `/websearch-order` | Interactively reorder the search fallback chain: enter grab • ↑↓ move • enter save • esc cancel (saved as `searchProvider` + `searchOrder`)                                 |
+| `/websearch-order` | Interactively reorder the search fallback chain: enter grab • ↑↓ move • enter save • esc cancel (saved as `searchOrder`)                                                    |
 | `/websearch-auth`  | Interactive credential setup (Exa / Firecrawl / Tavily / Monid / Ollama). OpenAI is listed read-only — it's auto-detected from your pi `/login` (Codex) or `OPENAI_API_KEY` |
 | `/websearch-usage` | Show this session's per-provider usage (calls, failures, avg latency), providers on cooldown/blocked, and your Monid wallet balance with recent run costs                   |
 
