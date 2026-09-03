@@ -14,12 +14,14 @@ test("parseAgyModels parses tab-separated model lines, collapses effort variants
   const models = parseAgyModels(MODELS_OUTPUT);
   assert.equal(models.length, 7);
   assert.deepEqual(models[0], {
-    id: "gemini-3.7-flash",
-    name: "Gemini 3.7 Flash",
-    supportedEfforts: ["high", "medium"],
+    id: "gemini-3.8-flash",
+    name: "Gemini 3.8 Flash",
+    supportedEfforts: ["high", "medium", "low"],
     defaultEffort: "high",
   });
-  assert.equal(models[1].id, "gemini-3.6-flash");
+  assert.equal(models[1].id, "gemini-3.7-flash");
+  assert.equal(models[3].id, "gemini-3.1-pro");
+  assert.deepEqual(models[3].supportedEfforts, ["high", "low"]);
   assert.deepEqual(models[4], {
     id: "claude-sonnet-4-6",
     name: "Claude Sonnet 4.6 (Thinking)",
@@ -58,6 +60,12 @@ test("resolveAgyModelEffort never launches a normalized model with an invalid ef
 });
 
 test("pricingForModel uses vendor-specific reference rates and no cross-vendor fallback", () => {
+  assert.deepEqual(pricingForModel("gemini-3.8-flash"), {
+    input: 0.75,
+    output: 3.75,
+    cacheRead: 0.075,
+    cacheWrite: 0.75,
+  });
   assert.deepEqual(pricingForModel("gemini-3.7-flash"), {
     input: 0.75,
     output: 3.75,
@@ -76,7 +84,7 @@ test("pricingForModel uses vendor-specific reference rates and no cross-vendor f
 });
 
 test("capabilitiesForModel gives agy ownership with a 1M Pi scheduling window", () => {
-  assert.deepEqual(capabilitiesForModel("gemini-3.7-flash"), {
+  assert.deepEqual(capabilitiesForModel("gemini-3.8-flash"), {
     contextWindow: 1_000_000,
     maxTokens: 65_536,
   });
@@ -98,9 +106,9 @@ test("fallback catalog mirrors all current agy model families", () => {
   assert.deepEqual(
     FALLBACK_MODELS.map(({ id }) => id),
     [
+      "gemini-3.8-flash",
       "gemini-3.7-flash",
       "gemini-3.6-flash",
-      "gemini-3.5-flash",
       "gemini-3.1-pro",
       "claude-sonnet-4-6",
       "claude-opus-4-6-thinking",

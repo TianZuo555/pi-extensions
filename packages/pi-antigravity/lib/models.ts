@@ -88,8 +88,14 @@ export function resolveAgyModelEffort(
   return model.defaultEffort ?? model.supportedEfforts[0];
 }
 
-/** Fallback snapshot from agy 1.1.22 `agy models`, including effort constraints. */
+/** Fallback snapshot from agy 1.1.25 `agy models`, including effort constraints. */
 export const FALLBACK_MODELS: AgyModelInfo[] = [
+  {
+    id: "gemini-3.8-flash",
+    name: "Gemini 3.8 Flash",
+    supportedEfforts: ["high", "medium", "low"],
+    defaultEffort: "high",
+  },
   {
     id: "gemini-3.7-flash",
     name: "Gemini 3.7 Flash",
@@ -99,12 +105,6 @@ export const FALLBACK_MODELS: AgyModelInfo[] = [
   {
     id: "gemini-3.6-flash",
     name: "Gemini 3.6 Flash",
-    supportedEfforts: ["high", "medium", "low"],
-    defaultEffort: "high",
-  },
-  {
-    id: "gemini-3.5-flash",
-    name: "Gemini 3.5 Flash",
     supportedEfforts: ["high", "medium", "low"],
     defaultEffort: "high",
   },
@@ -158,7 +158,7 @@ const ZERO_PRICING: ModelPricing = {
  * than inheriting an unrelated vendor's rate.
  */
 export function pricingForModel(modelId: string): ModelPricing {
-  if (/^gemini-3\.(?:7|6)-flash$/i.test(modelId)) {
+  if (/^gemini-3\.(?:8|7|6)-flash$/i.test(modelId)) {
     return { input: 0.75, output: 3.75, cacheRead: 0.075, cacheWrite: 0.75 };
   }
   if (/^gemini-3\.5-flash$/i.test(modelId)) {
