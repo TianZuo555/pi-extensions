@@ -83,11 +83,28 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             base="$(git merge-base "origin/${{ github.event.pull_request.base.ref }}" HEAD)"
-            echo "Testing packages changed since ${base}"
-            # The leading ... includes dependents of changed packages; the
-            # negated filter drops the root workspace project so root-only
-            # changes (docs, CI config) don't pull in the recursive suite.
-            pnpm --filter "...[${base}]" --filter "!pi-extensions" test
+            echo "Testing changes since ${base}"
+
+            # Shared root configuration can affect every package. Only
+            # documentation, changesets, and GitHub metadata are safe to
+            # ignore when deciding whether the full suite is required.
+            shared_change=false
+            while IFS= read -r file; do
+              case "${file}" in
+                packages/*|.changeset/*|.github/*|*.md|LICENSE|LICENSE.*) ;;
+                *) shared_change=true; break ;;
+              esac
+            done < <(git diff --name-only "${base}"...HEAD)
+
+            if [ "${shared_change}" = "true" ]; then
+              echo "Shared workspace files changed; running the full suite"
+              pnpm test
+            else
+              # The leading ... includes dependents of changed packages; the
+              # negated filter drops the root workspace project selected by
+              # docs, workflow, and changeset-only changes.
+              pnpm --filter "...[${base}]" --filter "!pi-extensions" test
+            fi
           else
             pnpm test
           fi
