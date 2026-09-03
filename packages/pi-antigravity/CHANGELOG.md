@@ -1,5 +1,11 @@
 # @tian.zuo/pi-antigravity
 
+## 0.10.0
+
+### Minor Changes
+
+- [#22](https://github.com/TianZuo555/pi-extensions/pull/22) [`be0df7c`](https://github.com/TianZuo555/pi-extensions/commit/be0df7cc89eed7b44ec4906509070391840e0177) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Add `gemini-3.8-flash` (Gemini 3.8 Flash, low/medium/high efforts) to the fallback model catalog from the agy 1.1.25 `agy models` snapshot, with $0.75/$3.75 per-million-token reference pricing. `gemini-3.5-flash`, no longer served by current agy, is dropped from the fallback snapshot; live discovery continues to surface whatever the installed agy reports.
+
 ## 0.9.0
 
 ### Minor Changes
