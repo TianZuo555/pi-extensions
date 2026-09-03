@@ -1,14 +1,27 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   AUTH_IDS,
+  SEARCH_PROVIDER_ORDER,
+  availableSearchProviders,
+  getProviderStatuses,
+  inspectOpenAICodexAuth,
   loadProviderKey,
   loadStoredConfig,
+  resolveExaConfig,
+  resolveFetchChain,
+  resolveFirecrawlConfig,
+  resolveMonidConfig,
+  resolveOllamaConfig,
+  resolveOpenAIConfig,
+  resolveSearchChain,
+  resolveTavilyConfig,
   saveStoredConfig,
   writePiAuthKey,
 } from "./lib/config.ts";
 import { getMonidWallet, listMonidRuns } from "./lib/monid.ts";
-import type { WebSearchConfig } from "./lib/types.ts";
+import type { WebSearchConfig, SearchProviderName } from "./lib/types.ts";
 import { registerTools } from "./lib/tools.ts";
+import { promptProviderOrder } from "./src/order-ui.ts";
 import {
   createWebSearchRuntime,
   runWebSearch,
@@ -20,6 +33,7 @@ const OLLAMA_DEFAULT_URL = "http://localhost:11434";
 const PI_AUTH_FILE = "~/.pi/agent/auth.json";
 
 const GREEN = "\x1b[32m";
+const YELLOW = "\x1b[33m";
 const RESET = "\x1b[0m";
 
 function maskKey(key: string | undefined): string {
@@ -87,6 +101,57 @@ function providerLine(name: KeyProvider | "ollama", config: WebSearchConfig): st
   return `${GREEN}${label}✓ auth: ${url}${key}${RESET}`;
 }
 
+/** Read-only openai row: credentials are auto-detected (pi /login codex,
+ * OPENAI_API_KEY, config file) and never configured through this command. */
+function openaiLine(config: WebSearchConfig): string {
+  const label = "openai".padEnd(10);
+  const codex = inspectOpenAICodexAuth();
+  if (codex.state === "fresh") {
+    return `${GREEN}${label}✓ auto: pi login (openai-codex)${RESET}`;
+  }
+  const resolved = resolveOpenAIConfig(undefined, config);
+  if (resolved) {
+    return `${GREEN}${label}✓ auto: ${resolved.source}${RESET}`;
+  }
+  if (codex.state === "expired") {
+    return `${YELLOW}${label}• codex login expired — re-run /login${RESET}`;
+  }
+  return `${label}• auto: /login with OpenAI or set OPENAI_API_KEY`;
+}
+
+function codexExpiryHint(): string[] {
+  return inspectOpenAICodexAuth().state === "expired"
+    ? [
+        "",
+        "⚠ your openai-codex token in ~/.pi/agent/auth.json is expired —",
+        "  re-run /login (OpenAI Codex) to refresh it.",
+      ]
+    : [];
+}
+
+/** One-line credential/config summary for the order dialog. */
+function searchProviderDetail(id: SearchProviderName, config: WebSearchConfig): string {
+  switch (id) {
+    case "openai": {
+      const resolved = resolveOpenAIConfig(undefined, config);
+      if (resolved) return resolved.source;
+      return inspectOpenAICodexAuth().state === "expired"
+        ? "codex login expired — re-run /login"
+        : "not detected (/login or OPENAI_API_KEY)";
+    }
+    case "exa":
+      return resolveExaConfig(config)?.source ?? "unconfigured";
+    case "tavily":
+      return resolveTavilyConfig(config)?.source ?? "unconfigured";
+    case "firecrawl":
+      return resolveFirecrawlConfig(config)?.source ?? "unconfigured";
+    case "monid":
+      return resolveMonidConfig(config)?.source ?? "unconfigured";
+    case "ollama":
+      return resolveOllamaConfig(config).source;
+  }
+}
+
 export default function webSearchExtension(pi: ExtensionAPI): void {
   let runtime: WebSearchRuntimeInstance | undefined;
   const getRuntime = () => (runtime ??= createWebSearchRuntime());
@@ -152,9 +217,86 @@ export default function webSearchExtension(pi: ExtensionAPI): void {
     },
   });
 
+  pi.registerCommand("web-search", {
+    description:
+      "Show web search provider status: detected credentials and the active search/fetch chains",
+    handler: async (_args, ctx) => {
+      const config = loadStoredConfig();
+      const lines: string[] = [
+        "Web search providers",
+        "",
+        `search chain: ${resolveSearchChain(undefined, config).join(" → ")}`,
+        `fetch chain:  ${resolveFetchChain(undefined, config).join(" → ")}`,
+        "",
+      ];
+      for (const s of getProviderStatuses(ctx)) {
+        const label = s.name.padEnd(10);
+        if (s.configured) {
+          const model = s.model ? ` · ${s.model}` : "";
+          lines.push(`${GREEN}${label}✓ ${s.source ?? "configured"}${model}${RESET}`);
+        } else {
+          lines.push(`${label}• unconfigured`);
+        }
+      }
+      lines.push(...codexExpiryHint());
+      lines.push(
+        "",
+        "openai is auto-detected (pi /login with OpenAI, or OPENAI_API_KEY) — it is not",
+        "listed as configurable in /websearch-auth. It ranks after keyless Firecrawl by",
+        'default; reorder the chain with /websearch-order, or set "searchProvider": "openai" in',
+        "~/.pi/web-search.json.",
+      );
+      ctx.ui.notify(lines.join("\n"), "info");
+    },
+  });
+
+  pi.registerCommand("websearch-order", {
+    description:
+      "Reorder the web search fallback chain (enter grab • ↑↓ move • enter save • esc cancel)",
+    handler: async (_args, ctx) => {
+      if (ctx.mode !== "tui") {
+        ctx.ui.notify(
+          '/websearch-order needs a TUI session — edit "searchOrder" in ~/.pi/web-search.json instead',
+          "warning",
+        );
+        return;
+      }
+
+      const config = loadStoredConfig();
+      const chain = resolveSearchChain(undefined, config);
+      const available = availableSearchProviders(config);
+      const list = [...chain, ...SEARCH_PROVIDER_ORDER.filter((p) => !chain.includes(p))];
+
+      const order = await promptProviderOrder(
+        ctx,
+        "Search provider order",
+        list.map((id) => ({
+          id,
+          detail: searchProviderDetail(id, config),
+          active: available.includes(id),
+        })),
+      );
+      if (!order) return; // cancelled
+      if (order.every((id, index) => id === list[index])) {
+        ctx.ui.notify("Order unchanged", "info");
+        return;
+      }
+
+      saveStoredConfig({
+        ...config,
+        searchProvider: undefined,
+        searchOrder: order as SearchProviderName[],
+      });
+      ctx.ui.notify(
+        `search provider order saved: ${order.join(" → ")}\n(~/.pi/web-search.json)`,
+        "info",
+      );
+    },
+  });
+
   pi.registerCommand("websearch-auth", {
     description:
-      "Configure web search providers: Exa / Firecrawl / Tavily / Monid / Ollama API keys (stored in pi auth)",
+      "Configure web search providers: Exa / Firecrawl / Tavily / Monid / Ollama API keys (stored in pi auth); openai is auto-detected — see /web-search",
     handler: async (_args, ctx) => {
       if (!ctx.hasUI) {
         ctx.ui.notify(
@@ -166,6 +308,7 @@ export default function webSearchExtension(pi: ExtensionAPI): void {
 
       const config = loadStoredConfig();
       const provider = await ctx.ui.select("Configure provider:", [
+        openaiLine(config),
         providerLine("exa", config),
         providerLine("firecrawl", config),
         providerLine("tavily", config),
@@ -173,11 +316,28 @@ export default function webSearchExtension(pi: ExtensionAPI): void {
         providerLine("ollama", config),
       ]);
       if (!provider) return;
-      // Lines may start with a green ANSI code; match on the provider name.
-      const name = (["exa", "firecrawl", "tavily", "monid", "ollama"] as const).find((n) =>
-        provider.includes(n),
+      // Lines may start with an ANSI code; match on the provider name.
+      const name = (["openai", "exa", "firecrawl", "tavily", "monid", "ollama"] as const).find(
+        (n) => provider.includes(n),
       );
       if (!name) return;
+
+      if (name === "openai") {
+        ctx.ui.notify(
+          [
+            "openai is auto-detected — there is no key to configure here:",
+            "  1. /login → OpenAI (ChatGPT Plus/Pro Codex) — used automatically",
+            '  2. OPENAI_API_KEY env, or "openai": { "apiKey": … } in',
+            "     ~/.pi/web-search.json",
+            ...codexExpiryHint(),
+            "",
+            "It ranks after keyless Firecrawl by default; reorder with /websearch-order",
+            'or set "searchProvider": "openai" in ~/.pi/web-search.json.',
+          ].join("\n"),
+          "info",
+        );
+        return;
+      }
 
       if (name !== "ollama") {
         const key = await ctx.ui.input(

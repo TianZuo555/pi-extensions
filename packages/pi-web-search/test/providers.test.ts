@@ -6,6 +6,7 @@ import { resetFirecrawlKeylessState, searchFirecrawl, fetchFirecrawl } from "../
 import { searchMonid, fetchMonid, getMonidWallet, listMonidRuns } from "../lib/monid.ts";
 import { searchOllama, fetchOllama } from "../lib/ollama.ts";
 import { searchOpenAI } from "../lib/openai.ts";
+import { resolveOpenAIConfig } from "../lib/config.ts";
 import { searchTavily, fetchTavily } from "../lib/tavily.ts";
 
 test("searchOpenAI parses JSON Responses API output with citations", async () => {
@@ -67,6 +68,112 @@ test("searchOpenAI parses JSON Responses API output with citations", async () =>
   } finally {
     globalThis.fetch = originalFetch;
     process.env.OPENAI_API_KEY = originalKey;
+  }
+});
+
+test("searchOpenAI reports internal API sources when no web URLs are returned", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalKey = process.env.OPENAI_API_KEY;
+
+  try {
+    process.env.OPENAI_API_KEY = "sk-test";
+
+    const mockOutput = {
+      output: [
+        {
+          type: "message",
+          content: [{ type: "text", text: "Seoul: 24°C, mostly clear.", annotations: [] }],
+        },
+        {
+          type: "web_search_call",
+          action: {
+            type: "search",
+            sources: [{ type: "api", name: "oai-weather" }],
+          },
+        },
+      ],
+    };
+
+    globalThis.fetch = async () =>
+      new Response(JSON.stringify(mockOutput), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+
+    const res = await searchOpenAI("seoul weather");
+    assert.equal(res.answer, "Seoul: 24°C, mostly clear.");
+    assert.equal(res.results.length, 0);
+    assert.deepEqual(res.internalSources, ["oai-weather"]);
+  } finally {
+    globalThis.fetch = originalFetch;
+    process.env.OPENAI_API_KEY = originalKey;
+  }
+});
+
+test("searchOpenAI sends configured reasoning effort", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalKey = process.env.OPENAI_API_KEY;
+  const originalReasoning = process.env.OPENAI_SEARCH_REASONING;
+
+  try {
+    process.env.OPENAI_API_KEY = "sk-test";
+    process.env.OPENAI_SEARCH_REASONING = "low";
+
+    let sentBody: Record<string, unknown> | undefined;
+    globalThis.fetch = async (_input, init) => {
+      sentBody = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify({ output: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    };
+
+    await searchOpenAI("test");
+    assert.deepEqual(sentBody?.reasoning, { effort: "low" });
+  } finally {
+    globalThis.fetch = originalFetch;
+    process.env.OPENAI_API_KEY = originalKey;
+    if (originalReasoning === undefined) delete process.env.OPENAI_SEARCH_REASONING;
+    else process.env.OPENAI_SEARCH_REASONING = originalReasoning;
+  }
+});
+
+test("resolveOpenAIConfig derives reasoning from the session thinking level", () => {
+  const originalKey = process.env.OPENAI_API_KEY;
+  const originalReasoning = process.env.OPENAI_SEARCH_REASONING;
+  delete process.env.OPENAI_SEARCH_REASONING;
+
+  const fakeCtx = (thinkingLevel: string, thinkingLevelMap?: Record<string, unknown>) =>
+    ({
+      thinkingLevel,
+      modelRegistry: {
+        find: (_provider: string, id: string) =>
+          id === "gpt-5.6-luna" ? { thinkingLevelMap } : undefined,
+      },
+    }) as unknown as Parameters<typeof resolveOpenAIConfig>[0];
+
+  try {
+    process.env.OPENAI_API_KEY = "sk-test";
+    const resolve = (...args: Parameters<typeof resolveOpenAIConfig>) => {
+      const res = resolveOpenAIConfig(...args);
+      assert.ok(res);
+      return res;
+    };
+    // unmapped level passes through
+    assert.equal(resolve(fakeCtx("low" as never), {}).reasoning, "low");
+    // explicit config beats the session level
+    assert.equal(
+      resolve(fakeCtx("high" as never), { openai: { reasoning: "low" } }).reasoning,
+      "low",
+    );
+    // model map nulls out an unsupported level → model default
+    assert.equal(resolve(fakeCtx("low" as never, { low: null }), {}).reasoning, undefined);
+    // off → undefined; xhigh (unsupported effort) → undefined
+    assert.equal(resolve(fakeCtx("off" as never), {}).reasoning, undefined);
+    assert.equal(resolve(fakeCtx("xhigh" as never), {}).reasoning, undefined);
+  } finally {
+    process.env.OPENAI_API_KEY = originalKey;
+    if (originalReasoning !== undefined) process.env.OPENAI_SEARCH_REASONING = originalReasoning;
   }
 });
 

@@ -12,13 +12,8 @@ import { DEFAULT_OPENAI_SYSTEM_PROMPT } from "./prompt.ts";
 
 export { DEFAULT_OPENAI_SYSTEM_PROMPT } from "./prompt.ts";
 
-export const PRIMARY_CONFIG_PATH = path.join(
-  os.homedir(),
-  ".config",
-  "pi-web-search",
-  "config.json",
-);
-const LEGACY_CONFIG_PATH = path.join(os.homedir(), ".pi", "web-search.json");
+export const PRIMARY_CONFIG_PATH = path.join(os.homedir(), ".pi", "web-search.json");
+const LEGACY_CONFIG_PATH = path.join(os.homedir(), ".config", "pi-web-search", "config.json");
 const PI_AUTH_FILE = path.join(os.homedir(), ".pi", "agent", "auth.json");
 
 export const DEFAULT_OPENAI_MODEL = "gpt-5.6-luna";
@@ -119,6 +114,7 @@ export interface ResolvedOpenAIConfig {
   baseUrl: string;
   model: string;
   systemPrompt: string;
+  reasoning?: "low" | "medium" | "high";
   source: string;
   isCodexOAuth: boolean;
   accountId?: string;
@@ -163,8 +159,33 @@ function isFreshTimestamp(expires: number | undefined): boolean {
   return ms > Date.now();
 }
 
+/** Reasoning effort derived from the session's pi thinking level, mapped
+ * through the search model's registry entry (thinkingLevelMap; a missing
+ * entry passes the level through, null/unsupported values are dropped so
+ * the model default applies). */
+function piThinkingToReasoning(
+  ctx: ExtensionContext | undefined,
+  model: string,
+): ResolvedOpenAIConfig["reasoning"] {
+  const level = ctx?.thinkingLevel;
+  if (!level || level === "off") return undefined;
+  const registry = ctx?.modelRegistry;
+  const entry =
+    registry?.find("openai-codex", model) ??
+    registry?.find("openai", model) ??
+    (ctx?.model?.provider === "openai-codex" || ctx?.model?.provider === "openai"
+      ? ctx.model
+      : undefined);
+  const mapped = entry?.thinkingLevelMap?.[level];
+  if (mapped === null) return undefined;
+  const effective = mapped ?? level;
+  return effective === "low" || effective === "medium" || effective === "high"
+    ? effective
+    : undefined;
+}
+
 export function resolveOpenAIConfig(
-  _ctx?: ExtensionContext,
+  ctx?: ExtensionContext,
   config = loadStoredConfig(),
 ): ResolvedOpenAIConfig | null {
   const systemPrompt =
@@ -174,6 +195,11 @@ export function resolveOpenAIConfig(
 
   const model =
     process.env.OPENAI_SEARCH_MODEL?.trim() || config.openai?.model?.trim() || DEFAULT_OPENAI_MODEL;
+
+  const explicitReasoning = (process.env.OPENAI_SEARCH_REASONING?.trim() ||
+    config.openai?.reasoning?.trim() ||
+    "") as ResolvedOpenAIConfig["reasoning"];
+  const reasoning = explicitReasoning || piThinkingToReasoning(ctx, model) || undefined;
 
   const customBaseUrl =
     process.env.OPENAI_BASE_URL?.trim() || config.openai?.baseUrl?.trim() || undefined;
@@ -189,6 +215,10 @@ export function resolveOpenAIConfig(
           : "https://api.openai.com/v1/responses"),
       model,
       systemPrompt,
+      reasoning:
+        reasoning === "low" || reasoning === "medium" || reasoning === "high"
+          ? reasoning
+          : undefined,
       source,
       isCodexOAuth: isCodex,
       accountId: extractAccountId(apiKey),
@@ -218,6 +248,18 @@ export function resolveOpenAIConfig(
   }
 
   return null;
+}
+
+/** State of pi's `openai-codex` login entry in ~/.pi/agent/auth.json.
+ * `expired` means the access token needs a fresh /login (pi refreshes it
+ * lazily, only when a codex model is actually used for chat). */
+export type OpenAICodexAuthState = "fresh" | "expired" | "missing";
+
+export function inspectOpenAICodexAuth(): { state: OpenAICodexAuthState; expires?: number } {
+  const entry = readPiAuthData()["openai-codex"];
+  if (!entry?.access) return { state: "missing" };
+  if (!isFreshTimestamp(entry.expires)) return { state: "expired", expires: entry.expires };
+  return { state: "fresh", expires: entry.expires };
 }
 
 export interface ResolvedExaConfig {
@@ -507,7 +549,11 @@ export function resolveSearchChain(
   config = loadStoredConfig(),
 ): SearchProviderName[] {
   const available = availableSearchProviders(config);
-  const head = requested ?? config.searchProvider;
+  const configuredHead =
+    config.searchProvider && available.includes(config.searchProvider)
+      ? config.searchProvider
+      : undefined;
+  const head = requested ?? configuredHead;
   const order = filterOrder(config.searchOrder, SEARCH_PROVIDER_ORDER).filter((p) =>
     available.includes(p),
   );
@@ -520,7 +566,11 @@ export function resolveFetchChain(
   config = loadStoredConfig(),
 ): FetchProviderName[] {
   const available = availableFetchProviders(config);
-  const head = requested ?? config.fetchProvider;
+  const configuredHead =
+    config.fetchProvider && available.includes(config.fetchProvider)
+      ? config.fetchProvider
+      : undefined;
+  const head = requested ?? configuredHead;
   const order = filterOrder(config.fetchOrder, FETCH_PROVIDER_ORDER).filter((p) =>
     available.includes(p),
   );

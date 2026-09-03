@@ -49,6 +49,8 @@ export interface WebSearchDetails {
   resultsCount: number;
   hasAnswer: boolean;
   results: Array<{ title: string; url: string }>;
+  /** Non-URL sources behind an answer-only response (e.g. oai-weather). */
+  internalSources?: string[];
   fallbackFrom?: string[];
 }
 
@@ -106,6 +108,10 @@ export async function executeSearch(
       return r.snippet ? `${header}\n   ${r.snippet}` : header;
     });
     sections.push(`## Sources & Results (${response.provider})\n\n${list.join("\n\n")}`);
+  } else if (response.internalSources?.length) {
+    sections.push(
+      `Answer from internal ${response.provider} source: ${response.internalSources.join(", ")} (no web URLs).`,
+    );
   } else if (!response.answer) {
     sections.push(`No search results found for: "${params.query}" via ${response.provider}.`);
   }
@@ -117,6 +123,7 @@ export async function executeSearch(
     resultsCount: response.results.length,
     hasAnswer: !!response.answer,
     results: response.results.map((r) => ({ title: r.title, url: r.url })),
+    internalSources: response.internalSources?.length ? response.internalSources : undefined,
     fallbackFrom: response.fallbacks?.length
       ? response.fallbacks.map((f) => f.provider)
       : undefined,
@@ -199,9 +206,11 @@ export function registerTools(
         theme.fg("success", "✓ ") +
         theme.fg(
           "muted",
-          `${details.resultsCount} result${details.resultsCount === 1 ? "" : "s"} via ${details.provider}${
-            details.hasAnswer ? " (with summary)" : ""
-          }`,
+          details.internalSources?.length
+            ? `answer via ${details.provider} (internal source: ${details.internalSources.join(", ")})`
+            : `${details.resultsCount} result${details.resultsCount === 1 ? "" : "s"} via ${details.provider}${
+                details.hasAnswer ? " (with summary)" : ""
+              }`,
         ) +
         fallbackStr;
 

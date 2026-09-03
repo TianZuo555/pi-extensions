@@ -22,6 +22,10 @@ export interface SearchResponse {
   provider: SearchProviderName;
   /** Providers that were tried before this response and failed */
   fallbacks?: ProviderFallback[];
+  /** Non-URL sources that produced the answer, e.g. OpenAI internal APIs
+   * ("oai-weather"). Present when the answer came from an internal source
+   * instead of web pages — web result lists are then legitimately empty. */
+  internalSources?: string[];
 }
 
 export interface FetchOptions {
@@ -66,6 +70,11 @@ export interface WebSearchConfig {
     baseUrl?: string;
     model?: string;
     systemPrompt?: string;
+    /** Responses API reasoning effort. Explicit setting wins; otherwise the
+     * session's pi thinking level is used (mapped via the model registry);
+     * with neither, the model default (medium) applies. "low" is ~40%
+     * faster and usually plenty for search queries. */
+    reasoning?: "low" | "medium" | "high";
   };
   exa?: {
     baseUrl?: string;

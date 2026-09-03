@@ -246,10 +246,10 @@ test("order entries without credentials or with unknown names are dropped", () =
     process.env.TAVILY_API_KEY = "tvly-key";
     // Config files arrive as untyped JSON, so bogus names are possible.
     const cfg = JSON.parse(
-      '{"searchOrder": ["firecrawl", "bogus"], "fetchOrder": ["exa", "bogus"]}',
+      '{"searchProvider": "exa", "fetchProvider": "exa", "searchOrder": ["firecrawl", "bogus"], "fetchOrder": ["exa", "bogus"]}',
     ) as WebSearchConfig;
 
-    // exa is listed in fetchOrder but has no credentials, so it is dropped;
+    // exa is preferred and listed in fetchOrder but has no credentials, so it is dropped;
     // the chain is the remaining available providers in canonical order
     // (keyless firecrawl included).
     assert.deepEqual(resolveSearchChain(undefined, cfg), ["firecrawl", "tavily", "ollama"]);

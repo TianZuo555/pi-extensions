@@ -8,7 +8,7 @@ test("WebSearchRuntime search dispatches to resolved provider and returns result
   const originalKey = process.env.OPENAI_API_KEY;
   const originalFirecrawlKey = process.env.FIRECRAWL_API_KEY;
   const originalKeyless = process.env.FIRECRAWL_KEYLESS;
-  // Ignore the developer machine's real ~/.config/pi-web-search/config.json:
+  // Ignore the developer machine's real ~/.pi/web-search.json:
   // a configured searchProvider would win over the env-key canonical head.
   const restoreConfig = hideStoredConfig();
 

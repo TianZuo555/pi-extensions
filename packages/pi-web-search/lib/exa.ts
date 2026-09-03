@@ -39,9 +39,7 @@ export async function searchExa(
 ): Promise<SearchResponse> {
   const config = resolveExaConfig();
   if (!config) {
-    throw new Error(
-      "Exa API key not found. Set EXA_API_KEY or configure ~/.config/pi-web-search/config.json",
-    );
+    throw new Error("Exa API key not found. Set EXA_API_KEY or configure ~/.pi/web-search.json");
   }
 
   const searchUrl = `${config.baseUrl.replace(/\/+$/, "")}/search`;
@@ -112,9 +110,7 @@ export async function searchExa(
 export async function fetchExa(url: string, options: FetchOptions = {}): Promise<FetchResponse> {
   const config = resolveExaConfig();
   if (!config) {
-    throw new Error(
-      "Exa API key not found. Set EXA_API_KEY or configure ~/.config/pi-web-search/config.json",
-    );
+    throw new Error("Exa API key not found. Set EXA_API_KEY or configure ~/.pi/web-search.json");
   }
 
   const contentsUrl = `${config.baseUrl.replace(/\/+$/, "")}/contents`;
