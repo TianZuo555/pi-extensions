@@ -94,9 +94,13 @@ function addResult(
   });
 }
 
-function extractSearchResults(output: unknown[], numResults: number | undefined): SearchResult[] {
+function extractSearchResults(
+  output: unknown[],
+  numResults: number | undefined,
+): { results: SearchResult[]; internalSources: string[] } {
   const results: SearchResult[] = [];
   const seenUrls = new Set<string>();
+  const internalSources = new Set<string>();
 
   for (const item of output) {
     if (!item || typeof item !== "object" || (item as { type?: unknown }).type !== "message")
@@ -151,20 +155,21 @@ function extractSearchResults(output: unknown[], numResults: number | undefined)
       for (const source of group) {
         if (!source || typeof source !== "object") continue;
         const record = source as Record<string, unknown>;
-        addResult(
-          results,
-          seenUrls,
-          record.url ?? record.source_website_url,
-          record.title ?? record.caption,
-        );
+        const url = record.url ?? record.source_website_url;
+        if (typeof url === "string" && url.trim().length > 0) {
+          addResult(results, seenUrls, url, record.title ?? record.caption);
+        } else if (record.type === "api" && typeof record.name === "string" && record.name) {
+          internalSources.add(record.name);
+        }
       }
     }
   }
 
-  if (typeof numResults === "number" && Number.isFinite(numResults) && numResults > 0) {
-    return results.slice(0, Math.min(Math.floor(numResults), 20));
-  }
-  return results;
+  const sliced =
+    typeof numResults === "number" && Number.isFinite(numResults) && numResults > 0
+      ? results.slice(0, Math.min(Math.floor(numResults), 20))
+      : results;
+  return { results: sliced, internalSources: [...internalSources] };
 }
 
 function extractAnswer(output: unknown[]): string {
@@ -247,7 +252,7 @@ export async function searchOpenAI(
   const auth = resolveOpenAIConfig(ctx);
   if (!auth) {
     throw new Error(
-      "OpenAI credentials not found. Set OPENAI_API_KEY, configure ~/.config/pi-web-search/config.json, or log into pi with Codex.",
+      "OpenAI credentials not found. Set OPENAI_API_KEY, configure ~/.pi/web-search.json, or log into pi with Codex.",
     );
   }
 
@@ -273,6 +278,7 @@ export async function searchOpenAI(
     include: ["web_search_call.action.sources"],
     stream: true,
     tool_choice: "required",
+    ...(auth.reasoning ? { reasoning: { effort: auth.reasoning } } : {}),
   };
 
   const timeoutSignal = AbortSignal.timeout(SEARCH_TIMEOUT_MS);
@@ -296,12 +302,13 @@ export async function searchOpenAI(
 
   const parsed = await parseOpenAIResponse(response);
   const answer = extractAnswer(parsed.output);
-  const results = extractSearchResults(parsed.output, options.numResults);
+  const { results, internalSources } = extractSearchResults(parsed.output, options.numResults);
 
   return {
     query,
     results,
     answer: answer || undefined,
     provider: "openai",
+    internalSources: internalSources.length > 0 ? internalSources : undefined,
   };
 }

@@ -5,6 +5,7 @@ import {
   DEFAULT_MONID_API_URL,
   DEFAULT_OPENAI_SYSTEM_PROMPT,
   getProviderStatuses,
+  inspectOpenAICodexAuth,
   resolveExaConfig,
   resolveFetchProvider,
   resolveFirecrawlConfig,
@@ -32,6 +33,31 @@ test("resolveOpenAIConfig prefers pi's openai-codex login over OPENAI_API_KEY", 
       process.env.OPENAI_API_KEY = originalEnv;
     } else {
       delete process.env.OPENAI_API_KEY;
+    }
+  }
+});
+
+test("inspectOpenAICodexAuth reports fresh / expired / missing states", () => {
+  const cases: Array<[Record<string, unknown>, string]> = [
+    [{}, "missing"],
+    [{ "openai-codex": { type: "oauth", access: "tok", expires: Date.now() + 60_000 } }, "fresh"],
+    [
+      {
+        "openai-codex": {
+          type: "oauth",
+          access: "tok",
+          expires: Math.floor((Date.now() - 1_000) / 1000), // legacy epoch seconds
+        },
+      },
+      "expired",
+    ],
+  ];
+  for (const [data, expected] of cases) {
+    const restoreFs = stubPiAuthData(data);
+    try {
+      assert.equal(inspectOpenAICodexAuth().state, expected);
+    } finally {
+      restoreFs();
     }
   }
 });
