@@ -6,9 +6,9 @@ import {
   queryDeepSeekUsage,
   queryZaiCnUsage,
   queryZaiUsage,
-} from "../packages/pi-usage/lib/providers.ts";
-import { formatReport, formatReports, formatStatusline } from "../packages/pi-usage/lib/format.ts";
-import { hasProviderLoginInfo } from "../packages/pi-usage/lib/auth.ts";
+} from "../lib/providers.ts";
+import { formatReport, formatReports, formatStatusline } from "../lib/format.ts";
+import { hasProviderLoginInfo } from "../lib/auth.ts";
 
 const copilotSnapshot = (overrides = {}) => ({
   overage_count: 0,
