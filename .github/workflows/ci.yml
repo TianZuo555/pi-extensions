@@ -59,6 +59,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          # Full history so tests can diff against the PR base branch.
+          fetch-depth: 0
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v6
@@ -72,8 +75,22 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # On PRs only run tests for packages changed since the merge base
+      # (dependents included). Pushes to main and release verification
+      # (workflow_call) always run the full suite.
       - name: Run tests
-        run: pnpm test
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base="$(git merge-base "origin/${{ github.event.pull_request.base.ref }}" HEAD)"
+            echo "Testing packages changed since ${base}"
+            # The leading ... includes dependents of changed packages; the
+            # negated filter drops the root workspace project so root-only
+            # changes (docs, CI config) don't pull in the recursive suite.
+            pnpm --filter "...[${base}]" --filter "!pi-extensions" test
+          else
+            pnpm test
+          fi
 
   ci-ok:
     name: CI
