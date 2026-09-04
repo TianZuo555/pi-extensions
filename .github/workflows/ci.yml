@@ -5,6 +5,12 @@ on:
   push:
     branches: [main]
   workflow_call:
+    inputs:
+      full_suite:
+        description: Run the full test suite for release verification.
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -60,7 +66,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v7
         with:
-          # Full history so tests can diff against the PR base branch.
+          # Full history so tests can diff against the PR base branch or the
+          # previous main-branch push.
           fetch-depth: 0
 
       - name: Setup pnpm
@@ -75,38 +82,60 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      # On PRs only run tests for packages changed since the merge base
-      # (dependents included). Pushes to main and release verification
-      # (workflow_call) always run the full suite.
+      # Pull requests and ordinary pushes run tests for changed packages
+      # (dependents included). Release verification opts into the full suite.
       - name: Run tests
         shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          FULL_SUITE: ${{ inputs.full_suite }}
+          PR_BASE_REF: ${{ github.event.pull_request.base.ref }}
+          PUSH_BEFORE: ${{ github.event.before }}
         run: |
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            base="$(git merge-base "origin/${{ github.event.pull_request.base.ref }}" HEAD)"
-            echo "Testing changes since ${base}"
+          set -euo pipefail
 
-            # Shared root configuration can affect every package. Only
-            # documentation, changesets, and GitHub metadata are safe to
-            # ignore when deciding whether the full suite is required.
-            shared_change=false
-            while IFS= read -r file; do
-              case "${file}" in
-                packages/*|.changeset/*|.github/*|*.md|LICENSE|LICENSE.*) ;;
-                *) shared_change=true; break ;;
-              esac
-            done < <(git diff --name-only "${base}"...HEAD)
+          if [ "${FULL_SUITE}" = "true" ]; then
+            echo "Full suite requested; running all tests"
+            pnpm test
+            exit 0
+          fi
 
-            if [ "${shared_change}" = "true" ]; then
-              echo "Shared workspace files changed; running the full suite"
+          if [ "${EVENT_NAME}" = "pull_request" ]; then
+            base="$(git merge-base "origin/${PR_BASE_REF}" HEAD)"
+          elif [ "${EVENT_NAME}" = "push" ]; then
+            base="${PUSH_BEFORE}"
+            if [ -z "${base}" ] || [ "${base}" = "0000000000000000000000000000000000000000" ] || ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+              echo "Push base is unavailable; running the full suite"
               pnpm test
-            else
-              # The leading ... includes dependents of changed packages; the
-              # negated filter drops the root workspace project selected by
-              # docs, workflow, and changeset-only changes.
-              pnpm --filter "...[${base}]" --filter "!pi-extensions" test
+              exit 0
             fi
           else
+            echo "Unsupported event ${EVENT_NAME}; running the full suite"
             pnpm test
+            exit 0
+          fi
+
+          echo "Testing changes since ${base}"
+
+          # Shared root configuration can affect every package. Only
+          # documentation, changesets, and GitHub metadata are safe to
+          # ignore when deciding whether the full suite is required.
+          shared_change=false
+          while IFS= read -r file; do
+            case "${file}" in
+              packages/*|.changeset/*|.github/*|*.md|LICENSE|LICENSE.*) ;;
+              *) shared_change=true; break ;;
+            esac
+          done < <(git diff --name-only "${base}"...HEAD)
+
+          if [ "${shared_change}" = "true" ]; then
+            echo "Shared workspace files changed; running the full suite"
+            pnpm test
+          else
+            # The leading ... includes dependents of changed packages; the
+            # negated filter drops the root workspace project selected by
+            # docs, workflow, and changeset-only changes.
+            pnpm --filter "...[${base}]" --filter "!pi-extensions" test
           fi
 
   ci-ok:

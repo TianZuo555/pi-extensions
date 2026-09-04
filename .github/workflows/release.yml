@@ -27,6 +27,8 @@ jobs:
   # Gate every release on the full CI suite instead.
   verify:
     uses: ./.github/workflows/ci.yml
+    with:
+      full_suite: true
 
   release:
     needs: verify
