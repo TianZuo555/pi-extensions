@@ -1,7 +1,7 @@
 {
   "name": "@tian.zuo/pi-web-search",
   "version": "0.5.0",
-  "description": "Web search (OpenAI Responses with simple prompt, Exa, Tavily, Firecrawl, Ollama) and web fetch for the pi coding agent.",
+  "description": "Web search and fetch with configurable fallback order across OpenAI, Exa, Tavily, Firecrawl, Monid, Ollama, and direct HTTP.",
   "type": "module",
   "keywords": [
     "pi",
@@ -15,6 +15,8 @@
     "exa",
     "tavily",
     "firecrawl",
+    "monid",
+    "tinyfish",
     "ollama"
   ],
   "author": "Tian Zuo",

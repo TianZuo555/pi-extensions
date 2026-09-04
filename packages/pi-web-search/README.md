@@ -32,13 +32,17 @@ entirely: keyless Firecrawl is the default, no key needed.
    ollama    • unconfigured (default localhost:11434)
 ```
 
-`/websearch-order`: grab a provider with `enter`, move it with `↑↓`, `enter` to
-save — or do nothing and the default chain (keyless Firecrawl first) applies:
+`/websearch-order`: configure both fallback chains in one dialog. It opens on
+**Search**; press `tab` to switch to **Fetch**. Grab a provider with `enter`,
+move it with `↑↓`, press `space` to drop it, and use `enter` while grabbed to
+save both tabs. `esc` cancels all edits.
 
 ```text
- Search provider order
+ Web provider order
 
- ↑↓ navigate • enter grab • esc cancel
+  Search   Fetch    Tab switches tool
+
+ ↑↓ navigate • enter grab • tab switch • esc cancel
 
  → openai    ✓ ~/.pi/agent/auth.json (openai-codex)
    exa       ✓ EXA_API_KEY env
@@ -47,6 +51,9 @@ save — or do nothing and the default chain (keyless Firecrawl first) applies:
    tavily    • unconfigured
    monid     • unconfigured
 ```
+
+The Fetch tab uses the same controls and includes `direct`, the built-in HTTP
+fallback. The default chains still apply when you do not save a custom order.
 
 **Manual** — env variables:
 
@@ -90,16 +97,16 @@ credentialed):
 session's thinking level (via pi's model registry), falling back to the model
 default; set `"low"` to always search ~40% faster.
 
-Prefer the interactive route? `/websearch-order` writes the complete
-`searchOrder` for you, and `/websearch-auth` manages Ollama's base URL — no
-hand-editing needed.
+Prefer the interactive route? `/websearch-order` writes complete `searchOrder`
+and `fetchOrder` arrays for you; use `tab` to switch between them.
+`/websearch-auth` manages Ollama's base URL — no hand-editing needed.
 
 ## Commands
 
 | Command            | Description                                                                                                                                                                 |
 | :----------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `/web-search`      | Show provider status: detected credentials (incl. auto-detected OpenAI) and the active search/fetch fallback chains                                                         |
-| `/websearch-order` | Interactively reorder the search fallback chain: enter grab • ↑↓ move • enter save • esc cancel (saved as `searchOrder`)                                                    |
+| `/websearch-order` | Interactively reorder search and fetch fallback chains: tab switch • enter grab • ↑↓ move • enter save • esc cancel (saved as `searchOrder` and `fetchOrder`)                        |
 | `/websearch-auth`  | Interactive credential setup (Exa / Firecrawl / Tavily / Monid / Ollama). OpenAI is listed read-only — it's auto-detected from your pi `/login` (Codex) or `OPENAI_API_KEY` |
 | `/websearch-usage` | Show this session's per-provider usage (calls, failures, avg latency), providers on cooldown/blocked, and your Monid wallet balance with recent run costs                   |
 
@@ -123,7 +130,8 @@ OpenAI and Tavily additionally return a synthesized summary (shown as
 
 ### `web_fetch`
 
-Reads web pages as clean Markdown.
+Reads web pages as clean Markdown. To customize its fallback priority, open
+`/websearch-order` and press `tab` to switch from Search to Fetch.
 
 - **Firecrawl** (`/v2/scrape`, `onlyMainContent` on): keyed or
   [keyless](https://www.firecrawl.dev/blog/firecrawl-keyless-launch) — a real

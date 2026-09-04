@@ -1,9 +1,6 @@
-/**
- * /websearch-order UI — grab-and-move list for the search fallback chain.
- * Keys: ↑↓ navigate (or move the grabbed item), enter grab then save,
- * space drop without saving, esc cancel. Every rendered line is
- * width-safe via truncateToWidth.
- */
+// /websearch-order UI — tabbed grab-and-move lists for the search and fetch
+// fallback chains. Tab switches tools; ↑↓ navigates or moves a grabbed item;
+// enter grabs/saves; space drops without saving; esc cancels.
 
 import type {
   ExtensionCommandContext,
@@ -17,48 +14,111 @@ export interface OrderItem {
   id: string;
   /** Short credential/config summary shown next to the name. */
   detail: string;
-  /** True when the provider currently has resolvable credentials. */
+  /** True when the provider is currently available for this tool. */
   active: boolean;
+}
+
+export interface OrderTab {
+  id: "search" | "fetch";
+  label: string;
+  items: OrderItem[];
+}
+
+export interface ProviderOrders {
+  search: string[];
+  fetch: string[];
 }
 
 const NAME_WIDTH = 11;
 
-/** Open the reorder dialog; resolves with the new id order, or null on cancel. */
+/** Build the editable full order without losing unavailable providers from a
+ * previously saved order. */
+export function completeProviderOrder<P extends string>(
+  canonical: readonly P[],
+  resolved: readonly P[],
+  configuredHead?: P,
+  configuredOrder?: readonly P[],
+): P[] {
+  const known = new Set(canonical);
+  return [
+    ...new Set([
+      ...(configuredHead && known.has(configuredHead) ? [configuredHead] : []),
+      ...(Array.isArray(configuredOrder)
+        ? configuredOrder.filter((provider) => known.has(provider))
+        : []),
+      ...resolved,
+      ...canonical,
+    ]),
+  ];
+}
+
+/** Open the tabbed reorder dialog; resolves with both orders, or null on cancel. */
 export function promptProviderOrder(
   ctx: ExtensionCommandContext,
-  title: string,
-  items: OrderItem[],
-): Promise<string[] | null> {
-  const detailById = new Map(items.map((item) => [item.id, item.detail]));
-  const activeById = new Map(items.map((item) => [item.id, item.active]));
-
-  return ctx.ui.custom<string[] | null>(
+  tabs: [OrderTab, OrderTab],
+): Promise<ProviderOrders | null> {
+  return ctx.ui.custom<ProviderOrders | null>(
     (tui: TUI, theme: Theme, keybindings: KeybindingsManager, done) => {
-      const order = items.map((item) => item.id);
-      const initial = [...order];
-      let cursor = 0;
+      let tabIndex = 0;
       let grabbed = false;
+      const orders: ProviderOrders = {
+        search: tabs.find((tab) => tab.id === "search")?.items.map((item) => item.id) ?? [],
+        fetch: tabs.find((tab) => tab.id === "fetch")?.items.map((item) => item.id) ?? [],
+      };
+      const cursors: Record<OrderTab["id"], number> = { search: 0, fetch: 0 };
+
+      const activeTab = (): OrderTab => tabs[tabIndex];
+      const activeOrder = (): string[] => orders[activeTab().id];
 
       const move = (delta: -1 | 1): void => {
+        const tab = activeTab();
+        const order = activeOrder();
+        const cursor = cursors[tab.id];
         if (grabbed) {
           const target = cursor + delta;
           if (target < 0 || target >= order.length) return;
           [order[cursor], order[target]] = [order[target], order[cursor]];
-          cursor = target;
+          cursors[tab.id] = target;
         } else if (order.length > 0) {
-          cursor = (cursor + delta + order.length) % order.length;
+          cursors[tab.id] = (cursor + delta + order.length) % order.length;
         }
+        tui.requestRender();
+      };
+
+      const switchTab = (): void => {
+        grabbed = false;
+        tabIndex = (tabIndex + 1) % tabs.length;
         tui.requestRender();
       };
 
       const component: Component = {
         render: (width: number): string[] => {
+          const tab = activeTab();
+          const order = activeOrder();
+          const itemById = new Map(tab.items.map((item) => [item.id, item]));
+          const tabLabels = tabs
+            .map((candidate, index) => {
+              const label = ` ${candidate.label} `;
+              return index === tabIndex
+                ? theme.bg("selectedBg", theme.fg("text", theme.bold(label)))
+                : theme.fg("dim", label);
+            })
+            .join(" ");
           const help = grabbed
-            ? "↑↓ move item • space drop • enter save • esc cancel"
-            : "↑↓ navigate • enter grab • esc cancel";
-          const lines = [theme.fg("accent", theme.bold(title)), "", theme.fg("dim", help), ""];
+            ? "↑↓ move item • space drop • enter save • tab switch • esc cancel"
+            : "↑↓ navigate • enter grab • tab switch • esc cancel";
+          const lines = [
+            theme.fg("accent", theme.bold("Web provider order")),
+            "",
+            `${tabLabels}${theme.fg("dim", "  Tab switches tool")}`,
+            "",
+            theme.fg("dim", help),
+            "",
+          ];
+
           order.forEach((id, index) => {
-            const isCursor = index === cursor;
+            const item = itemById.get(id);
+            const isCursor = index === cursors[tab.id];
             const isGrabbed = isCursor && grabbed;
             const marker = isGrabbed
               ? theme.fg("accent", "● ")
@@ -67,26 +127,27 @@ export function promptProviderOrder(
                 : "  ";
             const name = isGrabbed ? theme.fg("accent", theme.bold(id)) : theme.bold(id);
             const pad = " ".repeat(Math.max(0, NAME_WIDTH - id.length));
-            const status =
-              (activeById.get(id) ?? false) ? theme.fg("success", "✓") : theme.fg("dim", "•");
-            const detail = theme.fg("muted", detailById.get(id) ?? "");
+            const status = item?.active ? theme.fg("success", "✓") : theme.fg("dim", "•");
+            const detail = theme.fg("muted", item?.detail ?? "");
             lines.push(`${marker}${name}${pad} ${status} ${detail}`);
           });
           lines.push(
             "",
             theme.fg(
               "dim",
-              "Top runs first; unconfigured (•) providers are skipped until they have credentials.",
+              "Top runs first; unavailable (•) providers keep their position and are skipped.",
             ),
           );
-          return lines.map((line) => truncateToWidth(line, width));
+          return lines.map((line) => truncateToWidth(line, Math.max(0, width)));
         },
-        invalidate: (): void => {
-          tui.requestRender();
-        },
+        invalidate: (): void => {},
         handleInput: (data: string): void => {
           if (keybindings.matches(data, "tui.select.cancel")) {
             done(null);
+            return;
+          }
+          if (keybindings.matches(data, "tui.input.tab")) {
+            switchTab();
             return;
           }
           if (keybindings.matches(data, "tui.select.up")) {
@@ -99,7 +160,7 @@ export function promptProviderOrder(
           }
           if (keybindings.matches(data, "tui.select.confirm")) {
             if (grabbed) {
-              done(order.every((id, index) => id === initial[index]) ? [...initial] : [...order]);
+              done({ search: [...orders.search], fetch: [...orders.fetch] });
               return;
             }
             grabbed = true;
