@@ -1,6 +1,6 @@
 // /websearch-order UI — tabbed grab-and-move lists for the search and fetch
 // fallback chains. Tab switches tools; ↑↓ navigates or moves a grabbed item;
-// enter grabs/saves; space drops without saving; esc cancels.
+// space grabs/drops an item; enter saves; esc cancels.
 
 import type {
   ExtensionCommandContext,
@@ -106,7 +106,7 @@ export function promptProviderOrder(
             .join(" ");
           const help = grabbed
             ? "↑↓ move item • space drop • enter save • tab switch • esc cancel"
-            : "↑↓ navigate • enter grab • tab switch • esc cancel";
+            : "↑↓ navigate • space grab • enter save • tab switch • esc cancel";
           const lines = [
             theme.fg("accent", theme.bold("Web provider order")),
             "",
@@ -159,12 +159,7 @@ export function promptProviderOrder(
             return;
           }
           if (keybindings.matches(data, "tui.select.confirm")) {
-            if (grabbed) {
-              done({ search: [...orders.search], fetch: [...orders.fetch] });
-              return;
-            }
-            grabbed = true;
-            tui.requestRender();
+            done({ search: [...orders.search], fetch: [...orders.fetch] });
             return;
           }
           if (data === " ") {

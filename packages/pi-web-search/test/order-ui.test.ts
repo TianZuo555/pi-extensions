@@ -121,17 +121,33 @@ test("order dialog preserves edits on both tabs and saves them together", async 
   const dialog = openDialog();
 
   dialog.component.handleInput?.("down");
-  dialog.component.handleInput?.("enter");
+  dialog.component.handleInput?.(" ");
   dialog.component.handleInput?.("up");
   dialog.component.handleInput?.(" ");
   dialog.component.handleInput?.("tab");
-  dialog.component.handleInput?.("enter");
   dialog.component.handleInput?.("down");
+  dialog.component.handleInput?.(" ");
+  dialog.component.handleInput?.("up");
+  dialog.component.handleInput?.(" ");
   dialog.component.handleInput?.("enter");
 
   assert.deepEqual(await dialog.result, {
     search: ["openai", "firecrawl"],
     fetch: ["direct", "firecrawl"],
+  });
+});
+
+test("order dialog saves immediately with enter, even while an item is grabbed", async () => {
+  const dialog = openDialog();
+
+  dialog.component.handleInput?.("down");
+  dialog.component.handleInput?.(" ");
+  dialog.component.handleInput?.("up");
+  dialog.component.handleInput?.("enter");
+
+  assert.deepEqual(await dialog.result, {
+    search: ["openai", "firecrawl"],
+    fetch: ["firecrawl", "direct"],
   });
 });
 
