@@ -1,5 +1,11 @@
 # @tian.zuo/pi-web-search
 
+## 0.6.0
+
+### Minor Changes
+
+- [#27](https://github.com/TianZuo555/pi-extensions/pull/27) [`35a256d`](https://github.com/TianZuo555/pi-extensions/commit/35a256da3260d1140ad2a035508064303dd8835b) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Expand `/websearch-order` into a tabbed editor for both fallback chains. The dialog opens on Search and switches to Fetch with Tab, preserves edits across tabs, and saves complete `searchOrder` and `fetchOrder` arrays together. The Fetch tab uses the same grab-and-move controls and includes the built-in `direct` provider.
+
 ## 0.5.0
 
 ### Minor Changes
