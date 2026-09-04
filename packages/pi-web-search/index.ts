@@ -1,7 +1,9 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import {
   AUTH_IDS,
+  FETCH_PROVIDER_ORDER,
   SEARCH_PROVIDER_ORDER,
+  availableFetchProviders,
   availableSearchProviders,
   getProviderStatuses,
   inspectOpenAICodexAuth,
@@ -19,9 +21,9 @@ import {
   writePiAuthKey,
 } from "./lib/config.ts";
 import { getMonidWallet, listMonidRuns } from "./lib/monid.ts";
-import type { WebSearchConfig, SearchProviderName } from "./lib/types.ts";
+import type { FetchProviderName, SearchProviderName, WebSearchConfig } from "./lib/types.ts";
 import { registerTools } from "./lib/tools.ts";
-import { promptProviderOrder } from "./src/order-ui.ts";
+import { completeProviderOrder, promptProviderOrder } from "./src/order-ui.ts";
 import {
   createWebSearchRuntime,
   runWebSearch,
@@ -130,7 +132,10 @@ function codexExpiryHint(): string[] {
 }
 
 /** One-line credential/config summary for the order dialog. */
-function searchProviderDetail(id: SearchProviderName, config: WebSearchConfig): string {
+function providerDetail(
+  id: SearchProviderName | FetchProviderName,
+  config: WebSearchConfig,
+): string {
   switch (id) {
     case "openai": {
       const resolved = resolveOpenAIConfig(undefined, config);
@@ -149,6 +154,8 @@ function searchProviderDetail(id: SearchProviderName, config: WebSearchConfig): 
       return resolveMonidConfig(config)?.source ?? "unconfigured";
     case "ollama":
       return resolveOllamaConfig(config).source;
+    case "direct":
+      return "built-in HTTP fallback";
   }
 }
 
@@ -252,43 +259,75 @@ export default function webSearchExtension(pi: ExtensionAPI): void {
 
   pi.registerCommand("websearch-order", {
     description:
-      "Reorder the web search fallback chain (enter grab • ↑↓ move • enter save • esc cancel)",
+      "Reorder web search and fetch fallback chains (tab switch • enter grab • ↑↓ move • enter save)",
     handler: async (_args, ctx) => {
       if (ctx.mode !== "tui") {
         ctx.ui.notify(
-          '/websearch-order needs a TUI session — edit "searchOrder" in ~/.pi/web-search.json instead',
+          '/websearch-order needs a TUI session — edit "searchOrder" and "fetchOrder" in ~/.pi/web-search.json instead',
           "warning",
         );
         return;
       }
 
       const config = loadStoredConfig();
-      const chain = resolveSearchChain(undefined, config);
-      const available = availableSearchProviders(config);
-      const list = [...chain, ...SEARCH_PROVIDER_ORDER.filter((p) => !chain.includes(p))];
-
-      const order = await promptProviderOrder(
-        ctx,
-        "Search provider order",
-        list.map((id) => ({
-          id,
-          detail: searchProviderDetail(id, config),
-          active: available.includes(id),
-        })),
+      const searchChain = resolveSearchChain(undefined, config);
+      const fetchChain = resolveFetchChain(undefined, config);
+      const availableSearch = availableSearchProviders(config);
+      const availableFetch = availableFetchProviders(config);
+      const searchList = completeProviderOrder(
+        SEARCH_PROVIDER_ORDER,
+        searchChain,
+        config.searchProvider,
+        config.searchOrder,
       );
+      const fetchList = completeProviderOrder(
+        FETCH_PROVIDER_ORDER,
+        fetchChain,
+        config.fetchProvider,
+        config.fetchOrder,
+      );
+
+      const order = await promptProviderOrder(ctx, [
+        {
+          id: "search",
+          label: "Search",
+          items: searchList.map((id) => ({
+            id,
+            detail: providerDetail(id, config),
+            active: availableSearch.includes(id),
+          })),
+        },
+        {
+          id: "fetch",
+          label: "Fetch",
+          items: fetchList.map((id) => ({
+            id,
+            detail: providerDetail(id, config),
+            active: availableFetch.includes(id),
+          })),
+        },
+      ]);
       if (!order) return; // cancelled
-      if (order.every((id, index) => id === list[index])) {
-        ctx.ui.notify("Order unchanged", "info");
+      const searchUnchanged = order.search.every((id, index) => id === searchList[index]);
+      const fetchUnchanged = order.fetch.every((id, index) => id === fetchList[index]);
+      if (searchUnchanged && fetchUnchanged) {
+        ctx.ui.notify("Orders unchanged", "info");
         return;
       }
 
       saveStoredConfig({
         ...config,
         searchProvider: undefined,
-        searchOrder: order as SearchProviderName[],
+        fetchProvider: undefined,
+        searchOrder: order.search as SearchProviderName[],
+        fetchOrder: order.fetch as FetchProviderName[],
       });
       ctx.ui.notify(
-        `search provider order saved: ${order.join(" → ")}\n(~/.pi/web-search.json)`,
+        [
+          `search order saved: ${order.search.join(" → ")}`,
+          `fetch order saved:  ${order.fetch.join(" → ")}`,
+          "(~/.pi/web-search.json)",
+        ].join("\n"),
         "info",
       );
     },
