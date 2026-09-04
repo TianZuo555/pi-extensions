@@ -18,6 +18,8 @@ import {
 
 const ENV_KEYS = [
   "OPENAI_API_KEY",
+  "DEEPSEEK_API_KEY",
+  "DEEPSEEK_BASE_URL",
   "EXA_API_KEY",
   "FIRECRAWL_API_KEY",
   "FIRECRAWL_KEYLESS",
@@ -125,6 +127,7 @@ test("provider chains put the requested provider first and dedupe", () => {
     delete process.env.FIRECRAWL_API_KEY;
     delete process.env.TAVILY_API_KEY;
     delete process.env.MONID_API_KEY;
+    delete process.env.DEEPSEEK_API_KEY;
     delete process.env.OLLAMA_HOST;
 
     // Firecrawl becomes "available" purely through its env key.
@@ -164,6 +167,7 @@ test("tavily joins search and fetch chains when configured", () => {
     delete process.env.FIRECRAWL_API_KEY;
     delete process.env.TAVILY_API_KEY;
     delete process.env.MONID_API_KEY;
+    delete process.env.DEEPSEEK_API_KEY;
     delete process.env.OLLAMA_HOST;
 
     process.env.TAVILY_API_KEY = "tvly-key";
@@ -203,6 +207,7 @@ test("searchOrder and fetchOrder configure the fallback sequence", () => {
     delete process.env.FIRECRAWL_API_KEY;
     delete process.env.TAVILY_API_KEY;
     delete process.env.MONID_API_KEY;
+    delete process.env.DEEPSEEK_API_KEY;
     delete process.env.OLLAMA_HOST;
 
     process.env.EXA_API_KEY = "exa-key";
@@ -241,6 +246,7 @@ test("order entries without credentials or with unknown names are dropped", () =
     delete process.env.FIRECRAWL_API_KEY;
     delete process.env.TAVILY_API_KEY;
     delete process.env.MONID_API_KEY;
+    delete process.env.DEEPSEEK_API_KEY;
     delete process.env.OLLAMA_HOST;
 
     process.env.TAVILY_API_KEY = "tvly-key";
@@ -271,6 +277,7 @@ test("usage counters track per-provider attempts for /websearch-usage", async ()
     process.env.FIRECRAWL_API_KEY = "fc-key";
     delete process.env.TAVILY_API_KEY;
     delete process.env.MONID_API_KEY;
+    delete process.env.DEEPSEEK_API_KEY;
     delete process.env.OLLAMA_HOST;
     installFetchMock(control);
 
@@ -313,6 +320,7 @@ test("search: quota-exhausted provider is skipped for the rest of the session", 
     process.env.FIRECRAWL_API_KEY = "fc-key";
     delete process.env.TAVILY_API_KEY;
     delete process.env.MONID_API_KEY;
+    delete process.env.DEEPSEEK_API_KEY;
     delete process.env.OLLAMA_HOST;
     installFetchMock(control);
 
@@ -360,6 +368,7 @@ test("search: walks the whole chain and reports an aggregated error", async () =
     process.env.FIRECRAWL_API_KEY = "fc-key";
     delete process.env.TAVILY_API_KEY;
     delete process.env.MONID_API_KEY;
+    delete process.env.DEEPSEEK_API_KEY;
     delete process.env.OLLAMA_HOST;
     installFetchMock(control);
 
@@ -401,6 +410,7 @@ test("fetch: falls back through firecrawl -> exa -> direct within one call", asy
     process.env.FIRECRAWL_API_KEY = "fc-key";
     delete process.env.TAVILY_API_KEY;
     delete process.env.MONID_API_KEY;
+    delete process.env.DEEPSEEK_API_KEY;
     delete process.env.OLLAMA_HOST;
 
     globalThis.fetch = (async (input: RequestInfo | URL) => {
@@ -478,6 +488,7 @@ test("fallback chain follows searchOrder/fetchOrder sequence including monid", (
   const restoreFs = hidePiAuthFile();
   try {
     delete process.env.OPENAI_API_KEY;
+    delete process.env.DEEPSEEK_API_KEY;
     delete process.env.OLLAMA_HOST;
     process.env.EXA_API_KEY = "exa-key";
     process.env.TAVILY_API_KEY = "tvly-key";

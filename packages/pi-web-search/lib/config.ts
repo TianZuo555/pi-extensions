@@ -17,6 +17,8 @@ const LEGACY_CONFIG_PATH = path.join(os.homedir(), ".config", "pi-web-search", "
 const PI_AUTH_FILE = path.join(os.homedir(), ".pi", "agent", "auth.json");
 
 export const DEFAULT_OPENAI_MODEL = "gpt-5.6-luna";
+export const DEFAULT_DEEPSEEK_MODEL = "deepseek-v4-flash";
+export const DEFAULT_DEEPSEEK_API_URL = "https://api.deepseek.com/responses";
 export const DEFAULT_OLLAMA_HOST = "http://localhost:11434";
 export const DEFAULT_EXA_API_URL = "https://api.exa.ai";
 export const DEFAULT_FIRECRAWL_API_URL = "https://api.firecrawl.dev/v2";
@@ -71,6 +73,7 @@ export function readPiAuthData(): PiAuthData {
 
 /** Provider ids used for API keys inside pi's ~/.pi/agent/auth.json. */
 export const AUTH_IDS = {
+  deepseek: "websearch-deepseek",
   exa: "websearch-exa",
   firecrawl: "websearch-firecrawl",
   tavily: "websearch-tavily",
@@ -86,7 +89,7 @@ function piAuthKey(id: AuthProviderId): string | undefined {
 
 /** Stored API key for a provider, read from pi's auth.json. */
 export function loadProviderKey(
-  name: "exa" | "firecrawl" | "tavily" | "ollama" | "monid",
+  name: "deepseek" | "exa" | "firecrawl" | "tavily" | "ollama" | "monid",
 ): string | undefined {
   return piAuthKey(AUTH_IDS[name]);
 }
@@ -262,6 +265,58 @@ export function inspectOpenAICodexAuth(): { state: OpenAICodexAuthState; expires
   return { state: "fresh", expires: entry.expires };
 }
 
+export interface ResolvedDeepseekConfig {
+  apiKey: string;
+  baseUrl: string;
+  model: string;
+  systemPrompt: string;
+  reasoning: "none" | "low" | "medium" | "high";
+  source: string;
+}
+
+/** Normalize a DeepSeek base URL to the full /responses endpoint. */
+function deepseekEndpoint(raw: string): string {
+  const trimmed = raw.trim().replace(/\/+$/, "");
+  return trimmed.endsWith("/responses") ? trimmed : `${trimmed}/responses`;
+}
+
+/** DeepSeek search credentials. Priority: pi's own deepseek login (API key
+ * entry, read-only reuse), then DEEPSEEK_API_KEY env, then the key stored
+ * via /websearch-auth, then the config file. */
+export function resolveDeepseekConfig(config = loadStoredConfig()): ResolvedDeepseekConfig | null {
+  const piLoginKey = readPiAuthData().deepseek?.key?.trim();
+  const envKey = process.env.DEEPSEEK_API_KEY?.trim();
+  const storedKey = piAuthKey(AUTH_IDS.deepseek);
+  const fileKey = config.deepseek?.apiKey?.trim();
+  const apiKey = piLoginKey || envKey || storedKey || fileKey;
+  if (!apiKey) return null;
+  const source = piLoginKey
+    ? "~/.pi/agent/auth.json (deepseek login)"
+    : envKey
+      ? "DEEPSEEK_API_KEY env"
+      : storedKey
+        ? "~/.pi/agent/auth.json (websearch-deepseek)"
+        : "config file";
+
+  const baseUrlRaw =
+    process.env.DEEPSEEK_BASE_URL?.trim() || config.deepseek?.baseUrl?.trim() || undefined;
+
+  return {
+    apiKey,
+    baseUrl: baseUrlRaw ? deepseekEndpoint(baseUrlRaw) : DEFAULT_DEEPSEEK_API_URL,
+    model:
+      process.env.DEEPSEEK_SEARCH_MODEL?.trim() ||
+      config.deepseek?.model?.trim() ||
+      DEFAULT_DEEPSEEK_MODEL,
+    systemPrompt:
+      process.env.DEEPSEEK_SEARCH_SYSTEM_PROMPT?.trim() ||
+      config.deepseek?.systemPrompt?.trim() ||
+      DEFAULT_OPENAI_SYSTEM_PROMPT,
+    reasoning: config.deepseek?.reasoning ?? "low",
+    source,
+  };
+}
+
 export interface ResolvedExaConfig {
   apiKey: string;
   baseUrl: string;
@@ -408,6 +463,7 @@ export function resolveMonidConfig(config = loadStoredConfig()): ResolvedMonidCo
 export function getProviderStatuses(ctx?: ExtensionContext): ProviderStatus[] {
   const config = loadStoredConfig();
   const openai = resolveOpenAIConfig(ctx, config);
+  const deepseek = resolveDeepseekConfig(config);
   const exa = resolveExaConfig(config);
   const firecrawl = resolveFirecrawlConfig(config);
   const tavily = resolveTavilyConfig(config);
@@ -422,6 +478,14 @@ export function getProviderStatuses(ctx?: ExtensionContext): ProviderStatus[] {
       source: openai?.source,
       baseUrl: openai?.baseUrl,
       model: openai?.model,
+    },
+    {
+      name: "deepseek",
+      label: "DeepSeek (server-side web_search)",
+      configured: !!deepseek,
+      source: deepseek?.source,
+      baseUrl: deepseek?.baseUrl,
+      model: deepseek?.model,
     },
     {
       name: "exa",
@@ -488,6 +552,7 @@ export function resolveFetchProvider(
 export const SEARCH_PROVIDER_ORDER: readonly SearchProviderName[] = [
   "firecrawl",
   "openai",
+  "deepseek",
   "exa",
   "tavily",
   "ollama",
@@ -510,6 +575,7 @@ export function availableSearchProviders(config = loadStoredConfig()): SearchPro
   const list: SearchProviderName[] = [];
   if (resolveFirecrawlConfig(config)) list.push("firecrawl");
   if (resolveOpenAIConfig(undefined, config)) list.push("openai");
+  if (resolveDeepseekConfig(config)) list.push("deepseek");
   if (resolveExaConfig(config)) list.push("exa");
   if (resolveTavilyConfig(config)) list.push("tavily");
   list.push("ollama");

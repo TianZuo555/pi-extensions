@@ -23,6 +23,7 @@ import {
   SynchronizedRef,
 } from "effect";
 import { resolveFetchChain, resolveSearchChain } from "../lib/config.ts";
+import { searchDeepseek } from "../lib/deepseek.ts";
 import { fetchDirect } from "../lib/direct-fetch.ts";
 import { fetchExa, searchExa } from "../lib/exa.ts";
 import { fetchFirecrawl, searchFirecrawl } from "../lib/firecrawl.ts";
@@ -316,6 +317,8 @@ const makeWebSearchRuntime = Effect.gen(function* () {
             switch (provider) {
               case "openai":
                 return await searchOpenAI(query, searchOpts, ctx);
+              case "deepseek":
+                return await searchDeepseek(query, searchOpts);
               case "exa":
                 return await searchExa(query, searchOpts);
               case "tavily":

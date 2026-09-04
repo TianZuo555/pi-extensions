@@ -6,6 +6,7 @@ import {
   DEFAULT_OPENAI_SYSTEM_PROMPT,
   getProviderStatuses,
   inspectOpenAICodexAuth,
+  resolveDeepseekConfig,
   resolveExaConfig,
   resolveFetchProvider,
   resolveFirecrawlConfig,
@@ -103,6 +104,63 @@ test("resolveOpenAIConfig respects OPENAI_API_KEY environment variable", () => {
       process.env.OPENAI_API_KEY = originalEnv;
     } else {
       delete process.env.OPENAI_API_KEY;
+    }
+  }
+});
+
+test("resolveDeepseekConfig prefers pi's deepseek login and normalizes base URLs", () => {
+  const originalEnv = process.env.DEEPSEEK_API_KEY;
+  const restoreFs = stubPiAuthData({
+    deepseek: { type: "api_key", key: "sk-pi-deepseek-key" },
+  });
+  try {
+    process.env.DEEPSEEK_API_KEY = "sk-env-key";
+    const res = resolveDeepseekConfig({});
+    assert.ok(res);
+    assert.equal(res.apiKey, "sk-pi-deepseek-key");
+    assert.equal(res.source, "~/.pi/agent/auth.json (deepseek login)");
+    assert.equal(res.baseUrl, "https://api.deepseek.com/responses");
+    assert.equal(res.model, "deepseek-v4-flash");
+    assert.equal(res.reasoning, "low");
+    assert.equal(res.systemPrompt, DEFAULT_OPENAI_SYSTEM_PROMPT);
+
+    // A bare base URL is extended to the /responses endpoint.
+    assert.equal(
+      resolveDeepseekConfig({ deepseek: { baseUrl: "https://proxy.example.com/v1/" } })?.baseUrl,
+      "https://proxy.example.com/v1/responses",
+    );
+  } finally {
+    restoreFs();
+    if (originalEnv !== undefined) {
+      process.env.DEEPSEEK_API_KEY = originalEnv;
+    } else {
+      delete process.env.DEEPSEEK_API_KEY;
+    }
+  }
+});
+
+test("resolveDeepseekConfig falls back to env key and config overrides", () => {
+  const originalEnv = process.env.DEEPSEEK_API_KEY;
+  const restoreFs = hidePiAuthFile();
+  try {
+    process.env.DEEPSEEK_API_KEY = "sk-env-key";
+    const res = resolveDeepseekConfig({
+      deepseek: { model: "deepseek-v4-pro", reasoning: "none" },
+    });
+    assert.ok(res);
+    assert.equal(res.apiKey, "sk-env-key");
+    assert.equal(res.source, "DEEPSEEK_API_KEY env");
+    assert.equal(res.model, "deepseek-v4-pro");
+    assert.equal(res.reasoning, "none");
+
+    delete process.env.DEEPSEEK_API_KEY;
+    assert.equal(resolveDeepseekConfig({}), null);
+  } finally {
+    restoreFs();
+    if (originalEnv !== undefined) {
+      process.env.DEEPSEEK_API_KEY = originalEnv;
+    } else {
+      delete process.env.DEEPSEEK_API_KEY;
     }
   }
 });
@@ -295,8 +353,17 @@ test("resolveMonidConfig respects MONID_API_KEY environment variable", () => {
   }
 });
 
-test("getProviderStatuses lists all 7 supported providers", () => {
+test("getProviderStatuses lists all 8 supported providers", () => {
   const statuses = getProviderStatuses();
   const names = statuses.map((s) => s.name);
-  assert.deepEqual(names, ["openai", "exa", "tavily", "firecrawl", "monid", "ollama", "direct"]);
+  assert.deepEqual(names, [
+    "openai",
+    "deepseek",
+    "exa",
+    "tavily",
+    "firecrawl",
+    "monid",
+    "ollama",
+    "direct",
+  ]);
 });

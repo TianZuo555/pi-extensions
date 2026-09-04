@@ -1,7 +1,7 @@
 # @tian.zuo/pi-web-search
 
 Web search and web fetch for the [pi coding agent](https://pi.dev). Two tools,
-six providers plus a built-in keyless fetcher, automatic fallback — no single
+seven providers plus a built-in keyless fetcher, automatic fallback — no single
 point of failure. **Works with zero configuration** thanks to Firecrawl's
 keyless tier (search + fetch, no signup).
 
@@ -60,6 +60,7 @@ fallback. The default chains still apply when you do not save a custom order.
 | Variable                         | Unlocks                                                                                                                                    |
 | :------------------------------- | :----------------------------------------------------------------------------------------------------------------------------------------- |
 | `OPENAI_API_KEY`                 | OpenAI search — your pi Codex/OpenAI login is used first; this key is only a fallback                                                      |
+| `DEEPSEEK_API_KEY`               | DeepSeek search (server-side `web_search`) — your pi DeepSeek login is used first; this key is only a fallback                             |
 | `EXA_API_KEY`                    | Exa search + fetch                                                                                                                         |
 | `FIRECRAWL_API_KEY`              | Firecrawl search + fetch — optional: without a key, the keyless tier is used (1,000 free credits/mo; set `FIRECRAWL_KEYLESS=0` to disable) |
 | `TAVILY_API_KEY`                 | Tavily search **and** fetch — one key unlocks both tools (fetch uses Tavily Extract)                                                       |
@@ -85,6 +86,11 @@ credentialed):
     "systemPrompt": "Search the web. Answer concisely and accurately; cite sources with Markdown links.",
     "reasoning": "low"
   },
+  "deepseek": {
+    "model": "deepseek-v4-flash",
+    "baseUrl": "https://api.deepseek.com/responses",
+    "reasoning": "low"
+  },
   "exa": { "baseUrl": "https://api.exa.ai" },
   "firecrawl": { "baseUrl": "https://api.firecrawl.dev/v2", "keyless": true },
   "tavily": { "baseUrl": "https://api.tavily.com" },
@@ -95,7 +101,9 @@ credentialed):
 
 `openai.reasoning` is optional: without it the search call follows the
 session's thinking level (via pi's model registry), falling back to the model
-default; set `"low"` to always search ~40% faster.
+default; set `"low"` to always search ~40% faster. `deepseek.reasoning`
+defaults to `"low"` already (agentic server-side search; `"none"` disables
+thinking entirely).
 
 Prefer the interactive route? `/websearch-order` writes complete `searchOrder`
 and `fetchOrder` arrays for you; use `tab` to switch between them.
@@ -107,7 +115,7 @@ and `fetchOrder` arrays for you; use `tab` to switch between them.
 | :----------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `/web-search`      | Show provider status: detected credentials (incl. auto-detected OpenAI) and the active search/fetch fallback chains                                                         |
 | `/websearch-order` | Interactively reorder search and fetch fallback chains: tab switch • enter grab • ↑↓ move • enter save • esc cancel (saved as `searchOrder` and `fetchOrder`)                        |
-| `/websearch-auth`  | Interactive credential setup (Exa / Firecrawl / Tavily / Monid / Ollama). OpenAI is listed read-only — it's auto-detected from your pi `/login` (Codex) or `OPENAI_API_KEY` |
+| `/websearch-auth`  | Interactive credential setup (DeepSeek / Exa / Firecrawl / Tavily / Monid / Ollama). OpenAI is listed read-only — it's auto-detected from your pi `/login` (Codex) or `OPENAI_API_KEY` |
 | `/websearch-usage` | Show this session's per-provider usage (calls, failures, avg latency), providers on cooldown/blocked, and your Monid wallet balance with recent run costs                   |
 
 ## The tools
@@ -115,14 +123,18 @@ and `fetchOrder` arrays for you; use `tab` to switch between them.
 ### `web_search`
 
 Queries live web sources and returns ranked results with links and snippets.
-OpenAI and Tavily additionally return a synthesized summary (shown as
-`## Summary`).
+OpenAI, DeepSeek, and Tavily additionally return a synthesized summary (shown
+as `## Summary`).
 
 - **Firecrawl** (default): live SERP results, keyed or keyless (1,000 free
   credits/mo without a key; `FIRECRAWL_KEYLESS=0` to opt out).
 - **OpenAI**: server-side web search via the Responses API with a simple prompt;
   uses your active pi login (`openai-codex` / `openai`) first, falling back to
   `OPENAI_API_KEY`.
+- **DeepSeek**: server-side `web_search` tool on DeepSeek's Responses API —
+  agentic multi-round search with page reads and a synthesized answer. Uses
+  your pi DeepSeek login first, then `DEEPSEEK_API_KEY`. Slow (~15–40s) but
+  cheap; domain filters are not supported by the upstream tool.
 - **Exa / Tavily / Firecrawl / Monid / Ollama**: native API calls. Exa, Tavily,
   Firecrawl, and Monid keys each power **both** search and fetch.
 - **Monid** (TinyFish via [api.monid.ai](https://monid.ai), $0/call):
