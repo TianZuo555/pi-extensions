@@ -37,6 +37,79 @@ test("latestUserPrompt extracts the last user text", () => {
   assert.equal(images, 0);
 });
 
+test("latestUserPrompt accepts print-mode strings and skips empty user content", () => {
+  for (const content of ["", "  ", [], [{ type: "text", text: "" }], undefined]) {
+    assert.deepEqual(
+      latestUserPrompt(
+        contextWith([
+          { role: "user", content: "Reply with exactly: PONG" },
+          { role: "user", content },
+        ]),
+      ),
+      { prompt: "Reply with exactly: PONG", images: 0 },
+    );
+  }
+});
+
+test("latestUserPrompt preserves caller text alongside extension-added user messages", () => {
+  for (const content of [
+    "Reply with exactly: PONG",
+    [{ type: "text", text: "Reply with exactly: PONG" }],
+  ]) {
+    const ctx = contextWith([
+      { role: "user", content: "Old question" },
+      { role: "assistant", content: [{ type: "text", text: "Old answer" }] },
+      { role: "user", content },
+      { role: "user", content: "Context-mode is active. Session mode: implement." },
+      { role: "user", content: [{ type: "text", text: "Additional extension context" }] },
+    ]);
+    assert.equal(
+      latestUserPrompt(ctx).prompt,
+      "Reply with exactly: PONG\nContext-mode is active. Session mode: implement.\nAdditional extension context",
+    );
+    const history = piHistoryBootstrap(ctx);
+    assert.ok(history);
+    assert.match(history, /Old question/);
+    assert.doesNotMatch(history, /PONG|Context-mode|Additional extension/);
+    ctx.messages.push(
+      ...contextWith([
+        { role: "assistant", content: [{ type: "toolCall", name: "read" }] },
+        { role: "toolResult", content: [{ type: "text", text: "tool output" }] },
+      ]).messages,
+    );
+    assert.match(latestUserPrompt(ctx).prompt, /^Reply with exactly: PONG\nContext-mode/);
+  }
+});
+
+test("latestUserPrompt skips empty batches and does not carry images from history", () => {
+  const ctx = contextWith([
+    { role: "user", content: [{ type: "image", data: "old" }] },
+    { role: "assistant", content: [] },
+    { role: "user", content: "current" },
+    { role: "assistant", content: [] },
+    { role: "user", content: [] },
+  ]);
+  assert.deepEqual(latestUserPrompt(ctx), { prompt: "current", images: 0 });
+  assert.doesNotMatch(piHistoryBootstrap(ctx) ?? "", /current/);
+  assert.match(
+    latestUserPrompt(contextWith([{ role: "user", content: [{ type: "image", data: "only" }] }]))
+      .prompt,
+    /1 image\(s\) omitted/,
+  );
+});
+
+test("piHistoryBootstrap excludes the entire first-turn user batch", () => {
+  assert.equal(
+    piHistoryBootstrap(
+      contextWith([
+        { role: "user", content: "Reply with exactly: PONG" },
+        { role: "user", content: "Extension context" },
+      ]),
+    ),
+    undefined,
+  );
+});
+
 test("latestUserPrompt notes omitted images", () => {
   const ctx = contextWith([
     {
@@ -162,13 +235,17 @@ test("agyIncompleteToolError explains agy background tasks for run_command", () 
 });
 
 /** Harness for stream-level tests: a turn controller behind a fake runtime. */
-function makeStreamHarness(options: { prompt?: string; createIsolatedRuntime?: () => any } = {}) {
+function makeStreamHarness(
+  options: { prompt?: string; context?: Context; createIsolatedRuntime?: () => any } = {},
+) {
   const prompt = options.prompt ?? "hello";
   const controller = new AgyTurnController(prompt);
   let sharedBeginCount = 0;
+  let request: { prompt: string; historyBootstrap?: string } | undefined;
   const fakeService = {
-    beginStreamTurn: () =>
+    beginStreamTurn: (input: { prompt: string; historyBootstrap?: string }) =>
       Effect.sync(() => {
+        request = input;
         sharedBeginCount += 1;
         return controller;
       }),
@@ -209,7 +286,7 @@ function makeStreamHarness(options: { prompt?: string; createIsolatedRuntime?: (
 
   const createStream = () => {
     const ctx = contextWith([{ role: "user", content: [{ type: "text", text: prompt }] }]);
-    return streamFn(model, ctx);
+    return streamFn(model, options.context ?? ctx);
   };
   /** Start a turn; resolves with all events once the stream ends. */
   const collect = async (): Promise<any[]> => {
@@ -223,6 +300,7 @@ function makeStreamHarness(options: { prompt?: string; createIsolatedRuntime?: (
     createStream,
     replay,
     getSharedBeginCount: () => sharedBeginCount,
+    getRequest: () => request,
   };
 }
 
@@ -346,6 +424,28 @@ test("streamAntigravity isolates pi summarization from the resumed agy conversat
   assert.equal(done?.message.usage.totalTokens, 0);
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.equal(disposed, true);
+});
+
+test("streamAntigravity sends print-mode caller text with appended extension context", async () => {
+  for (const injected of [[], [{ role: "user", content: "Context-mode is active." }]]) {
+    const harness = makeStreamHarness({
+      context: contextWith([{ role: "user", content: "Reply with exactly: PONG" }, ...injected]),
+    });
+    harness.controller.push({
+      type: "result",
+      status: "OK",
+      error: undefined,
+      response: "PONG",
+      usage: undefined,
+    });
+    const events = await harness.collect();
+    assert.equal(events.at(-1)?.type, "done");
+    assert.equal(
+      harness.getRequest()?.prompt,
+      "Reply with exactly: PONG" + (injected.length ? "\nContext-mode is active." : ""),
+    );
+    assert.equal(harness.getRequest()?.historyBootstrap, undefined);
+  }
 });
 
 test("streamAntigravity renders a pending bash card on run_command ACTIVE", async () => {
