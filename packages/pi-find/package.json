@@ -1,6 +1,6 @@
 {
   "name": "@tian.zuo/pi-find",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Simple, bounded ripgrep/fd-backed grep and find tools for the pi coding agent.",
   "type": "module",
   "keywords": [
