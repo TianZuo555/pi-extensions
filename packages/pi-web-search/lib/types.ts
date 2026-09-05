@@ -44,7 +44,14 @@ export interface FetchResponse {
   fallbacks?: ProviderFallback[];
 }
 
-export type SearchProviderName = "openai" | "exa" | "tavily" | "firecrawl" | "ollama" | "monid";
+export type SearchProviderName =
+  | "openai"
+  | "deepseek"
+  | "exa"
+  | "tavily"
+  | "firecrawl"
+  | "ollama"
+  | "monid";
 export type FetchProviderName = "firecrawl" | "exa" | "tavily" | "ollama" | "monid" | "direct";
 
 export interface ProviderStatus {
@@ -75,6 +82,16 @@ export interface WebSearchConfig {
      * with neither, the model default (medium) applies. "low" is ~40%
      * faster and usually plenty for search queries. */
     reasoning?: "low" | "medium" | "high";
+  };
+  deepseek?: {
+    apiKey?: string;
+    baseUrl?: string;
+    model?: string;
+    systemPrompt?: string;
+    /** Responses API reasoning effort for the server-side web_search tool.
+     * Defaults to "low": fast and cheap for search queries. "none" disables
+     * thinking mode entirely. */
+    reasoning?: "none" | "low" | "medium" | "high";
   };
   exa?: {
     baseUrl?: string;

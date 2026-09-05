@@ -6,6 +6,7 @@ import { resetFirecrawlKeylessState, searchFirecrawl, fetchFirecrawl } from "../
 import { searchMonid, fetchMonid, getMonidWallet, listMonidRuns } from "../lib/monid.ts";
 import { searchOllama, fetchOllama } from "../lib/ollama.ts";
 import { searchOpenAI } from "../lib/openai.ts";
+import { searchDeepseek } from "../lib/deepseek.ts";
 import { resolveOpenAIConfig } from "../lib/config.ts";
 import { searchTavily, fetchTavily } from "../lib/tavily.ts";
 
@@ -174,6 +175,125 @@ test("resolveOpenAIConfig derives reasoning from the session thinking level", ()
   } finally {
     process.env.OPENAI_API_KEY = originalKey;
     if (originalReasoning !== undefined) process.env.OPENAI_SEARCH_REASONING = originalReasoning;
+  }
+});
+
+test("searchDeepseek extracts sources from markdown citations and open_page calls", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalKey = process.env.DEEPSEEK_API_KEY;
+  const restoreFs = hidePiAuthFile();
+
+  try {
+    process.env.DEEPSEEK_API_KEY = "sk-test-deepseek";
+
+    let sentBody: Record<string, unknown> | undefined;
+    let sentAuth: string | undefined;
+    let sentUrl: string | undefined;
+    globalThis.fetch = async (input, init) => {
+      sentUrl = String(input);
+      const headers = (init?.headers ?? {}) as Record<string, string>;
+      sentAuth = headers.Authorization;
+      sentBody = JSON.parse(String(init?.body));
+      return new Response(
+        JSON.stringify({
+          output: [
+            {
+              type: "web_search_call",
+              action: { type: "search", queries: ["typescript 7 release"] },
+            },
+            {
+              type: "web_search_call",
+              action: {
+                type: "open_page",
+                url: "https://devblogs.microsoft.com/typescript/announcing-typescript-7-0/#ws_call_id=call_01_abc",
+              },
+            },
+            {
+              type: "web_search_call",
+              action: {
+                type: "open_page",
+                url: "https://www.npmjs.com/package/typescript#ws_call_id=call_02_def",
+              },
+            },
+            {
+              type: "message",
+              content: [
+                {
+                  type: "output_text",
+                  text: "TypeScript 7.0 is out. See the [announcement](https://devblogs.microsoft.com/typescript/announcing-typescript-7-0/) and [typescript on npm](https://www.npmjs.com/package/typescript).",
+                  annotations: [],
+                },
+              ],
+            },
+          ],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      );
+    };
+
+    const res = await searchDeepseek("typescript 7", { numResults: 5 });
+    assert.equal(res.provider, "deepseek");
+    assert.match(res.answer ?? "", /TypeScript 7\.0 is out/);
+
+    // Request shape: forced server-side web_search, low reasoning default.
+    assert.equal(sentUrl, "https://api.deepseek.com/responses");
+    assert.equal(sentAuth, "Bearer sk-test-deepseek");
+    assert.deepEqual(sentBody?.tools, [{ type: "web_search" }]);
+    assert.deepEqual(sentBody?.tool_choice, { type: "web_search" });
+    assert.deepEqual(sentBody?.reasoning, { effort: "low" });
+    assert.equal(sentBody?.stream, true);
+
+    // Markdown-cited sources come first (with titles), open_page URLs are
+    // appended and the ws_call_id fragment is stripped; deduped by URL.
+    assert.deepEqual(
+      res.results.map((r) => ({ title: r.title, url: r.url })),
+      [
+        {
+          title: "announcement",
+          url: "https://devblogs.microsoft.com/typescript/announcing-typescript-7-0/",
+        },
+        { title: "typescript on npm", url: "https://www.npmjs.com/package/typescript" },
+      ],
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreFs();
+    if (originalKey !== undefined) {
+      process.env.DEEPSEEK_API_KEY = originalKey;
+    } else {
+      delete process.env.DEEPSEEK_API_KEY;
+    }
+  }
+});
+
+test("searchDeepseek surfaces API errors and missing credentials", async () => {
+  const originalFetch = globalThis.fetch;
+  const originalKey = process.env.DEEPSEEK_API_KEY;
+  const restoreFs = hidePiAuthFile();
+
+  try {
+    delete process.env.DEEPSEEK_API_KEY;
+    await assert.rejects(() => searchDeepseek("q"), /DeepSeek credentials not found/);
+
+    process.env.DEEPSEEK_API_KEY = "sk-test-deepseek";
+    globalThis.fetch = async () =>
+      new Response(JSON.stringify({ error: { message: "Authentication Fails" } }), {
+        status: 401,
+        statusText: "Unauthorized",
+        headers: { "Content-Type": "application/json" },
+      });
+    await assert.rejects(
+      () => searchDeepseek("q"),
+      (err: Error) => /DeepSeek Responses API error \(401/.test(err.message),
+    );
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreFs();
+    if (originalKey !== undefined) {
+      process.env.DEEPSEEK_API_KEY = originalKey;
+    } else {
+      delete process.env.DEEPSEEK_API_KEY;
+    }
   }
 });
 

@@ -9,6 +9,7 @@ import {
   inspectOpenAICodexAuth,
   loadProviderKey,
   loadStoredConfig,
+  resolveDeepseekConfig,
   resolveExaConfig,
   resolveFetchChain,
   resolveFirecrawlConfig,
@@ -45,6 +46,7 @@ function maskKey(key: string | undefined): string {
 
 /** Providers whose only credential is a single API key + its env var. */
 const KEY_PROVIDERS = {
+  deepseek: "DEEPSEEK_API_KEY",
   exa: "EXA_API_KEY",
   firecrawl: "FIRECRAWL_API_KEY",
   tavily: "TAVILY_API_KEY",
@@ -121,6 +123,17 @@ function openaiLine(config: WebSearchConfig): string {
   return `${label}• auto: /login with OpenAI or set OPENAI_API_KEY`;
 }
 
+/** deepseek row: auto-detected from pi's own deepseek login first, with a
+ * pastable key as fallback (unlike openai, which is fully read-only). */
+function deepseekLine(config: WebSearchConfig): string {
+  const label = "deepseek".padEnd(10);
+  const resolved = resolveDeepseekConfig(config);
+  if (resolved) {
+    return `${GREEN}${label}✓ auto: ${resolved.source}${RESET}`;
+  }
+  return `${label}• auto: /login with DeepSeek or set DEEPSEEK_API_KEY`;
+}
+
 function codexExpiryHint(): string[] {
   return inspectOpenAICodexAuth().state === "expired"
     ? [
@@ -144,6 +157,8 @@ function providerDetail(
         ? "codex login expired — re-run /login"
         : "not detected (/login or OPENAI_API_KEY)";
     }
+    case "deepseek":
+      return resolveDeepseekConfig(config)?.source ?? "unconfigured (/login or DEEPSEEK_API_KEY)";
     case "exa":
       return resolveExaConfig(config)?.source ?? "unconfigured";
     case "tavily":
@@ -248,9 +263,10 @@ export default function webSearchExtension(pi: ExtensionAPI): void {
       lines.push(...codexExpiryHint());
       lines.push(
         "",
-        "openai is auto-detected (pi /login with OpenAI, or OPENAI_API_KEY) — it is not",
-        "listed as configurable in /websearch-auth. It ranks after keyless Firecrawl by",
-        'default; reorder the chain with /websearch-order, or set "searchProvider": "openai" in',
+        "openai and deepseek are auto-detected from your pi /login sessions",
+        '(OPENAI_API_KEY / DEEPSEEK_API_KEY env or "apiKey" in ~/.pi/web-search.json',
+        "work too). They rank after keyless Firecrawl by default; reorder with",
+        '/websearch-order, or set "searchProvider": "openai" or "deepseek" in',
         "~/.pi/web-search.json.",
       );
       ctx.ui.notify(lines.join("\n"), "info");
@@ -335,11 +351,11 @@ export default function webSearchExtension(pi: ExtensionAPI): void {
 
   pi.registerCommand("websearch-auth", {
     description:
-      "Configure web search providers: Exa / Firecrawl / Tavily / Monid / Ollama API keys (stored in pi auth); openai is auto-detected — see /web-search",
+      "Configure web search providers: DeepSeek / Exa / Firecrawl / Tavily / Monid / Ollama API keys (stored in pi auth); openai is auto-detected — see /web-search",
     handler: async (_args, ctx) => {
       if (!ctx.hasUI) {
         ctx.ui.notify(
-          "/websearch-auth needs an interactive session — set EXA_API_KEY / FIRECRAWL_API_KEY / TAVILY_API_KEY / MONID_API_KEY / OLLAMA_API_KEY instead",
+          "/websearch-auth needs an interactive session — set DEEPSEEK_API_KEY / EXA_API_KEY / FIRECRAWL_API_KEY / TAVILY_API_KEY / MONID_API_KEY / OLLAMA_API_KEY instead",
           "warning",
         );
         return;
@@ -348,6 +364,7 @@ export default function webSearchExtension(pi: ExtensionAPI): void {
       const config = loadStoredConfig();
       const provider = await ctx.ui.select("Configure provider:", [
         openaiLine(config),
+        deepseekLine(config),
         providerLine("exa", config),
         providerLine("firecrawl", config),
         providerLine("tavily", config),
@@ -356,9 +373,9 @@ export default function webSearchExtension(pi: ExtensionAPI): void {
       ]);
       if (!provider) return;
       // Lines may start with an ANSI code; match on the provider name.
-      const name = (["openai", "exa", "firecrawl", "tavily", "monid", "ollama"] as const).find(
-        (n) => provider.includes(n),
-      );
+      const name = (
+        ["openai", "deepseek", "exa", "firecrawl", "tavily", "monid", "ollama"] as const
+      ).find((n) => provider.includes(n));
       if (!name) return;
 
       if (name === "openai") {

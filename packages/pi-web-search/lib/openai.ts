@@ -172,7 +172,9 @@ function extractSearchResults(
   return { results: sliced, internalSources: [...internalSources] };
 }
 
-function extractAnswer(output: unknown[]): string {
+/** Concatenate the assistant message text across output items. Exported for
+ * the DeepSeek provider (same output shape). */
+export function extractAnswer(output: unknown[]): string {
   const parts: string[] = [];
   for (const item of output) {
     if (!item || typeof item !== "object" || (item as { type?: unknown }).type !== "message")
@@ -191,7 +193,10 @@ function extractAnswer(output: unknown[]): string {
   return parts.join("\n\n").trim();
 }
 
-async function parseOpenAIResponse(response: Response): Promise<{ output: unknown[] }> {
+/** Parse a Responses API reply: either a JSON body or an SSE stream
+ * (OpenAI and DeepSeek both speak this shape). Exported for the DeepSeek
+ * provider, which uses the same wire format. */
+export async function parseOpenAIResponse(response: Response): Promise<{ output: unknown[] }> {
   const text = await response.text();
   const trimmed = text.trim();
 
@@ -203,7 +208,7 @@ async function parseOpenAIResponse(response: Response): Promise<{ output: unknow
       return { output: [] };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      throw new Error(`OpenAI API returned invalid JSON: ${message}`);
+      throw new Error(`Responses API returned invalid JSON: ${message}`);
     }
   }
 
@@ -241,7 +246,7 @@ async function parseOpenAIResponse(response: Response): Promise<{ output: unknow
     return { output: outputItems };
   }
 
-  throw new Error("OpenAI API returned no parseable response output");
+  throw new Error("Responses API returned no parseable response output");
 }
 
 export async function searchOpenAI(
