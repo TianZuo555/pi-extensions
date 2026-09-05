@@ -3,7 +3,10 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { after, before, test } from "node:test";
+import { spawnSync } from "node:child_process";
+import { Effect } from "effect";
 import { resolveBinary } from "../src/binaries.ts";
+import { streamLines } from "../src/stream.ts";
 import { FIND_RESULT_LIMIT, GREP_RESULT_LIMIT } from "../lib/prompt.ts";
 import {
   buildFdArgs,
@@ -147,6 +150,38 @@ test("grep stops after the fixed result limit and reports truncation", {
   const outcome = await grep({ pattern: "hit", path: "many.txt" });
   assert.equal(outcome.matches.length, GREP_RESULT_LIMIT);
   assert.equal(outcome.truncated, true);
+  assert.equal(outcome.timedOut, false);
+});
+
+test("grep skips oversized files during directory traversal", { skip: !hasRg }, async () => {
+  const bigDir = path.join(root, "big-dir");
+  mkdirSync(bigDir);
+  writeFileSync(path.join(bigDir, "oversized.txt"), `needle\n${"x".repeat(5 * 1024 * 1024)}\n`);
+  writeFileSync(path.join(bigDir, "small.txt"), "needle\n");
+  const outcome = await grep({ pattern: "needle", path: "big-dir" });
+  assert.deepEqual(
+    outcome.matches.map((match) => match.path),
+    ["big-dir/small.txt"],
+  );
+  assert.equal(outcome.timedOut, false);
+});
+
+test("a wedged search is killed at the wall-clock budget and stays partial", {
+  skip: !hasRg || process.platform === "win32",
+}, async () => {
+  const fifo = path.join(root, "stuck-pipe");
+  spawnSync("mkfifo", [fifo]);
+  const result = await Effect.runPromise(
+    streamLines({
+      binary: "rg",
+      args: ["--regexp", "needle", "--", fifo],
+      cwd: root,
+      timeoutMs: 150,
+      onLine: () => true,
+    }),
+  );
+  assert.equal(result.timedOut, true);
+  assert.equal(result.stoppedEarly, false);
 });
 
 test("find uses one glob under one directory", { skip: !hasFd }, async () => {
@@ -212,6 +247,8 @@ test("engine arguments contain only the fixed simple behavior", () => {
   assert.ok(rg.includes("--regexp"));
   assert.ok(rg.includes("--type-add"));
   assert.ok(rg.includes("pifind:*.ts"));
+  assert.ok(rg.includes("--max-filesize"));
+  assert.ok(rg.includes("4M"));
   assert.ok(!rg.includes("--hidden"));
   assert.ok(!rg.includes("--smart-case"));
   assert.ok(!rg.includes("--fixed-strings"));
