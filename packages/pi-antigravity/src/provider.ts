@@ -33,7 +33,7 @@ import { readAgyProcessProfile, type AgyProcessProfile } from "../lib/agy-profil
 import type { AgyActivity, AgyUsage } from "../lib/reducer.ts";
 import type { AgyReplayStore } from "../lib/replay.ts";
 import { mapAgyToolToNative } from "../lib/native-tools.ts";
-import { restoredPiContextPrompt, WRAPPER_TOOL_NAME } from "../lib/prompt.ts";
+import { omittedImagesPrompt, restoredPiContextPrompt, WRAPPER_TOOL_NAME } from "../lib/prompt.ts";
 import {
   AntigravityRuntime,
   createAntigravityRuntime,
@@ -51,27 +51,48 @@ interface ImagePart {
   [k: string]: unknown;
 }
 
-/** Extract the latest user message text (plus an image-omitted note). */
-export function latestUserPrompt(context: Context): { prompt: string; images: number } {
-  let images = 0;
+/**
+ * Pi Context has no caller/extension provenance. Preserve the latest contiguous
+ * user-message batch in order, rather than letting its last message replace
+ * the caller's request. Trailing assistant/tool messages are tool-loop re-entry.
+ * Skip wholly empty batches, using the same boundary for history restoration.
+ */
+function latestUserBatch(context: Context): { start: number; prompt: string; images: number } {
   for (let i = context.messages.length - 1; i >= 0; i--) {
-    const message = context.messages[i] as { role?: string; content?: unknown };
-    if (message.role !== "user") continue;
-    const parts = Array.isArray(message.content) ? message.content : [];
-    let text = "";
-    for (const part of parts as (TextPart | ImagePart)[]) {
-      if (part && typeof part === "object" && part.type === "text") {
-        text += (text ? "\n" : "") + part.text;
-      } else if (part && typeof part === "object" && part.type === "image") {
-        images += 1;
+    if (context.messages[i].role !== "user") continue;
+    const end = i + 1;
+    while (i > 0 && context.messages[i - 1].role === "user") i--;
+    const texts: string[] = [];
+    let images = 0;
+    for (const message of context.messages.slice(i, end)) {
+      if (typeof message.content === "string") {
+        if (message.content.trim()) texts.push(message.content);
+        continue;
+      }
+      const parts = Array.isArray(message.content) ? message.content : [];
+      for (const part of parts as (TextPart | ImagePart)[]) {
+        if (part?.type === "text" && typeof part.text === "string" && part.text.trim()) {
+          texts.push(part.text);
+        } else if (part?.type === "image") {
+          images += 1;
+        }
       }
     }
-    if (images > 0) {
-      text += `\n(${images} image(s) omitted — the agy print interface is text-only)`;
-    }
-    return { prompt: text, images };
+    if (texts.length === 0 && images === 0) continue;
+    const prompt = texts.join("\n");
+    return {
+      start: i,
+      prompt: prompt + (images ? `\n${omittedImagesPrompt(images)}` : ""),
+      images,
+    };
   }
-  return { prompt: "", images: 0 };
+  return { start: -1, prompt: "", images: 0 };
+}
+
+/** Extract all text in the latest user batch (plus an image-omitted note). */
+export function latestUserPrompt(context: Context): { prompt: string; images: number } {
+  const { prompt, images } = latestUserBatch(context);
+  return { prompt, images };
 }
 
 // A fresh fallback conversation can safely receive roughly 60k transcript
@@ -82,13 +103,7 @@ const MAX_RESTORED_HISTORY_CHARS = 240_000;
 
 /** Serialize the active pi branch before its latest user request. */
 export function piHistoryBootstrap(context: Context): string | undefined {
-  let latestUser = -1;
-  for (let i = context.messages.length - 1; i >= 0; i--) {
-    if ((context.messages[i] as { role?: string }).role === "user") {
-      latestUser = i;
-      break;
-    }
-  }
+  const { start: latestUser } = latestUserBatch(context);
   if (latestUser <= 0) return undefined;
 
   const entries: string[] = [];
@@ -99,7 +114,8 @@ export function piHistoryBootstrap(context: Context): string | undefined {
       content?: unknown;
     };
     const parts = Array.isArray(message.content) ? message.content : [];
-    const rendered: string[] = [];
+    const rendered: string[] =
+      typeof message.content === "string" && message.content.trim() ? [message.content] : [];
     for (const part of parts as Array<Record<string, unknown>>) {
       if (part?.type === "text" && typeof part.text === "string" && part.text.trim()) {
         rendered.push(part.text);

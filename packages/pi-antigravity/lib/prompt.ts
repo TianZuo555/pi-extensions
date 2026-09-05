@@ -16,6 +16,10 @@
 export const WRAPPER_TOOL_NAME = "antigravity";
 export const WRAPPER_TOOL_DESCRIPTION = "";
 
+export function omittedImagesPrompt(images: number): string {
+  return `(${images} image(s) omitted — the agy print interface is text-only)`;
+}
+
 /** Rehydrate a fresh agy conversation from the active branch of a pi session. */
 export function restoredPiContextPrompt(transcript: string): string {
   return [
