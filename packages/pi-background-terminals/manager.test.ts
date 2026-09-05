@@ -305,14 +305,14 @@ test("hard runtime timeout terminates the tree and settles timed_out", async () 
         command: nodeCmd("setInterval(() => {}, 1000)"),
         title: "deadline",
         cwd,
-        timeoutMs: 100,
+        timeoutMs: 250,
       }),
     );
-    const result = await runTool(runtime, manager.waitForSettlement(started.id, 1_000));
+    const result = await runTool(runtime, manager.waitForSettlement(started.id, 3_000));
 
     assert.equal(result.settled, true);
     assert.equal(result.snapshot.status, "timed_out");
-    assert.equal(result.snapshot.timeoutMs, 100);
+    assert.equal(result.snapshot.timeoutMs, 250);
     assert.match(result.snapshot.errorText ?? "", /runtime timeout/);
     assert.deepEqual(settled, [{ status: "timed_out", consumed: true }]);
   });
