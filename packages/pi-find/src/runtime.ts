@@ -33,6 +33,7 @@ export interface GrepMatch {
 export interface GrepOutcome {
   readonly matches: readonly GrepMatch[];
   readonly truncated: boolean;
+  readonly timedOut: boolean;
 }
 
 export interface FindRequest {
@@ -45,6 +46,7 @@ export interface FindRequest {
 export interface FindOutcome {
   readonly files: readonly string[];
   readonly truncated: boolean;
+  readonly timedOut: boolean;
 }
 
 export interface SearchRuntimeShape {
@@ -105,8 +107,11 @@ function isExplicitHiddenPath(searchPath: string | undefined): boolean {
     .some((segment) => segment.startsWith(".") && segment !== "." && segment !== "..");
 }
 
+/** Files larger than this are skipped: giant blobs (caches, bundles, sourcemaps) are what turns a broad search into an overnight scan. Matches OMP's native grep ceiling. */
+const GREP_MAX_FILESIZE = "4M";
+
 export function buildRgArgs(request: GrepRequest, searchRoot: string): string[] {
-  const args = ["--json", "--line-number", "--color=never"];
+  const args = ["--json", "--line-number", "--color=never", "--max-filesize", GREP_MAX_FILESIZE];
   if (!isInsideGitRepository(searchRoot)) args.push("--no-require-git");
   if (request.glob !== undefined) {
     args.push("--type-add", `pifind:${request.glob}`, "--type", "pifind");
@@ -162,6 +167,7 @@ const makeSearchRuntime = Effect.gen(function* () {
             ({
               matches,
               truncated: sawOverflow || result.stoppedEarly,
+              timedOut: result.timedOut,
             }) satisfies GrepOutcome,
         ),
       );
@@ -198,6 +204,7 @@ const makeSearchRuntime = Effect.gen(function* () {
             ({
               files,
               truncated: sawOverflow || result.stoppedEarly,
+              timedOut: result.timedOut,
             }) satisfies FindOutcome,
         ),
       );

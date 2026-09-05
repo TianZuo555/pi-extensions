@@ -10,6 +10,7 @@ import {
   GREP_TOOL_DESCRIPTION,
   outputLimitNotice,
   resultLimitNotice,
+  searchTimeoutNotice,
 } from "../lib/prompt.ts";
 import type { GrepOutcome } from "../src/runtime.ts";
 
@@ -17,6 +18,7 @@ function outcome(matches: ReadonlyArray<[string, number, string]>): GrepOutcome 
   return {
     matches: matches.map(([path, lineNumber, text]) => ({ path, lineNumber, text })),
     truncated: false,
+    timedOut: false,
   };
 }
 
@@ -67,4 +69,11 @@ test("model-facing metadata stays concise and describes the fixed semantics", ()
 test("fixed limit notices tell the caller to narrow the search", () => {
   assert.match(resultLimitNotice("matches", 100), /narrow pattern, path, or glob/);
   assert.match(outputLimitNotice("find"), /omitted files/);
+});
+
+test("timeout notices say the results are partial and how to narrow", () => {
+  const notice = searchTimeoutNotice(30_000);
+  assert.match(notice, /timed out after 30s/);
+  assert.match(notice, /partial/);
+  assert.match(notice, /narrow the path, pattern, or glob/i);
 });

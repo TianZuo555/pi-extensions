@@ -23,6 +23,8 @@ import {
   NO_GREP_MATCHES,
   outputLimitNotice,
   resultLimitNotice,
+  SEARCH_TIMEOUT_MS,
+  searchTimeoutNotice,
 } from "./prompt.ts";
 import {
   type GrepOutcome,
@@ -58,6 +60,7 @@ export interface SearchDetails {
   readonly resultCount: number;
   readonly fileCount: number;
   readonly truncated: boolean;
+  readonly timedOut: boolean;
 }
 
 export function renderGrepLines(outcome: GrepOutcome): string[] {
@@ -121,7 +124,13 @@ export function registerTools(pi: ExtensionAPI, runtime: SearchRuntimeInstance):
       );
 
       const matchCount = outcome.matches.length;
-      if (matchCount === 0) {
+      const notices = [
+        ...(outcome.truncated ? [resultLimitNotice("matches", GREP_RESULT_LIMIT)] : []),
+        ...(outcome.timedOut ? [searchTimeoutNotice(SEARCH_TIMEOUT_MS)] : []),
+      ];
+      // A timed-out search must never read as a completed empty one: the
+      // notice travels even when nothing was gathered.
+      if (matchCount === 0 && notices.length === 0) {
         return {
           content: [{ type: "text" as const, text: NO_GREP_MATCHES }],
           details: {
@@ -130,15 +139,15 @@ export function registerTools(pi: ExtensionAPI, runtime: SearchRuntimeInstance):
             resultCount: 0,
             fileCount: 0,
             truncated: false,
+            timedOut: false,
           } satisfies SearchDetails,
         };
       }
 
       const body = boundedBody(renderGrepLines(outcome), "grep");
       const fileCount = countFiles(outcome);
-      const notices = outcome.truncated ? [resultLimitNotice("matches", GREP_RESULT_LIMIT)] : [];
       const text = [
-        grepResultHeader(matchCount, fileCount),
+        matchCount === 0 ? NO_GREP_MATCHES : grepResultHeader(matchCount, fileCount),
         "",
         body.text,
         ...notices.flatMap((notice) => ["", notice]),
@@ -152,6 +161,7 @@ export function registerTools(pi: ExtensionAPI, runtime: SearchRuntimeInstance):
           resultCount: matchCount,
           fileCount,
           truncated: outcome.truncated || body.truncated,
+          timedOut: outcome.timedOut,
         } satisfies SearchDetails,
       };
     },
@@ -191,7 +201,7 @@ export function registerTools(pi: ExtensionAPI, runtime: SearchRuntimeInstance):
         { signal },
       );
 
-      if (outcome.files.length === 0) {
+      if (outcome.files.length === 0 && !outcome.timedOut) {
         return {
           content: [{ type: "text" as const, text: NO_FILES_FOUND }],
           details: {
@@ -200,15 +210,19 @@ export function registerTools(pi: ExtensionAPI, runtime: SearchRuntimeInstance):
             resultCount: 0,
             fileCount: 0,
             truncated: false,
+            timedOut: false,
           } satisfies SearchDetails,
         };
       }
 
       const body = boundedBody(outcome.files, "find");
       const count = outcome.files.length;
-      const notices = outcome.truncated ? [resultLimitNotice("files", FIND_RESULT_LIMIT)] : [];
+      const notices = [
+        ...(outcome.truncated ? [resultLimitNotice("files", FIND_RESULT_LIMIT)] : []),
+        ...(outcome.timedOut ? [searchTimeoutNotice(SEARCH_TIMEOUT_MS)] : []),
+      ];
       const text = [
-        findResultHeader(count),
+        count === 0 && !outcome.timedOut ? NO_FILES_FOUND : findResultHeader(count),
         "",
         body.text,
         ...notices.flatMap((notice) => ["", notice]),
@@ -222,6 +236,7 @@ export function registerTools(pi: ExtensionAPI, runtime: SearchRuntimeInstance):
           resultCount: count,
           fileCount: count,
           truncated: outcome.truncated || body.truncated,
+          timedOut: outcome.timedOut,
         } satisfies SearchDetails,
       };
     },
@@ -294,7 +309,9 @@ function renderSearchResult(
     details.kind === "find"
       ? ""
       : ` in ${details.fileCount} file${details.fileCount === 1 ? "" : "s"}`;
-  const more = details.truncated ? theme.fg("warning", " (truncated)") : "";
+  const more =
+    (details.truncated ? theme.fg("warning", " (truncated)") : "") +
+    (details.timedOut ? theme.fg("warning", " (timed out)") : "");
   const summary =
     theme.fg("success", "✓ ") + theme.fg("muted", `${details.resultCount} ${unit}${scope}`) + more;
   return expandedResult(summary, output, options.expanded, theme);

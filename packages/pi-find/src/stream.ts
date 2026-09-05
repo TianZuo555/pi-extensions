@@ -11,6 +11,7 @@ import { spawn } from "node:child_process";
 import { statSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { Effect } from "effect";
+import { SEARCH_TIMEOUT_MS } from "../lib/prompt.ts";
 import { missingBinaryMessage, resolveBinary, type SearchBinary } from "./binaries.ts";
 import { SearchAbortedError, SearchProcessError, SearchToolMissingError } from "./errors.ts";
 
@@ -24,22 +25,31 @@ export interface StreamRequest {
    */
   readonly onLine: (line: string) => boolean;
   readonly signal?: AbortSignal;
+  /** Wall-clock budget; defaults to SEARCH_TIMEOUT_MS. Overridable for tests. */
+  readonly timeoutMs?: number;
 }
 
 export interface StreamResult {
   /** True when onLine asked to stop, meaning more output was available. */
   readonly stoppedEarly: boolean;
+  /** True when the wall-clock budget killed the child; gathered output is partial. */
+  readonly timedOut: boolean;
   readonly exitCode: number | null;
 }
 
 /**
  * Exit codes that are not failures. rg uses 1 for "no matches", which is a
  * perfectly good answer; fd uses 0 even when nothing matched. A killed child
- * reports null, which is expected whenever we stop early.
+ * reports null, which is expected whenever we stop early or time out.
  */
-function isBenignExit(binary: SearchBinary, code: number | null, stoppedEarly: boolean): boolean {
+function isBenignExit(
+  binary: SearchBinary,
+  code: number | null,
+  stoppedEarly: boolean,
+  timedOut: boolean,
+): boolean {
   if (code === 0 || code === null) return true;
-  if (stoppedEarly) return true;
+  if (stoppedEarly || timedOut) return true;
   return binary === "rg" && code === 1;
 }
 
@@ -96,11 +106,13 @@ export function streamLines(
     const reader = createInterface({ input: child.stdout });
     let stderr = "";
     let stoppedEarly = false;
+    let timedOut = false;
     let settled = false;
     let aborted = false;
 
     const cleanup = () => {
       reader.close();
+      clearTimeout(timeoutId);
       outerSignal?.removeEventListener("abort", onAbort);
       effectSignal.removeEventListener("abort", onAbort);
     };
@@ -117,9 +129,9 @@ export function streamLines(
       resume(effect);
     };
 
-    const stopChild = () => {
+    const stopChild = (signal: NodeJS.Signals = "SIGTERM") => {
       if (child.exitCode === null && child.signalCode === null) {
-        child.kill("SIGTERM");
+        child.kill(signal);
       }
     };
 
@@ -127,6 +139,14 @@ export function streamLines(
       aborted = true;
       stopChild();
     }
+
+    // A search should finish in well under the budget; the timer only bounds a
+    // pathological hang (huge tree, network mount, FIFO) so it can never run
+    // for a night. SIGKILL like Maka/Grok: a wedged child must not linger.
+    const timeoutId = setTimeout(() => {
+      timedOut = true;
+      stopChild("SIGKILL");
+    }, request.timeoutMs ?? SEARCH_TIMEOUT_MS);
 
     outerSignal?.addEventListener("abort", onAbort, { once: true });
     effectSignal.addEventListener("abort", onAbort, { once: true });
@@ -179,7 +199,7 @@ export function streamLines(
         );
         return;
       }
-      if (!isBenignExit(request.binary, code, stoppedEarly)) {
+      if (!isBenignExit(request.binary, code, stoppedEarly, timedOut)) {
         const detail = stderr.trim().split("\n")[0] ?? "";
         settle(
           new SearchProcessError({
@@ -193,7 +213,7 @@ export function streamLines(
         );
         return;
       }
-      settle(Effect.succeed({ stoppedEarly, exitCode: code }));
+      settle(Effect.succeed({ stoppedEarly, timedOut, exitCode: code }));
     });
 
     // Interruption path: kill the child so a cancelled turn leaves nothing behind.

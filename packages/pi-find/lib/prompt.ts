@@ -3,8 +3,11 @@
 export const GREP_RESULT_LIMIT = 100;
 export const FIND_RESULT_LIMIT = 200;
 
+/** Wall-clock budget for one rg/fd run; a search should finish well under it. */
+export const SEARCH_TIMEOUT_MS = 30_000;
+
 export const GREP_TOOL_DESCRIPTION =
-  "Search file contents with a case-sensitive regex; respects .gitignore.";
+  "Search file contents with a case-sensitive regex; respects .gitignore; 30s timeout.";
 export const GREP_PROMPT_SNIPPET = "Search file contents with a regex";
 
 export const GREP_PARAMETER_DESCRIPTIONS = {
@@ -13,7 +16,7 @@ export const GREP_PARAMETER_DESCRIPTIONS = {
   glob: "Optional file glob, for example '*.ts' or '**/*.test.ts'.",
 };
 
-export const FIND_TOOL_DESCRIPTION = "Find files with a glob; respects .gitignore.";
+export const FIND_TOOL_DESCRIPTION = "Find files with a glob; respects .gitignore; 30s timeout.";
 export const FIND_PROMPT_SNIPPET = "Find files with a glob";
 
 export const FIND_PARAMETER_DESCRIPTIONS = {
@@ -50,4 +53,9 @@ export function resultLimitNotice(kind: "matches" | "files", limit: number): str
 export function outputLimitNotice(kind: "grep" | "find"): string {
   const unit = kind === "grep" ? "matches" : "files";
   return `[Output limit reached; narrow the search to see the omitted ${unit}.]`;
+}
+
+export function searchTimeoutNotice(timeoutMs: number): string {
+  const seconds = Math.round(timeoutMs / 1000);
+  return `[Search timed out after ${seconds}s; results are partial. Narrow the path, pattern, or glob.]`;
 }
