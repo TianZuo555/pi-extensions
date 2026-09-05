@@ -1,5 +1,11 @@
 # @tian.zuo/pi-antigravity
 
+## 0.10.1
+
+### Patch Changes
+
+- [#36](https://github.com/TianZuo555/pi-extensions/pull/36) [`c1184d7`](https://github.com/TianZuo555/pi-extensions/commit/c1184d76f34f5def05b808cd552cf4ad5d94cc1a) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Fix print-mode string prompts and preserve consecutive user messages so extension-added context no longer replaces the caller's request. Use the same request boundary when restoring history and retain string-form historical messages.
+
 ## 0.10.0
 
 ### Minor Changes
