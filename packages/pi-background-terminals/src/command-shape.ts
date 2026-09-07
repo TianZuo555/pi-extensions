@@ -10,7 +10,7 @@
  * first line happens to be `cd` is not a state-only command.
  */
 
-import { formatElapsed, type TerminalSnapshot } from "./domain.ts";
+import type { TerminalSnapshot } from "./domain.ts";
 
 const ASSIGNMENT = /^(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S+)$/;
 const BARE_CD = /^cd(?:\s|$)/i;
@@ -32,14 +32,6 @@ export function isStateOnlyCommand(command: string) {
   return segments.every((segment) => ASSIGNMENT.test(segment) || BARE_CD.test(segment));
 }
 
-export function stateOnlyCommandError() {
-  return (
-    "This command only changes shell state (cd/export/assignment) in a shell discarded on exit, " +
-    "so it cannot affect any later call; it was not executed. Use working_dir to choose the " +
-    "directory, or combine setup and work in one command: `cd packages/x && npm test`."
-  );
-}
-
 /**
  * An already-running terminal for the identical command in the identical
  * directory. Same command in another directory, or one that already settled,
@@ -52,15 +44,5 @@ export function findDuplicateRunning(
 ) {
   return snapshots.find(
     (snap) => snap.status === "running" && snap.command === command && snap.cwd === cwd,
-  );
-}
-
-export function duplicateCommandError(snap: TerminalSnapshot) {
-  return (
-    `This exact command is already running as background terminal ${snap.id} ` +
-    `(started ${formatElapsed(snap)} ago, pid ${snap.pid ?? "?"}). It has not failed: yielded commands ` +
-    "keep running and report back on exit. This second copy was not executed — re-running it would " +
-    "repeat its side effects. Wait for that result, or stop it from /ps. To run it again on purpose, " +
-    "change the command text or use a different working_dir."
   );
 }

@@ -1,11 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {
-  duplicateCommandError,
-  findDuplicateRunning,
-  isStateOnlyCommand,
-  stateOnlyCommandError,
-} from "./src/command-shape.ts";
+import { findDuplicateRunning, isStateOnlyCommand } from "./src/command-shape.ts";
+import { duplicateCommandError, stateOnlyCommandError } from "./src/prompt.ts";
 import type { OutputView, TerminalSnapshot } from "./src/domain.ts";
 
 function view(): OutputView {

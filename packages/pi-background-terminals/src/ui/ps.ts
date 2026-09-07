@@ -411,6 +411,8 @@ class TerminalDetailView implements Component {
   /** False once the reader pages away from EOF: the spill window must not be
    * yanked forward under someone reading history. `G` restores it. */
   private following = true;
+  /** Freeze retained output too: its rolling tail would otherwise move under readers. */
+  private pausedMemoryText?: string;
   /** Whether the last render had the viewport clamped to the top of the window. */
   private atWindowTop = false;
   private unsubscribe: () => void;
@@ -458,7 +460,7 @@ class TerminalDetailView implements Component {
    */
   private activeSource(snap: TerminalSnapshot): SpillSource | undefined {
     const stream = this.activeStream();
-    if (!stream) return undefined;
+    if (!stream || this.pausedMemoryText !== undefined) return undefined;
     const view = stream === "stdout" ? snap.stdout : snap.stderr;
     if (!view.spillPath || view.truncatedBytes === 0) return undefined;
     const existing = this.sources.get(stream);
@@ -481,14 +483,44 @@ class TerminalDetailView implements Component {
     const state = source.state();
     const unloaded = state.end === 0 && state.error === undefined;
     if (!this.following && !unloaded) return;
-    void source.follow();
+    const tab = this.tab;
+    // A paused reader still needs its first disk window; only later EOF growth
+    // is conditional on following. Otherwise early scrolling blocks all paging.
+    const initial = unloaded;
+    void source.follow(() => !this.closed && this.tab === tab && (initial || this.following));
+  }
+
+  private pauseFollowing() {
+    if (!this.following) return;
+    const snap = this.snap();
+    const stream = this.activeStream();
+    if (snap && stream) {
+      const buffer = snap[stream];
+      if (buffer.spillPath === undefined || buffer.truncatedBytes === 0) {
+        this.pausedMemoryText = buffer.text;
+        this.lineCache = createOutputLineCache();
+      }
+    }
+    this.following = false;
   }
 
   /** Extend the window backwards. `force` covers an explicit jump-to-top. */
   private loadEarlier(force: boolean) {
+    if (!force && !this.atWindowTop) return;
+    const snap = this.snap();
+    const stream = this.activeStream();
+    if (this.pausedMemoryText !== undefined && snap && stream) {
+      const buffer = snap[stream];
+      if (buffer.spillPath !== undefined && buffer.truncatedBytes > 0) {
+        // Retention may overflow while paused. Explicit backward paging opts
+        // into the disk archive rather than dead-ending in the frozen view.
+        this.pausedMemoryText = undefined;
+        this.lineCache = createOutputLineCache();
+      }
+    }
     const source = this.currentSource();
     if (!source) return;
-    if (!force && !this.atWindowTop) return;
+    this.pumpSpill();
     if (source.state().start === 0) return;
     this.following = false;
     void source.loadEarlier().then((outcome) => {
@@ -502,8 +534,12 @@ class TerminalDetailView implements Component {
 
   /** Reached the bottom of the viewport: follow EOF, or page one window on. */
   private reachedBottom(wasAtBottom: boolean) {
+    this.pausedMemoryText = undefined;
     const source = this.currentSource();
-    if (!source) return;
+    if (!source) {
+      this.following = true;
+      return;
+    }
     const state = source.state();
     if (state.end >= state.size) {
       this.following = true;
@@ -549,6 +585,7 @@ class TerminalDetailView implements Component {
   private switchTab(tab: TerminalDetailTab) {
     if (tab === this.tab) return;
     this.tab = tab;
+    this.pausedMemoryText = undefined;
     this.lineCache = createOutputLineCache();
     this.scrollOffset = tab === "info" ? Number.MAX_SAFE_INTEGER : 0;
     this.following = true;
@@ -583,6 +620,7 @@ class TerminalDetailView implements Component {
       return;
     }
     if (this.keybindings.matches(data, "tui.editor.cursorUp") || data === "k") {
+      this.pauseFollowing();
       this.scrollOffset += OUTPUT_SCROLL_STEP;
       this.loadEarlier(false);
       this.tui.requestRender();
@@ -596,6 +634,7 @@ class TerminalDetailView implements Component {
       return;
     }
     if (this.keybindings.matches(data, "tui.editor.pageUp")) {
+      this.pauseFollowing();
       this.scrollOffset += this.viewportHeight();
       this.loadEarlier(false);
       this.tui.requestRender();
@@ -609,12 +648,14 @@ class TerminalDetailView implements Component {
       return;
     }
     if (data === "g") {
+      this.pauseFollowing();
       this.scrollOffset = Number.MAX_SAFE_INTEGER; // clamped to top in render
       this.loadEarlier(true);
       this.tui.requestRender();
       return;
     }
     if (data === "G") {
+      this.pausedMemoryText = undefined;
       this.scrollOffset = 0;
       this.following = true;
       this.pumpSpill();
@@ -694,8 +735,16 @@ class TerminalDetailView implements Component {
       const version =
         // totalBytes is a monotonically increasing proxy for a source version.
         // Namespacing prevents retained/spill windows from sharing stale wraps.
-        useSpill ? `spill:${spill.version}` : `mem:${buffer.totalBytes}`;
-      output = this.lineCache.get(useSpill ? spill.text : buffer.text, version, width - 2);
+        useSpill
+          ? `spill:${spill.version}`
+          : this.pausedMemoryText !== undefined
+            ? "paused-memory"
+            : `mem:${buffer.totalBytes}`;
+      output = this.lineCache.get(
+        useSpill ? spill.text : (this.pausedMemoryText ?? buffer.text),
+        version,
+        width - 2,
+      );
 
       if (snap.errorText) {
         noteRows.push(

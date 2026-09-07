@@ -23,6 +23,7 @@
  */
 
 import * as fs from "node:fs/promises";
+import { completeCodePointEnd } from "../utf8.ts";
 
 /** Live-tail window: what `follow` retains while pinned to EOF. */
 export const SPILL_TAIL_BYTES = 1024 * 1024;
@@ -53,8 +54,8 @@ export type EarlierOutcome = "noop" | "prepended" | "reanchored";
 export interface SpillSource {
   readonly path: string;
   state(): SpillWindowState;
-  /** Initial tail load, then EOF growth. Safe to call on a timer. */
-  follow(): Promise<boolean>;
+  /** Initial tail load, then EOF growth. Recheck permission before committing async reads. */
+  follow(isFollowing?: () => boolean): Promise<boolean>;
   loadEarlier(): Promise<EarlierOutcome>;
   /** Page one window forward. Resolves true when the window moved. */
   seekAfter(): Promise<boolean>;
@@ -105,13 +106,16 @@ export function createSpillSource(
     }
   };
 
-  /** Replace the window with [from, to), snapped forward off a split char. */
-  const readWindow = async (from: number, to: number) => {
+  /** Snap both edges inward; the next page retries any incomplete suffix. */
+  const readWindow = async (from: number, to: number, canCommit = () => true) => {
     const raw = await readRange(from, to);
+    if (disposed || !canCommit()) return false;
     const offset = from === 0 ? 0 : leadingBoundary(raw);
-    window = Buffer.from(raw.subarray(offset));
+    const body = raw.subarray(offset);
+    window = Buffer.from(body.subarray(0, completeCodePointEnd(body)));
     start = from + offset;
-    end = from + raw.length;
+    end = start + window.length;
+    return true;
   };
 
   const trimFront = (limit: number) => {
@@ -156,31 +160,35 @@ export function createSpillSource(
     return changed;
   };
 
-  const follow = () =>
+  const follow = (isFollowing = () => true) =>
     run(async () => {
       const stat = await fs.stat(spillPath);
+      if (disposed || !isFollowing()) return false;
       size = stat.size;
       // Fresh tail load when nothing is loaded, the file was replaced/truncated,
       // or the viewer fell so far behind that appending would blow the window.
       if (window.length === 0 || end > size || size - end > tailBytes) {
         if (size === 0 && window.length === 0) return false;
-        await readWindow(Math.max(0, size - tailBytes), size);
-        return true;
+        return readWindow(Math.max(0, size - tailBytes), size, isFollowing);
       }
       if (size === end) return false;
       const raw = await readRange(end, size);
-      if (raw.length === 0) return false;
-      window = Buffer.concat([window, raw]);
-      end += raw.length;
+      if (disposed || !isFollowing() || raw.length === 0) return false;
+      const combined = Buffer.concat([window, raw]);
+      const complete = completeCodePointEnd(combined);
+      const added = complete - window.length;
+      window = combined.subarray(0, complete);
+      end += added;
       trimFront(tailBytes);
-      return true;
+      return added > 0;
     });
 
   const loadEarlier = async () => {
     if (disposed || loading || start === 0) return "noop" as const;
     let outcome: EarlierOutcome = "noop";
     await run(async () => {
-      if (window.length >= windowBytes) {
+      // Up to three spare bytes may be unusable for the next UTF-8 character.
+      if (window.length >= windowBytes - 3) {
         // Window cap reached: page backwards, ending exactly where the current
         // window began, so upward reading loses nothing.
         const to = start;
@@ -188,7 +196,7 @@ export function createSpillSource(
         outcome = "reanchored";
         return true;
       }
-      const from = Math.max(0, start - chunkBytes);
+      const from = Math.max(0, start - Math.min(chunkBytes, windowBytes - window.length));
       const raw = await readRange(from, start);
       if (raw.length === 0) return false;
       const offset = from === 0 ? 0 : leadingBoundary(raw);

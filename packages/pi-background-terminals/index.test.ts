@@ -91,6 +91,79 @@ async function pollUntil(
   return true;
 }
 
+test("a pre-aborted Bash call does not initialize or spawn", async () => {
+  let initialized = false;
+  const app = harness(
+    createBackgroundTerminalsExtension({
+      resolveShellSettings: () => ({}),
+      createRuntime: () => {
+        initialized = true;
+        throw new Error("must not initialize");
+      },
+      createForegroundBash: () => {
+        throw new Error("must not fall back");
+      },
+    }),
+  );
+  const controller = new AbortController();
+  controller.abort();
+  try {
+    await assert.rejects(
+      app.tools
+        .get("bash")
+        .execute("aborted", { command: "echo forbidden" }, controller.signal, undefined, app.ctx),
+      { name: "AbortError" },
+    );
+    assert.equal(initialized, false);
+  } finally {
+    await app.shutdown();
+  }
+});
+
+test("cancellation during manager initialization prevents spawn and fallback", async () => {
+  const { createTerminalRuntime } = await import("./src/runtime.ts");
+  const { TerminalManager } = await import("./src/manager.ts");
+  const runtime = createTerminalRuntime();
+  const controller = new AbortController();
+  const manager = await runtime.runPromise(TerminalManager);
+  const abortingRuntime = new Proxy(runtime, {
+    get(target, property, receiver) {
+      if (property !== "runPromise") return Reflect.get(target, property, receiver);
+      return (effect: Parameters<typeof runtime.runPromise>[0]) => {
+        const result = runtime.runPromise(effect);
+        controller.abort();
+        return result;
+      };
+    },
+  });
+  const app = harness(
+    createBackgroundTerminalsExtension({
+      resolveShellSettings: () => ({}),
+      createRuntime: () => abortingRuntime,
+      createForegroundBash: () => {
+        throw new Error("must not fall back");
+      },
+    }),
+  );
+  try {
+    await assert.rejects(
+      app.tools
+        .get("bash")
+        .execute(
+          "aborted-init",
+          { command: "echo forbidden" },
+          controller.signal,
+          undefined,
+          app.ctx,
+        ),
+      { name: "AbortError" },
+    );
+    assert.equal(manager.view.size(), 0);
+  } finally {
+    await app.shutdown();
+  }
+});
+
 test("extension overrides bash, adds log reading, and keeps the user /ps command", async () => {
   const app = harness(backgroundTerminals);
   try {
@@ -165,7 +238,7 @@ test("terminal_log_read resolves an opaque ref from bash", async () => {
       undefined,
       app.ctx,
     );
-    const ref = /archive ref (bt-\d+:stdout)/.exec(result.content[0].text)?.[1];
+    const ref = /archive ref (bt-[a-f0-9]{16}-\d+:stdout)/.exec(result.content[0].text)?.[1];
     assert.ok(ref, result.content[0].text);
 
     const page = await app.tools
@@ -193,7 +266,7 @@ test("terminal_log_read is bounded by a per-run call budget", async () => {
       undefined,
       app.ctx,
     );
-    const ref = /archive ref (bt-\d+:stdout)/.exec(result.content[0].text)?.[1];
+    const ref = /archive ref (bt-[a-f0-9]{16}-\d+:stdout)/.exec(result.content[0].text)?.[1];
     assert.ok(ref, result.content[0].text);
 
     const read = (id: string) =>
@@ -263,8 +336,8 @@ test("renderers distinguish quick bash from actually yielded terminals", async (
           {
             type: "text",
             text: [
-              'Command is still running as background terminal bt-9 "server".',
-              'bt-9 [running] "server" (pid 99)',
+              'Command is still running as background terminal bt-0123456789abcdef-9 "server".',
+              'bt-0123456789abcdef-9 [running] "server" (pid 99)',
               "",
               "stdout:",
               "startup-output",
@@ -277,7 +350,7 @@ test("renderers distinguish quick bash from actually yielded terminals", async (
       { isError: false },
     );
     const renderedYielded = yielded.render(120).join("\n").trimEnd();
-    assert.match(renderedYielded, /terminal bt-9 running.*\/ps to inspect/);
+    assert.match(renderedYielded, /terminal bt-0123456789abcdef-9 running.*\/ps to inspect/);
     assert.doesNotMatch(renderedYielded, /stdout|startup-output|server"/);
 
     const completionRenderer = app.messageRenderers.get("background-terminal-result");
@@ -388,7 +461,7 @@ test("re-running a still-running command is refused instead of duplicating it", 
         undefined,
         app.ctx,
       ),
-      /already running as background terminal bt-\d+.*has not failed/is,
+      /already running as background terminal bt-[a-f0-9]{16}-\d+.*has not failed/is,
     );
   } finally {
     await app.shutdown();
@@ -691,7 +764,7 @@ test("a yielded hard timeout sends exactly one timed-out completion", async () =
       undefined,
       app.ctx,
     );
-    assert.match(result.content[0].text, /background terminal bt-\d+/);
+    assert.match(result.content[0].text, /background terminal bt-[a-f0-9]{16}-\d+/);
     assert.equal(
       await pollUntil(() => app.messages.length === 1),
       true,
@@ -730,7 +803,7 @@ test("failed result delivery does not write directly to the TUI terminal", async
       undefined,
       app.ctx,
     );
-    assert.match(result.content[0].text, /background terminal bt-\d+/);
+    assert.match(result.content[0].text, /background terminal bt-[a-f0-9]{16}-\d+/);
     assert.equal(await pollUntil(() => deliveryAttempts === 1), true, "delivery was attempted");
     assert.deepEqual(consoleErrors, []);
   } finally {
@@ -756,7 +829,7 @@ test("yielded command returns an id then sends exactly one completion", async ()
     );
 
     assert.equal(result.details, undefined);
-    assert.match(result.content[0].text, /background terminal bt-\d+/);
+    assert.match(result.content[0].text, /background terminal bt-[a-f0-9]{16}-\d+/);
     assert.match(result.content[0].text, /do not poll/);
 
     assert.equal(
@@ -800,7 +873,7 @@ test("near-simultaneous yielded completions share one follow-up", async () => {
       ),
     );
     const ids = results.map((result) => {
-      const id = /background terminal (bt-\d+)/.exec(result.content[0].text)?.[1];
+      const id = /background terminal (bt-[a-f0-9]{16}-\d+)/.exec(result.content[0].text)?.[1];
       assert.ok(id, result.content[0].text);
       return id;
     });
