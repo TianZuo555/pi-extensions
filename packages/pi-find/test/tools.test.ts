@@ -60,10 +60,13 @@ test("model-facing metadata stays concise and describes the fixed semantics", ()
     ...Object.values(GREP_PARAMETER_DESCRIPTIONS),
     ...Object.values(FIND_PARAMETER_DESCRIPTIONS),
   ]) {
-    assert.ok(value.length <= 90, `metadata is too long: ${value}`);
+    assert.ok(value.length <= 400, `metadata is too long: ${value}`);
   }
   assert.match(GREP_TOOL_DESCRIPTION, /case-sensitive regex/);
   assert.match(FIND_TOOL_DESCRIPTION, /glob/);
+  assert.match(GREP_TOOL_DESCRIPTION, /4 MiB/);
+  assert.match(GREP_TOOL_DESCRIPTION, /100 matching lines/);
+  assert.match(FIND_TOOL_DESCRIPTION, /200 files/);
 });
 
 test("fixed limit notices tell the caller to narrow the search", () => {

@@ -111,6 +111,39 @@ test("empty searches return short model-visible answers", {
   }
 });
 
+test("empty timeout results retain a warning even when collapsed", async () => {
+  const { runtime, tools } = captureTools();
+  try {
+    for (const kind of ["grep", "find"] as const) {
+      const result = {
+        content: [{ type: "text" as const, text: "Search timed out; results are partial." }],
+        details: {
+          kind,
+          query: "*",
+          resultCount: 0,
+          fileCount: 0,
+          truncated: false,
+          timedOut: true,
+        },
+      };
+      for (const expanded of [false, true]) {
+        const component = tools.get(kind)!.renderResult!(
+          result,
+          { expanded, isPartial: false },
+          theme,
+          { isError: false },
+        );
+        assert.match(component.render(80).join("\n"), /timed out/);
+        for (const width of [1, 12, 42]) {
+          for (const line of component.render(width)) assert.ok(visibleWidth(line) <= width);
+        }
+      }
+    }
+  } finally {
+    await runtime.dispose();
+  }
+});
+
 test("custom renderers remain width-safe", () => {
   const { runtime, tools } = captureTools();
   try {

@@ -245,6 +245,7 @@ test("searches are abortable", { skip: !hasRg }, async () => {
 test("engine arguments contain only the fixed simple behavior", () => {
   const rg = buildRgArgs({ pattern: "needle", path: "src", glob: "*.ts", cwd: root }, root);
   assert.ok(rg.includes("--regexp"));
+  // Simple basename prefilters avoid scanning unrelated file contents.
   assert.ok(rg.includes("--type-add"));
   assert.ok(rg.includes("pifind:*.ts"));
   assert.ok(rg.includes("--max-filesize"));
@@ -258,5 +259,8 @@ test("engine arguments contain only the fixed simple behavior", () => {
   const fd = buildFdArgs({ pattern: "*.ts", path: "src", cwd: root }, root);
   assert.ok(fd.includes("--glob"));
   assert.ok(fd.includes("*.ts"));
+  assert.ok(fd.includes("--print0"));
+  assert.ok(rg.includes("--no-config"));
+  assert.ok(rg.includes("--case-sensitive"));
   assert.ok(!fd.includes("--hidden"));
 });

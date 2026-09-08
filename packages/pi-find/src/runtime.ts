@@ -1,13 +1,16 @@
 /** Effect service backing the deliberately small grep and find tools. */
 
-import { existsSync, statSync } from "node:fs";
+import { existsSync, realpathSync, statSync } from "node:fs";
+import { homedir } from "node:os";
 import * as nodePath from "node:path";
 import { Cause, Context, Effect, Exit, Layer, ManagedRuntime, Result } from "effect";
+import { Minimatch } from "minimatch";
 import {
   EMPTY_PATTERN_ERROR,
   FIND_RESULT_LIMIT,
   findPathNotDirectoryError,
   GREP_RESULT_LIMIT,
+  GIT_PATH_ERROR,
   missingSearchPathError,
 } from "../lib/prompt.ts";
 import { decodeRgEvent } from "../lib/rg-json.ts";
@@ -59,7 +62,8 @@ export class SearchRuntime extends Context.Service<SearchRuntime, SearchRuntimeS
 ) {}
 
 function normalizeResultPath(filePath: string): string {
-  const normalized = nodePath.normalize(filePath).replaceAll("\\", "/");
+  const native = nodePath.normalize(filePath);
+  const normalized = process.platform === "win32" ? native.replaceAll("\\", "/") : native;
   return normalized.replace(/^\.\//, "");
 }
 
@@ -73,13 +77,31 @@ function searchTarget(
   requestedPath: string | undefined,
   requireDirectory: boolean,
 ): { readonly argument: string; readonly root: string } | SearchInputError {
-  const argument = requestedPath ?? ".";
+  let argument = (requestedPath ?? ".").replace(/^@/, "");
+  if (argument === "~") argument = homedir();
+  else if (
+    argument.startsWith("~/") ||
+    (process.platform === "win32" && argument.startsWith("~\\"))
+  ) {
+    argument = nodePath.join(homedir(), argument.slice(2));
+  }
   const absolute = nodePath.resolve(cwd, argument);
   let isDirectory: boolean;
   try {
     isDirectory = statSync(absolute).isDirectory();
   } catch {
     return new SearchInputError({ message: missingSearchPathError(argument) });
+  }
+  // realpath catches symlink aliases to .git, but a component we lack
+  // permission to resolve must not read as "path does not exist".
+  let resolved = absolute;
+  try {
+    resolved = realpathSync(absolute);
+  } catch {
+    // keep the stat-verified path
+  }
+  if ([absolute, resolved].some((path) => normalizeResultPath(path).split("/").includes(".git"))) {
+    return new SearchInputError({ message: GIT_PATH_ERROR });
   }
   if (requireDirectory && !isDirectory) {
     return new SearchInputError({ message: findPathNotDirectoryError(argument) });
@@ -110,22 +132,62 @@ function isExplicitHiddenPath(searchPath: string | undefined): boolean {
 /** Files larger than this are skipped: giant blobs (caches, bundles, sourcemaps) are what turns a broad search into an overnight scan. Matches OMP's native grep ceiling. */
 const GREP_MAX_FILESIZE = "4M";
 
+/** Safe basename prefilter only; complex globs are left to Minimatch. */
+function basenamePrefilter(pattern: string | undefined): string {
+  const basename = pattern?.split("/").at(-1);
+  // Restrict the entire pattern: a brace/extglob alternative can contain slashes.
+  return pattern !== undefined && /^[a-zA-Z0-9_./*?-]+$/.test(pattern) && basename ? basename : "*";
+}
+
 export function buildRgArgs(request: GrepRequest, searchRoot: string): string[] {
-  const args = ["--json", "--line-number", "--color=never", "--max-filesize", GREP_MAX_FILESIZE];
+  const args = [
+    "--no-config",
+    "--case-sensitive",
+    "--json",
+    "--line-number",
+    "--color=never",
+    "--max-filesize",
+    GREP_MAX_FILESIZE,
+  ];
   if (!isInsideGitRepository(searchRoot)) args.push("--no-require-git");
-  if (request.glob !== undefined) {
-    args.push("--type-add", `pifind:${request.glob}`, "--type", "pifind");
-  }
+  const prefilter = basenamePrefilter(request.glob);
+  if (prefilter !== "*") args.push("--type-add", `pifind:${prefilter}`, "--type", "pifind");
   if (!isExplicitHiddenPath(request.path)) args.push("--glob", "!.*");
   args.push("--glob", "!.git/", "--regexp", request.pattern, "--", request.path ?? ".");
   return args;
 }
 
 export function buildFdArgs(request: FindRequest, searchRoot: string): string[] {
-  const args = ["--type", "f", "--glob", request.pattern, "--exclude", ".git"];
+  const args = [
+    "--type",
+    "f",
+    "--print0",
+    "--color=never",
+    "--case-sensitive",
+    "--glob",
+    "--exclude",
+    ".git",
+  ];
   if (!isInsideGitRepository(searchRoot)) args.push("--no-require-git");
-  args.push("--", request.path ?? ".");
+  args.push("--", basenamePrefilter(request.pattern), request.path ?? ".");
   return args;
+}
+
+/** Match slash globs relative to the search root, otherwise match basenames. */
+function pathMatcher(pattern: string | undefined, root: string, cwd: string) {
+  const matcher =
+    pattern === undefined
+      ? undefined
+      : new Minimatch(pattern, {
+          dot: true,
+          matchBase: !pattern.includes("/"),
+          nonegate: true,
+          nocomment: true,
+          nocase: false,
+        });
+  return (file: string): boolean =>
+    matcher === undefined ||
+    matcher.match(normalizeResultPath(nodePath.relative(root, nodePath.resolve(cwd, file))));
 }
 
 const makeSearchRuntime = Effect.gen(function* () {
@@ -140,16 +202,17 @@ const makeSearchRuntime = Effect.gen(function* () {
       const target = searchTarget(request.cwd, request.path, false);
       if (target instanceof SearchInputError) return Effect.fail(target);
 
+      const accepts = pathMatcher(request.glob, target.root, request.cwd);
       const matches: GrepMatch[] = [];
       let sawOverflow = false;
       return streamLines({
         binary: "rg",
-        args: buildRgArgs(request, target.root),
+        args: buildRgArgs({ ...request, path: target.argument }, target.root),
         cwd: request.cwd,
         signal: request.signal,
         onLine(line) {
           const event = decodeRgEvent(line);
-          if (event === undefined) return true;
+          if (event === undefined || !accepts(event.path)) return true;
           if (matches.length >= GREP_RESULT_LIMIT) {
             sawOverflow = true;
             return false;
@@ -181,16 +244,18 @@ const makeSearchRuntime = Effect.gen(function* () {
       const target = searchTarget(request.cwd, request.path, true);
       if (target instanceof SearchInputError) return Effect.fail(target);
 
+      const accepts = pathMatcher(request.pattern, target.root, request.cwd);
       const files: string[] = [];
       let sawOverflow = false;
       return streamLines({
         binary: "fd",
-        args: buildFdArgs(request, target.root),
+        args: buildFdArgs({ ...request, path: target.argument }, target.root),
+        delimiter: "\0",
         cwd: request.cwd,
         signal: request.signal,
         onLine(line) {
-          const file = line.endsWith("\r") ? line.slice(0, -1) : line;
-          if (file.length === 0) return true;
+          const file = line;
+          if (file.length === 0 || !accepts(file)) return true;
           if (files.length >= FIND_RESULT_LIMIT) {
             sawOverflow = true;
             return false;

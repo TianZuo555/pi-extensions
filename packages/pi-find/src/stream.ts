@@ -9,7 +9,6 @@
 
 import { spawn } from "node:child_process";
 import { statSync } from "node:fs";
-import { createInterface } from "node:readline";
 import { Effect } from "effect";
 import { SEARCH_TIMEOUT_MS } from "../lib/prompt.ts";
 import { missingBinaryMessage, resolveBinary, type SearchBinary } from "./binaries.ts";
@@ -24,6 +23,8 @@ export interface StreamRequest {
    * killed and the run settles successfully with what was gathered so far.
    */
   readonly onLine: (line: string) => boolean;
+  /** fd uses NUL records so newlines in filenames remain intact. */
+  readonly delimiter?: "\n" | "\0";
   readonly signal?: AbortSignal;
   /** Wall-clock budget; defaults to SEARCH_TIMEOUT_MS. Overridable for tests. */
   readonly timeoutMs?: number;
@@ -48,7 +49,7 @@ function isBenignExit(
   stoppedEarly: boolean,
   timedOut: boolean,
 ): boolean {
-  if (code === 0 || code === null) return true;
+  if (code === 0) return true;
   if (stoppedEarly || timedOut) return true;
   return binary === "rg" && code === 1;
 }
@@ -103,7 +104,8 @@ export function streamLines(
       stdio: ["ignore", "pipe", "pipe"],
     });
 
-    const reader = createInterface({ input: child.stdout });
+    const delimiter = request.delimiter ?? "\n";
+    let pending = "";
     let stderr = "";
     let stoppedEarly = false;
     let timedOut = false;
@@ -111,7 +113,7 @@ export function streamLines(
     let aborted = false;
 
     const cleanup = () => {
-      reader.close();
+      child.stdout.removeListener("data", onData);
       clearTimeout(timeoutId);
       outerSignal?.removeEventListener("abort", onAbort);
       effectSignal.removeEventListener("abort", onAbort);
@@ -137,7 +139,7 @@ export function streamLines(
 
     function onAbort() {
       aborted = true;
-      stopChild();
+      stopChild("SIGKILL");
     }
 
     // A search should finish in well under the budget; the timer only bounds a
@@ -154,17 +156,17 @@ export function streamLines(
     child.stderr?.on("data", (chunk: Buffer) => {
       // Bounded: a pathological glob can make rg complain per file, and the
       // message we surface only ever needs the first few lines.
-      if (stderr.length < 4096) stderr += chunk.toString("utf8");
+      if (stderr.length < 4096) stderr = (stderr + chunk.toString("utf8")).slice(0, 4096);
     });
 
-    reader.on("line", (line: string) => {
-      if (stoppedEarly || aborted) return;
+    function onLine(line: string) {
+      if (settled || stoppedEarly || aborted) return;
       let wantsMore: boolean;
       try {
         wantsMore = request.onLine(line);
       } catch (error) {
         stoppedEarly = true;
-        stopChild();
+        stopChild("SIGKILL");
         settle(
           new SearchProcessError({
             message: `Failed to read ${request.binary} output: ${
@@ -177,9 +179,25 @@ export function streamLines(
       }
       if (!wantsMore) {
         stoppedEarly = true;
-        stopChild();
+        stopChild("SIGKILL");
       }
-    });
+    }
+
+    function onData(chunk: string) {
+      if (settled || stoppedEarly || aborted) return;
+      pending += chunk;
+      let start = 0;
+      let end = pending.indexOf(delimiter, start);
+      while (end !== -1) {
+        onLine(pending.slice(start, end));
+        start = end + 1;
+        if (settled || stoppedEarly || aborted) break;
+        end = pending.indexOf(delimiter, start);
+      }
+      pending = settled || stoppedEarly || aborted ? "" : pending.slice(start);
+    }
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", onData);
 
     child.on("error", (error: Error) => {
       settle(
@@ -190,7 +208,12 @@ export function streamLines(
       );
     });
 
-    child.on("close", (code: number | null) => {
+    child.on("close", (code: number | null, signal: NodeJS.Signals | null) => {
+      // A killed producer's trailing fragment is garbage, not a record: rg's
+      // partial JSON is dropped by the decoder, but a truncated fd path would
+      // silently become a bogus result. Only flush on a natural exit.
+      if (!timedOut && pending.length > 0) onLine(pending);
+      pending = "";
       if (aborted) {
         settle(
           new SearchAbortedError({
@@ -206,7 +229,9 @@ export function streamLines(
             message:
               detail.length > 0
                 ? `${request.binary} failed: ${detail}`
-                : `${request.binary} exited with code ${code}`,
+                : signal !== null
+                  ? `${request.binary} terminated by ${signal}`
+                  : `${request.binary} exited with code ${code}`,
             tool: request.binary,
             exitCode: code ?? undefined,
           }),
@@ -218,7 +243,7 @@ export function streamLines(
 
     // Interruption path: kill the child so a cancelled turn leaves nothing behind.
     return Effect.sync(() => {
-      stopChild();
+      stopChild("SIGKILL");
       cleanup();
     });
   });

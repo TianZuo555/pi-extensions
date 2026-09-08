@@ -63,8 +63,14 @@ export interface SearchDetails {
   readonly timedOut: boolean;
 }
 
+export function displayPath(path: string): string {
+  return /[\x00-\x1f\x7f\\"]/.test(path) ? JSON.stringify(path) : path;
+}
+
 export function renderGrepLines(outcome: GrepOutcome): string[] {
-  return outcome.matches.map((match) => `${match.path}:${match.lineNumber}: ${match.text}`);
+  return outcome.matches.map(
+    (match) => `${displayPath(match.path)}:${match.lineNumber}: ${match.text}`,
+  );
 }
 
 function countFiles(outcome: GrepOutcome): number {
@@ -215,7 +221,7 @@ export function registerTools(pi: ExtensionAPI, runtime: SearchRuntimeInstance):
         };
       }
 
-      const body = boundedBody(outcome.files, "find");
+      const body = boundedBody(outcome.files.map(displayPath), "find");
       const count = outcome.files.length;
       const notices = [
         ...(outcome.truncated ? [resultLimitNotice("files", FIND_RESULT_LIMIT)] : []),
@@ -298,7 +304,12 @@ function renderSearchResult(
     );
   }
   if (details.resultCount === 0) {
-    return expandedResult(theme.fg("muted", "no results"), output, options.expanded, theme);
+    const summary = details.timedOut
+      ? theme.fg("warning", "search timed out (no results gathered)")
+      : details.truncated
+        ? theme.fg("warning", "no results shown (truncated)")
+        : theme.fg("muted", "no results");
+    return expandedResult(summary, output, options.expanded, theme);
   }
 
   const unit =
