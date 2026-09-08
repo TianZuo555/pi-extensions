@@ -1,5 +1,11 @@
 # @tian.zuo/pi-find
 
+## 0.4.1
+
+### Patch Changes
+
+- [#42](https://github.com/TianZuo555/pi-extensions/pull/42) [`15d880f`](https://github.com/TianZuo555/pi-extensions/commit/15d880f6b539391da66cf7693b80f763b4736d81) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Fix root-relative glob matching without bypassing ignore rules, isolate grep from user ripgrep configuration, and report unexpected process termination as an error. Preserve unusual filenames with NUL-delimited find output and JSON-quoted display paths, and never surface partial records after a timeout kill. Normalize @ and home paths, reject explicit .git searches, retain empty-search timeout warnings, and document search limits. Add regression coverage for these behaviors and active cancellation.
+
 ## 0.4.0
 
 ### Minor Changes
