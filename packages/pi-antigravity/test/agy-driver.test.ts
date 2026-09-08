@@ -601,8 +601,12 @@ test("persistent driver keeps the longer tool budget while another step is still
   // Regression: ACTIVE A, ACTIVE B, DONE B — B completing must not clear the
   // active-tool state while A is still running, so the stall watchdog must
   // fire on the tool budget, not the short base budget.
+  // Use a long base / short tool budget so fixture startup cannot race the
+  // initial stall arm under full-suite load (same pattern as the single-tool
+  // active-budget test above).
   const fixture = await stepSequenceFixture();
   const executor = new AgyDriverSession();
+  const seen: string[] = [];
   try {
     await assert.rejects(
       () =>
@@ -610,15 +614,20 @@ test("persistent driver keeps the longer tool budget while another step is still
           prompt: "overlap",
           binary: fixture.script,
           cwd: fixture.dir,
-          inactivityTimeoutMs: 120,
-          toolInactivityTimeoutMs: 600,
+          inactivityTimeoutMs: 500,
+          toolInactivityTimeoutMs: 80,
           timeoutMs: 5_000,
           spawnOverride: fixtureSpawn(fixture.script),
+          onActivity: (activity) => seen.push(activity.type),
         }),
       (error: unknown) => {
         assert.ok(error instanceof AgyStallError, `expected AgyStallError, got ${error}`);
+        assert.ok(
+          seen.filter((type) => type === "tool_start").length >= 2 && seen.includes("tool_done"),
+          "fixture steps must arrive before the stall fires",
+        );
         assert.equal(error.toolActive, true, "step A is still ACTIVE after B finished");
-        assert.equal(error.stalledMs, 600, "fired on the tool budget, not the base budget");
+        assert.equal(error.stalledMs, 80, "fired on the tool budget, not the base budget");
         return true;
       },
     );
@@ -634,6 +643,7 @@ test("persistent driver treats a duplicate ACTIVE id as one step for the watchdo
   // budget applies again once no other step is ACTIVE.
   const fixture = await stepSequenceFixture();
   const executor = new AgyDriverSession();
+  const seen: string[] = [];
   try {
     await assert.rejects(
       () =>
@@ -641,15 +651,22 @@ test("persistent driver treats a duplicate ACTIVE id as one step for the watchdo
           prompt: "duplicate",
           binary: fixture.script,
           cwd: fixture.dir,
-          inactivityTimeoutMs: 120,
-          toolInactivityTimeoutMs: 600,
+          // Match the startup headroom of other driver stall fixtures; keep
+          // the tool budget much longer so a wedged ACTIVE would miss this.
+          inactivityTimeoutMs: 500,
+          toolInactivityTimeoutMs: 2_000,
           timeoutMs: 5_000,
           spawnOverride: fixtureSpawn(fixture.script),
+          onActivity: (activity) => seen.push(activity.type),
         }),
       (error: unknown) => {
         assert.ok(error instanceof AgyStallError, `expected AgyStallError, got ${error}`);
+        assert.ok(
+          seen.includes("tool_start") && seen.includes("tool_done"),
+          "fixture steps must arrive before the stall fires",
+        );
         assert.equal(error.toolActive, false, "the step is closed by its DONE event");
-        assert.equal(error.stalledMs, 120, "fired on the base budget");
+        assert.equal(error.stalledMs, 500, "fired on the base budget");
         return true;
       },
     );
