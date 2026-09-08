@@ -7,26 +7,28 @@ export const FIND_RESULT_LIMIT = 200;
 export const SEARCH_TIMEOUT_MS = 30_000;
 
 export const GREP_TOOL_DESCRIPTION =
-  "Search file contents with a case-sensitive regex; respects .gitignore; 30s timeout.";
+  "Search file contents with a case-sensitive regex; respects .gitignore. Skips hidden paths by default and files over 4 MiB during traversal. Up to 100 matching lines, clipped at 400 characters; bounded output; 30s timeout. Ripgrep config is ignored. Special paths are JSON-quoted; decode before read/edit.";
 export const GREP_PROMPT_SNIPPET = "Search file contents with a regex";
 
 export const GREP_PARAMETER_DESCRIPTIONS = {
   pattern: "Case-sensitive ripgrep regex.",
   path: "File or directory to search; default is the current directory.",
-  glob: "Optional file glob, for example '*.ts' or '**/*.test.ts'.",
+  glob: "Case-sensitive glob: basename ('*.ts') or search-root-relative path ('src/*.ts').",
 };
 
-export const FIND_TOOL_DESCRIPTION = "Find files with a glob; respects .gitignore; 30s timeout.";
+export const FIND_TOOL_DESCRIPTION =
+  "Find files with a case-sensitive glob; respects .gitignore. Skips hidden paths by default. Up to 200 files; bounded output; 30s timeout. Paths containing special characters are JSON-quoted; decode them before passing to read/edit.";
 export const FIND_PROMPT_SNIPPET = "Find files with a glob";
 
 export const FIND_PARAMETER_DESCRIPTIONS = {
-  pattern: "File glob, for example '*.ts' or '**/*.test.ts'.",
+  pattern: "Case-sensitive glob: basename ('*.ts') or search-root-relative path ('src/*.ts').",
   path: "Directory to search; default is the current directory.",
 };
 
 export const NO_GREP_MATCHES = "No matches found.";
 export const NO_FILES_FOUND = "No files found.";
 export const EMPTY_PATTERN_ERROR = "Search pattern cannot be empty.";
+export const GIT_PATH_ERROR = "Searches inside .git are excluded; choose a working-tree path.";
 
 export function missingSearchPathError(searchPath: string): string {
   return `Search path does not exist: ${searchPath}.`;

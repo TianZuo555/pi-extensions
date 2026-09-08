@@ -19,7 +19,7 @@ interface RgData {
 }
 
 function decodeText(value: RgData | string | undefined): string {
-  if (value === undefined) return "";
+  if (value == null) return "";
   if (typeof value === "string") return value;
   if (typeof value.text === "string") return value.text;
   if (typeof value.bytes === "string") {
@@ -55,7 +55,7 @@ export function decodeRgEvent(line: string): RgLine | undefined {
     return undefined;
   }
 
-  if (event.type !== "match") return undefined;
+  if (event == null || event.type !== "match") return undefined;
   const data = event.data;
   if (!data || typeof data.line_number !== "number") return undefined;
 

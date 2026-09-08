@@ -48,6 +48,8 @@ test("ignores blank and malformed lines", () => {
   assert.equal(decodeRgEvent("   "), undefined);
   assert.equal(decodeRgEvent("not json"), undefined);
   assert.equal(decodeRgEvent("{"), undefined);
+  assert.equal(decodeRgEvent("null"), undefined);
+  assert.equal(decodeRgEvent(matchEvent({ path: null })), undefined);
 });
 
 test("ignores events missing a line number or path", () => {

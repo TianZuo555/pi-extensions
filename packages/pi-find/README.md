@@ -33,7 +33,7 @@ grep(pattern, path?, glob?)
 find(pattern, path?)
 ```
 
-- `pattern` is a file glob, for example `*.ts` or `**/*.test.ts`.
+- `pattern` is a case-sensitive file glob, for example `*.ts` or `**/*.test.ts`.
 - `path` is one directory and defaults to the current directory.
 
 ```jsonc
@@ -42,15 +42,31 @@ find(pattern, path?)
 
 ## Search behavior
 
-- Both tools respect `.gitignore` and always skip `.git`.
+- Both tools respect `.gitignore` and always skip `.git`. Explicit `.git`
+  roots, files inside them, and symlink aliases to them are rejected.
+- Globs without `/` match basenames at any depth. Globs containing `/` match
+  paths relative to the search directory (or the parent of an explicit grep
+  file). For example, `src/*.ts` matches direct children of `src`, while
+  `src/**/*.ts` includes descendants. Use `/` in globs on every platform.
+  Glob filtering never re-includes ignored files.
+- A leading `@` is stripped from input paths; `~` and `~/...` expand to the
+  home directory. Ripgrep user configuration is ignored so it cannot change
+  the tool's case sensitivity or ignore behavior.
 - Hidden files and directories are not searched by default. An explicitly
   named hidden path still works, for example `path: ".github"`.
 - Grep stops after 100 matches; find stops after 200 files. A result says when
   the fixed limit was reached so the caller can narrow the search.
+- Grep skips files larger than 4 MiB during directory traversal. Explicitly
+  named files follow ripgrep's explicit-file behavior and can exceed that limit.
 - Grep lines longer than 400 characters are clipped.
 - Search output also has a hard byte limit, and running searches are
   cancellable.
 - Relative result paths can be passed directly to pi's `read` and `edit` tools.
+  Paths containing control characters, backslashes, or quotes are JSON-quoted;
+  decode the JSON string before using them. Newlines in filenames do not create
+  extra find results.
+- Timeouts are marked as partial, including when no results were gathered.
+  Unexpected process termination is an error, not a completed empty search.
 
 For uncommon searches involving several roots, exclusions, multiline matching,
 counts, sorting, or pipelines, use `rg` or `fd` through the shell rather than
