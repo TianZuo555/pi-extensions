@@ -35,7 +35,7 @@ Parameters:
 - `title` — optional short `/ps` label. The default strips common leading
   `D=/path;` or `cd /path &&` setup and preserves both ends when bounding a long
   command, so repeated setup prefixes do not hide the actual work.
-- `yield-time_ms` — optional initial wait, default **10 seconds**. Integer values
+- `yield_time_ms` — optional initial wait, default **10 seconds**. Integer values
   are clamped to **250–30,000 ms** rather than rejected when out of range.
 
 Behavior:
@@ -51,7 +51,7 @@ Behavior:
 4. If it exits during `yield_time_ms`, return its final status and bounded
    head+tail output to the model. Non-zero exits and hard timeouts are Bash tool
    errors. The TUI keeps the quick command visibly distinct from background work.
-5. If it remains alive, return an id such as `bt-1`. Only then does the row
+5. If it remains alive, return an id such as `bt-a12b34c56d78ef90-1`. Only then does the row
    collapse to compact background-terminal status. The model should continue
    rather than poll. Nearby exits share one compact follow-up after a 1,000 ms
    sliding quiet window, with a 3,000 ms maximum hold. An isolated exit keeps
@@ -64,11 +64,14 @@ read-only `terminal_log_read` tool only pages an opaque archive ref emitted by
 per agent run. The user still owns terminal inspection and termination through
 `/ps`.
 
-To prevent an agent from spending an entire run on recursive shell searches,
-the extension counts recognized read-only Bash inspection commands across the
-whole agent run. It starts adding a model-facing synthesis warning at call 6 and
-blocks call 9 (limit 8) before spawn. The counter resets for the next agent run;
-normal builds, tests, and other unrecognized execution commands are not counted.
+Terminal IDs include a random runtime identifier, so archive references from
+before `/reload` or `/resume` cannot resolve to a different command's output.
+Old references become unavailable rather than being reused. The read budgets
+apply only to `terminal_log_read`, not to Bash inspection commands.
+
+Cancellation before spawn prevents execution (including foreground fallback).
+Once a command has started, cancellation only ends the initial wait; the command
+continues in the background and remains eligible for its completion message.
 
 ### Safe foreground fallback
 
@@ -94,9 +97,10 @@ While at least one terminal runs, a one-line widget renders above the editor.
    `←/→`, or `h`/`l` switches tabs. Output tabs support live tailing, scrolling
    (`↑/↓`, `PgUp/PgDn`, `g`/`G`), and `x` to stop. Once a stream outgrows its
    in-memory retention the viewer reads the **complete on-disk log** instead:
-   scrolling past the top of the loaded window pulls in earlier bytes, `G`
-   returns to the live tail. The note row shows how much is loaded, how much
-   lies on either side, and the log's path.
+   scrolling up immediately pauses live following and freezes the reading
+   position (including retained output). Scrolling past the top of the loaded
+   window pulls in earlier bytes; `G` returns to the live tail. The note row
+   shows how much is loaded, how much lies on either side, and the log's path.
 
 ## Design
 
@@ -142,6 +146,8 @@ While at least one terminal runs, a one-line widget renders above the editor.
   transport may receive the script over stdin, but that pipe is closed
   immediately and cannot be used interactively.
 - **Process-tree termination.** POSIX children use their own process group.
+  Cleanup checks that group independently of stdio closure, so descendants with
+  redirected output are also reaped on natural shell exit and shutdown.
   On Windows the manager creates a dedicated Job Object before starting a
   terminal, and a pre-shell launcher joins it before Bash can run; every
   descendant therefore inherits `KILL_ON_JOB_CLOSE` membership without an
@@ -179,6 +185,9 @@ cd packages/pi-background-terminals
 pnpm run check
 pnpm test
 ```
+
+Tests run without forced process exit, including lifecycle regressions for
+redirected descendants, pre-spawn cancellation, and runtime-scoped archive IDs.
 
 ## Credits
 

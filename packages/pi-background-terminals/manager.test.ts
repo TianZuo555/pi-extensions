@@ -21,9 +21,8 @@ import {
   MAX_RUNNING,
   MAX_TRACKED,
   RETAINED_PER_STREAM,
-  TerminalManager,
-  type TerminalManagerShape,
-} from "./src/manager.ts";
+} from "./src/constants.ts";
+import { TerminalManager, type TerminalManagerShape } from "./src/manager.ts";
 import { createTerminalRuntime, runTool } from "./src/runtime.ts";
 
 const cwd = process.cwd();
@@ -1125,7 +1124,7 @@ test("status returns the snapshot and rejects unknown ids with the known list", 
     assert.equal(seen.id, snap.id);
     await assert.rejects(
       runTool(runtime, manager.status("bt-999")),
-      /Unknown terminal id "bt-999"\. Known: bt-1\./,
+      /Unknown terminal id "bt-999"\. Known: bt-[a-f0-9]{16}-1\./,
     );
   });
 });

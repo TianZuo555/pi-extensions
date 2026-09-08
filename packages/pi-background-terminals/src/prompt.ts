@@ -14,7 +14,13 @@ import {
   MAX_RUNNING,
   MAX_YIELD_TIME_MS,
   MIN_YIELD_TIME_MS,
-} from "./manager.ts";
+  MAX_TRACKED,
+  MAX_RUNTIME_TIMEOUT_SECONDS,
+  MAX_SPILL_BYTES_PER_STREAM,
+  TERMINAL_LOG_READ_RUN_BUDGET,
+  TERMINAL_LOG_READ_RUN_CALLS,
+} from "./constants.ts";
+import type { TerminalLogReadResult } from "./manager.ts";
 
 /** Output returned by the initial bash call. */
 export const BASH_STDOUT_MAX = 16 * 1024;
@@ -57,10 +63,74 @@ export const TERMINAL_LOG_READ_TOOL_DESCRIPTION =
 export const TERMINAL_LOG_READ_PROMPT_SNIPPET = "Read a terminal archive page";
 
 export const TERMINAL_LOG_READ_PARAMETER_DESCRIPTIONS = {
-  ref: "Bash archive ref, e.g. bt-3:stdout.",
+  ref: "Exact Bash archive ref (runtime-scoped).",
   offset: "Start byte; default 0.",
   limit: "Page bytes; default maximum.",
 };
+
+export const TERMINAL_ERRORS = {
+  emptyCommand: "command must not be empty.",
+  invalidTimeout: `timeout must be a finite number of seconds in (0, ${MAX_RUNTIME_TIMEOUT_SECONDS}].`,
+  invalidDirectory: (cwd: string) => `working_dir is not a directory: ${cwd}`,
+  shuttingDown: "Background terminal manager is shutting down.",
+  shutDownDuringStart: "Background terminal manager shut down while starting.",
+  concurrency: `Max ${MAX_RUNNING} background terminals can run concurrently. Stop one from /ps before starting another.`,
+  spillFlush: "Full-log spill flush timed out; full output may be incomplete",
+  spillFailed: (error: string) => `Full-log spill failed: ${error}`,
+  spillCapped: (stream: string) =>
+    `${stream} full-log spill reached the ${MAX_SPILL_BYTES_PER_STREAM}-byte safety limit`,
+  incompleteStdio: "stdio did not close after termination; output may be incomplete",
+  runtimeTimeout: (ms: number) => `Command exceeded its ${ms}-ms runtime timeout`,
+  unknownTerminal: (id: string, known: readonly string[]) =>
+    `Unknown terminal id "${id}". Known: ${known.join(", ") || "none"}.`,
+  expiredArchive: (ref: string) =>
+    `Archive ${ref} expired when the terminal was pruned from the ${MAX_TRACKED}-entry retention cap. ` +
+    "It cannot be recovered. Work with the output already available or re-run the command.",
+  smallArchive: (ref: string) =>
+    `Archive ${ref} is unavailable; its output was small enough that the terminal result already contains all of it.`,
+  unknownArchive: (id: string) =>
+    `Unknown terminal id "${id}"; no terminal with that id is tracked in this session.`,
+  unavailableArchive: (ref: string) => `Archive ${ref} is unavailable.`,
+  unreadableArchive: (ref: string) => `Archive ${ref} could not be read.`,
+  invalidRef: (ref: string) =>
+    `Invalid terminal log ref "${ref}"; use the exact runtime-scoped ref emitted by Bash.`,
+  readCalls: `terminal_log_read budget exhausted for this agent run (maximum ${TERMINAL_LOG_READ_RUN_CALLS} reads). Work with the output you already have; the user can inspect the full log with /ps.`,
+  readBytes: `terminal_log_read budget exhausted for this agent run (maximum ${TERMINAL_LOG_READ_RUN_BUDGET} bytes). Work with the output you already have; the user can inspect the full log with /ps.`,
+  interrupted: "Operation was aborted.",
+  initialWaitAborted: (id: string) =>
+    `Initial wait aborted; ${id} continues in the background and will report when it exits.`,
+};
+
+export function foregroundFallbackWarning(reason: string) {
+  return `[Managed bash unavailable before spawn; using Pi's foreground bash fallback — no auto-yield or /ps tracking for this call. Reason: ${reason.slice(0, 500)}]`;
+}
+
+export function formatTerminalLogRead(result: TerminalLogReadResult) {
+  const range = result.bytesRead === 0 ? "empty" : `${result.offset}-${result.nextOffset - 1}`;
+  return [
+    `${result.id}:${result.stream} bytes ${range} of ${result.size}; ` +
+      `settled: ${result.settled ? "yes" : "no"}; complete: ${result.complete ? "yes" : "no"}; next_offset: ${result.nextOffset}`,
+    result.text || "(empty)",
+  ].join("\n");
+}
+
+export function stateOnlyCommandError() {
+  return (
+    "This command only changes shell state (cd/export/assignment) in a shell discarded on exit, " +
+    "so it cannot affect any later call; it was not executed. Use working_dir to choose the " +
+    "directory, or combine setup and work in one command: `cd packages/x && npm test`."
+  );
+}
+
+export function duplicateCommandError(snap: TerminalSnapshot) {
+  return (
+    `This exact command is already running as background terminal ${snap.id} ` +
+    `(started ${formatElapsed(snap)} ago, pid ${snap.pid ?? "?"}). It has not failed: yielded commands ` +
+    "keep running and report back on exit. This second copy was not executed — re-running it would " +
+    "repeat its side effects. Wait for that result, or stop it from /ps. To run it again on purpose, " +
+    "change the command text or use a different working_dir."
+  );
+}
 
 const LEADING_SETUP =
   /^(?:(?:export\s+)?[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|[^;\s]+)\s*;\s*)+/;
@@ -85,7 +155,7 @@ export function deriveCommandTitle(command: string, explicitTitle?: string) {
   return truncateTitle(withoutSetup || normalized || "command");
 }
 
-/** One metadata line: `bt-1 [running] "dev server" (pid 12345, 3m12s, exit -, /path)`. */
+/** One metadata line: `bt-<runtime-id>-1 [running] "dev server" (pid 12345, 3m12s, exit -, /path)`. */
 export function describeTerminal(snap: TerminalSnapshot) {
   const details = [
     `pid ${snap.pid ?? "?"}`,

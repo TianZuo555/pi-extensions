@@ -127,13 +127,14 @@ immediately. Neither path provides an interactive input surface.
 ```text
 index.ts                    Pi boundary, bash override, fallback, /ps
 src/command-shape.ts        Pre-spawn guards: state-only and duplicate commands
+src/constants.ts            Shared execution and output limits
 src/domain.ts               Snapshot/status/error types
 src/manager.ts              Effect service and process lifecycle
 src/output.ts               Bounded head+tail stream retention
 src/process-tracker.ts      Synchronous abnormal-exit process-tree safety net
 src/win32-job.ts            Native named Job Object creation and membership
 src/win32-child.mjs         Plain-JS pre-shell launcher that joins the job first
-src/prompt.ts               Tool metadata and model-facing formatting
+src/prompt.ts               Tool metadata, validation/errors, model-facing formatting
 src/result-delivery.ts      Drain-once completion delivery map
 src/runtime.ts              ManagedRuntime and Effect→Promise boundary
 src/ui/output-view.ts       ANSI-safe wrapped output rendering
@@ -158,7 +159,7 @@ running ── /ps stop / session teardown ────────► killed
 
 A snapshot includes:
 
-- stable `bt-N` id;
+- stable `bt-<16-hex-runtime-id>-N` id, never reused across runtime recreation;
 - exact model command, bounded title, absolute cwd, and pid;
 - timestamps, optional timeout, and final exit code or signal;
 - separate stdout/stderr `OutputView` values;
@@ -204,14 +205,19 @@ at most four source lines. Quick final results show at most six; yielded results
 collapse to compact terminal status with `/ps`. Exceptions thrown by the display
 callback are ignored; presentation cannot affect process execution.
 
-The initial wait is abortible. Aborting it does not kill the process. The error
+Cancellation is checked before initialization, after initialization, and at the
+spawn boundary (after any asynchronous Windows job setup). A pre-spawn abort
+never runs the command or invokes foreground fallback. Abort-related spawn
+errors carry `fallbackSafe: false`, independently of the tool boundary's own
+cancellation checks. Once spawned, the initial
+wait is abortible. Aborting it does not kill the process. The error
 identifies the terminal id, and eventual settlement remains eligible for an
 automatic follow-up.
 
 The returned result has two forms:
 
 - **Final:** status/output are returned directly, without presenting the
-  manager's internal `bt-N` identity as background work, and any deferred
+  manager's internal terminal identity as background work, and any deferred
   completion for the tiny start→wait race is consumed. Failed, killed, and
   timed-out final states throw so Pi marks the Bash result as an error.
 - **Yielded:** status is `running`, the id and captured startup output are
@@ -424,7 +430,7 @@ terminal status.
 ### Model-facing archive reads
 
 `terminal_log_read` is the only model-facing path into a complete spill. It
-accepts the opaque `bt-N:stdout` or `bt-N:stderr` reference emitted by Bash,
+accepts the opaque `bt-<runtime-id>-N:stdout` or `bt-<runtime-id>-N:stderr` reference emitted by Bash,
 plus a byte `offset` and bounded `limit`. The manager resolves the reference
 against the live session registry rather than exposing a filesystem path. Each
 read returns `settled`, `complete`, the current file size, and `next_offset`;
@@ -433,7 +439,8 @@ poll operation. Pages are capped at 64 KiB, and the extension permits 256 KiB
 and 8 archive reads per agent run. Both budgets are required: the byte budget
 bounds full-page firehosing, and the call budget bounds a `limit: 1` polling
 loop that would otherwise spend almost no bytes. Pruned entries return an
-expired/unavailable error.
+expired/unavailable error. Every manager has a fresh random 64-bit runtime id;
+refs from a previous runtime cannot alias terminals after reload/resume.
 
 A byte offset chosen by the model can land inside a code point, so both window
 edges are snapped to UTF-8 boundaries before decoding: leading continuation
@@ -474,14 +481,18 @@ Exit metadata is recorded on Node's `exit` event, but settlement occurs on
 `close` so output has reached EOF. If descendants inherit the pipes and hold
 them open after the shell exits, bounded cleanup closes the entry scope and
 reaps the process group — on Windows, closing the job kills the survivors and
-releases the pipes they hold.
+releases the pipes they hold. Closed pipes alone are not proof of tree exit:
+redirected descendants may still be alive in the POSIX process group. Natural
+settlement and explicit termination both reap that group with bounded
+SIGTERM→SIGKILL escalation. A group remains in the abnormal-exit tracker until
+it is gone; disposal sweeps any residual group.
 
 The entry scope is the single cleanup path for `/ps` stop, hard timeout,
 pruning, internal kill calls, and runtime disposal.
 
 Pi's detached-child tracker is internal and not exported. The manager therefore
 registers its own synchronous Node `exit` listener while live, tracks every
-spawned pid and open job until close/scope cleanup, and closes every tracked job
+spawned process group and open job until confirmed tree cleanup, and closes every tracked job
 object followed by a best-effort process-tree SIGKILL (`taskkill /F /T` on
 Windows) if an uncaught crash or emergency terminal exit bypasses
 `session_shutdown`. Closed jobs are untracked immediately, so long sessions do
@@ -545,9 +556,14 @@ seekAfter   next window starts exactly where the current one ended → viewer
 The two exact anchors are why paging needs no line arithmetic: a re-anchored
 window shares a byte boundary with the window it replaces, so reading continues
 without a gap or overlap in either direction. `follow` runs only while the
-viewer is *following* (bottom-pinned and untouched by backwards paging), so a
-reader in history is never yanked to EOF; `G` restores following. A pruned or
-unreadable spill records a bounded error and the view degrades to the retained
+viewer is *following*. Any upward scroll, Page Up, or `g` pauses following
+immediately, not just when a disk page is loaded. Retained in-memory text is
+frozen while paused, so its rolling tail cannot move the reading position.
+The first disk window may still load while paused; pausing before its async
+read commits must not disable archive paging. If retention overflows during a
+memory pause, explicit backward paging switches to the spill without requiring
+`G` or a tab switch. Returning to the bottom or pressing `G` restores following.
+A pruned or unreadable spill records a bounded error and the view degrades to the retained
 buffer with a note.
 
 ## 16. Session teardown
@@ -589,7 +605,10 @@ The package test suite covers:
 - pre-spawn blocking and next-run reset for state-only and duplicate commands;
 - hard timeout status and tree termination;
 - Bash-specific syntax on the resolved shell;
-- abort leaving eventual completion deliverable;
+- pre-spawn cancellation preventing execution and fallback, including during initialization;
+- post-spawn abort leaving eventual completion deliverable;
+- redirected SIGTERM-resistant descendants reaped on natural exit and disposal;
+- archive refs from an old runtime rejected after recreation;
 - process-tree kill, pre-shell Windows job membership, reload-safe native FFI,
   SIGKILL escalation, and abnormal process-exit cleanup;
 - session disposal, spill-directory cleanup, and per-entry pruning cleanup;
@@ -604,13 +623,19 @@ The package test suite covers:
 - spill-window follow/backfill/re-anchor anchoring, UTF-8 boundaries, and
   degradation when the log becomes unreadable.
 
+The suite runs without `--test-force-exit`, so leaked handles cannot be hidden
+by forcibly exiting the test runner. Unicode paging tests cover three- and
+four-byte characters at non-aligned window boundaries, and `/ps` component
+interaction tests verify that scrolling pauses both memory and disk output.
+
 Validation commands:
 
 ```bash
-npm run check --workspace @tian.zuo/pi-background-terminals
-npm test --workspace @tian.zuo/pi-background-terminals
-npm run typecheck
-npm pack --dry-run --workspace @tian.zuo/pi-background-terminals
+pnpm --filter @tian.zuo/pi-background-terminals run check
+pnpm --filter @tian.zuo/pi-background-terminals test
+pnpm run typecheck
+pnpm run check
+pnpm test
 ```
 
 The publish workflow runs both typechecks and the package test suite before its

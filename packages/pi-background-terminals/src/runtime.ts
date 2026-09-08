@@ -6,6 +6,7 @@
 
 import { Cause, Exit, ManagedRuntime, Result, type Effect } from "effect";
 import { TerminalManagerLive } from "./manager.ts";
+import { TERMINAL_ERRORS } from "./prompt.ts";
 
 export function createTerminalRuntime() {
   return ManagedRuntime.make(TerminalManagerLive);
@@ -29,7 +30,7 @@ export async function runTool<A, E>(
   );
   if (Exit.isSuccess(exit)) return exit.value;
   if (Cause.hasInterruptsOnly(exit.cause)) {
-    throw new Error(options.interruptMessage ?? "Operation was aborted.");
+    throw new Error(options.interruptMessage ?? TERMINAL_ERRORS.interrupted);
   }
   // Preserve typed Effect failures so callers can make narrow, safety-aware
   // decisions (notably: foreground fallback only when SpawnError proves that

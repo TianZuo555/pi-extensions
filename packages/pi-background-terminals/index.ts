@@ -35,22 +35,26 @@ import { Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { createCompletionBatchScheduler } from "./src/completion-batcher.ts";
 import { SpawnError, type TerminalSnapshot, type TerminalStatus } from "./src/domain.ts";
-import {
-  duplicateCommandError,
-  findDuplicateRunning,
-  isStateOnlyCommand,
-  stateOnlyCommandError,
-} from "./src/command-shape.ts";
+import { findDuplicateRunning, isStateOnlyCommand } from "./src/command-shape.ts";
 import {
   DEFAULT_YIELD_TIME_MS,
   MAX_RUNTIME_TIMEOUT_SECONDS,
   MAX_TERMINAL_LOG_READ_BYTES,
+  TERMINAL_LOG_READ_RUN_BUDGET,
+  TERMINAL_LOG_READ_RUN_CALLS,
+} from "./src/constants.ts";
+import {
   TerminalManager,
   type SettlementWaitResult,
   type TerminalLogReadResult,
   type TerminalManagerShape,
 } from "./src/manager.ts";
 import {
+  TERMINAL_ERRORS,
+  foregroundFallbackWarning,
+  formatTerminalLogRead,
+  duplicateCommandError,
+  stateOnlyCommandError,
   BASH_PARAMETER_DESCRIPTIONS,
   BASH_PROMPT_SNIPPET,
   BASH_TOOL_DESCRIPTION,
@@ -79,26 +83,13 @@ const SESSION_ENV_KEYS = [
 
 type CompactTerminalStatus = TerminalStatus | "starting";
 
-const TERMINAL_LOG_READ_RUN_BUDGET = MAX_TERMINAL_LOG_READ_BYTES * 4;
-/** A byte budget alone cannot stop `limit: 1` polling; bound the calls too. */
-const TERMINAL_LOG_READ_RUN_CALLS = 8;
-
 function parseTerminalLogRef(ref: string) {
-  const match = /^(bt-\d+):(stdout|stderr)$/.exec(ref);
+  const match = /^(bt-[a-f0-9]{16}-\d+):(stdout|stderr)$/.exec(ref);
   if (!match) return undefined;
   return {
     id: match[1],
     stream: match[2] as "stdout" | "stderr",
   };
-}
-
-function formatTerminalLogRead(result: TerminalLogReadResult) {
-  const range = result.bytesRead === 0 ? "empty" : `${result.offset}-${result.nextOffset - 1}`;
-  return [
-    `${result.id}:${result.stream} bytes ${range} of ${result.size}; ` +
-      `settled: ${result.settled ? "yes" : "no"}; complete: ${result.complete ? "yes" : "no"}; next_offset: ${result.nextOffset}`,
-    result.text || "(empty)",
-  ].join("\n");
 }
 
 /** Extract manager-owned status from a model-facing Bash result. Output is
@@ -109,8 +100,10 @@ function compactTerminalState(
   isError: boolean,
 ): { readonly id?: string; readonly status: CompactTerminalStatus } {
   const metadata = text.split("\n\nstdout:", 1)[0] ?? "";
-  const described = metadata.match(/\b(bt-\d+) \[(running|done|failed|timed_out|killed)\]/);
-  const id = described?.[1] ?? metadata.match(/\bterminal (bt-\d+)\b/i)?.[1];
+  const described = metadata.match(
+    /\b(bt-[a-f0-9]{16}-\d+) \[(running|done|failed|timed_out|killed)\]/,
+  );
+  const id = described?.[1] ?? metadata.match(/\bterminal (bt-[a-f0-9]{16}-\d+)\b/i)?.[1];
   const describedStatus = described?.[2] as TerminalStatus | undefined;
 
   if (describedStatus) return { id, status: describedStatus };
@@ -462,10 +455,11 @@ export function createBackgroundTerminalsExtension(
         return text;
       },
       async execute(toolCallId, params, signal, onUpdate, ctx) {
+        signal?.throwIfAborted();
         // Preserve the exact command text. Trimming here can break heredocs and
         // multiline scripts; trim only for validation and the display title.
         const command = params.command;
-        if (!command.trim()) throw new Error("command must not be empty.");
+        if (!command.trim()) throw new Error(TERMINAL_ERRORS.emptyCommand);
 
         // The shell is discarded at exit, so a command that only mutates shell
         // state cannot affect anything. Left to run it would exit 0 and let the
@@ -478,9 +472,7 @@ export function createBackgroundTerminalsExtension(
             params.timeout <= 0 ||
             params.timeout > MAX_RUNTIME_TIMEOUT_SECONDS)
         ) {
-          throw new Error(
-            `timeout must be a finite number of seconds in (0, ${MAX_RUNTIME_TIMEOUT_SECONDS}].`,
-          );
+          throw new Error(TERMINAL_ERRORS.invalidTimeout);
         }
 
         const cwd = path.resolve(ctx.cwd, params.working_dir ?? ".");
@@ -489,7 +481,7 @@ export function createBackgroundTerminalsExtension(
             throw new Error("not a directory");
           }
         } catch {
-          throw new Error(`working_dir is not a directory: ${cwd}`);
+          throw new Error(TERMINAL_ERRORS.invalidDirectory(cwd));
         }
 
         // Preserve Pi's built-in shellPath and shellCommandPrefix settings even
@@ -502,16 +494,16 @@ export function createBackgroundTerminalsExtension(
         const title = deriveCommandTitle(command, params.title);
 
         const runForegroundFallback = async (reason: unknown, resetManagedRuntime: boolean) => {
+          signal?.throwIfAborted();
           if (resetManagedRuntime) {
             const brokenRuntime = runtime;
             runtime = undefined;
             managerPromise = undefined;
             await brokenRuntime?.dispose().catch(() => {});
           }
+          signal?.throwIfAborted();
           const reasonText = reason instanceof Error ? reason.message : String(reason);
-          const warning =
-            `[Managed bash unavailable before spawn; using Pi's foreground bash fallback — ` +
-            `no auto-yield or /ps tracking for this call. Reason: ${reasonText.slice(0, 500)}]`;
+          const warning = foregroundFallbackWarning(reasonText);
           if (ctx.hasUI) ctx.ui.notify(warning, "warning");
 
           const fallback = makeForegroundBash(cwd, {
@@ -544,6 +536,8 @@ export function createBackgroundTerminalsExtension(
           return await runForegroundFallback(managerError, true);
         }
 
+        signal?.throwIfAborted();
+
         // Re-issuing a command that is still running is the one mistake the model
         // gets no feedback on: the duplicate repeats every side effect and both
         // copies report success. Refuse instead of spawning it twice.
@@ -563,6 +557,7 @@ export function createBackgroundTerminalsExtension(
         if (thinkingLevel) env.PI_REASONING_LEVEL = thinkingLevel;
 
         let started: TerminalSnapshot;
+        signal?.throwIfAborted();
         try {
           started = await runTool(
             getRuntime(),
@@ -573,6 +568,7 @@ export function createBackgroundTerminalsExtension(
               title,
               cwd,
               env,
+              signal,
               timeoutMs: params.timeout === undefined ? undefined : params.timeout * 1000,
             }),
           );
@@ -633,7 +629,7 @@ export function createBackgroundTerminalsExtension(
         try {
           waited = await runTool(getRuntime(), waitForSettlement(), {
             signal,
-            interruptMessage: `Initial wait aborted; ${started.id} continues in the background and will report when it exits.`,
+            interruptMessage: TERMINAL_ERRORS.initialWaitAborted(started.id),
           });
         } finally {
           unsubscribe();
@@ -715,9 +711,7 @@ export function createBackgroundTerminalsExtension(
       async execute(_toolCallId, params) {
         const parsed = parseTerminalLogRef(params.ref);
         if (!parsed) {
-          throw new Error(
-            `Invalid terminal log ref "${params.ref}"; expected bt-N:stdout or bt-N:stderr.`,
-          );
+          throw new Error(TERMINAL_ERRORS.invalidRef(params.ref));
         }
         const limit = Math.min(
           MAX_TERMINAL_LOG_READ_BYTES,
@@ -726,16 +720,10 @@ export function createBackgroundTerminalsExtension(
         // Two budgets, because either one alone is escapable: bytes bound a
         // firehose of full pages, calls bound a tiny-limit polling loop.
         if (terminalLogReadCalls >= TERMINAL_LOG_READ_RUN_CALLS) {
-          throw new Error(
-            `terminal_log_read budget exhausted for this agent run (maximum ${TERMINAL_LOG_READ_RUN_CALLS} reads). ` +
-              "Work with the output you already have; the user can inspect the full log with /ps.",
-          );
+          throw new Error(TERMINAL_ERRORS.readCalls);
         }
         if (terminalLogReadBytes + limit > TERMINAL_LOG_READ_RUN_BUDGET) {
-          throw new Error(
-            `terminal_log_read budget exhausted for this agent run (maximum ${TERMINAL_LOG_READ_RUN_BUDGET} bytes). ` +
-              "Work with the output you already have; the user can inspect the full log with /ps.",
-          );
+          throw new Error(TERMINAL_ERRORS.readBytes);
         }
         terminalLogReadCalls++;
         const manager = await getManager();

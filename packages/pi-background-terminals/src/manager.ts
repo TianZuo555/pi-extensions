@@ -13,6 +13,7 @@
  */
 
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -33,23 +34,18 @@ import { createDetachedChildTracker } from "./process-tracker.ts";
 import { createChildJob, preloadChildJobSupport, type ChildJobHandle } from "./win32-job.ts";
 import { codePointStart, completeCodePointEnd } from "./utf8.ts";
 
-export const MAX_RUNNING = 8;
-export const MAX_TRACKED = 32;
-export const DEFAULT_YIELD_TIME_MS = 10_000;
-export const MIN_YIELD_TIME_MS = 250;
-export const MAX_YIELD_TIME_MS = 30_000;
-/** Same upper bound as Pi's built-in bash timeout (Node timer maximum). */
-export const MAX_RUNTIME_TIMEOUT_MS = 2_147_483_647;
-export const MAX_RUNTIME_TIMEOUT_SECONDS = MAX_RUNTIME_TIMEOUT_MS / 1000;
+import {
+  MAX_RUNNING,
+  MAX_TRACKED,
+  MIN_YIELD_TIME_MS,
+  MAX_YIELD_TIME_MS,
+  RETAINED_PER_STREAM,
+  HEAD_RETAINED_PER_STREAM,
+  MAX_SPILL_BYTES_PER_STREAM,
+  MAX_TERMINAL_LOG_READ_BYTES,
+} from "./constants.ts";
+import { TERMINAL_ERRORS } from "./prompt.ts";
 const MAX_SETTLED_HISTORY = MAX_TRACKED * 4;
-/** In-memory retained cap per stream. */
-export const RETAINED_PER_STREAM = 2 * 1024 * 1024;
-/** Stable startup prefix within the retained cap; the remainder is rolling tail. */
-export const HEAD_RETAINED_PER_STREAM = 256 * 1024;
-/** Private full-log spills are bounded so a firehose cannot fill the temp disk. */
-export const MAX_SPILL_BYTES_PER_STREAM = 256 * 1024 * 1024;
-/** Maximum bytes exposed by one model-facing archive read. */
-export const MAX_TERMINAL_LOG_READ_BYTES = 64 * 1024;
 const STOP_TIMEOUT_MS = 5_000;
 /** SIGTERM is normally enough; the second deadline covers a wedged process. */
 const FORCE_KILL_AFTER_MS = 2_000;
@@ -189,6 +185,8 @@ export interface StartOptions {
   readonly shellPath?: string;
   /** Environment resolved at the tool boundary, including current PI_* state. */
   readonly env?: NodeJS.ProcessEnv;
+  /** Cancellation prevents spawn, but never kills an already-started command. */
+  readonly signal?: AbortSignal;
   /** Optional hard total runtime timeout. The yield wait is independent. */
   readonly timeoutMs?: number;
 }
@@ -349,6 +347,19 @@ function killTree(child: ChildProcess, signal: NodeJS.Signals) {
   }
 }
 
+/** Stdio closure does not imply that redirected descendants have exited.
+ * POSIX probing/signaling assumes the reaped leader's PGID has not been reused
+ * between exit and bounded cleanup; signal-zero probes cannot establish identity. */
+function processGroupAlive(child: ChildProcess) {
+  if (process.platform === "win32" || !child.pid) return false;
+  try {
+    process.kill(-child.pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code !== "ESRCH";
+  }
+}
+
 /** Await stdio closure without retaining a listener after interruption. */
 function awaitChildClose(child: ChildProcess, closed: () => boolean) {
   return Effect.callback<void>((resume) => {
@@ -374,23 +385,26 @@ function terminateChild(
   onSignal: () => void,
   onEscalation: () => void,
 ) {
+  const treeGone = () => closed() && !processGroupAlive(child);
+  const awaitTree = () =>
+    Effect.gen(function* () {
+      yield* awaitChildClose(child, closed);
+      while (processGroupAlive(child)) yield* Effect.sleep(25);
+    });
   return Effect.suspend(() => {
-    if (closed()) return Effect.void;
+    if (treeGone()) return Effect.void;
     return Effect.gen(function* () {
       yield* Effect.sync(() => {
         onSignal();
         killTree(child, "SIGTERM");
       });
-      yield* awaitChildClose(child, closed).pipe(
-        Effect.timeout(FORCE_KILL_AFTER_MS),
-        Effect.ignore,
-      );
-      if (closed()) return;
+      yield* awaitTree().pipe(Effect.timeout(FORCE_KILL_AFTER_MS), Effect.ignore);
+      if (treeGone()) return;
       yield* Effect.sync(() => {
         killTree(child, "SIGKILL");
         onEscalation();
       });
-      yield* awaitChildClose(child, closed).pipe(Effect.timeout(500), Effect.ignore);
+      yield* awaitTree().pipe(Effect.timeout(500), Effect.ignore);
     });
   });
 }
@@ -425,6 +439,7 @@ const makeManager = Effect.gen(function* () {
   const settlementWaiters = new Map<string, Set<{ consumed: boolean }>>();
   const listeners = new Set<() => void>();
   const idListeners = new Map<string, Set<() => void>>();
+  const runtimeId = randomBytes(8).toString("hex");
   let counter = 0;
   let reserved = 0;
   let disposed = false;
@@ -553,8 +568,7 @@ const makeManager = Effect.gen(function* () {
           Effect.sync(() => {
             entry.stdoutBuf.spillPath = undefined;
             entry.stderrBuf.spillPath = undefined;
-            entry.snapshot.errorText ??=
-              "Full-log spill flush timed out; full output may be incomplete";
+            entry.snapshot.errorText ??= TERMINAL_ERRORS.spillFlush;
           }),
       }),
       Effect.andThen(Effect.sync(() => markArchiveCompleteness(entry))),
@@ -596,6 +610,9 @@ const makeManager = Effect.gen(function* () {
     for (const waiter of waiters ?? []) waiter.consumed = true;
     const consumed = (killInterest.get(s.id) ?? 0) > 0 || (waiters?.size ?? 0) > 0;
     Deferred.doneUnsafe(entry.settled, Effect.void);
+    if (entry.child.pid && !processGroupAlive(entry.child)) {
+      detachedChildren.untrack(entry.child.pid);
+    }
     // The tree is final: close the Windows job so detached descendants that
     // no PID path can reach are reaped now rather than at Pi exit.
     entry.childJob?.close();
@@ -617,7 +634,17 @@ const makeManager = Effect.gen(function* () {
   const settleAfterFlush = (entry: Entry) => {
     if (entry.settling || entry.snapshot.status !== "running") return;
     entry.settling = true;
-    runCleanup(flushSpillStreams(entry).pipe(Effect.andThen(Effect.sync(() => settle(entry)))));
+    runCleanup(
+      terminateChild(
+        entry.child,
+        () => entry.stdioClosed,
+        () => {}, // Natural exit/spawn failure retains its truthful status.
+        () => entry.childJob?.close(),
+      ).pipe(
+        Effect.andThen(flushSpillStreams(entry)),
+        Effect.andThen(Effect.sync(() => settle(entry))),
+      ),
+    );
   };
 
   const scheduleExitCleanup = (entry: Entry) => {
@@ -675,7 +702,7 @@ const makeManager = Effect.gen(function* () {
           const buf = stream === "stdout" ? current.stdoutBuf : current.stderrBuf;
           buf.spillPath = undefined;
           current.snapshot.errorText ??= bounded(
-            `Full-log spill failed: ${boundedSpillError(error, spillPath)}`,
+            TERMINAL_ERRORS.spillFailed(boundedSpillError(error, spillPath)),
           );
         }
       });
@@ -693,9 +720,7 @@ const makeManager = Effect.gen(function* () {
             if (current) {
               const buf = stream === "stdout" ? current.stdoutBuf : current.stderrBuf;
               buf.spillPath = undefined;
-              current.snapshot.errorText ??= bounded(
-                `${stream} full-log spill reached the ${MAX_SPILL_BYTES_PER_STREAM}-byte safety limit`,
-              );
+              current.snapshot.errorText ??= bounded(TERMINAL_ERRORS.spillCapped(stream));
             }
             return true;
           }
@@ -717,13 +742,13 @@ const makeManager = Effect.gen(function* () {
       yield* Effect.suspend((): Effect.Effect<void, SpawnError | ConcurrencyLimitError> => {
         if (disposed) {
           return new SpawnError({
-            message: "Background terminal manager is shutting down.",
+            message: TERMINAL_ERRORS.shuttingDown,
             fallbackSafe: false,
           });
         }
         if (runningCount() + reserved >= MAX_RUNNING) {
           return new ConcurrencyLimitError({
-            message: `Max ${MAX_RUNNING} background terminals can run concurrently. Stop one from /ps before starting another.`,
+            message: TERMINAL_ERRORS.concurrency,
           });
         }
         reserved++;
@@ -737,7 +762,7 @@ const makeManager = Effect.gen(function* () {
           catch: (error) =>
             new SpawnError({
               message: boundedError(error),
-              fallbackSafe: true,
+              fallbackSafe: !options.signal?.aborted,
             }),
         });
         // Create the Windows kill switch before any process in the command
@@ -750,6 +775,7 @@ const makeManager = Effect.gen(function* () {
 
         const child = yield* Effect.try({
           try: () => {
+            options.signal?.throwIfAborted();
             const env = options.env ?? process.env;
             const spawned = childJob
               ? spawn(process.execPath, [WIN32_CHILD_PATH, childJob.name], {
@@ -794,7 +820,7 @@ const makeManager = Effect.gen(function* () {
             if (childJob) detachedChildren.untrackJob(childJob);
             return new SpawnError({
               message: boundedError(error),
-              fallbackSafe: true,
+              fallbackSafe: !options.signal?.aborted,
             });
           },
         });
@@ -802,7 +828,7 @@ const makeManager = Effect.gen(function* () {
         const childPid = child.pid;
         if (childPid) detachedChildren.track(childPid);
 
-        const id = `bt-${++counter}`;
+        const id = `bt-${runtimeId}-${++counter}`;
         const entryRef = () => entries.get(id);
         const stdoutSpill = makeSpill(entryRef, id, "stdout", () => child.stdout?.resume());
         const stderrSpill = makeSpill(entryRef, id, "stderr", () => child.stderr?.resume());
@@ -895,7 +921,6 @@ const makeManager = Effect.gen(function* () {
           scheduleExitCleanup(entry);
         });
         child.once("close", (code, signal) => {
-          if (childPid) detachedChildren.untrack(childPid);
           entry.exited = true;
           entry.stdioClosed = true;
           // Only trust close's code/signal when 'exit' never fired (a spawn
@@ -939,8 +964,7 @@ const makeManager = Effect.gen(function* () {
                 // SPILL_FLUSH_TIMEOUT_MS) — settling here first would cite a
                 // spill file that is still being flushed.
                 if (!entry.stdioClosed) {
-                  entry.snapshot.errorText ??=
-                    "stdio did not close after termination; output may be incomplete";
+                  entry.snapshot.errorText ??= TERMINAL_ERRORS.incompleteStdio;
                 }
                 entry.settling = true;
                 yield* flushSpillStreams(entry);
@@ -951,7 +975,7 @@ const makeManager = Effect.gen(function* () {
               // PID-based kills cannot reach the re-parented survivors.
               entry.childJob?.close();
               if (entry.childJob) detachedChildren.untrackJob(entry.childJob);
-              if (childPid) detachedChildren.untrack(childPid);
+              if (childPid && !processGroupAlive(child)) detachedChildren.untrack(childPid);
             }),
           ),
           scope,
@@ -963,12 +987,13 @@ const makeManager = Effect.gen(function* () {
         if (disposed) {
           yield* closeEntryScope(entry);
           return yield* new SpawnError({
-            message: "Background terminal manager shut down while starting.",
+            message: TERMINAL_ERRORS.shutDownDuringStart,
             fallbackSafe: false,
           });
         }
         entries.set(id, entry);
-        if (options.timeoutMs !== undefined) {
+        const timeoutMs = options.timeoutMs;
+        if (timeoutMs !== undefined) {
           entry.timeoutHandle = setTimeout(() => {
             if (entry.snapshot.status !== "running") return;
             // Preserve a natural exit that already won but whose descendants
@@ -976,10 +1001,10 @@ const makeManager = Effect.gen(function* () {
             // but must not rewrite the truthful final status.
             entry.timedOut ||= !entry.exited;
             if (entry.timedOut) {
-              entry.snapshot.errorText ??= `Command exceeded its ${options.timeoutMs}-ms runtime timeout`;
+              entry.snapshot.errorText ??= TERMINAL_ERRORS.runtimeTimeout(timeoutMs);
             }
             runCleanup(closeEntryScope(entry).pipe(Effect.timeout(STOP_TIMEOUT_MS), Effect.ignore));
-          }, options.timeoutMs);
+          }, timeoutMs);
           entry.timeoutHandle.unref();
         }
         notify(id);
@@ -1006,7 +1031,7 @@ const makeManager = Effect.gen(function* () {
       if (!entry) {
         const known = [...entries.keys()];
         return new UnknownTerminalError({
-          message: `Unknown terminal id "${id}". Known: ${known.join(", ") || "none"}.`,
+          message: TERMINAL_ERRORS.unknownTerminal(id, known),
         });
       }
       if (entry.snapshot.status !== "running") {
@@ -1056,7 +1081,7 @@ const makeManager = Effect.gen(function* () {
       if (!entry) {
         const known = [...entries.keys()];
         return new UnknownTerminalError({
-          message: `Unknown terminal id "${id}". Known: ${known.join(", ") || "none"}.`,
+          message: TERMINAL_ERRORS.unknownTerminal(id, known),
         });
       }
       return Effect.succeed(entry.snapshot as TerminalSnapshot);
@@ -1074,24 +1099,22 @@ const makeManager = Effect.gen(function* () {
           if (tombstone) {
             if (tombstone[request.stream].archived) {
               return new TerminalLogUnavailableError({
-                message:
-                  `Archive ${request.id}:${request.stream} expired when the terminal was pruned from the ${MAX_TRACKED}-entry retention cap. ` +
-                  "It cannot be recovered. Work with the output already available or re-run the command.",
+                message: TERMINAL_ERRORS.expiredArchive(`${request.id}:${request.stream}`),
               });
             }
             return new TerminalLogUnavailableError({
-              message: `Archive ${request.id}:${request.stream} is unavailable; its output was small enough that the terminal result already contains all of it.`,
+              message: TERMINAL_ERRORS.smallArchive(`${request.id}:${request.stream}`),
             });
           }
           return new UnknownTerminalError({
-            message: `Unknown terminal id "${request.id}"; no terminal with that id is tracked in this session.`,
+            message: TERMINAL_ERRORS.unknownArchive(request.id),
           });
         }
         const buffer = request.stream === "stdout" ? entry.stdoutBuf : entry.stderrBuf;
         const spillPath = buffer.spillPath;
         if (!spillPath) {
           return new TerminalLogUnavailableError({
-            message: `Archive ${request.id}:${request.stream} is unavailable.`,
+            message: TERMINAL_ERRORS.unavailableArchive(`${request.id}:${request.stream}`),
           });
         }
         const offset = Number.isFinite(request.offset)
@@ -1142,7 +1165,7 @@ const makeManager = Effect.gen(function* () {
           },
           catch: () =>
             new TerminalLogUnavailableError({
-              message: `Archive ${request.id}:${request.stream} could not be read.`,
+              message: TERMINAL_ERRORS.unreadableArchive(`${request.id}:${request.stream}`),
             }),
         });
       },

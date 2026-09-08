@@ -115,8 +115,8 @@ test("loadEarlier stops at byte zero and seekAfter pages forward from the window
 });
 
 test("window boundaries never split a multi-byte code point", async () => {
-  // 2-byte code points: every 1024-byte window boundary lands mid-character
-  // unless it is snapped forward.
+  // Baseline two-byte coverage. The forward-page test below deliberately
+  // uses non-aligned window sizes and three-/four-byte characters.
   const file = await spillFile("é".repeat(4000));
   const source = createSpillSource(file, () => {}, OPTIONS);
 
@@ -132,6 +132,84 @@ test("window boundaries never split a multi-byte code point", async () => {
   assert.equal(state.text, "é".repeat(state.text.length));
 
   source.dispose();
+});
+
+test("forward Unicode pages are byte-contiguous and respect the window cap", async () => {
+  for (const character of ["€", "😀"]) {
+    const content = `${character}a`.repeat(10_000);
+    const file = await spillFile(content);
+    const source = createSpillSource(file, () => {}, {
+      tailBytes: 1025,
+      windowBytes: 4097,
+      chunkBytes: 1025,
+    });
+    try {
+      await source.follow();
+      while (source.state().start > 0) {
+        await source.loadEarlier();
+        assert.ok(source.state().end - source.state().start <= 4097);
+        assert.ok(!source.state().text.includes("\uFFFD"));
+      }
+      let joined = source.state().text;
+      let end = source.state().end;
+      while (end < source.state().size) {
+        assert.equal(await source.seekAfter(), true);
+        const page = source.state();
+        assert.equal(page.start, end);
+        assert.ok(page.end > end);
+        assert.ok(!page.text.includes("\uFFFD"));
+        joined += page.text;
+        end = page.end;
+      }
+      assert.equal(joined, content);
+    } finally {
+      source.dispose();
+      await fs.rm(path.dirname(file), { recursive: true, force: true });
+    }
+  }
+});
+
+test("pausing during a follow read discards the pending window update", async () => {
+  for (const alreadyLoaded of [false, true]) {
+    const file = await spillFile("initial\n");
+    const source = createSpillSource(file, () => {}, OPTIONS);
+    try {
+      if (alreadyLoaded) await source.follow();
+      const before = source.state();
+      await fs.appendFile(file, "later\n");
+      let checks = 0;
+      assert.equal(await source.follow(() => ++checks === 1), false);
+      assert.equal(checks, 2, "permission is checked after stat and after reading");
+      assert.equal(source.state().text, before.text);
+      assert.equal(source.state().start, before.start);
+      assert.equal(source.state().end, before.end);
+      assert.equal(await source.follow(), true);
+      assert.equal(source.state().text, "initial\nlater\n");
+    } finally {
+      source.dispose();
+      await fs.rm(path.dirname(file), { recursive: true, force: true });
+    }
+  }
+});
+
+test("follow retries an incomplete UTF-8 suffix when the rest arrives", async () => {
+  const file = await spillFile("prefix");
+  const source = createSpillSource(file, () => {}, OPTIONS);
+  try {
+    await source.follow();
+    const euro = Buffer.from("€");
+    await fs.appendFile(file, euro.subarray(0, 1));
+    assert.equal(await source.follow(), false);
+    assert.equal(source.state().text, "prefix");
+    assert.equal(source.state().end, 6);
+    await fs.appendFile(file, euro.subarray(1));
+    assert.equal(await source.follow(), true);
+    assert.equal(source.state().text, "prefix€");
+    assert.equal(source.state().end, 9);
+  } finally {
+    source.dispose();
+    await fs.rm(path.dirname(file), { recursive: true, force: true });
+  }
 });
 
 test("an unreadable spill reports an error instead of throwing", async () => {
