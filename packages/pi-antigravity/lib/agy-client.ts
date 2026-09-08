@@ -13,6 +13,7 @@ import { killAgyTree, trackAgyChild, untrackAgyChild } from "./agy-children.ts";
 import { getAgyBinary } from "./agy-diagnostics.ts";
 import type { AgyExecutionMode } from "./agy-profile.ts";
 import { parseAgyLine } from "./events.ts";
+import { trackActiveToolStep } from "./tool-steps.ts";
 import { applyEvent, newTurnOutcome, type AgyActivity, type AgyTurnOutcome } from "./reducer.ts";
 
 /** agy reasoning effort, as accepted by `agy --effort`. */
@@ -166,8 +167,7 @@ export async function runAgyTurn(request: AgyTurnRequest): Promise<AgyTurnOutcom
     const outcome = newTurnOutcome();
     let stdoutBuf = "";
     let stderrBuf = "";
-    /** True between a tool_start activity and its terminal event. */
-    let toolActive = false;
+    const activeTools = new Set<string>();
 
     let settled = false;
     let untracked = false;
@@ -215,12 +215,12 @@ export async function runAgyTurn(request: AgyTurnRequest): Promise<AgyTurnOutcom
       const armStall = () => {
         if (settled || outcome.finished) return;
         if (stallTimer !== undefined) clearTimeout(stallTimer);
-        const budgetMs = toolActive ? stallToolMs : stallBaseMs;
+        const budgetMs = activeTools.size > 0 ? stallToolMs : stallBaseMs;
         stallTimer = setTimeout(() => {
           killAgyTree(child);
           untrack();
           finishLogical(() => {
-            reject(new AgyStallError(budgetMs, toolActive));
+            reject(new AgyStallError(budgetMs, activeTools.size > 0));
           });
         }, budgetMs);
       };
@@ -260,9 +260,7 @@ export async function runAgyTurn(request: AgyTurnRequest): Promise<AgyTurnOutcom
         }
       }
       for (const activity of applyEvent(outcome, parsed)) {
-        if (activity.type === "tool_start") toolActive = true;
-        else if (activity.type === "tool_done" || activity.type === "tool_error")
-          toolActive = false;
+        trackActiveToolStep(activeTools, activity);
         request.onActivity?.(activity);
       }
       if (outcome.finished) {
@@ -275,7 +273,7 @@ export async function runAgyTurn(request: AgyTurnRequest): Promise<AgyTurnOutcom
       }
       // A tool-start/done flip changes the stall budget (the liveness
       // listener re-armed before this parse ran), so re-arm with the new
-      // toolActive state.
+      // active-tool state.
       rearmStall();
     };
 
@@ -339,5 +337,8 @@ export async function runAgyTurn(request: AgyTurnRequest): Promise<AgyTurnOutcom
         );
       });
     });
+    // Abort can happen during spawn, before the listener above is installed.
+    // Attach child error/close handlers first so the killed child remains observed.
+    if (request.signal?.aborted) abortHandler();
   });
 }

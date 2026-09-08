@@ -545,6 +545,175 @@ test("persistent driver wraps synchronous spawn failures and marks itself dead",
   await executor.close("shutdown");
 });
 
+/**
+ * Driver fixture that streams multi-tool step sequences and then goes
+ * silent, so the Pi-side stall watchdog is the only thing that can end the
+ * turn. Used to pin the ACTIVE-step tracking semantics.
+ */
+async function stepSequenceFixture(): Promise<{ dir: string; script: string }> {
+  const dir = await mkdtemp(path.join(tmpdir(), "agy-driver-steps-"));
+  const script = path.join(dir, "driver-steps.mjs");
+  await writeFile(
+    script,
+    `#!/usr/bin/env node
+import readline from "node:readline";
+const conversation = "driver-steps-conversation";
+const send = (obj) => console.log(JSON.stringify(obj));
+const toolStep = (index, state, name) => send({
+  event: "step_update",
+  step_update: {
+    conversation_id: conversation,
+    step_index: index,
+    state,
+    step_type: "tool",
+    tool_name: name,
+    tool_info: { name, parameters: { CommandLine: "sleep 60" } }
+  }
+});
+let initSent = false;
+const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+rl.on("line", (line) => {
+  const event = JSON.parse(line);
+  if (!initSent) {
+    initSent = true;
+    send({ event: "init", conversation_id: conversation, init: {} });
+  }
+  const content = event.message.content;
+  if (content === "overlap") {
+    toolStep(0, "ACTIVE", "tool_a");
+    toolStep(1, "ACTIVE", "tool_b");
+    toolStep(1, "DONE", "tool_b");
+  }
+  if (content === "duplicate") {
+    toolStep(0, "ACTIVE", "tool_a");
+    toolStep(0, "ACTIVE", "tool_a");
+    toolStep(0, "DONE", "tool_a");
+  }
+  // Every sequence ends silent: the watchdog must decide the budget.
+});
+`,
+  );
+  await chmod(script, 0o755);
+  return { dir, script };
+}
+
+test("persistent driver keeps the longer tool budget while another step is still ACTIVE", async () => {
+  // Regression: ACTIVE A, ACTIVE B, DONE B — B completing must not clear the
+  // active-tool state while A is still running, so the stall watchdog must
+  // fire on the tool budget, not the short base budget.
+  const fixture = await stepSequenceFixture();
+  const executor = new AgyDriverSession();
+  try {
+    await assert.rejects(
+      () =>
+        executor.run({
+          prompt: "overlap",
+          binary: fixture.script,
+          cwd: fixture.dir,
+          inactivityTimeoutMs: 120,
+          toolInactivityTimeoutMs: 600,
+          timeoutMs: 5_000,
+          spawnOverride: fixtureSpawn(fixture.script),
+        }),
+      (error: unknown) => {
+        assert.ok(error instanceof AgyStallError, `expected AgyStallError, got ${error}`);
+        assert.equal(error.toolActive, true, "step A is still ACTIVE after B finished");
+        assert.equal(error.stalledMs, 600, "fired on the tool budget, not the base budget");
+        return true;
+      },
+    );
+  } finally {
+    await executor.close("shutdown");
+    await rm(fixture.dir, { recursive: true, force: true });
+  }
+});
+
+test("persistent driver treats a duplicate ACTIVE id as one step for the watchdog", async () => {
+  // Regression: a repeated ACTIVE for the same step id must not wedge the
+  // watchdog in the tool budget — one DONE closes the step and the base
+  // budget applies again once no other step is ACTIVE.
+  const fixture = await stepSequenceFixture();
+  const executor = new AgyDriverSession();
+  try {
+    await assert.rejects(
+      () =>
+        executor.run({
+          prompt: "duplicate",
+          binary: fixture.script,
+          cwd: fixture.dir,
+          inactivityTimeoutMs: 120,
+          toolInactivityTimeoutMs: 600,
+          timeoutMs: 5_000,
+          spawnOverride: fixtureSpawn(fixture.script),
+        }),
+      (error: unknown) => {
+        assert.ok(error instanceof AgyStallError, `expected AgyStallError, got ${error}`);
+        assert.equal(error.toolActive, false, "the step is closed by its DONE event");
+        assert.equal(error.stalledMs, 120, "fired on the base budget");
+        return true;
+      },
+    );
+  } finally {
+    await executor.close("shutdown");
+    await rm(fixture.dir, { recursive: true, force: true });
+  }
+});
+
+test("persistent driver abort during startup never submits the prompt to stdin", async () => {
+  // Regression: the signal can fire while the executor is still inside the
+  // spawn/start path (binary check, recycle, child start). The turn must be
+  // settled with the abort outcome BEFORE the user event is written, and no
+  // abort listener may be registered after the signal already fired.
+  const signal = new AbortController();
+  let written = "";
+  const child = new EventEmitter() as EventEmitter & {
+    stdin: EventEmitter & {
+      write: (line: string, callback: (error?: Error | null) => void) => boolean;
+      end: () => void;
+    };
+    stdout: PassThrough;
+    stderr: PassThrough;
+    pid?: number;
+  };
+  child.stdout = new PassThrough();
+  child.stderr = new PassThrough();
+  child.stdin = Object.assign(new EventEmitter(), {
+    write: (line: string, callback: (error?: Error | null) => void) => {
+      written += line;
+      queueMicrotask(() => callback());
+      return true;
+    },
+    end: () => {},
+  });
+  const spawnOverride = ((_binary: string, _args: readonly string[], _options: unknown) => {
+    // Abort mid-startup: after run()'s entry check, while the driver is
+    // starting the child process.
+    signal.abort();
+    return child;
+  }) as never;
+  const executor = new AgyDriverSession();
+  try {
+    const message = await executor
+      .run({
+        prompt: "must never be submitted",
+        binary: "/fake/agy",
+        spawnOverride,
+        signal: signal.signal,
+        timeoutMs: 2_000,
+        inactivityTimeoutMs: 0,
+      })
+      .then(
+        (outcome) => outcome.error ?? "",
+        (error: unknown) => (error instanceof Error ? error.message : String(error)),
+      );
+    assert.match(message, /aborted/i);
+    assert.equal(written, "", "no user event may reach the agy stdin after abort");
+    assert.equal(getEventListeners(signal.signal, "abort").length, 0);
+  } finally {
+    await executor.close("shutdown");
+  }
+});
+
 test("one-shot executor exposes rollback mode and abortable close", async () => {
   const executor = new AgyOneShotExecutor();
   assert.equal(executor.snapshot().mode, "one-shot");

@@ -44,6 +44,16 @@ Claude and GPT models
   Weekly limit:     [████████████████████] 100% left · resets 15:08 on 4 Sep
 ```
 
+## Context and permissions
+
+The first agy turn receives the active Pi conversation history, including earlier work with another provider. `/agy reset` deliberately starts fresh without replaying that history; it does not delete the Pi transcript. A later provider switch or branch move can restore the active history again.
+
+Pi's current system instructions (including project guidance and extension additions) are relayed on the first native turn, after a native conversation restore, and when they change. Unchanged instructions are not repeated on each turn or tool-loop re-entry; removing them sends an explicit clearing notice. Unacknowledged instruction and skill-catalog updates are retained across stall retries. Disposable summaries receive their own instructions without changing the live conversation.
+
+**This is a text adapter, not a native system role.** agy's CLI has no system-prompt input, so Pi instructions are included as a labeled user-prompt snapshot. They cannot override agy's native system instructions. Forwarding Pi tool references does not make those tools available: agy uses its actual native and bridge schemas.
+
+**Native agy tools bypass Pi's pre-execution permission hooks.** Both execution modes always pass `--dangerously-skip-permissions` because headless agy otherwise denies permission prompts. Native commands, file edits, browser actions, and reads execute inside agy; their Pi cards are replayed afterward. Blocking or disabling a Pi tool cannot prevent a native operation that already happened. Only tools routed through the Pi bridge execute under Pi's hooks and permissions. Use this extension only where you trust agy's access to the workspace; the replay UI is not a security boundary.
+
 ## Commands
 
 | Command          | What it does                                                                                                    |
@@ -66,7 +76,7 @@ Claude and GPT models
 | `PI_ANTIGRAVITY_AGENT=<name>`            | Select a custom agy agent. Empty, control-character-containing, and overlong values are rejected before spawn.                               |
 | `PI_ANTIGRAVITY_MODE=plan\|accept-edits` | Select agy's stable CLI execution mode. Other values fail before spawn.                                                                      |
 | `AGY_BINARY=/path/to/agy`                | Strictly use a specific agy binary; no fallback if it fails.                                                                                 |
-| `AGY_TURN_TIMEOUT_MS=600000`             | Pi-owned overall budget per active agy turn. Persistent mode intentionally does not pass `--print-timeout`.                                  |
+| `AGY_TURN_TIMEOUT_MS=600000`             | Pi-owned overall budget for one logical turn, including startup, fallback, stall retries, and backoff. Retries receive only the remaining budget. Persistent mode does not pass `--print-timeout`.                                  |
 | `AGY_STALL_TIMEOUT_MS=120000`            | Kill the turn when the stream produces no bytes for this long and retry by resuming the conversation. `0` disables the watchdog.             |
 | `AGY_TOOL_STALL_TIMEOUT_MS=300000`       | Stall budget while a tool step is ACTIVE — a quiet foreground tool is legitimate, so silence inside a tool gets a longer leash.              |
 | `AGY_STALL_RETRY_BACKOFF_MS=3000`        | Pause before each stall retry. Stalls retry at most twice, rendered as a collapsed "agy stream stalled … restarting the turn" thinking line. |
