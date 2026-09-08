@@ -9,6 +9,7 @@
  */
 
 import type { AgyActivity, AgyUsage } from "./reducer.ts";
+import { agyToolStepKey as toolStepKey } from "./tool-steps.ts";
 
 type Waiter = (activity: AgyActivity | null, error: Error | undefined) => void;
 
@@ -126,10 +127,6 @@ export class AgyTurnController {
       });
     });
   }
-}
-
-function toolStepKey(activity: { stepId?: number; name: string }): string {
-  return activity.stepId === undefined ? `name:${activity.name}` : `step:${activity.stepId}`;
 }
 
 const USAGE_KEYS = [

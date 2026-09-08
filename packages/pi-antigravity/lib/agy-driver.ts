@@ -9,6 +9,7 @@ import {
 import { killAgyTree, signalAgyTree, trackAgyChild, untrackAgyChild } from "./agy-children.ts";
 import { AgyCompatibilityError, checkAgyBinary } from "./agy-diagnostics.ts";
 import { parseAgyLine } from "./events.ts";
+import { trackActiveToolStep } from "./tool-steps.ts";
 import { applyEvent, newTurnOutcome, type AgyTurnOutcome } from "./reducer.ts";
 
 export type AgyDriverState = "idle" | "starting" | "ready" | "running" | "stopping" | "dead";
@@ -70,7 +71,7 @@ interface ActiveTurn {
   generation: number;
   request: AgyTurnRequest;
   outcome: AgyTurnOutcome;
-  toolActive: boolean;
+  activeTools: Set<string>;
   conversationReported: boolean;
   overallTimer?: NodeJS.Timeout;
   stallTimer?: NodeJS.Timeout;
@@ -235,6 +236,8 @@ export class AgyDriverSession implements AgyTurnExecutor {
 
   async #runExclusive(request: AgyTurnRequest): Promise<AgyTurnOutcome> {
     const checked = request.binary ? undefined : await checkAgyBinary();
+    if (request.signal?.aborted) return abortOutcome();
+    if (this.#shutdown) throw new AgySpawnError("agy driver is shut down.", this.#stderrTail);
     if (checked && !checked.ok) throw new AgyCompatibilityError(checked);
     const binary = request.binary ?? checked?.binary;
     if (!binary) throw new AgySpawnError("agy binary resolution returned no executable.", "");
@@ -244,7 +247,13 @@ export class AgyDriverSession implements AgyTurnExecutor {
       if (cause) await this.close("recycle", cause);
       else this.#reusedTurns += 1;
     }
+    if (request.signal?.aborted) return abortOutcome();
+    if (this.#shutdown) throw new AgySpawnError("agy driver is shut down.", this.#stderrTail);
     if (!this.#child) await this.#start(request, nextConfig);
+    if (request.signal?.aborted) {
+      await this.close("abort");
+      return abortOutcome();
+    }
     const child = this.#child;
     if (!child) throw new AgySpawnError("agy driver failed to start.", this.#stderrTail);
 
@@ -258,6 +267,7 @@ export class AgyDriverSession implements AgyTurnExecutor {
     this.#submittedTurns += 1;
     this.#currentProcessTurns += 1;
     this.#armTurnTimers(turn);
+    if (this.#active !== turn) return outcomePromise;
     try {
       await this.#writeUserEvent(child, request.prompt);
     } catch (error) {
@@ -339,7 +349,7 @@ export class AgyDriverSession implements AgyTurnExecutor {
       generation: this.#generation,
       request,
       outcome: newTurnOutcome(),
-      toolActive: false,
+      activeTools: new Set(),
       conversationReported: false,
       resolve: () => {},
       reject: () => {},
@@ -426,6 +436,7 @@ export class AgyDriverSession implements AgyTurnExecutor {
     };
     turn.abortHandler = onAbort;
     turn.request.signal?.addEventListener("abort", onAbort, { once: true });
+    if (turn.request.signal?.aborted) onAbort();
     this.#rearmStall(turn);
   }
 
@@ -435,13 +446,13 @@ export class AgyDriverSession implements AgyTurnExecutor {
     const baseMs = turn.request.inactivityTimeoutMs ?? 120_000;
     if (baseMs <= 0) return;
     const toolMs = turn.request.toolInactivityTimeoutMs ?? Math.max(baseMs, 300_000);
-    const budgetMs = turn.toolActive ? toolMs : baseMs;
+    const budgetMs = turn.activeTools.size > 0 ? toolMs : baseMs;
     turn.stallTimer = setTimeout(() => {
       const child = this.#child;
       if (this.#active !== turn || !child) return;
       this.#detachChild(child, "dead");
       killAgyTree(child);
-      this.#settleTurn(turn, { error: new AgyStallError(budgetMs, turn.toolActive) });
+      this.#settleTurn(turn, { error: new AgyStallError(budgetMs, turn.activeTools.size > 0) });
     }, budgetMs);
   }
 
@@ -504,10 +515,7 @@ export class AgyDriverSession implements AgyTurnExecutor {
       }
     }
     for (const activity of applyEvent(turn.outcome, parsed)) {
-      if (activity.type === "tool_start") turn.toolActive = true;
-      else if (activity.type === "tool_done" || activity.type === "tool_error") {
-        turn.toolActive = false;
-      }
+      trackActiveToolStep(turn.activeTools, activity);
       turn.request.onActivity?.(activity);
     }
     if (turn.outcome.conversationId) this.#boundConversationId = turn.outcome.conversationId;

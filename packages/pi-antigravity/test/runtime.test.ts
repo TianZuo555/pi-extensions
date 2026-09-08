@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { AgySpawnError, AgyStallError, type AgyTurnRequest } from "../lib/agy-client.ts";
-import { stallContinuationPrompt } from "../lib/prompt.ts";
+import { piSystemInstructionsPrompt, stallContinuationPrompt } from "../lib/prompt.ts";
 import { newTurnOutcome, type AgyTurnOutcome } from "../lib/reducer.ts";
 import type { AgyTurnExecutor } from "../lib/agy-driver.ts";
 import { AntigravityRuntime, createAntigravityRuntime, runAntigravity } from "../src/runtime.ts";
@@ -243,7 +243,8 @@ test("runtime restores a persisted native conversation and cumulative usage", as
     );
     assert.equal(await controller.next(), null);
     assert.equal(requests[0].conversationId, "persisted-conversation");
-    assert.equal(requests[0].prompt, "continue");
+    // A restored native conversation may still contain an old Pi snapshot.
+    assert.equal(requests[0].prompt, `${piSystemInstructionsPrompt("")}\n\ncontinue`);
     assert.deepEqual(await runAntigravity(runtime, service.snapshot), {
       conversationId: "persisted-conversation",
       model: "gemini-3.7-flash",

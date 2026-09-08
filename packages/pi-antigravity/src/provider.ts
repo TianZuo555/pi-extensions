@@ -33,6 +33,7 @@ import { readAgyProcessProfile, type AgyProcessProfile } from "../lib/agy-profil
 import type { AgyActivity, AgyUsage } from "../lib/reducer.ts";
 import type { AgyReplayStore } from "../lib/replay.ts";
 import { mapAgyToolToNative } from "../lib/native-tools.ts";
+import { agyToolStepKey } from "../lib/tool-steps.ts";
 import { omittedImagesPrompt, restoredPiContextPrompt, WRAPPER_TOOL_NAME } from "../lib/prompt.ts";
 import {
   AntigravityRuntime,
@@ -208,10 +209,6 @@ export function mapThinkingToEffort(level: ThinkingLevel | undefined): AgyEffort
 
 let replayCallSeq = 0;
 
-function agyToolStepKey(activity: { stepId?: number; name: string }): string {
-  return activity.stepId === undefined ? `name:${activity.name}` : `step:${activity.stepId}`;
-}
-
 /**
  * True for agy `call_mcp_tool` steps that target our own bridge server.
  * Those calls surface as synthetic bridge_call activities (emitted as the
@@ -350,6 +347,7 @@ export function streamAntigravity(
         const controller = await turnRuntime.runPromise(
           turnService.beginStreamTurn({
             prompt,
+            systemPrompt: context.systemPrompt,
             historyBootstrap: summaryRequest ? undefined : piHistoryBootstrap(context),
             bootstrapSuffix: summaryRequest ? undefined : getBootstrapSuffix?.(),
             modelId: model.id,

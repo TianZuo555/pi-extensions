@@ -370,6 +370,86 @@ test("terminal result disarms stall watchdog and resolves even when stdio stays 
   assert.equal(outcome.finished, true);
 });
 
+function agyToolStepLine(
+  conversation: string,
+  stepIndex: number,
+  state: string,
+  name: string,
+): string {
+  return JSON.stringify({
+    event: "step_update",
+    step_update: {
+      conversation_id: conversation,
+      step_index: stepIndex,
+      state,
+      step_type: "tool",
+      tool_name: name,
+      tool_info: { name, parameters: { CommandLine: "sleep 60" } },
+    },
+  });
+}
+
+test("stall watchdog keeps the longer tool budget while another step is still ACTIVE", async () => {
+  // Regression: ACTIVE A, ACTIVE B, DONE B — finishing B must not shorten
+  // the watchdog back to the base budget while A is still ACTIVE.
+  const child = manualChild();
+  const promise = runAgyTurn({
+    prompt: "hi",
+    timeoutMs: 10_000,
+    inactivityTimeoutMs: 60,
+    toolInactivityTimeoutMs: 300,
+    spawnOverride: (() => child) as never,
+  });
+  child.emitStdout(
+    `${[
+      JSON.stringify({ event: "init", conversation_id: "c-overlap", init: {} }),
+      agyToolStepLine("c-overlap", 0, "ACTIVE", "tool_a"),
+      agyToolStepLine("c-overlap", 1, "ACTIVE", "tool_b"),
+      agyToolStepLine("c-overlap", 1, "DONE", "tool_b"),
+    ].join("\n")}\n`,
+  );
+  await assert.rejects(
+    () => promise,
+    (error: unknown) => {
+      assert.ok(error instanceof AgyStallError, `expected AgyStallError, got ${error}`);
+      assert.equal(error.toolActive, true, "step A is still ACTIVE after B finished");
+      assert.equal(error.stalledMs, 300, "fired on the tool budget, not the base budget");
+      return true;
+    },
+  );
+});
+
+test("stall watchdog treats a duplicate ACTIVE id as one step", async () => {
+  // Regression: a repeated ACTIVE for the same step id must not wedge the
+  // watchdog in the tool budget — one DONE closes the step and the base
+  // budget applies again once no other step is ACTIVE.
+  const child = manualChild();
+  const promise = runAgyTurn({
+    prompt: "hi",
+    timeoutMs: 10_000,
+    inactivityTimeoutMs: 60,
+    toolInactivityTimeoutMs: 300,
+    spawnOverride: (() => child) as never,
+  });
+  child.emitStdout(
+    `${[
+      JSON.stringify({ event: "init", conversation_id: "c-duplicate", init: {} }),
+      agyToolStepLine("c-duplicate", 0, "ACTIVE", "tool_a"),
+      agyToolStepLine("c-duplicate", 0, "ACTIVE", "tool_a"),
+      agyToolStepLine("c-duplicate", 0, "DONE", "tool_a"),
+    ].join("\n")}\n`,
+  );
+  await assert.rejects(
+    () => promise,
+    (error: unknown) => {
+      assert.ok(error instanceof AgyStallError, `expected AgyStallError, got ${error}`);
+      assert.equal(error.toolActive, false, "the step is closed by its DONE event");
+      assert.equal(error.stalledMs, 60, "fired on the base budget");
+      return true;
+    },
+  );
+});
+
 function processGone(pid: number): boolean {
   try {
     process.kill(pid, 0);

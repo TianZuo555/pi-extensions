@@ -353,7 +353,10 @@ test("streamAntigravity refreshes bridge state and passes effort, profile, and r
     const events = [];
     for await (const event of streamFn(
       model,
-      contextWith([{ role: "user", content: [{ type: "text", text: prompt }] }]),
+      {
+        ...contextWith([{ role: "user", content: [{ type: "text", text: prompt }] }]),
+        systemPrompt: "Project instructions from Pi",
+      },
       { reasoning: "medium" },
     )) {
       events.push(event);
@@ -369,6 +372,7 @@ test("streamAntigravity refreshes bridge state and passes effort, profile, and r
   });
   await eventsPromise;
   assert.equal(captured?.effort, "high", "unsupported medium falls back to discovered default");
+  assert.equal(captured?.systemPrompt, "Project instructions from Pi");
   assert.equal(captured?.agent, "reviewer");
   assert.equal(captured?.mode, "plan");
   assert.equal(captured?.bridgeRevision, "2:1");
@@ -379,11 +383,13 @@ test("streamAntigravity isolates pi summarization from the resumed agy conversat
     "<conversation>\nuser: real request\nassistant: result\n</conversation>\n\nSummarize the conversation above.";
   const isolatedController = new AgyTurnController(summaryPrompt);
   const isolatedPrompts: string[] = [];
+  let isolatedSystemPrompt: string | undefined;
   let isolatedBeginCount = 0;
   let disposed = false;
   const isolatedService = {
-    beginStreamTurn: (request: { prompt: string }) =>
+    beginStreamTurn: (request: { prompt: string; systemPrompt?: string }) =>
       Effect.sync(() => {
+        isolatedSystemPrompt = request.systemPrompt;
         isolatedBeginCount += 1;
         isolatedPrompts.push(request.prompt);
         return isolatedController;
@@ -403,6 +409,10 @@ test("streamAntigravity isolates pi summarization from the resumed agy conversat
   };
   const harness = makeStreamHarness({
     prompt: summaryPrompt,
+    context: {
+      ...contextWith([{ role: "user", content: summaryPrompt }]),
+      systemPrompt: "Pi summary instructions",
+    },
     createIsolatedRuntime: () => isolatedRuntime as any,
   });
   const eventsPromise = harness.collect();
@@ -419,6 +429,7 @@ test("streamAntigravity isolates pi summarization from the resumed agy conversat
   assert.equal(harness.getSharedBeginCount(), 0);
   assert.equal(isolatedBeginCount, 1);
   assert.deepEqual(isolatedPrompts, [summaryPrompt]);
+  assert.equal(isolatedSystemPrompt, "Pi summary instructions");
   const done = events.find((event) => event.type === "done");
   assert.equal(done?.message.content[0]?.text, "Compact summary");
   assert.equal(done?.message.usage.totalTokens, 0);
