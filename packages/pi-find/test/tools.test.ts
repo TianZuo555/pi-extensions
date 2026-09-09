@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { FindParams, GrepParams, renderGrepLines } from "../lib/tools.ts";
+import { FindParams, GrepParams, renderGrepLines, resultText } from "../lib/tools.ts";
 import {
   FIND_PARAMETER_DESCRIPTIONS,
   FIND_PROMPT_SNIPPET,
@@ -60,13 +60,27 @@ test("model-facing metadata stays concise and describes the fixed semantics", ()
     ...Object.values(GREP_PARAMETER_DESCRIPTIONS),
     ...Object.values(FIND_PARAMETER_DESCRIPTIONS),
   ]) {
-    assert.ok(value.length <= 400, `metadata is too long: ${value}`);
+    assert.ok(value.length <= 120, `metadata is too long: ${value}`);
   }
   assert.match(GREP_TOOL_DESCRIPTION, /case-sensitive regex/);
   assert.match(FIND_TOOL_DESCRIPTION, /glob/);
-  assert.match(GREP_TOOL_DESCRIPTION, /4 MiB/);
-  assert.match(GREP_TOOL_DESCRIPTION, /100 matching lines/);
-  assert.match(FIND_TOOL_DESCRIPTION, /200 files/);
+  for (const description of [GREP_TOOL_DESCRIPTION, FIND_TOOL_DESCRIPTION]) {
+    assert.match(description, /respects \.gitignore/);
+    assert.match(description, /skips hidden paths by default/);
+    assert.doesNotMatch(description, /MiB|matching lines|timeout|JSON|config|\d/);
+  }
+});
+
+test("result text keeps one blank line between sections", () => {
+  assert.equal(
+    resultText("No matches found.", "", [searchTimeoutNotice(30_000)]),
+    "No matches found.\n\n[Search timed out after 30s; results are partial. Narrow the path, pattern, or glob.]",
+  );
+  assert.equal(
+    resultText("1 match in 1 file", "a.ts:1: needle", []),
+    "1 match in 1 file\n\na.ts:1: needle",
+  );
+  assert.equal(resultText("0 files", "", []), "0 files");
 });
 
 test("fixed limit notices tell the caller to narrow the search", () => {

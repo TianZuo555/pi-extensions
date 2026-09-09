@@ -9,6 +9,7 @@ import {
 import { Text } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
 import {
+  FILE_SIZE_LIMIT_NOTICE,
   FIND_PARAMETER_DESCRIPTIONS,
   FIND_PROMPT_SNIPPET,
   FIND_RESULT_LIMIT,
@@ -22,6 +23,7 @@ import {
   NO_FILES_FOUND,
   NO_GREP_MATCHES,
   outputLimitNotice,
+  QUOTED_PATH_NOTICE,
   resultLimitNotice,
   SEARCH_TIMEOUT_MS,
   searchTimeoutNotice,
@@ -107,6 +109,15 @@ function boundedBody(lines: readonly string[], kind: "grep" | "find"): BoundedBo
   };
 }
 
+/** Join a header, an optional body, and notices with exactly one blank line between sections. */
+export function resultText(header: string, body: string, notices: readonly string[]): string {
+  return [
+    header,
+    ...(body.length === 0 ? [] : ["", body]),
+    ...notices.flatMap((notice) => ["", notice]),
+  ].join("\n");
+}
+
 export function registerTools(pi: ExtensionAPI, runtime: SearchRuntimeInstance): void {
   pi.registerTool({
     name: "grep",
@@ -131,6 +142,9 @@ export function registerTools(pi: ExtensionAPI, runtime: SearchRuntimeInstance):
 
       const matchCount = outcome.matches.length;
       const notices = [
+        ...(outcome.matches.some((match) => displayPath(match.path) !== match.path)
+          ? [QUOTED_PATH_NOTICE]
+          : []),
         ...(outcome.truncated ? [resultLimitNotice("matches", GREP_RESULT_LIMIT)] : []),
         ...(outcome.timedOut ? [searchTimeoutNotice(SEARCH_TIMEOUT_MS)] : []),
       ];
@@ -138,7 +152,12 @@ export function registerTools(pi: ExtensionAPI, runtime: SearchRuntimeInstance):
       // notice travels even when nothing was gathered.
       if (matchCount === 0 && notices.length === 0) {
         return {
-          content: [{ type: "text" as const, text: NO_GREP_MATCHES }],
+          content: [
+            {
+              type: "text" as const,
+              text: resultText(NO_GREP_MATCHES, "", [FILE_SIZE_LIMIT_NOTICE]),
+            },
+          ],
           details: {
             kind: "grep",
             query: params.pattern,
@@ -152,12 +171,11 @@ export function registerTools(pi: ExtensionAPI, runtime: SearchRuntimeInstance):
 
       const body = boundedBody(renderGrepLines(outcome), "grep");
       const fileCount = countFiles(outcome);
-      const text = [
+      const text = resultText(
         matchCount === 0 ? NO_GREP_MATCHES : grepResultHeader(matchCount, fileCount),
-        "",
         body.text,
-        ...notices.flatMap((notice) => ["", notice]),
-      ].join("\n");
+        notices,
+      );
 
       return {
         content: [{ type: "text" as const, text }],
@@ -224,15 +242,15 @@ export function registerTools(pi: ExtensionAPI, runtime: SearchRuntimeInstance):
       const body = boundedBody(outcome.files.map(displayPath), "find");
       const count = outcome.files.length;
       const notices = [
+        ...(outcome.files.some((path) => displayPath(path) !== path) ? [QUOTED_PATH_NOTICE] : []),
         ...(outcome.truncated ? [resultLimitNotice("files", FIND_RESULT_LIMIT)] : []),
         ...(outcome.timedOut ? [searchTimeoutNotice(SEARCH_TIMEOUT_MS)] : []),
       ];
-      const text = [
+      const text = resultText(
         count === 0 && !outcome.timedOut ? NO_FILES_FOUND : findResultHeader(count),
-        "",
         body.text,
-        ...notices.flatMap((notice) => ["", notice]),
-      ].join("\n");
+        notices,
+      );
 
       return {
         content: [{ type: "text" as const, text }],

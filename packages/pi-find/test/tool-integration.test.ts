@@ -99,12 +99,39 @@ test("empty searches return short model-visible answers", {
     const grep = await tools
       .get("grep")!
       .execute("grep", { pattern: "missing" }, undefined, undefined, { cwd: root });
-    assert.equal(text(grep), "No matches found.");
+    assert.equal(text(grep), "No matches found.\n\n[Files >4 MiB are skipped during traversal.]");
 
     const find = await tools
       .get("find")!
       .execute("find", { pattern: "*.ts" }, undefined, undefined, { cwd: root });
     assert.equal(text(find), "No files found.");
+  } finally {
+    await runtime.dispose();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("path decoding guidance appears only for quoted paths", {
+  skip: !hasRg || !hasFd || process.platform === "win32",
+}, async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "pi-find-quoted-"));
+  const { runtime, tools } = captureTools();
+  try {
+    for (const filename of ["plain.txt", 'quoted".txt']) {
+      writeFileSync(path.join(root, filename), "needle\n");
+      for (const kind of ["grep", "find"]) {
+        const result = await tools
+          .get(kind)!
+          .execute(kind, { pattern: kind === "grep" ? "needle" : "*.txt" }, undefined, undefined, {
+            cwd: root,
+          });
+        assert.equal(
+          text(result).includes("JSON-decode quoted paths before read/edit"),
+          filename !== "plain.txt",
+        );
+      }
+      rmSync(path.join(root, filename));
+    }
   } finally {
     await runtime.dispose();
     rmSync(root, { recursive: true, force: true });
