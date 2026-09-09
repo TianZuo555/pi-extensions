@@ -7,24 +7,26 @@ export const FIND_RESULT_LIMIT = 200;
 export const SEARCH_TIMEOUT_MS = 30_000;
 
 export const GREP_TOOL_DESCRIPTION =
-  "Search file contents with a case-sensitive regex; respects .gitignore. Skips hidden paths by default and files over 4 MiB during traversal. Up to 100 matching lines, clipped at 400 characters; bounded output; 30s timeout. Ripgrep config is ignored. Special paths are JSON-quoted; decode before read/edit.";
+  "Search file contents with a case-sensitive regex; respects .gitignore; skips hidden paths by default.";
 export const GREP_PROMPT_SNIPPET = "Search file contents with a regex";
 
 export const GREP_PARAMETER_DESCRIPTIONS = {
   pattern: "Case-sensitive ripgrep regex.",
-  path: "File or directory to search; default is the current directory.",
-  glob: "Case-sensitive glob: basename ('*.ts') or search-root-relative path ('src/*.ts').",
+  path: "Search file or directory; defaults to cwd.",
+  glob: "Case-sensitive glob: basename ('*.ts') or search-root-relative ('src/*.ts').",
 };
 
 export const FIND_TOOL_DESCRIPTION =
-  "Find files with a case-sensitive glob; respects .gitignore. Skips hidden paths by default. Up to 200 files; bounded output; 30s timeout. Paths containing special characters are JSON-quoted; decode them before passing to read/edit.";
+  "Find files with a case-sensitive glob; respects .gitignore; skips hidden paths by default.";
 export const FIND_PROMPT_SNIPPET = "Find files with a glob";
 
 export const FIND_PARAMETER_DESCRIPTIONS = {
-  pattern: "Case-sensitive glob: basename ('*.ts') or search-root-relative path ('src/*.ts').",
-  path: "Directory to search; default is the current directory.",
+  pattern: "Case-sensitive glob: basename ('*.ts') or search-root-relative ('src/*.ts').",
+  path: "Search directory; defaults to cwd.",
 };
 
+export const QUOTED_PATH_NOTICE = "[JSON-decode quoted paths before read/edit.]";
+export const FILE_SIZE_LIMIT_NOTICE = "[Files >4 MiB are skipped during traversal.]";
 export const NO_GREP_MATCHES = "No matches found.";
 export const NO_FILES_FOUND = "No files found.";
 export const EMPTY_PATTERN_ERROR = "Search pattern cannot be empty.";
