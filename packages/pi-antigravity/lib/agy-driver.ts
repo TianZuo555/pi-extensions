@@ -27,6 +27,7 @@ export type AgyRecycleCause =
   | "session-tree"
   | "restore"
   | "reset"
+  | "background-task"
   | "unspecified";
 
 export interface AgyProcessConfigSnapshot {
@@ -164,6 +165,7 @@ export class AgyDriverSession implements AgyTurnExecutor {
   #recycleReasons = new Map<AgyRecycleCause, number>();
   #lastRecycleReason: AgyRecycleCause | undefined;
   #shutdown = false;
+  #recycling: Promise<void> = Promise.resolve();
 
   snapshot(): AgyExecutorSnapshot {
     return {
@@ -205,6 +207,7 @@ export class AgyDriverSession implements AgyTurnExecutor {
 
   async close(reason: AgyExecutorCloseReason, cause?: AgyRecycleCause): Promise<void> {
     if (reason === "shutdown") this.#shutdown = true;
+    await this.#recycling;
     const child = this.#child;
     if (!child) {
       this.#state = reason === "shutdown" ? "dead" : "idle";
@@ -550,9 +553,16 @@ export class AgyDriverSession implements AgyTurnExecutor {
     const turn = this.#active;
     if (turn) {
       const tail = this.#stderrTail.trim().split("\n").slice(-3).join("\n");
+      // Only append canned recovery hints when agy left no diagnostics of
+      // its own — a real stderr tail beats boilerplate.
+      const hint = tail
+        ? `: ${tail}`
+        : ` (no stderr${this.#config?.model ? ` model=${this.#config.model}` : ""}${
+            this.#boundConversationId ? ` conv=${this.#boundConversationId.slice(0, 8)}` : ""
+          }). The cause is unknown. Try /agy reset before retrying, or set PI_ANTIGRAVITY_DRIVER=0 for one-shot mode. Check for commands still running before retrying; use pi's own bash for long-lived commands.`;
       this.#settleTurn(turn, {
         error: new AgySpawnError(
-          `agy exited with code ${code ?? signal ?? "signal"} before producing a result${tail ? `: ${tail}` : ""}`,
+          `agy exited with code ${code ?? signal ?? "signal"} before producing a result${hint}`,
           this.#stderrTail,
         ),
       });
@@ -565,9 +575,46 @@ export class AgyDriverSession implements AgyTurnExecutor {
     if (turn.stallTimer) clearTimeout(turn.stallTimer);
     if (turn.abortHandler) turn.request.signal?.removeEventListener("abort", turn.abortHandler);
     this.#active = undefined;
-    if (this.#child) this.#state = "ready";
+    const child = this.#child;
+    // Both successful and failed terminal results can leave ACTIVE tools.
+    // Quarantine this process immediately, but let outstanding commands handle
+    // SIGTERM before forcing group cleanup. Resolving only afterwards keeps
+    // queued turns from spawning a replacement while cleanup is in progress.
+    if (child && !("error" in result) && turn.activeTools.size > 0) {
+      this.#log(`recycle:background-task:${turn.activeTools.size}`);
+      this.#recordRecycle("background-task");
+      this.#recycling = this.#recycleIncompleteChild(child);
+      void this.#recycling.then(() => turn.resolve(result.outcome), turn.reject);
+      return;
+    }
+    if (child) this.#state = "ready";
     if ("error" in result) turn.reject(result.error);
     else turn.resolve(result.outcome);
+  }
+
+  async #recycleIncompleteChild(child: DriverChild): Promise<void> {
+    this.#detachChild(child, "stopping");
+    // Detached from reuse/event handling, but still owned by the death hooks.
+    trackAgyChild(child);
+    this.#log("background-task:SIGTERM");
+    signalAgyTree(child, "SIGTERM");
+    // A closed driver/stdio does not prove its descendants exited. Give the
+    // whole group a bounded grace period, then reap any survivors even if the
+    // leader has already gone. Windows escalates via taskkill /T here.
+    await new Promise<void>((resolve) => setTimeout(resolve, TERM_CLOSE_MS));
+    await new Promise<void>((resolve) => {
+      const finish = () => {
+        clearTimeout(timer);
+        child.off("close", finish);
+        resolve();
+      };
+      const timer = setTimeout(finish, TERM_CLOSE_MS);
+      child.once("close", finish);
+      killAgyTree(child);
+      if (child.exitCode !== null || child.signalCode !== null) finish();
+    });
+    this.#log("background-task:cleanup-complete");
+    this.#state = this.#shutdown ? "dead" : "idle";
   }
 
   #detachChild(child: DriverChild, nextState: AgyDriverState): void {

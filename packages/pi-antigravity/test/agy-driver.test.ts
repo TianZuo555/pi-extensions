@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { EventEmitter, getEventListeners } from "node:events";
 import { PassThrough } from "node:stream";
-import { chmod, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -13,6 +13,7 @@ import {
   type AgyTurnRequest,
 } from "../lib/agy-client.ts";
 import { AgyDriverSession, AgyOneShotExecutor } from "../lib/agy-driver.ts";
+import { getAgyChildrenRegistry } from "../lib/agy-children.ts";
 
 async function driverFixture(): Promise<{ dir: string; script: string }> {
   const dir = await mkdtemp(path.join(tmpdir(), "agy-driver-"));
@@ -21,11 +22,13 @@ async function driverFixture(): Promise<{ dir: string; script: string }> {
     script,
     `#!/usr/bin/env node
 import readline from "node:readline";
+import { writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
 const args = process.argv.slice(2);
 let turns = 0;
 const conversation = "driver-conversation";
 const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
-rl.on("line", (line) => {
+rl.on("line", async (line) => {
   const event = JSON.parse(line);
   turns += 1;
   console.log(JSON.stringify({ event: "init", conversation_id: conversation, init: {} }));
@@ -45,6 +48,62 @@ rl.on("line", (line) => {
   }
   if (event.message.content === "silent") return;
   if (event.message.content === "exit-before-result") process.exit(7);
+  // Backgrounded long command: the tool step goes ACTIVE and the result still
+  // arrives, so the step never reaches DONE/ERROR (issue #43 state).
+  const activeToolStep = JSON.stringify({
+    event: "step_update",
+    step_update: {
+      conversation_id: conversation,
+      step_index: turns,
+      state: "ACTIVE",
+      step_type: "tool",
+      tool_name: "run_command",
+      tool_info: { name: "run_command", parameters: { CommandLine: "sleep 60" } }
+    }
+  });
+  if (event.message.content === "background") console.log(activeToolStep);
+  if (["background-graceful", "background-stubborn"].includes(event.message.content)) {
+    const worker = spawn(process.execPath, ["--input-type=module", "-e", [
+      'import { writeFileSync } from "node:fs";',
+      'process.on("SIGTERM", () => { writeFileSync("worker-term", "yes");',
+      event.message.content === "background-graceful"
+        ? 'setTimeout(() => { writeFileSync("worker-cleanup", "yes"); process.exit(0); }, 25);'
+        : '',
+      '}); process.send("ready"); setInterval(() => {}, 1000);'
+    ].join("\\n")], { stdio: ["ignore", "ignore", "ignore", "ipc"] });
+    await new Promise(resolve => worker.once("message", resolve));
+    process.on("SIGTERM", () => {
+      writeFileSync("term-received", "yes");
+      if (event.message.content === "background-graceful") {
+        setTimeout(() => {
+          writeFileSync("cleanup-finished", "yes");
+          process.exit(0);
+        }, 75);
+      }
+    });
+    console.log(activeToolStep);
+  }
+  if (event.message.content === "completed-tool") {
+    console.log(activeToolStep);
+    const done = JSON.parse(activeToolStep);
+    done.step_update.state = "DONE";
+    console.log(JSON.stringify(done));
+  }
+  if (event.message.content === "background-error") {
+    console.log(activeToolStep);
+    console.log(JSON.stringify({
+      event: "result",
+      conversation_id: conversation,
+      result: {
+        status: "FAILURE",
+        response: "",
+        error: "timeout waiting for response",
+        conversation_id: conversation,
+        num_turns: turns
+      }
+    }));
+    return;
+  }
   console.log(JSON.stringify({
     event: "result",
     conversation_id: conversation,
@@ -376,6 +435,208 @@ test("persistent driver identifies every process reuse mismatch", async () => {
   }
 });
 
+for (const mode of ["graceful", "stubborn"] as const) {
+  test(`background recycle gives ${mode} processes a grace period before the next spawn`, {
+    skip: process.platform === "win32" ? "POSIX signals" : false,
+  }, async () => {
+    const fixture = await driverFixture();
+    const executor = new AgyDriverSession();
+    const children: ReturnType<typeof spawn>[] = [];
+    const spawnOverride = ((
+      _binary: string,
+      args: readonly string[],
+      options: Parameters<typeof spawn>[2],
+    ) => {
+      if (children.length) {
+        assert.ok(
+          children[0].exitCode !== null || children[0].signalCode !== null,
+          "the previous leader must exit before its replacement spawns",
+        );
+      }
+      const child = spawn(process.execPath, [fixture.script, ...args], options);
+      children.push(child);
+      return child;
+    }) as typeof spawn;
+    const request = {
+      binary: fixture.script,
+      cwd: fixture.dir,
+      spawnOverride,
+      inactivityTimeoutMs: 5_000,
+    };
+    try {
+      const first = executor.run({ ...request, prompt: `background-${mode}` });
+      const second = executor.run({
+        ...request,
+        prompt: "second",
+        conversationId: "driver-conversation",
+      });
+      const [outcome] = await Promise.all([first, second]);
+      assert.equal(outcome.status, "OK");
+      assert.equal(await readFile(path.join(fixture.dir, "term-received"), "utf8"), "yes");
+      assert.equal(await readFile(path.join(fixture.dir, "worker-term"), "utf8"), "yes");
+      if (mode === "graceful") {
+        assert.equal(await readFile(path.join(fixture.dir, "worker-cleanup"), "utf8"), "yes");
+        assert.equal(await readFile(path.join(fixture.dir, "cleanup-finished"), "utf8"), "yes");
+        assert.equal(children[0].exitCode, 0);
+      } else {
+        assert.equal(children[0].signalCode, "SIGKILL");
+      }
+      assert.equal(executor.snapshot().stats?.spawnCount, 2);
+      assert.equal(executor.snapshot().stats?.recycleCount, 1);
+    } finally {
+      await executor.close("shutdown");
+      await rm(fixture.dir, { recursive: true, force: true });
+    }
+  });
+}
+
+test("shutdown waits for quarantined background cleanup and retains death-hook ownership", async () => {
+  const fixture = await driverFixture();
+  const executor = new AgyDriverSession();
+  let pid: number | undefined;
+  let receivedResult!: () => void;
+  const resultSeen = new Promise<void>((resolve) => {
+    receivedResult = resolve;
+  });
+  try {
+    const pending = executor.run({
+      binary: fixture.script,
+      cwd: fixture.dir,
+      prompt: "background",
+      inactivityTimeoutMs: 5_000,
+      spawnOverride: fixtureSpawn(fixture.script),
+      onActivity: (activity) => {
+        if (activity.type === "result") {
+          pid = executor.snapshot().pid;
+          receivedResult();
+        }
+      },
+    });
+    await resultSeen;
+    assert.equal(executor.snapshot().state, "stopping");
+    assert.equal(executor.snapshot().pid, undefined, "quarantined child cannot be reused");
+    assert.ok(pid);
+    assert.ok(getAgyChildrenRegistry().live.has(pid));
+    await executor.close("shutdown");
+    assert.equal((await pending).status, "OK");
+    assert.equal(executor.snapshot().state, "dead");
+    assert.equal(getAgyChildrenRegistry().live.has(pid), false);
+  } finally {
+    await executor.close("shutdown");
+    await rm(fixture.dir, { recursive: true, force: true });
+  }
+});
+
+test("persistent driver reuses a process after all tool steps complete", async () => {
+  const fixture = await driverFixture();
+  const executor = new AgyDriverSession();
+  const request = {
+    binary: fixture.script,
+    cwd: fixture.dir,
+    inactivityTimeoutMs: 5_000,
+    spawnOverride: fixtureSpawn(fixture.script),
+  };
+  try {
+    const first = await executor.run({ ...request, prompt: "completed-tool" });
+    assert.equal(executor.snapshot().state, "ready");
+    const second = await executor.run({
+      ...request,
+      prompt: "second",
+      conversationId: first.conversationId,
+    });
+    assert.equal(JSON.parse(first.response).pid, JSON.parse(second.response).pid);
+    assert.equal(executor.snapshot().stats?.recycleCount, 0);
+    assert.equal(executor.snapshot().stats?.reusedTurns, 1);
+  } finally {
+    await executor.close("shutdown");
+    await rm(fixture.dir, { recursive: true, force: true });
+  }
+});
+
+test("persistent driver recycles after a turn that backgrounds a tool step", async () => {
+  // Issue #43: a turn that ends while a run_command step is still ACTIVE
+  // backgrounded a long command; reusing that agy process makes the very
+  // next turn exit code 1 with empty stderr. The driver must spawn fresh
+  // instead, resuming the same conversation by id.
+  const fixture = await driverFixture();
+  const executor = new AgyDriverSession();
+  const spawnOverride = fixtureSpawn(fixture.script);
+  try {
+    const first = await executor.run({
+      prompt: "background",
+      binary: fixture.script,
+      cwd: fixture.dir,
+      inactivityTimeoutMs: 5_000,
+      spawnOverride,
+    });
+    assert.equal(first.status, "OK");
+    const firstResponse = JSON.parse(first.response) as { pid: number };
+    assert.equal(executor.snapshot().state, "idle", "no live child between turns");
+
+    const second = await executor.run({
+      prompt: "second",
+      conversationId: first.conversationId,
+      binary: fixture.script,
+      cwd: fixture.dir,
+      inactivityTimeoutMs: 5_000,
+      spawnOverride,
+    });
+    const secondResponse = JSON.parse(second.response) as { pid: number; args: string[] };
+    assert.notEqual(secondResponse.pid, firstResponse.pid);
+    assert.equal(
+      secondResponse.args[secondResponse.args.indexOf("--conversation") + 1],
+      first.conversationId,
+    );
+    const snapshot = executor.snapshot();
+    assert.equal(snapshot.stats?.spawnCount, 2);
+    assert.equal(snapshot.stats?.recycleCount, 1);
+    assert.equal(snapshot.stats?.lastRecycleReason, "background-task");
+    assert.deepEqual(snapshot.stats?.recycleReasons, { "background-task": 1 });
+    assert.ok(snapshot.lifecycle.some((entry) => entry.includes("recycle:background-task:")));
+  } finally {
+    await executor.close("shutdown");
+    await rm(fixture.dir, { recursive: true, force: true });
+  }
+});
+
+test("persistent driver recycles after an ERROR result with a still-ACTIVE tool", async () => {
+  // Regression for issue #43: the observed poisoning arrives as a FAILURE
+  // result ("timeout waiting for response") while run_command stays ACTIVE,
+  // so the recycle must key on the ACTIVE residue, not on result status.
+  const fixture = await driverFixture();
+  const executor = new AgyDriverSession();
+  const spawnOverride = fixtureSpawn(fixture.script);
+  try {
+    const first = await executor.run({
+      prompt: "background-error",
+      binary: fixture.script,
+      cwd: fixture.dir,
+      inactivityTimeoutMs: 5_000,
+      spawnOverride,
+    });
+    assert.equal(first.status, "ERROR");
+    assert.match(first.error ?? "", /timeout waiting for response/);
+    assert.equal(executor.snapshot().state, "idle", "no live child between turns");
+
+    const second = await executor.run({
+      prompt: "second",
+      conversationId: first.conversationId,
+      binary: fixture.script,
+      cwd: fixture.dir,
+      inactivityTimeoutMs: 5_000,
+      spawnOverride,
+    });
+    assert.equal(second.status, "OK");
+    const stats = executor.snapshot().stats;
+    assert.equal(stats?.spawnCount, 2);
+    assert.equal(stats?.recycleCount, 1);
+    assert.equal(stats?.lastRecycleReason, "background-task");
+  } finally {
+    await executor.close("shutdown");
+    await rm(fixture.dir, { recursive: true, force: true });
+  }
+});
+
 test("persistent driver kills a silent active process with AgyStallError", async () => {
   const fixture = await driverFixture();
   const executor = new AgyDriverSession();
@@ -520,7 +781,9 @@ test("persistent driver reports a child close before its terminal result", async
         }),
       (error: unknown) =>
         error instanceof AgySpawnError &&
-        /exited with code 7 before producing a result/.test(error.message),
+        /exited with code 7 before producing a result/.test(error.message) &&
+        /no stderr/.test(error.message) &&
+        /PI_ANTIGRAVITY_DRIVER=0/.test(error.message),
     );
   } finally {
     await executor.close("shutdown");
