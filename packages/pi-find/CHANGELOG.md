@@ -1,5 +1,11 @@
 # @tian.zuo/pi-find
 
+## 0.4.2
+
+### Patch Changes
+
+- [#46](https://github.com/TianZuo555/pi-extensions/pull/46) [`7e31102`](https://github.com/TianZuo555/pi-extensions/commit/7e311025a10e284646e662a082685fe695bbc018) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Simplify grep/find descriptions to search semantics and hidden-path defaults. Keep limits and timeout guidance in results, show JSON path decoding guidance only for quoted paths, and mention the traversal file-size cap only on empty grep results without timeout or truncation notices.
+
 ## 0.4.1
 
 ### Patch Changes
