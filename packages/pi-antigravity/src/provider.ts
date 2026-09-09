@@ -34,7 +34,13 @@ import type { AgyActivity, AgyUsage } from "../lib/reducer.ts";
 import type { AgyReplayStore } from "../lib/replay.ts";
 import { mapAgyToolToNative } from "../lib/native-tools.ts";
 import { agyToolStepKey } from "../lib/tool-steps.ts";
-import { omittedImagesPrompt, restoredPiContextPrompt, WRAPPER_TOOL_NAME } from "../lib/prompt.ts";
+import {
+  agyIncompleteToolError,
+  BRIDGE_PENDING_TOOL_MESSAGE,
+  omittedImagesPrompt,
+  restoredPiContextPrompt,
+  WRAPPER_TOOL_NAME,
+} from "../lib/prompt.ts";
 import {
   AntigravityRuntime,
   createAntigravityRuntime,
@@ -177,27 +183,6 @@ const OVERFLOW_PATTERN = /context (length|window|size).*(exceed|limit)|exceeds.*
  * failure so truncated or empty answers never pass silently.
  */
 const RECOVERED_INTERRUPTION_PATTERN = /stream was interrupted/i;
-
-/**
- * Error recorded for an agy tool call that never reached DONE. agy runs
- * long-lived commands as background tasks (its own manage_task system); in
- * headless print mode the step never completes and the turn ends with
- * "timeout waiting for response" while the spawned process keeps running.
- */
-export function agyIncompleteToolError(tool: string, resultError?: string): string {
-  if (
-    tool === "run_command" &&
-    (!resultError || /timeout waiting for response/i.test(resultError))
-  ) {
-    return (
-      "agy started this command as a background task, which headless agy cannot await " +
-      "(\u201ctimeout waiting for response\u201d). The process keeps running after the turn \u2014 " +
-      "follow up in a later message to have agy check the task\u2019s output, or run " +
-      "long-lived processes with pi\u2019s own bash instead."
-    );
-  }
-  return "agy tool call did not complete.";
-}
 
 /** Map an explicit pi thinking level to agy's `--effort` (low|medium|high). */
 export function mapThinkingToEffort(level: ThinkingLevel | undefined): AgyEffort | undefined {
@@ -564,7 +549,7 @@ export function streamAntigravity(
             const tool = pending.toolCall.arguments.tool;
             replay.record(pending.id, {
               agyTool: tool,
-              output: "Started and still running. Track live status and output with /agy-tasks.",
+              output: BRIDGE_PENDING_TOOL_MESSAGE,
             });
             stream.push({
               type: "toolcall_end",
@@ -666,6 +651,13 @@ export function streamAntigravity(
           const activity = await controller.next();
           if (activity === null) {
             if (emitIncompleteTools() > 0) {
+              controller.deferResult({
+                type: "result",
+                status: "ERROR",
+                response: "",
+                error: "agy turn ended without a result event.",
+                usage: undefined,
+              });
               endWithToolUse();
               return;
             }
@@ -752,6 +744,7 @@ export function streamAntigravity(
                 textBuffer = "";
                 stream.push({ type: "text_start", contentIndex: textIndex, partial: output });
               }
+              controller.recordEmittedText(activity.delta);
               textBuffer += activity.delta;
               const block = output.content[textIndex];
               if (block.type === "text") block.text = textBuffer;
@@ -765,6 +758,7 @@ export function streamAntigravity(
             }
             case "result": {
               if (emitIncompleteTools(activity.error) > 0) {
+                controller.deferResult(activity);
                 endWithToolUse();
                 return;
               }
@@ -778,54 +772,41 @@ export function streamAntigravity(
               if (usage) attachUsage(usage, false);
               else attachUsage(activity.usage, true);
 
-              if (activity.response) {
+              // Account for text rendered in earlier Pi messages and blocks,
+              // not just this closure's textBuffer (which tool boundaries clear).
+              const suffix = controller.remainingResponseText(activity.response);
+              if (suffix) {
+                controller.recordEmittedText(suffix);
                 if (textIndex !== null) {
-                  // Deltas already streamed this block. agy's authoritative
-                  // response is normally the concatenation of those deltas, so
-                  // drift means a dropped tail: emit the missing suffix as a
-                  // real delta, keeping delta-only consumers in sync with
-                  // `partial` rather than silently rewriting the block.
-                  if (textBuffer !== activity.response) {
-                    const block = output.content[textIndex];
-                    if (activity.response.startsWith(textBuffer)) {
-                      const suffix = activity.response.slice(textBuffer.length);
-                      if (block.type === "text") block.text = activity.response;
-                      textBuffer = activity.response;
-                      stream.push({
-                        type: "text_delta",
-                        contentIndex: textIndex,
-                        delta: suffix,
-                        partial: output,
-                      });
-                    } else {
-                      // True divergence (never observed): streamed text cannot
-                      // be retracted through deltas, so keep what consumers
-                      // already saw and let text_end confirm it.
-                      if (block.type === "text") block.text = textBuffer;
-                    }
-                  }
-                  closeText();
+                  textBuffer += suffix;
+                  const block = output.content[textIndex];
+                  if (block.type === "text") block.text = textBuffer;
+                  stream.push({
+                    type: "text_delta",
+                    contentIndex: textIndex,
+                    delta: suffix,
+                    partial: output,
+                  });
                 } else {
                   closeUnfilledThought();
-                  output.content.push({ type: "text", text: activity.response });
+                  output.content.push({ type: "text", text: suffix });
                   const idx = output.content.length - 1;
                   stream.push({ type: "text_start", contentIndex: idx, partial: output });
                   stream.push({
                     type: "text_delta",
                     contentIndex: idx,
-                    delta: activity.response,
+                    delta: suffix,
                     partial: output,
                   });
                   stream.push({
                     type: "text_end",
                     contentIndex: idx,
-                    content: activity.response,
+                    content: suffix,
                     partial: output,
                   });
                 }
-              } else {
-                closeText();
               }
+              closeText();
 
               const hasResponse =
                 Boolean(activity.response?.trim()) ||

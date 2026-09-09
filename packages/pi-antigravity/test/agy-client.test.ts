@@ -3,7 +3,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { test } from "node:test";
 import { AgyStallError, buildAgyArgs, runAgyTurn } from "../lib/agy-client.ts";
 import { getAgyChildrenRegistry, killAllAgyTrees } from "../lib/agy-children.ts";
-import { agyIncompleteToolError } from "../src/provider.ts";
+import { agyIncompleteToolError } from "../lib/prompt.ts";
 import { CONVERSATION_ID, OK_CAPTURE, REAL_CAPTURE } from "./fixtures.ts";
 
 type FakeChild = {

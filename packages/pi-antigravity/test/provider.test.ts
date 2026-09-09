@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
-  agyIncompleteToolError,
   isSummarizationRequest,
   latestUserPrompt,
   mapThinkingToEffort,
@@ -10,6 +9,9 @@ import {
   streamAntigravity,
 } from "../src/provider.ts";
 import { AgyTurnController } from "../lib/turn.ts";
+import { agyIncompleteToolError } from "../lib/prompt.ts";
+import { newTurnOutcome } from "../lib/reducer.ts";
+import { AntigravityRuntime, createAntigravityRuntime } from "../src/runtime.ts";
 import { AgyReplayStore } from "../lib/replay.ts";
 import { AgyPiBridge } from "../lib/bridge.ts";
 import { assertDeltasMatchPartial } from "./delta-replay.ts";
@@ -218,7 +220,9 @@ test("mapThinkingToEffort maps pi thinking levels to agy effort", () => {
 test("agyIncompleteToolError explains agy background tasks for run_command", () => {
   const bg = agyIncompleteToolError("run_command", "timeout waiting for response");
   assert.match(bg, /background task/);
-  assert.match(bg, /keeps running/);
+  assert.match(bg, /process state is unknown/);
+  assert.match(bg, /one-shot mode may leave it running/);
+  assert.doesNotMatch(bg, /task is stopped|keeps running/);
 
   // Unknown stream end for run_command still gets the background hint.
   assert.match(agyIncompleteToolError("run_command"), /background task/);
@@ -233,6 +237,86 @@ test("agyIncompleteToolError explains agy background tasks for run_command", () 
     "agy tool call did not complete.",
   );
 });
+
+for (const status of ["OK", "ERROR", "missing-result"] as const) {
+  test(`incomplete tool replay preserves ${status} completion without resubmitting the prompt`, async () => {
+    const requests: string[] = [];
+    const runtime = createAntigravityRuntime({
+      async run(request) {
+        requests.push(request.prompt);
+        request.onConversation?.("background-conversation");
+        request.onActivity?.({
+          type: "tool_start",
+          stepId: 1,
+          name: "run_command",
+          args: { CommandLine: "sleep 60" },
+        });
+        if (status !== "missing-result") {
+          request.onActivity?.({
+            type: "result",
+            status,
+            response: status === "OK" ? "Command started." : "",
+            error: status === "ERROR" ? "timeout waiting for response" : undefined,
+            usage: undefined,
+          });
+        }
+        return {
+          ...newTurnOutcome(),
+          conversationId: "background-conversation",
+          status: status === "OK" ? "OK" : "ERROR",
+          finished: status !== "missing-result",
+        };
+      },
+      snapshot: () => ({ mode: "persistent", state: "idle", lifecycle: [] }),
+      async close() {},
+    });
+    const service = runtime.runSync(AntigravityRuntime);
+    const replay = new AgyReplayStore();
+    const streamFn = streamAntigravity(runtime, service, replay, new AgyPiBridge("test-reentry"));
+    const model = {
+      id: "test-model",
+      name: "Test",
+      provider: "antigravity",
+      api: "antigravity-stream-json",
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    } as Model<string>;
+    const context = contextWith([{ role: "user", content: "Run the long command" }]);
+    try {
+      const first = await streamFn(model, context).result();
+      assert.equal(first.stopReason, "toolUse");
+      const tool = first.content.find((block) => block.type === "toolCall");
+      assert.ok(tool);
+      context.messages.push(first, {
+        role: "toolResult",
+        toolCallId: tool.id,
+        toolName: tool.name,
+        content: [{ type: "text", text: "Command completion unknown." }],
+        isError: true,
+        timestamp: Date.now(),
+      });
+      // Exercise re-entry after the executor has closed, not just while running.
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      const second = await streamFn(model, context).result();
+      assert.equal(requests.length, 1, "tool replay must not start another agy turn");
+      assert.equal(second.stopReason, status === "OK" ? "stop" : "error");
+      if (status !== "OK") {
+        assert.match(
+          second.errorMessage ?? "",
+          status === "ERROR" ? /timeout waiting for response/ : /without a result event/,
+        );
+      } else {
+        assert.ok(
+          second.content.some(
+            (block) => block.type === "text" && block.text === "Command started.",
+          ),
+        );
+      }
+    } finally {
+      await runtime.runPromise(service.close);
+      await runtime.dispose();
+    }
+  });
+}
 
 /** Harness for stream-level tests: a turn controller behind a fake runtime. */
 function makeStreamHarness(
@@ -302,6 +386,42 @@ function makeStreamHarness(
     getSharedBeginCount: () => sharedBeginCount,
     getRequest: () => request,
   };
+}
+
+for (const { before, after, response, expected } of [
+  { before: "Started.", after: "", response: "Started.", expected: "" },
+  { before: "Started", after: "", response: "Started at :3000.", expected: " at :3000." },
+  { before: "", after: "", response: "Started.", expected: "Started." },
+  { before: "Started.", after: "", response: "Different final text.", expected: "" },
+  { before: "Started", after: " at :3000", response: "Started at :3000.", expected: "." },
+]) {
+  test(`deferred response emits only unseen text: ${JSON.stringify({ before, after, response })}`, async () => {
+    const h = makeStreamHarness();
+    if (before) h.controller.push({ type: "text", delta: before });
+    h.controller.push({ type: "tool_start", stepId: 1, name: "run_command", args: {} });
+    if (after) h.controller.push({ type: "text", delta: after });
+    h.controller.push({
+      type: "result",
+      status: "OK",
+      response,
+      error: undefined,
+      usage: undefined,
+    });
+    h.controller.close();
+    const first = await h.collect();
+    assert.equal(first.at(-1).reason, "toolUse");
+    assertDeltasMatchPartial(first);
+    const second = await h.collect();
+    assert.equal(second.at(-1).reason, "stop");
+    assertDeltasMatchPartial(second);
+    const text = (events: any[]) =>
+      events
+        .filter((event) => event.type === "text_delta")
+        .map((event) => event.delta)
+        .join("");
+    assert.equal(text(first), before + after);
+    assert.equal(text(second), expected);
+  });
 }
 
 test("streamAntigravity refreshes bridge state and passes effort, profile, and revision before begin", async () => {

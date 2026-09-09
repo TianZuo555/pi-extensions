@@ -22,6 +22,7 @@ export class AgyTurnController {
   #incompleteTools = new Map<string, Extract<AgyActivity, { type: "tool_start" }>>();
   #reportedUsage: AgyUsage;
   #thoughtReported = false;
+  #emittedText = "";
 
   constructor(prompt: string, conversationUsage: AgyUsage = {}) {
     this.prompt = prompt;
@@ -61,6 +62,25 @@ export class AgyTurnController {
     const tools = [...this.#incompleteTools.values()];
     this.#incompleteTools.clear();
     return tools;
+  }
+
+  /** Keep the terminal result pending while Pi executes incomplete-tool replay.
+   * Unlike push(), this also works after the executor has closed the turn.
+   */
+  deferResult(result: Extract<AgyActivity, { type: "result" }>): void {
+    this.#queue.unshift(result);
+  }
+
+  /** Track rendered deltas across Pi messages, including closed text blocks. */
+  recordEmittedText(delta: string): void {
+    this.#emittedText += delta;
+  }
+
+  /** The terminal response normally concatenates the turn's streamed deltas.
+   * On divergence, preserve already-rendered text rather than repeat/replace it.
+   */
+  remainingResponseText(response: string): string {
+    return response.startsWith(this.#emittedText) ? response.slice(this.#emittedText.length) : "";
   }
 
   /** Show at most one synthetic thought summary per logical agy turn. */

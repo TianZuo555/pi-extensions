@@ -15,6 +15,27 @@
  */
 export const WRAPPER_TOOL_NAME = "antigravity";
 export const WRAPPER_TOOL_DESCRIPTION = "";
+export const BRIDGE_PENDING_TOOL_MESSAGE =
+  "Started and still running at tool handoff. Unfinished commands may be cancelled when " +
+  "the agy turn ends. Refresh /agy-tasks to check current process status and partial output.";
+
+/** Replay diagnostics must not promise that an unobserved task survived or stopped. */
+export function agyIncompleteToolError(tool: string, resultError?: string): string {
+  if (
+    tool === "run_command" &&
+    (!resultError || /timeout waiting for response/i.test(resultError))
+  ) {
+    return (
+      "agy did not report this command completing. It may have become a background task " +
+      '(headless agy can report "timeout waiting for response"). Its current process state ' +
+      "is unknown: persistent-driver cleanup cancels unfinished work with SIGTERM, then " +
+      "force-kills surviving processes after a short grace period, while " +
+      "one-shot mode may leave it running. Check /agy-tasks and verify whether the command " +
+      "is still running before retrying; use pi's own bash for long-lived commands."
+    );
+  }
+  return "agy tool call did not complete.";
+}
 
 export function omittedImagesPrompt(images: number): string {
   return `(${images} image(s) omitted — the agy print interface is text-only)`;

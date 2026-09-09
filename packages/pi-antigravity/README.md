@@ -81,6 +81,14 @@ Pi's current system instructions (including project guidance and extension addit
 | `AGY_TOOL_STALL_TIMEOUT_MS=300000`       | Stall budget while a tool step is ACTIVE — a quiet foreground tool is legitimate, so silence inside a tool gets a longer leash.              |
 | `AGY_STALL_RETRY_BACKOFF_MS=3000`        | Pause before each stall retry. Stalls retry at most twice, rendered as a collapsed "agy stream stalled … restarting the turn" thinking line. |
 
+## Terms of Service & account safety
+
+This extension never talks to Google's servers itself. Authentication, tokens, and all API access stay inside the official first-party `agy` CLI; this extension only drives its supported stream-json/`--print` interface and renders the output inside pi. OAuth credentials never leave the official client.
+
+This matters because Google's [Antigravity Terms of Service](https://antigravity.google/terms) explicitly prohibit accessing the service through third-party software, and the [official FAQ](https://antigravity.google/docs/faq) names third-party coding agents as grounds for suspension — Google's recommended path for third-party agents is a Vertex AI or AI Studio API key. In February 2026 Google ran automated 403 suspension sweeps against accounts (including paid subscribers) whose credentials were used by reverse-engineered clients hitting the private `cloudcode-pa.googleapis.com` API.
+
+In practice: extensions that reimplement Antigravity's private API with extracted OAuth client IDs put your Google account at real risk of permanent suspension. This extension avoids that class of violation by design, though driving the official CLI programmatically is automation Google has not explicitly licensed.
+
 ## Development
 
 Reference: [Pi-cursor-sdk](https://github.com/fitchmultz/pi-cursor-sdk)
