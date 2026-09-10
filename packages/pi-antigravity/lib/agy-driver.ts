@@ -9,6 +9,7 @@ import {
 import { killAgyTree, signalAgyTree, trackAgyChild, untrackAgyChild } from "./agy-children.ts";
 import { AgyCompatibilityError, checkAgyBinary } from "./agy-diagnostics.ts";
 import { parseAgyLine } from "./events.ts";
+import { agyHasRunningToolProcess } from "./tasks.ts";
 import { trackActiveToolStep } from "./tool-steps.ts";
 import { applyEvent, newTurnOutcome, type AgyTurnOutcome } from "./reducer.ts";
 
@@ -76,6 +77,10 @@ interface ActiveTurn {
   conversationReported: boolean;
   overallTimer?: NodeJS.Timeout;
   stallTimer?: NodeJS.Timeout;
+  /** Stall budgets already forgiven because a tool process was verifiably alive. */
+  stallGraces: number;
+  /** Bumped on every rearm so an in-flight liveness probe can be discarded. */
+  stallEpoch: number;
   abortHandler?: () => void;
   resolve: (outcome: AgyTurnOutcome) => void;
   reject: (error: unknown) => void;
@@ -166,6 +171,23 @@ export class AgyDriverSession implements AgyTurnExecutor {
   #lastRecycleReason: AgyRecycleCause | undefined;
   #shutdown = false;
   #recycling: Promise<void> = Promise.resolve();
+  /**
+   * Consecutive tool-stall budgets a single turn may survive on process
+   * evidence alone. 12 x the 300s default caps a silent-but-working tool at
+   * roughly an hour, after which the turn fails as a stall regardless.
+   */
+  #stallGraceLimit = 12;
+  /** Test seam for the "is a tool process alive?" probe. */
+  #probeToolProcess: (agyPids: number[]) => Promise<boolean> = agyHasRunningToolProcess;
+
+  /** Test hook: override the tool-liveness probe and its grace ceiling. */
+  setStallLivenessProbe(
+    probe: (agyPids: number[]) => Promise<boolean>,
+    graceLimit = this.#stallGraceLimit,
+  ): void {
+    this.#probeToolProcess = probe;
+    this.#stallGraceLimit = graceLimit;
+  }
 
   snapshot(): AgyExecutorSnapshot {
     return {
@@ -354,6 +376,8 @@ export class AgyDriverSession implements AgyTurnExecutor {
       outcome: newTurnOutcome(),
       activeTools: new Set(),
       conversationReported: false,
+      stallGraces: 0,
+      stallEpoch: 0,
       resolve: () => {},
       reject: () => {},
     };
@@ -446,17 +470,53 @@ export class AgyDriverSession implements AgyTurnExecutor {
   #rearmStall(turn: ActiveTurn): void {
     if (this.#active !== turn) return;
     if (turn.stallTimer) clearTimeout(turn.stallTimer);
+    // Any rearm invalidates an in-flight liveness probe: its answer describes
+    // a window that new stream activity has already superseded.
+    turn.stallEpoch += 1;
     const baseMs = turn.request.inactivityTimeoutMs ?? 120_000;
     if (baseMs <= 0) return;
     const toolMs = turn.request.toolInactivityTimeoutMs ?? Math.max(baseMs, 300_000);
     const budgetMs = turn.activeTools.size > 0 ? toolMs : baseMs;
+    const epoch = turn.stallEpoch;
     turn.stallTimer = setTimeout(() => {
-      const child = this.#child;
-      if (this.#active !== turn || !child) return;
-      this.#detachChild(child, "dead");
-      killAgyTree(child);
-      this.#settleTurn(turn, { error: new AgyStallError(budgetMs, turn.activeTools.size > 0) });
+      void this.#onStallExpired(turn, budgetMs, epoch);
     }, budgetMs);
+  }
+
+  /**
+   * Silence alone does not prove a hang. agy emits no stdout while a tool step
+   * is ACTIVE, so a slow quiet command (a cold `cargo build`) is
+   * indistinguishable from a wedged process by timing alone. Before killing a
+   * turn mid-tool, look for positive evidence of work: a live group-leading
+   * child of this agy process. While that evidence holds, extend the budget
+   * instead of killing, bounded by #stallGraceLimit so a tool doing only
+   * in-process work (agy's `schedule`, `search_web`) still terminates.
+   */
+  async #onStallExpired(turn: ActiveTurn, budgetMs: number, epoch: number): Promise<void> {
+    const child = this.#child;
+    if (this.#active !== turn || !child || turn.stallEpoch !== epoch) return;
+    const toolActive = turn.activeTools.size > 0;
+
+    if (toolActive && turn.stallGraces < this.#stallGraceLimit && child.pid !== undefined) {
+      const working = await this.#probeToolProcess([child.pid]);
+      // The probe awaited, so re-check state before acting on a stale answer.
+      // A settled turn needs nothing. A bumped epoch means stream activity (or
+      // another expiry) already rearmed the watchdog: this verdict describes a
+      // superseded window and must never kill the turn.
+      if (this.#active !== turn || turn.stallEpoch !== epoch) return;
+      if (working || this.#child !== child) {
+        if (working) {
+          turn.stallGraces += 1;
+          this.#log(`stall:tool-alive:${turn.stallGraces}`);
+        }
+        this.#rearmStall(turn);
+        return;
+      }
+    }
+
+    this.#detachChild(child, "dead");
+    killAgyTree(child);
+    this.#settleTurn(turn, { error: new AgyStallError(budgetMs, toolActive) });
   }
 
   #onStdout(generation: number, chunk: string): void {

@@ -242,8 +242,10 @@ test("incomplete schedules explain the missing completion without claiming cance
   const message = agyIncompleteToolError("schedule");
   assert.match(message, /scheduled wait/);
   assert.match(message, /final state is unknown/);
-  assert.match(message, /\/agy-tasks/);
   assert.doesNotMatch(message, /was cancelled|was aborted|keeps running/);
+  // agy runs schedule timers in-process, so they never hold a task pid and
+  // /agy-tasks always renders them as done. Never send the model there.
+  assert.doesNotMatch(message, /agy-tasks/);
 });
 
 for (const status of ["OK", "ERROR", "missing-result"] as const) {
@@ -407,6 +409,12 @@ for (const { before, after, response, expected } of [
     expected: "Different final text.",
   },
   { before: "Started.", after: "Final answer.", response: "Final answer.", expected: "" },
+  // agy's deltas normally end with a newline its result text omits, so the
+  // already-rendered check must ignore trailing whitespace or the whole final
+  // answer gets emitted a second time.
+  { before: "Started.", after: "Final answer.\n", response: "Final answer.", expected: "" },
+  { before: "Started.", after: "Final answer.", response: "Final answer.\n", expected: "" },
+  { before: "", after: "Final answer.\n", response: "Final answer.", expected: "" },
   { before: "Started", after: " at :3000", response: "Started at :3000.", expected: "." },
 ]) {
   test(`deferred response emits only unseen text: ${JSON.stringify({ before, after, response })}`, async () => {

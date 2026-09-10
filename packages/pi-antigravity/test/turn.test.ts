@@ -81,3 +81,36 @@ test("turn usage treats a lower terminal counter as an agy reset", () => {
     },
   );
 });
+
+test("remainingResponseText tolerates trailing-newline drift between deltas and result", () => {
+  // agy streams "…text.\n" as deltas but reports "…text." in result.response
+  // (measured against agy 1.2.0), and a result can carry either the whole
+  // turn or only its final answer. Neither may be dropped nor duplicated.
+  const wholeTurn = new AgyTurnController("p");
+  wholeTurn.recordEmittedText("Checking.\n");
+  wholeTurn.recordEmittedText("All 15 tests pass.\n");
+  assert.equal(wholeTurn.remainingResponseText("Checking.\nAll 15 tests pass."), "");
+
+  const finalOnly = new AgyTurnController("p");
+  finalOnly.recordEmittedText("Checking.\n");
+  finalOnly.recordEmittedText("All 15 tests pass.\n");
+  assert.equal(finalOnly.remainingResponseText("All 15 tests pass."), "");
+
+  const resultNewline = new AgyTurnController("p");
+  resultNewline.recordEmittedText("Checking.\n");
+  resultNewline.recordEmittedText("All 15 tests pass.");
+  assert.equal(resultNewline.remainingResponseText("All 15 tests pass.\n"), "");
+
+  // A genuinely different final answer still survives (the missing-message bug).
+  const distinct = new AgyTurnController("p");
+  distinct.recordEmittedText("Checking.\n");
+  assert.equal(
+    distinct.remainingResponseText("### Merge summary\n\nDone."),
+    "### Merge summary\n\nDone.",
+  );
+
+  // Plain continuations are still emitted as suffixes.
+  const suffix = new AgyTurnController("p");
+  suffix.recordEmittedText("Started");
+  assert.equal(suffix.remainingResponseText("Started at :3000."), " at :3000.");
+});

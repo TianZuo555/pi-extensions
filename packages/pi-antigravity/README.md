@@ -20,6 +20,8 @@ Long-running commands (dev servers, watchers) become agy background tasks. A hin
 ■ 1 agy background task • /agy-tasks to view
 ```
 
+Task liveness is detected from process ancestry (agy pipes task output through itself, so nothing holds the log open). `ps` start times are second-resolution, so a process that cannot be resolved to exactly one task is listed as `unclear` instead of being attributed by proximity — stopping a task signals its whole process group, and a wrong guess would kill a sibling task. `unclear` processes are shown but never signalled automatically.
+
 ### Artifacts (`/agy-artifacts`)
 
 Images and files agy creates land in a per-conversation artifact store. A hint appears when new ones exist:
@@ -50,7 +52,7 @@ The first agy turn receives the active Pi conversation history, including earlie
 
 Pi's current system instructions (including project guidance and extension additions) are relayed on the first native turn, after a native conversation restore, and when they change. Unchanged instructions are not repeated on each turn or tool-loop re-entry; removing them sends an explicit clearing notice. Unacknowledged instruction and skill-catalog updates are retained across stall retries. Disposable summaries receive their own instructions without changing the live conversation.
 
-**This is a text adapter, not a native system role.** agy's CLI has no system-prompt input, so Pi instructions are included as a labeled user-prompt snapshot. They cannot override agy's native system instructions. Forwarding Pi tool references does not make those tools available: agy uses its actual native and bridge schemas.
+**This is a text adapter, not a native system role.** agy's CLI has no system-prompt input, so Pi instructions are included as a labeled user-prompt snapshot. They cannot override agy's native system instructions. Pi's own `Available tools:` inventory is stripped before relay because agy cannot call Pi builtins — it uses its actual native and bridge schemas — while every other line, including project guidance, relays unchanged.
 
 **Native agy tools bypass Pi's pre-execution permission hooks.** Both execution modes always pass `--dangerously-skip-permissions` because headless agy otherwise denies permission prompts. Native commands, file edits, browser actions, and reads execute inside agy; their Pi cards are replayed afterward. Blocking or disabling a Pi tool cannot prevent a native operation that already happened. Only tools routed through the Pi bridge execute under Pi's hooks and permissions. Use this extension only where you trust agy's access to the workspace; the replay UI is not a security boundary.
 
@@ -79,7 +81,7 @@ Pi's current system instructions (including project guidance and extension addit
 | `AGY_BINARY=/path/to/agy`                | Strictly use a specific agy binary; no fallback if it fails.                                                                                 |
 | `AGY_TURN_TIMEOUT_MS=600000`             | Pi-owned overall budget for one logical turn, including startup, fallback, stall retries, and backoff. Retries receive only the remaining budget. Persistent mode sets agy's separate `--print-timeout` above Node's maximum timer budget so its default five-minute wait cannot silently end a live turn; Pi's deadline and abort still stop the process.                                  |
 | `AGY_STALL_TIMEOUT_MS=120000`            | Kill the turn when the stream produces no bytes for this long and retry by resuming the conversation. `0` disables the watchdog.             |
-| `AGY_TOOL_STALL_TIMEOUT_MS=300000`       | Stall budget while a tool step is ACTIVE — a quiet foreground tool is legitimate, so silence inside a tool gets a longer leash.              |
+| `AGY_TOOL_STALL_TIMEOUT_MS=300000`       | Stall budget while a tool step is ACTIVE — a quiet foreground tool is legitimate, so silence inside a tool gets a longer leash. When this budget expires, the turn is not killed outright: one `ps` check looks for a live process-group-leading child of the agy process, and while that evidence of real work holds the budget is extended (up to 12 times, ~1h at the default). Tools that spawn nothing (`schedule`, `search_web`) have no such evidence, so this timeout remains their bound. |
 | `AGY_STALL_RETRY_BACKOFF_MS=3000`        | Pause before each stall retry. Stalls retry at most twice, rendered as a collapsed "agy stream stalled … restarting the turn" thinking line. |
 
 ## Terms of Service & account safety

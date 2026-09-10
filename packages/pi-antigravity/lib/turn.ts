@@ -77,11 +77,14 @@ export class AgyTurnController {
   }
 
   /** Results can contain the whole turn or just its final answer. Never drop
-   * a distinct final answer merely because earlier commentary was streamed.
+   * a distinct final answer merely because earlier commentary was streamed,
+   * and never repeat one that was already rendered. Trailing-whitespace drift
+   * between agy's deltas and its result text is normal (deltas usually end
+   * with a newline the result omits), so the already-seen check ignores it.
    */
   remainingResponseText(response: string): string {
     if (response.startsWith(this.#emittedText)) return response.slice(this.#emittedText.length);
-    if (this.#emittedText.endsWith(response)) return "";
+    if (this.#emittedText.trimEnd().endsWith(response.trimEnd())) return "";
     return response;
   }
 

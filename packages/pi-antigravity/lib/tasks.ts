@@ -35,6 +35,13 @@ export interface AgyTask {
   /** Live task processes (log holders or children of a live agy process). */
   pids: number[];
   /**
+   * Live processes that could belong to this task or a sibling started in the
+   * same `ps` resolution window. Shown as uncertain, never signalled: stopping
+   * a task kills its process group, so acting on a guess could kill a
+   * different task's work.
+   */
+  ambiguous: number[];
+  /**
    * Likely orphaned processes: re-parented to launchd, sitting in the session
    * cwd, started when the log was created. agy pipes task output through
    * itself, so after agy exits nothing holds the log open and `pids` is
@@ -135,6 +142,24 @@ function execText(command: string, args: string[]): Promise<string> {
   });
 }
 
+/**
+ * Whether an agy process currently owns a running tool command.
+ *
+ * The stall watchdog's "no stdout" signal cannot distinguish a wedged agy
+ * from a healthy one running a quiet foreground command: agy emits nothing
+ * on stdout while a tool step is ACTIVE, so a slow `cargo build` looks
+ * identical to a hang. It does, however, spawn each tool command as a
+ * process-group leader in its own group, so the presence of such a child is
+ * positive evidence of real work. Absence is not proof of a hang — agy's
+ * in-process tools (`schedule`, `search_web`) never spawn anything — so
+ * callers must keep a bounded timeout as the fallback.
+ */
+export async function agyHasRunningToolProcess(agyPids: number[]): Promise<boolean> {
+  if (agyPids.length === 0) return false;
+  const rows = parseAgyProcessRows(await execText("ps", ["-axo", "pid=,ppid=,pgid=,etime="]));
+  return selectAgyTaskDescendants(rows, agyPids).length > 0;
+}
+
 /** Numeric newest-first ordering (`task-12.log` before `task-9.log`). */
 export function compareAgyTaskLogNames(left: string, right: string): number {
   const leftMatch = left.match(/^task-(\d+)\.log$/);
@@ -180,24 +205,44 @@ interface TaskBirth {
   birthMs: number;
 }
 
-/** Assign each candidate to the task whose log birth time is nearest. */
+/** `ps` etime resolution: start times closer than this are indistinguishable. */
+const BIRTH_MATCH_RESOLUTION_MS = 1_000;
+
+/**
+ * Assign each candidate to the task whose log birth time is nearest.
+ *
+ * `ps` etime has one-second resolution, so commands launched within the same
+ * second cannot be told apart by start time. Guessing is unsafe here: stopping
+ * a task signals its whole process group, so mis-assigning pid B to task A
+ * means stopping A also kills B. When the nearest task is not unambiguous the
+ * candidate is reported as an ambiguous match against every plausible task
+ * instead of becoming one task's independently stoppable pid.
+ */
 function assignNearestBirth(
   candidates: Array<{ pid: number; startMs: number }>,
   tasks: TaskBirth[],
-): Map<string, number[]> {
+): { assigned: Map<string, number[]>; ambiguous: Map<string, number[]> } {
   const assigned = new Map<string, number[]>();
-  if (tasks.length === 0) return assigned;
+  const ambiguous = new Map<string, number[]>();
+  if (tasks.length === 0) return { assigned, ambiguous };
+  const add = (map: Map<string, number[]>, name: string, pid: number) => {
+    const values = map.get(name) ?? [];
+    values.push(pid);
+    map.set(name, values);
+  };
   for (const candidate of candidates) {
-    const nearest = tasks.reduce((best, task) =>
-      Math.abs(candidate.startMs - task.birthMs) < Math.abs(candidate.startMs - best.birthMs)
-        ? task
-        : best,
+    const deltas = tasks.map((task) => ({
+      task,
+      delta: Math.abs(candidate.startMs - task.birthMs),
+    }));
+    const bestDelta = Math.min(...deltas.map(({ delta }) => delta));
+    const tied = deltas.filter(
+      ({ delta }) => delta - bestDelta <= BIRTH_MATCH_RESOLUTION_MS,
     );
-    const values = assigned.get(nearest.name) ?? [];
-    values.push(candidate.pid);
-    assigned.set(nearest.name, values);
+    if (tied.length === 1) add(assigned, tied[0].task.name, candidate.pid);
+    else for (const { task } of tied) add(ambiguous, task.name, candidate.pid);
   }
-  return assigned;
+  return { assigned, ambiguous };
 }
 
 interface UnownedTaskScan {
@@ -205,6 +250,8 @@ interface UnownedTaskScan {
   descendants: Map<string, number[]>;
   /** Launchd-re-parented leftovers in the session cwd, by task log. */
   orphans: Map<string, number[]>;
+  /** Processes that could belong to more than one task, by task log. */
+  ambiguous: Map<string, number[]>;
 }
 
 /** agy's own working directory; it spawns task commands from here. */
@@ -217,28 +264,49 @@ function agyConfigDir(brainDir?: string): string {
  * pipes task output through itself, so scans fall back to process
  * ancestry (children of the agy processes this pi spawned) and, once agy
  * is gone too, the orphan heuristic. One `ps` pass feeds both.
+ *
+ * `claimedPids` are processes already proven to belong to a *different* task
+ * by the authoritative log-holder scan. They must be excluded here, along with
+ * everything sharing their process group: stopping a task signals the whole
+ * group, so letting a claimed process be re-matched to an unowned task would
+ * make stopping that task kill the confirmed one.
  */
 async function scanUnownedProcesses(
   sessionCwd: string | undefined,
   agyPids: number[],
   tasks: TaskBirth[],
   brainDir?: string,
+  claimedPids: Iterable<number> = [],
 ): Promise<UnownedTaskScan> {
-  if (tasks.length === 0) return { descendants: new Map(), orphans: new Map() };
-  const rows = parseAgyProcessRows(await execText("ps", ["-axo", "pid=,ppid,pgid,etime="]));
+  if (tasks.length === 0) {
+    return { descendants: new Map(), orphans: new Map(), ambiguous: new Map() };
+  }
+  const rows = parseAgyProcessRows(await execText("ps", ["-axo", "pid=,ppid=,pgid=,etime="]));
+  const claimed = new Set(claimedPids);
+  // Expand ownership to process groups: a claimed leader owns its group, and a
+  // claimed member implicates its whole group.
+  const claimedGroups = new Set(
+    rows.filter((row) => claimed.has(row.pid)).map((row) => row.pgid),
+  );
+  const isClaimed = (row: AgyProcessRow) => claimed.has(row.pid) || claimedGroups.has(row.pgid);
+  const available = rows.filter((row) => !isClaimed(row));
   const nearTaskBirth = (startMs: number) =>
     tasks.some((task) => Math.abs(startMs - task.birthMs) <= 15_000);
 
-  const descendants = assignNearestBirth(
-    selectAgyTaskDescendants(rows, agyPids).filter(({ startMs }) => nearTaskBirth(startMs)),
+  const descendantMatch = assignNearestBirth(
+    selectAgyTaskDescendants(available, agyPids).filter(({ startMs }) => nearTaskBirth(startMs)),
     tasks,
   );
+  const descendants = descendantMatch.assigned;
+  const ambiguous = descendantMatch.ambiguous;
 
-  const orphanCandidates = rows.filter(
+  const orphanCandidates = available.filter(
     (row) => row.ppid === 1 && row.pid !== process.pid && nearTaskBirth(row.startMs),
   );
   const empty = new Map<string, number[]>();
-  if (!sessionCwd || orphanCandidates.length === 0) return { descendants, orphans: empty };
+  if (!sessionCwd || orphanCandidates.length === 0) {
+    return { descendants, orphans: empty, ambiguous };
+  }
 
   const cwdOutput = await execText("lsof", [
     "-a",
@@ -254,7 +322,14 @@ async function scanUnownedProcesses(
   const inAcceptedCwd = orphanCandidates.filter(({ pid }) =>
     acceptedCwds.has(processCwds.get(pid) ?? ""),
   );
-  return { descendants, orphans: assignNearestBirth(inAcceptedCwd, tasks) };
+  const orphanMatch = assignNearestBirth(inAcceptedCwd, tasks);
+  // Orphans are already advisory (never auto-stopped), but an unresolvable
+  // orphan still must not be presented as one task's own process.
+  const mergedAmbiguous = new Map(ambiguous);
+  for (const [name, pids] of orphanMatch.ambiguous) {
+    mergedAmbiguous.set(name, [...(mergedAmbiguous.get(name) ?? []), ...pids]);
+  }
+  return { descendants, orphans: orphanMatch.assigned, ambiguous: mergedAmbiguous };
 }
 
 /** Canonical working directories an orphaned task process may sit in. */
@@ -330,9 +405,18 @@ export async function listAgyTasks(
   const unownedTasks = metadata
     .filter(({ name }) => (holders.get(name)?.length ?? 0) === 0)
     .map(({ name, birthMs }) => ({ name, birthMs }));
+  // Pids the authoritative holder scan already tied to a task must not be
+  // re-matched to an unowned one by the ancestry/orphan heuristics.
+  const claimedPids = new Set([...holders.values()].flat());
   const [contents, unowned] = await Promise.all([
     Promise.all(metadata.map(({ logPath }) => fs.readFile(logPath, "utf8").catch(() => ""))),
-    scanUnownedProcesses(options.sessionCwd, options.agyPids ?? [], unownedTasks, options.brainDir),
+    scanUnownedProcesses(
+      options.sessionCwd,
+      options.agyPids ?? [],
+      unownedTasks,
+      options.brainDir,
+      claimedPids,
+    ),
   ]);
 
   return metadata.map(
@@ -340,6 +424,7 @@ export async function listAgyTasks(
       id: name.replace(/\.log$/, ""),
       logPath,
       pids: [...new Set([...(holders.get(name) ?? []), ...(unowned.descendants.get(name) ?? [])])],
+      ambiguous: unowned.ambiguous.get(name) ?? [],
       orphans: unowned.orphans.get(name) ?? [],
       description: describeTaskLog(contents[index]),
       bytes: stat.size,

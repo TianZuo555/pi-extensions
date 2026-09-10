@@ -1052,3 +1052,181 @@ test("one-shot executor exposes rollback mode and abortable close", async () => 
   await executor.close("shutdown");
   assert.equal(executor.snapshot().state, "dead");
 });
+
+test("a verifiably working tool process extends the stall budget instead of dying", async () => {
+  // agy emits no stdout while a tool step is ACTIVE, so a quiet slow command
+  // (cold `cargo build`) is indistinguishable from a hang by timing alone.
+  // While a group-leading child proves work is happening, the turn survives.
+  const fixture = await stepSequenceFixture();
+  const executor = new AgyDriverSession();
+  let probes = 0;
+  // Report "working" twice, then stop: the turn must outlive the first two
+  // budgets and only fail once the evidence of progress disappears.
+  executor.setStallLivenessProbe(async () => ++probes <= 2);
+  const start = Date.now();
+  try {
+    await assert.rejects(
+      () =>
+        executor.run({
+          prompt: "overlap",
+          binary: fixture.script,
+          cwd: fixture.dir,
+          inactivityTimeoutMs: 2_000,
+          toolInactivityTimeoutMs: 120,
+          timeoutMs: 10_000,
+          spawnOverride: fixtureSpawn(fixture.script),
+        }),
+      (error: unknown) => {
+        assert.ok(error instanceof AgyStallError, `expected AgyStallError, got ${error}`);
+        assert.equal(error.toolActive, true);
+        assert.equal(probes, 3, "probed once per expiry until evidence vanished");
+        // Two forgiven budgets means it survived well past a single 120ms one.
+        assert.ok(
+          Date.now() - start >= 360,
+          `expected at least three tool budgets to elapse, got ${Date.now() - start}ms`,
+        );
+        return true;
+      },
+    );
+    assert.ok(
+      executor.snapshot().lifecycle.some((line) => line.includes("stall:tool-alive:2")),
+      "grace extensions are recorded in the lifecycle log",
+    );
+  } finally {
+    await executor.close("shutdown");
+    await rm(fixture.dir, { recursive: true, force: true });
+  }
+});
+
+test("the stall grace ceiling still ends a silent turn with no tool process", async () => {
+  // In-process agy tools (schedule, search_web) spawn nothing, so absence of a
+  // child is not proof of a hang — but it must not grant unlimited grace.
+  const fixture = await stepSequenceFixture();
+  const executor = new AgyDriverSession();
+  let probes = 0;
+  // Always "working", but the ceiling is 2: the turn must still fail.
+  executor.setStallLivenessProbe(async () => {
+    probes += 1;
+    return true;
+  }, 2);
+  try {
+    await assert.rejects(
+      () =>
+        executor.run({
+          prompt: "overlap",
+          binary: fixture.script,
+          cwd: fixture.dir,
+          inactivityTimeoutMs: 2_000,
+          toolInactivityTimeoutMs: 120,
+          timeoutMs: 10_000,
+          spawnOverride: fixtureSpawn(fixture.script),
+        }),
+      (error: unknown) => {
+        assert.ok(error instanceof AgyStallError, `expected AgyStallError, got ${error}`);
+        assert.equal(probes, 2, "probing stops once the grace ceiling is reached");
+        return true;
+      },
+    );
+  } finally {
+    await executor.close("shutdown");
+    await rm(fixture.dir, { recursive: true, force: true });
+  }
+});
+
+test("a stalled turn with no active tool fails immediately without probing", async () => {
+  // The base budget covers silence between steps, where no tool is running and
+  // process evidence is meaningless. That path must not pay for a `ps` scan.
+  const fixture = await stepSequenceFixture();
+  const executor = new AgyDriverSession();
+  let probes = 0;
+  executor.setStallLivenessProbe(async () => {
+    probes += 1;
+    return true;
+  });
+  try {
+    await assert.rejects(
+      () =>
+        executor.run({
+          prompt: "no-tools",
+          binary: fixture.script,
+          cwd: fixture.dir,
+          inactivityTimeoutMs: 400,
+          toolInactivityTimeoutMs: 5_000,
+          timeoutMs: 10_000,
+          spawnOverride: fixtureSpawn(fixture.script),
+        }),
+      (error: unknown) => {
+        assert.ok(error instanceof AgyStallError, `expected AgyStallError, got ${error}`);
+        assert.equal(error.toolActive, false);
+        assert.equal(probes, 0, "no tool active means no liveness probe");
+        return true;
+      },
+    );
+  } finally {
+    await executor.close("shutdown");
+    await rm(fixture.dir, { recursive: true, force: true });
+  }
+});
+
+test("a liveness probe in flight cannot kill a turn that resumed and completed", async () => {
+  // The probe is async. If stream activity rearms the watchdog while a probe is
+  // in flight, that probe's verdict describes a superseded window: acting on it
+  // would kill a demonstrably healthy turn.
+  const dir = await mkdtemp(path.join(tmpdir(), "agy-driver-staleprobe-"));
+  const script = path.join(dir, "driver-stale.mjs");
+  await writeFile(
+    script,
+    `#!/usr/bin/env node
+import readline from "node:readline";
+const send = (o) => console.log(JSON.stringify(o));
+const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
+rl.on("line", () => {
+  send({ event: "init", conversation_id: "c", init: {} });
+  send({ event: "step_update", step_update: { conversation_id: "c", step_index: 0,
+    state: "ACTIVE", step_type: "tool", tool_name: "run_command",
+    tool_info: { name: "run_command", parameters: { CommandLine: "build" } } } });
+  // Silent past the tool budget so a probe starts, then resume steadily and
+  // finish while that probe is still pending.
+  setTimeout(() => {
+    let n = 0;
+    const iv = setInterval(() => {
+      send({ event: "step_update", step_update: { conversation_id: "c", step_index: 0,
+        state: "ACTIVE", step_type: "agent_response", text_delta: "tick" + (++n) } });
+      if (n >= 15) { clearInterval(iv);
+        send({ event: "step_update", step_update: { conversation_id: "c", step_index: 0,
+          state: "DONE", step_type: "tool", tool_name: "run_command",
+          tool_info: { name: "run_command", parameters: {}, output: "built" } } });
+        send({ event: "result", result: { conversation_id: "c", status: "SUCCESS", response: "built ok" } });
+      }
+    }, 30);
+  }, 150);
+});
+`,
+  );
+  await chmod(script, 0o755);
+  const executor = new AgyDriverSession();
+  let probes = 0;
+  // Slow negative probe: resolves long after output resumed.
+  executor.setStallLivenessProbe(async () => {
+    probes += 1;
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    return false;
+  });
+  try {
+    const outcome = await executor.run({
+      prompt: "resume",
+      binary: script,
+      cwd: dir,
+      inactivityTimeoutMs: 5_000,
+      toolInactivityTimeoutMs: 100,
+      timeoutMs: 8_000,
+      spawnOverride: fixtureSpawn(script),
+    });
+    assert.ok(probes >= 1, "the scenario must actually put a probe in flight");
+    assert.equal(outcome.status, "OK", "a resumed turn must not be killed by a stale probe");
+    assert.equal(outcome.response, "built ok");
+  } finally {
+    await executor.close("shutdown");
+    await rm(dir, { recursive: true, force: true });
+  }
+});

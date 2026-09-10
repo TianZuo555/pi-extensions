@@ -148,7 +148,15 @@ test("describeTaskLog picks the first meaningful line, bounded", () => {
 });
 
 function task(id: string, pids: number[]): AgyTask {
-  return { id, logPath: `/tmp/${id}.log`, pids, orphans: [], description: "cmd", bytes: 0 };
+  return {
+    id,
+    logPath: `/tmp/${id}.log`,
+    pids,
+    ambiguous: [],
+    orphans: [],
+    description: "cmd",
+    bytes: 0,
+  };
 }
 
 test("parseEtimeMs handles all ps etime shapes", () => {
@@ -170,4 +178,119 @@ test("automatic task cleanup can exclude heuristic or self matches", () => {
   const task = { pids: [101, 303], orphans: [202, 101] };
   assert.deepEqual(agyTaskStopPids(task, false, 303), [101]);
   assert.deepEqual(agyTaskStopPids(task, true, 303), [101, 202]);
+});
+
+test("tasks started within ps resolution are never claimed as one task's own pids", async () => {
+  // `ps` etime is second-resolution, so two commands launched milliseconds
+  // apart cannot be resolved by start time. Guessing is dangerous: stopping a
+  // task signals its whole process group, so a wrong guess kills a sibling.
+  const brainDir = await fs.mkdtemp(path.join(os.tmpdir(), "agy-tasks-tie-"));
+  const taskDir = path.join(brainDir, "c-tie", ".system_generated", "tasks");
+  await fs.mkdir(taskDir, { recursive: true });
+  const kids = [] as Array<{ pid?: number }>;
+  try {
+    await fs.writeFile(path.join(taskDir, "task-1.log"), "first command\n");
+    kids.push(spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+      detached: true,
+      stdio: "ignore",
+    }));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    await fs.writeFile(path.join(taskDir, "task-2.log"), "second command\n");
+    kids.push(spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+      detached: true,
+      stdio: "ignore",
+    }));
+
+    const tasks = await listAgyTasks("c-tie", { brainDir, agyPids: [process.pid] });
+    assert.equal(tasks.length, 2);
+    // No task may own a pid it cannot be proven to own...
+    for (const task of tasks) {
+      assert.deepEqual(task.pids, [], `${task.id} must not claim an ambiguous pid`);
+    }
+    // ...and the uncertainty must still be visible rather than silently dropped.
+    const flagged = tasks.filter((task) => task.ambiguous.length > 0);
+    assert.ok(flagged.length > 0, "ambiguous liveness must be reported somewhere");
+    assert.equal(
+      agyTaskStopPids({ pids: [], orphans: [] }).length,
+      0,
+      "ambiguous pids are not part of the stop set",
+    );
+  } finally {
+    for (const kid of kids) {
+      if (kid.pid !== undefined) {
+        try {
+          process.kill(-kid.pid, "SIGKILL");
+        } catch {
+          // Already gone.
+        }
+      }
+    }
+    await fs.rm(brainDir, { recursive: true, force: true });
+  }
+});
+
+test("mixed holder/ancestry detection never reassigns a confirmed task's process", async () => {
+  // task-1 is detected authoritatively (its process holds the log open); task-2
+  // has no holder and falls back to ancestry. The ancestry candidate pool must
+  // exclude everything already claimed, or task-2 inherits task-1's pid and
+  // stopping task-2 kills task-1 (stops signal the whole process group).
+  const brainDir = await fs.mkdtemp(path.join(os.tmpdir(), "agy-tasks-mixed-"));
+  const taskDir = path.join(brainDir, "c-mixed", ".system_generated", "tasks");
+  await fs.mkdir(taskDir, { recursive: true });
+  const holderLog = path.join(taskDir, "task-1.log");
+  const kids: Array<{ pid?: number }> = [];
+  try {
+    await fs.writeFile(holderLog, "holder command\n");
+    // Group-leading child of this process that also holds task-1.log open.
+    const holder = spawn(
+      process.execPath,
+      [
+        "-e",
+        `require('node:fs').openSync(${JSON.stringify(holderLog)}, 'a');` +
+          "setInterval(() => {}, 1000)",
+      ],
+      { detached: true, stdio: "ignore" },
+    );
+    kids.push(holder);
+    await new Promise((resolve) => setTimeout(resolve, 400));
+
+    await fs.writeFile(path.join(taskDir, "task-2.log"), "ancestry command\n");
+    const other = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+      detached: true,
+      stdio: "ignore",
+    });
+    kids.push(other);
+    await new Promise((resolve) => setTimeout(resolve, 400));
+
+    const tasks = await listAgyTasks("c-mixed", { brainDir, agyPids: [process.pid] });
+    const first = tasks.find((task) => task.id === "task-1");
+    const second = tasks.find((task) => task.id === "task-2");
+    assert.ok(first && second);
+
+    // The authoritative match stands.
+    assert.deepEqual(first?.pids, [holder.pid]);
+    // The fallback match must never include the confirmed task's process,
+    // in pids or in the advisory buckets that surface it.
+    for (const bucket of [second?.pids, second?.ambiguous, second?.orphans]) {
+      assert.ok(
+        !(bucket ?? []).includes(holder.pid as number),
+        `task-2 must not reference task-1's pid ${holder.pid}`,
+      );
+    }
+    assert.ok(
+      !agyTaskStopPids(second as AgyTask).includes(holder.pid as number),
+      "stopping task-2 must not signal task-1's process",
+    );
+  } finally {
+    for (const kid of kids) {
+      if (kid.pid !== undefined) {
+        try {
+          process.kill(-kid.pid, "SIGKILL");
+        } catch {
+          // Already gone.
+        }
+      }
+    }
+    await fs.rm(brainDir, { recursive: true, force: true });
+  }
 });

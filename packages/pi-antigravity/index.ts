@@ -538,7 +538,10 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
           listAgyArtifacts(snapshot.conversationId),
         ]);
         setAgyTasksWidget(
-          tasks.filter((task) => task.pids.length > 0 || task.orphans.length > 0).length,
+          tasks.filter(
+            (task) =>
+              task.pids.length > 0 || task.orphans.length > 0 || task.ambiguous.length > 0,
+          ).length,
         );
         setAgyArtifactsWidget(artifacts.length);
       } catch {
