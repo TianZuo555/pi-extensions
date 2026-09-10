@@ -396,7 +396,7 @@ test("relayed instructions omit Pi's tool inventory but keep all other guidance"
     "Guidelines:",
     "- Be concise in your responses",
     "",
-    "<project_instructions path=\"/repo/AGENTS.md\">",
+    '<project_instructions path="/repo/AGENTS.md">',
     "## Coding Principles",
     "- Do not preserve backward compatibility.",
     "</project_instructions>",
@@ -482,9 +482,13 @@ test("tool-inventory stripping never touches project instructions", () => {
 test("an unvalidated Available tools block is left untouched", () => {
   // No trailing Pi caveat and no "- name: description" bullets: not Pi's
   // inventory, so the text must relay verbatim.
-  const prose = ["Notes for the operator.", "", "Available tools: see the wiki.", "", "Be careful."].join(
-    "\n",
-  );
+  const prose = [
+    "Notes for the operator.",
+    "",
+    "Available tools: see the wiki.",
+    "",
+    "Be careful.",
+  ].join("\n");
   const relayed = piSystemInstructionsPrompt(prose);
   assert.match(relayed, /Available tools: see the wiki\./);
   assert.match(relayed, /Be careful\./);

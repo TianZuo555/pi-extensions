@@ -236,9 +236,7 @@ function assignNearestBirth(
       delta: Math.abs(candidate.startMs - task.birthMs),
     }));
     const bestDelta = Math.min(...deltas.map(({ delta }) => delta));
-    const tied = deltas.filter(
-      ({ delta }) => delta - bestDelta <= BIRTH_MATCH_RESOLUTION_MS,
-    );
+    const tied = deltas.filter(({ delta }) => delta - bestDelta <= BIRTH_MATCH_RESOLUTION_MS);
     if (tied.length === 1) add(assigned, tied[0].task.name, candidate.pid);
     else for (const { task } of tied) add(ambiguous, task.name, candidate.pid);
   }
@@ -285,9 +283,7 @@ async function scanUnownedProcesses(
   const claimed = new Set(claimedPids);
   // Expand ownership to process groups: a claimed leader owns its group, and a
   // claimed member implicates its whole group.
-  const claimedGroups = new Set(
-    rows.filter((row) => claimed.has(row.pid)).map((row) => row.pgid),
-  );
+  const claimedGroups = new Set(rows.filter((row) => claimed.has(row.pid)).map((row) => row.pgid));
   const isClaimed = (row: AgyProcessRow) => claimed.has(row.pid) || claimedGroups.has(row.pgid);
   const available = rows.filter((row) => !isClaimed(row));
   const nearTaskBirth = (startMs: number) =>

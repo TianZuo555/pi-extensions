@@ -190,16 +190,20 @@ test("tasks started within ps resolution are never claimed as one task's own pid
   const kids = [] as Array<{ pid?: number }>;
   try {
     await fs.writeFile(path.join(taskDir, "task-1.log"), "first command\n");
-    kids.push(spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
-      detached: true,
-      stdio: "ignore",
-    }));
+    kids.push(
+      spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+        detached: true,
+        stdio: "ignore",
+      }),
+    );
     await new Promise((resolve) => setTimeout(resolve, 30));
     await fs.writeFile(path.join(taskDir, "task-2.log"), "second command\n");
-    kids.push(spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
-      detached: true,
-      stdio: "ignore",
-    }));
+    kids.push(
+      spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+        detached: true,
+        stdio: "ignore",
+      }),
+    );
 
     const tasks = await listAgyTasks("c-tie", { brainDir, agyPids: [process.pid] });
     assert.equal(tasks.length, 2);

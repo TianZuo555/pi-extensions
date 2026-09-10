@@ -96,7 +96,10 @@ export function stripPiToolInventory(instructions: string): string {
   }
 
   const kept = [...lines.slice(0, start), ...lines.slice(end + 1)];
-  return kept.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+  return kept
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 }
 
 /** agy's CLI has no system-role input; relay Pi instructions explicitly as prompt text. */
