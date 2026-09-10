@@ -776,6 +776,9 @@ export function streamAntigravity(
               // not just this closure's textBuffer (which tool boundaries clear).
               const suffix = controller.remainingResponseText(activity.response);
               if (suffix) {
+                // A distinct final answer is its own block, not a continuation
+                // glued onto the last word of streamed commentary.
+                if (suffix === activity.response) closeText();
                 controller.recordEmittedText(suffix);
                 if (textIndex !== null) {
                   textBuffer += suffix;

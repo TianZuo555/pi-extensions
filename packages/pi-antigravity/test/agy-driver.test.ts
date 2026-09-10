@@ -46,6 +46,30 @@ rl.on("line", async (line) => {
     }));
     return;
   }
+  if (event.message.content === "schedule-across-print-default") {
+    const step = {
+      step_index: turns,
+      state: "ACTIVE",
+      step_type: "tool",
+      tool_name: "schedule",
+      tool_info: { parameters: { DurationSeconds: 45, Prompt: "Checking task status" } }
+    };
+    console.log(JSON.stringify({ event: "step_update", step_update: step }));
+    // Accelerated reproduction of agy's five-minute wait returning SUCCESS
+    // while a timer and its final answer are still pending.
+    const timeoutIndex = args.indexOf("--print-timeout");
+    const waitMs = timeoutIndex < 0 ? 20 : Math.min(5000, parseFloat(args[timeoutIndex + 1]) * 1000);
+    const deadline = setTimeout(() => {
+      console.log(JSON.stringify({ event: "result", result: { status: "SUCCESS", response: "" } }));
+    }, waitMs);
+    await new Promise(resolve => setTimeout(resolve, 60));
+    clearTimeout(deadline);
+    step.state = "DONE";
+    step.tool_info.output = "Finished waiting 45 seconds.";
+    console.log(JSON.stringify({ event: "step_update", step_update: step }));
+    console.log(JSON.stringify({ event: "result", result: { status: "SUCCESS", response: "Final task summary." } }));
+    return;
+  }
   if (event.message.content === "silent") return;
   if (event.message.content === "exit-before-result") process.exit(7);
   // Backgrounded long command: the tool step goes ACTIVE and the result still
@@ -126,7 +150,7 @@ function fixtureSpawn(script: string): typeof spawn {
     spawn(process.execPath, [script, ...args], options)) as typeof spawn;
 }
 
-test("buildDriverAgyArgs uses stream input and omits print deadlines", () => {
+test("buildDriverAgyArgs keeps the native print wait beyond Pi's timer budget", () => {
   const args = buildDriverAgyArgs({
     conversationId: "c1",
     model: "gemini-3.7-flash",
@@ -144,8 +168,36 @@ test("buildDriverAgyArgs uses stream input and omits print deadlines", () => {
   assert.equal(args[args.indexOf("--agent") + 1], "reviewer");
   assert.equal(args[args.indexOf("--mode") + 1], "plan");
   assert.ok(!args.includes("--print"));
-  assert.ok(!args.includes("--print-timeout"));
+  assert.equal(args[args.indexOf("--print-timeout") + 1], "2147484s");
   assert.ok(!args.includes("3:7"));
+});
+
+test("persistent driver waits through schedules to the final answer across reused turns", async () => {
+  const fixture = await driverFixture();
+  const driver = new AgyDriverSession();
+  try {
+    for (const timeoutMs of [1_000, 2_000]) {
+      const outcome = await driver.run({
+        prompt: "schedule-across-print-default",
+        conversationId: "driver-conversation",
+        binary: "fixture-agy",
+        spawnOverride: fixtureSpawn(fixture.script),
+        timeoutMs,
+      });
+      assert.equal(outcome.status, "OK");
+      assert.equal(outcome.response, "Final task summary.");
+      assert.ok(
+        outcome.activities.some(
+          (activity) => activity.type === "tool_done" && activity.name === "schedule",
+        ),
+      );
+    }
+    assert.equal(driver.snapshot().stats?.spawnCount, 1);
+    assert.equal(driver.snapshot().stats?.recycleCount, 0);
+  } finally {
+    await driver.close("shutdown");
+    await rm(fixture.dir, { recursive: true, force: true });
+  }
 });
 
 test("persistent driver handles fragmented CRLF and a final unterminated result", async () => {
@@ -308,7 +360,7 @@ test("persistent driver sends exact NDJSON and reuses one PID across idle time",
       message: { role: "user", content: "first" },
     });
     assert.ok(!firstResponse.args.includes("--print"));
-    assert.ok(!firstResponse.args.includes("--print-timeout"));
+    assert.equal(firstResponse.args[firstResponse.args.indexOf("--print-timeout") + 1], "2147484s");
     assert.equal(executor.snapshot().state, "ready");
 
     // No watchdog is armed while the process is idle.

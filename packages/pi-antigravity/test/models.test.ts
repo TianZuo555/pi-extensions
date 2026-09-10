@@ -3,6 +3,7 @@ import { test } from "node:test";
 import {
   capabilitiesForModel,
   FALLBACK_MODELS,
+  modelCacheIsFresh,
   modelCacheTtlMs,
   parseAgyModels,
   pricingForModel,
@@ -122,4 +123,18 @@ test("modelCacheTtlMs expires fallback caches fast, live caches slow", () => {
   assert.equal(modelCacheTtlMs("fallback"), 5 * 60 * 1000);
   // Unknown/undefined source (old caches) is treated as live.
   assert.equal(modelCacheTtlMs(undefined), 24 * 60 * 60 * 1000);
+});
+
+test("modelCacheIsFresh honors source-specific TTLs and rejects undated caches", () => {
+  const now = Date.now();
+  assert.equal(modelCacheIsFresh({ fetchedAt: now - 60_000, source: "live" }, now), true);
+  assert.equal(modelCacheIsFresh({ fetchedAt: now - 60_000, source: "fallback" }, now), true);
+  assert.equal(modelCacheIsFresh({ fetchedAt: now - 10 * 60_000, source: "fallback" }, now), false);
+  assert.equal(
+    modelCacheIsFresh({ fetchedAt: now - 25 * 60 * 60_000, source: "live" }, now),
+    false,
+  );
+  // Undated caches (or caches missing fetchedAt) are never fresh.
+  assert.equal(modelCacheIsFresh({ source: "live" }, now), false);
+  assert.equal(modelCacheIsFresh({ fetchedAt: 0, source: "fallback" }, now), false);
 });

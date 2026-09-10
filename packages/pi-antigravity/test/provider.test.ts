@@ -238,6 +238,14 @@ test("agyIncompleteToolError explains agy background tasks for run_command", () 
   );
 });
 
+test("incomplete schedules explain the missing completion without claiming cancellation", () => {
+  const message = agyIncompleteToolError("schedule");
+  assert.match(message, /scheduled wait/);
+  assert.match(message, /final state is unknown/);
+  assert.match(message, /\/agy-tasks/);
+  assert.doesNotMatch(message, /was cancelled|was aborted|keeps running/);
+});
+
 for (const status of ["OK", "ERROR", "missing-result"] as const) {
   test(`incomplete tool replay preserves ${status} completion without resubmitting the prompt`, async () => {
     const requests: string[] = [];
@@ -392,7 +400,13 @@ for (const { before, after, response, expected } of [
   { before: "Started.", after: "", response: "Started.", expected: "" },
   { before: "Started", after: "", response: "Started at :3000.", expected: " at :3000." },
   { before: "", after: "", response: "Started.", expected: "Started." },
-  { before: "Started.", after: "", response: "Different final text.", expected: "" },
+  {
+    before: "Started.",
+    after: "",
+    response: "Different final text.",
+    expected: "Different final text.",
+  },
+  { before: "Started.", after: "Final answer.", response: "Final answer.", expected: "" },
   { before: "Started", after: " at :3000", response: "Started at :3000.", expected: "." },
 ]) {
   test(`deferred response emits only unseen text: ${JSON.stringify({ before, after, response })}`, async () => {
@@ -822,7 +836,7 @@ test("streamAntigravity emits the missing tail as a delta when the response drif
   assertDeltasMatchPartial(events);
 });
 
-test("streamAntigravity keeps streamed text when the response truly diverges", async () => {
+test("streamAntigravity preserves a distinct final answer in a separate text block", async () => {
   const { controller, collect } = makeStreamHarness();
   const eventsPromise = collect();
 
@@ -836,9 +850,12 @@ test("streamAntigravity keeps streamed text when the response truly diverges", a
   });
 
   const events = await eventsPromise;
-  const textEnd = events.find((e) => e.type === "text_end");
-  // Streamed deltas cannot be retracted, so consumers keep what they saw.
-  assert.equal(textEnd.content, "streamed partial");
+  // Streamed deltas cannot be retracted, but the final answer must not vanish
+  // or be glued directly onto the final word of the previous block.
+  assert.deepEqual(
+    events.filter((event) => event.type === "text_end").map((event) => event.content),
+    ["streamed partial", "completely different text"],
+  );
   assertDeltasMatchPartial(events);
 });
 

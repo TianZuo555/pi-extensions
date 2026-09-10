@@ -9,8 +9,16 @@
  *
  * - Listing: one log file per task; the first meaningful line usually shows
  *   the command.
- * - Liveness: a running task holds its log file open, so one batched `lsof`
- *   scan maps logs to live pid(s). No pids means the task already exited.
+ * - Liveness, in order of trust:
+ *   1. A process holding the log open (`lsof`), when agy redirects the
+ *      task's output straight into the file (older agy versions).
+ *   2. A process-group-leading child of a live agy process we spawned
+ *      (agy >= 1.2.0 pipes task output through itself, so nothing holds
+ *      the log open; tasks run as agy's children in their own group).
+ *   3. Orphan heuristic for tasks that outlived their agy parent:
+ *      re-parented to launchd, sitting in the session cwd or agy's own
+ *      config directory (agy >= 1.2.0 spawns tasks from there), started
+ *      when the log was created.
  * - Stopping: SIGTERM the process, preferring the whole process group so
  *   wrappers like `npm start` take their children down too.
  */
@@ -24,7 +32,7 @@ export interface AgyTask {
   /** e.g. "task-3". */
   id: string;
   logPath: string;
-  /** Live process pids holding the log open; empty when agy has exited. */
+  /** Live task processes (log holders or children of a live agy process). */
   pids: number[];
   /**
    * Likely orphaned processes: re-parented to launchd, sitting in the session
@@ -73,6 +81,48 @@ export function parseEtimeMs(etime: string): number {
   const days = dayPart === undefined ? 0 : Number.parseInt(dayPart, 10);
   if (!Number.isInteger(seconds) || !Number.isInteger(days)) return Number.NaN;
   return (days * 86_400 + seconds) * 1_000;
+}
+
+/** One `ps` row: identity plus an approximate start time. */
+export interface AgyProcessRow {
+  pid: number;
+  ppid: number;
+  pgid: number;
+  startMs: number;
+}
+
+/** Parse `ps -axo pid=,ppid,pgid,etime=` output into process rows. */
+export function parseAgyProcessRows(output: string, now = Date.now()): AgyProcessRow[] {
+  const rows: AgyProcessRow[] = [];
+  for (const line of output.split("\n")) {
+    const match = line.trim().match(/^(\d+)\s+(\d+)\s+(\d+)\s+(\S+)$/);
+    if (!match) continue;
+    const startMs = now - parseEtimeMs(match[4]);
+    if (!Number.isFinite(startMs)) continue;
+    rows.push({
+      pid: Number.parseInt(match[1], 10),
+      ppid: Number.parseInt(match[2], 10),
+      pgid: Number.parseInt(match[3], 10),
+      startMs,
+    });
+  }
+  return rows;
+}
+
+/**
+ * Candidate task processes among live agy children: agy spawns each task
+ * as a process-group leader, so `pgid === pid` separates task commands
+ * from agy's own helpers.
+ */
+export function selectAgyTaskDescendants(
+  rows: AgyProcessRow[],
+  agyPids: number[],
+  ownPid = process.pid,
+): Array<{ pid: number; startMs: number }> {
+  const parents = new Set(agyPids);
+  return rows
+    .filter((row) => parents.has(row.ppid) && row.pgid === row.pid && row.pid !== ownPid)
+    .map(({ pid, startMs }) => ({ pid, startMs }));
 }
 
 function execText(command: string, args: string[]): Promise<string> {
@@ -130,6 +180,99 @@ interface TaskBirth {
   birthMs: number;
 }
 
+/** Assign each candidate to the task whose log birth time is nearest. */
+function assignNearestBirth(
+  candidates: Array<{ pid: number; startMs: number }>,
+  tasks: TaskBirth[],
+): Map<string, number[]> {
+  const assigned = new Map<string, number[]>();
+  if (tasks.length === 0) return assigned;
+  for (const candidate of candidates) {
+    const nearest = tasks.reduce((best, task) =>
+      Math.abs(candidate.startMs - task.birthMs) < Math.abs(candidate.startMs - best.birthMs)
+        ? task
+        : best,
+    );
+    const values = assigned.get(nearest.name) ?? [];
+    values.push(candidate.pid);
+    assigned.set(nearest.name, values);
+  }
+  return assigned;
+}
+
+interface UnownedTaskScan {
+  /** Live group-leading children of our agy processes, by task log. */
+  descendants: Map<string, number[]>;
+  /** Launchd-re-parented leftovers in the session cwd, by task log. */
+  orphans: Map<string, number[]>;
+}
+
+/** agy's own working directory; it spawns task commands from here. */
+function agyConfigDir(brainDir?: string): string {
+  return path.dirname(brainDir ?? agyBrainDir());
+}
+
+/**
+ * Resolve liveness for task logs that no process holds open: agy >= 1.2.0
+ * pipes task output through itself, so scans fall back to process
+ * ancestry (children of the agy processes this pi spawned) and, once agy
+ * is gone too, the orphan heuristic. One `ps` pass feeds both.
+ */
+async function scanUnownedProcesses(
+  sessionCwd: string | undefined,
+  agyPids: number[],
+  tasks: TaskBirth[],
+  brainDir?: string,
+): Promise<UnownedTaskScan> {
+  if (tasks.length === 0) return { descendants: new Map(), orphans: new Map() };
+  const rows = parseAgyProcessRows(await execText("ps", ["-axo", "pid=,ppid,pgid,etime="]));
+  const nearTaskBirth = (startMs: number) =>
+    tasks.some((task) => Math.abs(startMs - task.birthMs) <= 15_000);
+
+  const descendants = assignNearestBirth(
+    selectAgyTaskDescendants(rows, agyPids).filter(({ startMs }) => nearTaskBirth(startMs)),
+    tasks,
+  );
+
+  const orphanCandidates = rows.filter(
+    (row) => row.ppid === 1 && row.pid !== process.pid && nearTaskBirth(row.startMs),
+  );
+  const empty = new Map<string, number[]>();
+  if (!sessionCwd || orphanCandidates.length === 0) return { descendants, orphans: empty };
+
+  const cwdOutput = await execText("lsof", [
+    "-a",
+    "-nP",
+    "-d",
+    "cwd",
+    "-p",
+    orphanCandidates.map(({ pid }) => pid).join(","),
+    "-Fpn",
+  ]);
+  const processCwds = parseProcessCwds(cwdOutput);
+  const acceptedCwds = await acceptedOrphanCwds(sessionCwd, brainDir);
+  const inAcceptedCwd = orphanCandidates.filter(({ pid }) =>
+    acceptedCwds.has(processCwds.get(pid) ?? ""),
+  );
+  return { descendants, orphans: assignNearestBirth(inAcceptedCwd, tasks) };
+}
+
+/** Canonical working directories an orphaned task process may sit in. */
+async function acceptedOrphanCwds(
+  sessionCwd: string | undefined,
+  brainDir?: string,
+): Promise<Set<string>> {
+  const dirs = [sessionCwd, agyConfigDir(brainDir)].filter(
+    (dir): dir is string => dir !== undefined,
+  );
+  const resolved = new Set(dirs.map((dir) => path.resolve(dir)));
+  for (const dir of dirs) {
+    const real = await fs.realpath(dir).catch(() => undefined);
+    if (real) resolved.add(real);
+  }
+  return resolved;
+}
+
 /** Parse pid → cwd from `lsof -Fpn -d cwd`. */
 function parseProcessCwds(output: string): Map<number, string> {
   const cwds = new Map<number, string>();
@@ -145,64 +288,15 @@ function parseProcessCwds(output: string): Map<number, string> {
   return cwds;
 }
 
-/**
- * Find orphan candidates once per scan, then assign each process to the
- * nearest task birth time. The old per-log implementation ran a full `ps`
- * and one or more `lsof` processes for every historical task.
- */
-async function scanOrphans(sessionCwd: string, tasks: TaskBirth[]): Promise<Map<string, number[]>> {
-  if (tasks.length === 0) return new Map();
-  const psOut = await execText("ps", ["-axo", "pid=,ppid=,etime="]);
-  const now = Date.now();
-  const candidates: Array<{ pid: number; startMs: number }> = [];
-  for (const line of psOut.split("\n")) {
-    const match = line.trim().match(/^(\d+)\s+(\d+)\s+(\S+)$/);
-    if (!match) continue;
-    const pid = Number.parseInt(match[1], 10);
-    const ppid = Number.parseInt(match[2], 10);
-    if (ppid !== 1 || pid === process.pid) continue;
-    const startMs = now - parseEtimeMs(match[3]);
-    if (
-      !Number.isFinite(startMs) ||
-      !tasks.some((task) => Math.abs(startMs - task.birthMs) <= 15_000)
-    ) {
-      continue;
-    }
-    candidates.push({ pid, startMs });
-  }
-  if (candidates.length === 0) return new Map();
-
-  const cwdOutput = await execText("lsof", [
-    "-a",
-    "-nP",
-    "-d",
-    "cwd",
-    "-p",
-    candidates.map(({ pid }) => pid).join(","),
-    "-Fpn",
-  ]);
-  const processCwds = parseProcessCwds(cwdOutput);
-  const canonicalCwd = await fs.realpath(sessionCwd).catch(() => path.resolve(sessionCwd));
-  const orphans = new Map<string, number[]>();
-  for (const candidate of candidates) {
-    const candidateCwd = processCwds.get(candidate.pid);
-    if (candidateCwd !== canonicalCwd && candidateCwd !== path.resolve(sessionCwd)) continue;
-    const nearest = tasks.reduce((best, task) =>
-      Math.abs(candidate.startMs - task.birthMs) < Math.abs(candidate.startMs - best.birthMs)
-        ? task
-        : best,
-    );
-    const values = orphans.get(nearest.name) ?? [];
-    values.push(candidate.pid);
-    orphans.set(nearest.name, values);
-  }
-  return orphans;
-}
-
 /** List every background task recorded for an agy conversation. */
 export async function listAgyTasks(
   conversationId: string,
-  options: { brainDir?: string; sessionCwd?: string } = {},
+  options: {
+    brainDir?: string;
+    sessionCwd?: string;
+    /** Live agy process pids (e.g. from the child-tracking registry). */
+    agyPids?: number[];
+  } = {},
 ): Promise<AgyTask[]> {
   const dir = path.join(
     options.brainDir ?? agyBrainDir(),
@@ -233,22 +327,20 @@ export async function listAgyTasks(
   // Liveness must be sampled before readFile opens the logs. Running both in
   // one Promise.all made lsof randomly identify pi itself as every task's pid.
   const holders = await taskLogHolders(metadata.map(({ logPath }) => logPath));
-  const orphanTasks = metadata
+  const unownedTasks = metadata
     .filter(({ name }) => (holders.get(name)?.length ?? 0) === 0)
     .map(({ name, birthMs }) => ({ name, birthMs }));
-  const [contents, orphans] = await Promise.all([
+  const [contents, unowned] = await Promise.all([
     Promise.all(metadata.map(({ logPath }) => fs.readFile(logPath, "utf8").catch(() => ""))),
-    options.sessionCwd
-      ? scanOrphans(options.sessionCwd, orphanTasks)
-      : Promise.resolve(new Map<string, number[]>()),
+    scanUnownedProcesses(options.sessionCwd, options.agyPids ?? [], unownedTasks, options.brainDir),
   ]);
 
   return metadata.map(
     ({ name, logPath, stat }, index): AgyTask => ({
       id: name.replace(/\.log$/, ""),
       logPath,
-      pids: holders.get(name) ?? [],
-      orphans: orphans.get(name) ?? [],
+      pids: [...new Set([...(holders.get(name) ?? []), ...(unowned.descendants.get(name) ?? [])])],
+      orphans: unowned.orphans.get(name) ?? [],
       description: describeTaskLog(contents[index]),
       bytes: stat.size,
     }),

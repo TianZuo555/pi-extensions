@@ -21,6 +21,12 @@ export const BRIDGE_PENDING_TOOL_MESSAGE =
 
 /** Replay diagnostics must not promise that an unobserved task survived or stopped. */
 export function agyIncompleteToolError(tool: string, resultError?: string): string {
+  if (tool === "schedule") {
+    return (
+      "agy stopped reporting before the scheduled wait completed. " +
+      "The timer's final state is unknown; check /agy-tasks before scheduling it again."
+    );
+  }
   if (
     tool === "run_command" &&
     (!resultError || /timeout waiting for response/i.test(resultError))

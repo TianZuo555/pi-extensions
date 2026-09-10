@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -9,9 +10,11 @@ import {
   describeTaskLog,
   findAgyTask,
   listAgyTasks,
+  parseAgyProcessRows,
   parseEtimeMs,
   parseLsofPids,
   parseTaskLogHolders,
+  selectAgyTaskDescendants,
   type AgyTask,
 } from "../lib/tasks.ts";
 
@@ -47,6 +50,79 @@ test("listAgyTasks never reports its own reader as a live task", async () => {
     assert.deepEqual(task?.pids, []);
   } finally {
     await ownHandle.close();
+    await fs.rm(brainDir, { recursive: true, force: true });
+  }
+});
+
+test("parseAgyProcessRows parses pid/ppid/pgid/etime rows and skips junk", () => {
+  const now = Date.now();
+  const rows = parseAgyProcessRows(" 101  2144  101  03:05\nnot a row\n 202  1  202  45\n", now);
+  assert.deepEqual(rows, [
+    { pid: 101, ppid: 2144, pgid: 101, startMs: now - 185_000 },
+    { pid: 202, ppid: 1, pgid: 202, startMs: now - 45_000 },
+  ]);
+});
+
+test("selectAgyTaskDescendants keeps only group-leading agy children", () => {
+  const now = Date.now();
+  const rows = [
+    { pid: 300, ppid: 2144, pgid: 300, startMs: now }, // task command
+    { pid: 301, ppid: 2144, pgid: 2141, startMs: now }, // shares agy's group
+    { pid: 302, ppid: 999, pgid: 302, startMs: now }, // unrelated parent
+    { pid: 303, ppid: 2144, pgid: 303, startMs: now }, // this pi process
+  ];
+  assert.deepEqual(selectAgyTaskDescendants(rows, [2144], 303), [{ pid: 300, startMs: now }]);
+});
+
+test("listAgyTasks detects a running task as a group-leading agy child", async () => {
+  const brainDir = await fs.mkdtemp(path.join(os.tmpdir(), "agy-tasks-desc-"));
+  const taskDir = path.join(brainDir, "c-desc", ".system_generated", "tasks");
+  await fs.mkdir(taskDir, { recursive: true });
+  // Stand in for the task command: a detached (own process group) child of
+  // this process, which plays the role of the live agy parent.
+  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+    detached: true,
+    stdio: "ignore",
+  });
+  try {
+    await fs.writeFile(path.join(taskDir, "task-1.log"), "long-running command\n");
+    const [task] = await listAgyTasks("c-desc", { brainDir, agyPids: [process.pid] });
+    assert.ok(task);
+    assert.deepEqual(task?.pids, [child.pid]);
+    assert.deepEqual(task?.orphans, []);
+  } finally {
+    if (child.pid !== undefined) {
+      try {
+        process.kill(-child.pid, "SIGKILL");
+      } catch {
+        // Already gone.
+      }
+    }
+    await fs.rm(brainDir, { recursive: true, force: true });
+  }
+});
+
+test("listAgyTasks leaves tasks done when no agy ancestor is supplied", async () => {
+  const brainDir = await fs.mkdtemp(path.join(os.tmpdir(), "agy-tasks-node-"));
+  const taskDir = path.join(brainDir, "c-none", ".system_generated", "tasks");
+  await fs.mkdir(taskDir, { recursive: true });
+  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+    detached: true,
+    stdio: "ignore",
+  });
+  try {
+    await fs.writeFile(path.join(taskDir, "task-1.log"), "long-running command\n");
+    const [task] = await listAgyTasks("c-none", { brainDir, sessionCwd: os.tmpdir() });
+    assert.ok(task);
+    assert.deepEqual(task?.pids, []);
+  } finally {
+    if (child.pid !== undefined) {
+      try {
+        process.kill(-child.pid, "SIGKILL");
+      } catch {
+        // Already gone.
+      }
+    }
     await fs.rm(brainDir, { recursive: true, force: true });
   }
 });

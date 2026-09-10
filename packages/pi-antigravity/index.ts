@@ -24,7 +24,11 @@ import { Type } from "typebox";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { piConfigDir, readJson, writeJson } from "./lib/config.ts";
-import { installAgyDeathHooks, killAllAgyTrees } from "./lib/agy-children.ts";
+import {
+  getAgyChildrenRegistry,
+  installAgyDeathHooks,
+  killAllAgyTrees,
+} from "./lib/agy-children.ts";
 import { checkAgyBinary, MIN_AGY_VERSION, runAgyCommand } from "./lib/agy-diagnostics.ts";
 import { parseAgyAgents, readAgyProcessProfile } from "./lib/agy-profile.ts";
 import { pruneBridgeMcpCache, removeMcpCacheEntry } from "./lib/mcp-cache.ts";
@@ -48,7 +52,7 @@ import {
   capabilitiesForModel,
   FALLBACK_MODELS,
   mergeAgyModels,
-  modelCacheTtlMs,
+  modelCacheIsFresh,
   parseAgyModels,
   pricingForModel,
   resolveAgyModelEffort,
@@ -206,9 +210,13 @@ async function listAgyModels(): Promise<AgyModelInfo[]> {
 
 function getInitialModelCache(): ModelCache {
   const cached = readJson<ModelCache | null>(MODEL_CACHE_FILE, null);
-  if (cached?.models?.length) {
+  if (cached?.models?.length && modelCacheIsFresh(cached)) {
     return { ...cached, models: normalizeModels(cached.models) };
   }
+  // An expired or missing cache may have been written by an older extension
+  // (e.g. a fallback catalog that predates newer models), so never register
+  // stale disk state at startup: use the catalog baked into this build and
+  // let the startup refresh pull the live list.
   return {
     fetchedAt: 0,
     source: "fallback",
@@ -219,11 +227,7 @@ function getInitialModelCache(): ModelCache {
 async function discoverModels(refresh = false): Promise<ModelCache> {
   if (!refresh) {
     const cached = readJson<ModelCache | null>(MODEL_CACHE_FILE, null);
-    if (
-      cached?.models?.length &&
-      cached.fetchedAt &&
-      Date.now() - cached.fetchedAt < modelCacheTtlMs(cached.source)
-    ) {
+    if (cached?.models?.length && modelCacheIsFresh(cached)) {
       return { ...cached, models: normalizeModels(cached.models) };
     }
   }
@@ -529,6 +533,7 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
         const [tasks, artifacts] = await Promise.all([
           listAgyTasks(snapshot.conversationId, {
             sessionCwd: tasksSessionCwd,
+            agyPids: [...getAgyChildrenRegistry().live],
           }),
           listAgyArtifacts(snapshot.conversationId),
         ]);
@@ -668,16 +673,17 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
   registerAntigravityProvider(currentCache.models);
 
   async function refreshStaleModelsWhenSelected(): Promise<void> {
-    if (
-      currentCache.fetchedAt &&
-      Date.now() - currentCache.fetchedAt < modelCacheTtlMs(currentCache.source)
-    ) {
-      return;
-    }
+    if (modelCacheIsFresh(currentCache)) return;
     const fresh = await discoverModels(true);
     currentCache = fresh;
     registerAntigravityProvider(fresh.models);
   }
+
+  // Startup registration must stay synchronous, and the picker needs a
+  // correct list even when the default model is not from antigravity (the
+  // session_start/model_select hooks only refresh once agy is selected): a
+  // no-op for fresh caches, otherwise a background heal of the registration.
+  void refreshStaleModelsWhenSelected();
 
   pi.on("before_agent_start", (event) => {
     captureSkills(event.systemPromptOptions?.skills);
@@ -1082,7 +1088,11 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
         ctx.ui.notify("agy-tasks: no agy conversation in this session yet.", "error");
         return;
       }
-      const rescan = () => listAgyTasks(conversationId, { sessionCwd: ctx.cwd });
+      const rescan = () =>
+        listAgyTasks(conversationId, {
+          sessionCwd: ctx.cwd,
+          agyPids: [...getAgyChildrenRegistry().live],
+        });
 
       // No arguments: interactive dashboard overlay (x stops, r rescans).
       if (!arg) {

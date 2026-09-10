@@ -76,11 +76,13 @@ export class AgyTurnController {
     this.#emittedText += delta;
   }
 
-  /** The terminal response normally concatenates the turn's streamed deltas.
-   * On divergence, preserve already-rendered text rather than repeat/replace it.
+  /** Results can contain the whole turn or just its final answer. Never drop
+   * a distinct final answer merely because earlier commentary was streamed.
    */
   remainingResponseText(response: string): string {
-    return response.startsWith(this.#emittedText) ? response.slice(this.#emittedText.length) : "";
+    if (response.startsWith(this.#emittedText)) return response.slice(this.#emittedText.length);
+    if (this.#emittedText.endsWith(response)) return "";
+    return response;
   }
 
   /** Show at most one synthetic thought summary per logical agy turn. */
