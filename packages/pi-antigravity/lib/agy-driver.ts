@@ -559,7 +559,7 @@ export class AgyDriverSession implements AgyTurnExecutor {
         ? `: ${tail}`
         : ` (no stderr${this.#config?.model ? ` model=${this.#config.model}` : ""}${
             this.#boundConversationId ? ` conv=${this.#boundConversationId.slice(0, 8)}` : ""
-          }). The cause is unknown. Try /agy reset before retrying, or set PI_ANTIGRAVITY_DRIVER=0 for one-shot mode. Check for commands still running before retrying; use pi's own bash for long-lived commands.`;
+          }). The cause is unknown. Try /agy-reset before retrying, or set PI_ANTIGRAVITY_DRIVER=0 for one-shot mode. Check for commands still running before retrying; use pi's own bash for long-lived commands.`;
       this.#settleTurn(turn, {
         error: new AgySpawnError(
           `agy exited with code ${code ?? signal ?? "signal"} before producing a result${hint}`,

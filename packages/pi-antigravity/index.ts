@@ -6,10 +6,11 @@
 //
 // Commands:
 //   /agy            show agy conversation and persistent-driver status
-//   /agy reset      drop the current agy conversation (next turn starts fresh)
-//   /agy models     re-discover models from `agy models` and re-register
-//   /agy agents     list configured custom agents
-//   /agy doctor     diagnose binary, models, driver, bridge, and local state
+//   /agy-reset      drop the current agy conversation (next turn starts fresh)
+//   /agy-models     re-discover models from `agy models` and re-register
+//   /agy-agents     list configured custom agents
+//   /agy-doctor     diagnose binary, models, driver, bridge, and local state
+//   /agy-subagents  list subagent activity observed on the agy stream
 //   /agy-usage      show Antigravity model quotas (weekly and 5-hour limits)
 
 import type {
@@ -71,6 +72,7 @@ import {
 import { readAgyConversationMetadata } from "./lib/conversation-metadata.ts";
 import { AgyReplayStore, type RecordedAgyTool } from "./lib/replay.ts";
 import { findAgyTask, listAgyTasks, stopAgyTask } from "./lib/tasks.ts";
+import { formatAgySubagents, trackAgySubagent, type AgySubagentEntry } from "./lib/subagents.ts";
 import { findAgyArtifact, listAgyArtifacts } from "./lib/artifacts.ts";
 import { fetchAgyUsage } from "./lib/usage.ts";
 import { WRAPPER_TOOL_DESCRIPTION, WRAPPER_TOOL_NAME } from "./lib/prompt.ts";
@@ -245,6 +247,10 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
   let currentCache = getInitialModelCache();
   let observedContextTokens: number | undefined;
   let persistedConversationKey: string | undefined;
+  // Live subagent roster, folded from stream activities since the last
+  // conversation reset/restore. In-memory only: agy's own conversation
+  // database remains the durable record.
+  const subagentRoster = new Map<string, AgySubagentEntry>();
   let selectedModelKey: string | undefined;
 
   pi.registerEntryRenderer(AGY_COMPACTION_ENTRY, (entry, _options, theme) => {
@@ -548,8 +554,10 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
     if (activity.type === "conversation_fallback") {
       observedContextTokens = undefined;
       persistedConversationKey = undefined;
+      subagentRoster.clear();
       return;
     }
+    trackAgySubagent(subagentRoster, activity);
     if (activity.type === "usage") {
       const nextContextTokens = agyContextTokens(activity.usage);
       const compaction = detectAgyCompaction(observedContextTokens, nextContextTokens);
@@ -850,153 +858,11 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
   });
 
   pi.registerCommand("agy", {
-    description: "Manage the agy backend: status | reset | models | agents | doctor",
+    description: "Show agy conversation and persistent-driver status",
     handler: async (args, ctx) => {
-      const sub = args.trim().toLowerCase();
-      if (sub === "reset") {
-        await runAntigravity(runtime, service.reset);
-        appendConversationReset(ctx);
-        ctx.ui.notify("antigravity: conversation reset; next turn starts fresh.", "info");
-        return;
-      }
-      if (sub === "models") {
-        const refreshed = await discoverModels(true);
-        currentCache = refreshed;
-        registerAntigravityProvider(refreshed.models);
+      if (args.trim()) {
         ctx.ui.notify(
-          `antigravity: ${refreshed.models.length} models registered (${refreshed.source}).`,
-          "info",
-        );
-        return;
-      }
-      if (sub === "agents") {
-        try {
-          const agents = parseAgyAgents(await execAgy(["agents"]));
-          ctx.ui.notify(
-            agents.length > 0
-              ? `antigravity custom agents:\n${agents.map((agent) => `• ${agent}`).join("\n")}`
-              : "antigravity: no custom agents configured.",
-            "info",
-          );
-        } catch (error) {
-          ctx.ui.notify(
-            `antigravity: failed to list agents (${error instanceof Error ? error.message : String(error)}).`,
-            "error",
-          );
-        }
-        return;
-      }
-      if (sub === "doctor") {
-        const lines = ["antigravity doctor"];
-        const binary = await checkAgyBinary({ refresh: true });
-        if (binary.ok) {
-          lines.push(
-            `binary: ${binary.binary} (${binary.version}, ${binary.source})`,
-            `binary selection: ${binary.selectionReason ?? "compatible candidate"}`,
-            `minimum: ${MIN_AGY_VERSION}`,
-          );
-        } else {
-          lines.push(
-            `binary: ERROR [${binary.category}] ${binary.message}`,
-            `minimum: ${MIN_AGY_VERSION}`,
-          );
-        }
-        for (const candidate of binary.candidates ?? []) {
-          const selected =
-            binary.ok && candidate.binary === binary.binary ? "selected" : "candidate";
-          lines.push(
-            `binary ${selected}: ${candidate.source} ${candidate.binary} · ${
-              candidate.ok
-                ? candidate.development
-                  ? (candidate.version ?? "development")
-                  : (candidate.version ?? "unknown")
-                : `ERROR [${candidate.category ?? "unknown"}]`
-            }`,
-          );
-        }
-
-        try {
-          const discovered = parseAgyModels((await runAgyCommand(["models"])).stdout);
-          if (discovered.length === 0) throw new Error("no valid model rows returned");
-          currentCache = { fetchedAt: Date.now(), source: "live", models: discovered };
-          registerAntigravityProvider(discovered);
-          lines.push(`models: ${discovered.length} (live)`);
-        } catch (error) {
-          lines.push(
-            `models: ERROR ${error instanceof Error ? error.message : String(error)}; ${currentCache.models.length} cached (${currentCache.source})`,
-          );
-        }
-
-        let snapshot: AntigravityStateSnapshot | undefined;
-        try {
-          snapshot = await runAntigravity(runtime, service.snapshot);
-          const executor = snapshot.executor;
-          const config = executor.config;
-          lines.push(
-            `driver: ${executor.mode} · ${executor.state}${executor.pid ? ` · pid ${executor.pid}` : ""}`,
-            `driver binary: ${config?.binary ?? "none"}${config?.binaryVersion ? ` · ${config.binaryVersion}` : ""}`,
-            `driver config: model=${config?.model ?? "none"} effort=${config?.effort ?? "none"} agent=${config?.agent ?? "none"} mode=${config?.mode ?? "default"}`,
-          );
-          if (executor.stats) {
-            const stats = executor.stats;
-            const reasons = Object.entries(stats.recycleReasons)
-              .map(([reason, count]) => `${reason}=${count}`)
-              .join(", ");
-            lines.push(
-              executor.mode === "persistent"
-                ? `driver stats: spawns=${stats.spawnCount} respawns=${Math.max(0, stats.spawnCount - 1)} turns=${stats.submittedTurns} reused=${stats.reusedTurns} recycles=${stats.recycleCount} current=${stats.currentProcessTurns}`
-                : `driver stats: one-shot launches=${stats.spawnCount} turns=${stats.submittedTurns}`,
-              `driver recycle reasons: ${reasons || "none"}`,
-            );
-          }
-        } catch (error) {
-          lines.push(`driver: ERROR ${error instanceof Error ? error.message : String(error)}`);
-        }
-
-        const selected = currentCache.models.find((model) => model.id === ctx.model?.id);
-        let profile = "agent=none mode=default";
-        try {
-          const configured = readAgyProcessProfile();
-          profile = `agent=${configured.agent ?? "none"} mode=${configured.mode ?? "default"}`;
-          lines.push(
-            `selection: ${ctx.model?.id ?? "none"} · effort ${
-              resolveAgyModelEffort(
-                selected,
-                ctx.thinkingLevel === "off"
-                  ? undefined
-                  : mapThinkingToEffort(
-                      ctx.thinkingLevel as Exclude<typeof ctx.thinkingLevel, "off">,
-                    ),
-              ) ?? "none"
-            }`,
-          );
-        } catch (error) {
-          lines.push(`profile: ERROR ${error instanceof Error ? error.message : String(error)}`);
-        }
-        lines.push(`profile: ${profile}`);
-        lines.push(
-          `bridge: enabled=${BRIDGE_ENABLED} running=${bridgeManager.isRunning()} registered=${bridgeManager.isRegistered()} revision=${bridgeManager.processRevision()}`,
-        );
-
-        const conversationId = snapshot?.conversationId;
-        if (conversationId) {
-          const [exists, metadata] = await Promise.all([
-            agyConversationExists(conversationId),
-            readAgyConversationMetadata(conversationId),
-          ]);
-          lines.push(
-            `conversation: ${conversationId} · db ${exists ? "readable" : "missing/unreadable"}`,
-            `metadata: ${metadata.status}`,
-          );
-        } else {
-          lines.push("conversation: none", "metadata: not applicable");
-        }
-        ctx.ui.notify(lines.join("\n"), binary.ok ? "info" : "error");
-        return;
-      }
-      if (sub) {
-        ctx.ui.notify(
-          `antigravity: unknown argument "${sub}". Use reset | models | agents | doctor.`,
+          'antigravity: use "/agy-reset", "/agy-models", "/agy-agents", "/agy-subagents", or "/agy-doctor".',
           "error",
         );
         return;
@@ -1034,6 +900,175 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
         `antigravity: ${title}\nconversation: ${id ?? "none"}\n${details.join(" · ")}\n${profile}`,
         "info",
       );
+    },
+  });
+
+  pi.registerCommand("agy-reset", {
+    description: "Drop the agy conversation and driver; next turn starts fresh",
+    handler: async (args, ctx) => {
+      if (args.trim()) {
+        ctx.ui.notify('agy-reset: usage "/agy-reset".', "error");
+        return;
+      }
+      await runAntigravity(runtime, service.reset);
+      subagentRoster.clear();
+      appendConversationReset(ctx);
+      ctx.ui.notify("antigravity: conversation reset; next turn starts fresh.", "info");
+    },
+  });
+
+  pi.registerCommand("agy-models", {
+    description: "Re-discover models from `agy models` and re-register the provider",
+    handler: async (args, ctx) => {
+      if (args.trim()) {
+        ctx.ui.notify('agy-models: usage "/agy-models".', "error");
+        return;
+      }
+      const refreshed = await discoverModels(true);
+      currentCache = refreshed;
+      registerAntigravityProvider(refreshed.models);
+      ctx.ui.notify(
+        `antigravity: ${refreshed.models.length} models registered (${refreshed.source}).`,
+        "info",
+      );
+    },
+  });
+
+  pi.registerCommand("agy-agents", {
+    description: "List configured custom agy agents",
+    handler: async (args, ctx) => {
+      if (args.trim()) {
+        ctx.ui.notify('agy-agents: usage "/agy-agents".', "error");
+        return;
+      }
+      try {
+        const agents = parseAgyAgents(await execAgy(["agents"]));
+        ctx.ui.notify(
+          agents.length > 0
+            ? `antigravity custom agents:\n${agents.map((agent) => `• ${agent}`).join("\n")}`
+            : "antigravity: no custom agents configured.",
+          "info",
+        );
+      } catch (error) {
+        ctx.ui.notify(
+          `antigravity: failed to list agents (${error instanceof Error ? error.message : String(error)}).`,
+          "error",
+        );
+      }
+    },
+  });
+
+  pi.registerCommand("agy-doctor", {
+    description: "Diagnose binary, models, driver, bridge, and conversation state",
+    handler: async (args, ctx) => {
+      if (args.trim()) {
+        ctx.ui.notify('agy-doctor: usage "/agy-doctor".', "error");
+        return;
+      }
+      const lines = ["antigravity doctor"];
+      const binary = await checkAgyBinary({ refresh: true });
+      if (binary.ok) {
+        lines.push(
+          `binary: ${binary.binary} (${binary.version}, ${binary.source})`,
+          `binary selection: ${binary.selectionReason ?? "compatible candidate"}`,
+          `minimum: ${MIN_AGY_VERSION}`,
+        );
+      } else {
+        lines.push(
+          `binary: ERROR [${binary.category}] ${binary.message}`,
+          `minimum: ${MIN_AGY_VERSION}`,
+        );
+      }
+      for (const candidate of binary.candidates ?? []) {
+        const selected = binary.ok && candidate.binary === binary.binary ? "selected" : "candidate";
+        lines.push(
+          `binary ${selected}: ${candidate.source} ${candidate.binary} · ${
+            candidate.ok
+              ? candidate.development
+                ? (candidate.version ?? "development")
+                : (candidate.version ?? "unknown")
+              : `ERROR [${candidate.category ?? "unknown"}]`
+          }`,
+        );
+      }
+
+      try {
+        const discovered = parseAgyModels((await runAgyCommand(["models"])).stdout);
+        if (discovered.length === 0) throw new Error("no valid model rows returned");
+        currentCache = { fetchedAt: Date.now(), source: "live", models: discovered };
+        registerAntigravityProvider(discovered);
+        lines.push(`models: ${discovered.length} (live)`);
+      } catch (error) {
+        lines.push(
+          `models: ERROR ${error instanceof Error ? error.message : String(error)}; ${currentCache.models.length} cached (${currentCache.source})`,
+        );
+      }
+
+      let snapshot: AntigravityStateSnapshot | undefined;
+      try {
+        snapshot = await runAntigravity(runtime, service.snapshot);
+        const executor = snapshot.executor;
+        const config = executor.config;
+        lines.push(
+          `driver: ${executor.mode} · ${executor.state}${executor.pid ? ` · pid ${executor.pid}` : ""}`,
+          `driver binary: ${config?.binary ?? "none"}${config?.binaryVersion ? ` · ${config.binaryVersion}` : ""}`,
+          `driver config: model=${config?.model ?? "none"} effort=${config?.effort ?? "none"} agent=${config?.agent ?? "none"} mode=${config?.mode ?? "default"}`,
+        );
+        if (executor.stats) {
+          const stats = executor.stats;
+          const reasons = Object.entries(stats.recycleReasons)
+            .map(([reason, count]) => `${reason}=${count}`)
+            .join(", ");
+          lines.push(
+            executor.mode === "persistent"
+              ? `driver stats: spawns=${stats.spawnCount} respawns=${Math.max(0, stats.spawnCount - 1)} turns=${stats.submittedTurns} reused=${stats.reusedTurns} recycles=${stats.recycleCount} current=${stats.currentProcessTurns}`
+              : `driver stats: one-shot launches=${stats.spawnCount} turns=${stats.submittedTurns}`,
+            `driver recycle reasons: ${reasons || "none"}`,
+          );
+        }
+      } catch (error) {
+        lines.push(`driver: ERROR ${error instanceof Error ? error.message : String(error)}`);
+      }
+
+      const selected = currentCache.models.find((model) => model.id === ctx.model?.id);
+      let profile = "agent=none mode=default";
+      try {
+        const configured = readAgyProcessProfile();
+        profile = `agent=${configured.agent ?? "none"} mode=${configured.mode ?? "default"}`;
+        lines.push(
+          `selection: ${ctx.model?.id ?? "none"} · effort ${
+            resolveAgyModelEffort(
+              selected,
+              ctx.thinkingLevel === "off"
+                ? undefined
+                : mapThinkingToEffort(
+                    ctx.thinkingLevel as Exclude<typeof ctx.thinkingLevel, "off">,
+                  ),
+            ) ?? "none"
+          }`,
+        );
+      } catch (error) {
+        lines.push(`profile: ERROR ${error instanceof Error ? error.message : String(error)}`);
+      }
+      lines.push(`profile: ${profile}`);
+      lines.push(
+        `bridge: enabled=${BRIDGE_ENABLED} running=${bridgeManager.isRunning()} registered=${bridgeManager.isRegistered()} revision=${bridgeManager.processRevision()}`,
+      );
+
+      const conversationId = snapshot?.conversationId;
+      if (conversationId) {
+        const [exists, metadata] = await Promise.all([
+          agyConversationExists(conversationId),
+          readAgyConversationMetadata(conversationId),
+        ]);
+        lines.push(
+          `conversation: ${conversationId} · db ${exists ? "readable" : "missing/unreadable"}`,
+          `metadata: ${metadata.status}`,
+        );
+      } else {
+        lines.push("conversation: none", "metadata: not applicable");
+      }
+      ctx.ui.notify(lines.join("\n"), binary.ok ? "info" : "error");
     },
   });
 
@@ -1124,6 +1159,22 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
       }
 
       await openAgyArtifactsPicker(ctx, rescan);
+    },
+  });
+
+  pi.registerCommand("agy-subagents", {
+    description: "List subagent activity observed on the agy stream (spawns, messages, kills)",
+    handler: async (args, ctx) => {
+      if (args.trim()) {
+        ctx.ui.notify('agy-subagents: usage "/agy-subagents".', "error");
+        return;
+      }
+      const report = formatAgySubagents(subagentRoster);
+      ctx.ui.notify(
+        report ??
+          "antigravity: no subagent activity observed this session. Subagents appear here as agy streams invoke_subagent/send_message steps.",
+        "info",
+      );
     },
   });
 

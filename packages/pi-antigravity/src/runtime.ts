@@ -5,7 +5,7 @@
  *
  * Continuity policy: agy keeps its own authoritative conversation history
  * (`--conversation <id>`), so the conversation is reused across turns and
- * reset only when the selected model changes or the user asks (/agy reset).
+ * reset only when the selected model changes or the user asks (/agy-reset).
  */
 
 import { Context, Data, Effect, Layer, ManagedRuntime, Exit, Cause, Result } from "effect";
