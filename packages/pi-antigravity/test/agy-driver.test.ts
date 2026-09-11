@@ -1240,7 +1240,9 @@ rl.on("line", () => {
     state: "ACTIVE", step_type: "tool", tool_name: "run_command",
     tool_info: { name: "run_command", parameters: { CommandLine: "build" } } } });
   // Silent past the tool budget so a probe starts, then resume steadily and
-  // finish while that probe is still pending.
+  // finish while that probe is still pending. The resume delay needs margin
+  // for the driver's own line processing, which the budget only starts
+  // counting from — under parallel test load that lag can exceed 50ms.
   setTimeout(() => {
     let n = 0;
     const iv = setInterval(() => {
@@ -1253,7 +1255,7 @@ rl.on("line", () => {
         send({ event: "result", result: { conversation_id: "c", status: "SUCCESS", response: "built ok" } });
       }
     }, 30);
-  }, 150);
+  }, 400);
 });
 `,
   );
