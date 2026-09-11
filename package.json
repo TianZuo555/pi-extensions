@@ -39,7 +39,8 @@
       "extensions/todo.ts",
       "extensions/vscode-bridge.ts",
       "extensions/web-search.ts",
-      "extensions/find.ts"
+      "extensions/find.ts",
+      "extensions/compact.ts"
     ]
   },
   "scripts": {
