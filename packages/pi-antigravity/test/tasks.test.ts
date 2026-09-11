@@ -31,6 +31,12 @@ import {
   verifyAgyOrphans,
 } from "../lib/agy-children.ts";
 
+// Real-process tests assert ps/pgid/ancestry semantics that do not exist on
+// Windows, and their spawned children would outlive POSIX-only group kills —
+// a live spawn() handle pins this test file's process forever, which is what
+// hung the windows-latest CI job. Skip them there entirely.
+const posix = { skip: process.platform === "win32", timeout: 20_000 };
+
 test("parseLsofPids extracts unique positive pids", () => {
   assert.deepEqual(parseLsofPids("37101\n37101\n402\n"), [37101, 402]);
   assert.deepEqual(parseLsofPids(""), []);
@@ -87,38 +93,42 @@ test("selectAgyTaskDescendants keeps only group-leading agy children", () => {
   assert.deepEqual(selectAgyTaskDescendants(rows, [2144], 303), [{ pid: 300, startMs: now }]);
 });
 
-test("listAgyTasks reports a group-leading agy child as ambiguous, never stoppable", async () => {
-  // A running foreground run_command shares the exact same process shape as a
-  // background task (group-leading child of the same agy, near a log birth),
-  // so ancestry can never prove ownership — only a log holder may be stopped.
-  const brainDir = await fs.mkdtemp(path.join(os.tmpdir(), "agy-tasks-desc-"));
-  const taskDir = path.join(brainDir, "c-desc", ".system_generated", "tasks");
-  await fs.mkdir(taskDir, { recursive: true });
-  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
-    detached: true,
-    stdio: "ignore",
-  });
-  try {
-    await fs.writeFile(path.join(taskDir, "task-1.log"), "long-running command\n");
-    const [task] = await listAgyTasks("c-desc", { brainDir, agyPids: [process.pid] });
-    assert.ok(task);
-    assert.deepEqual(task.pids, [], "ancestry alone is not stoppable ownership");
-    assert.deepEqual(task.ambiguous, [child.pid]);
-    assert.deepEqual(task.orphans, []);
-    assert.equal(agyTaskStopPids(task).length, 0);
-  } finally {
-    if (child.pid !== undefined) {
-      try {
-        process.kill(-child.pid, "SIGKILL");
-      } catch {
-        // Already gone.
+test(
+  "listAgyTasks reports a group-leading agy child as ambiguous, never stoppable",
+  posix,
+  async () => {
+    // A running foreground run_command shares the exact same process shape as a
+    // background task (group-leading child of the same agy, near a log birth),
+    // so ancestry can never prove ownership — only a log holder may be stopped.
+    const brainDir = await fs.mkdtemp(path.join(os.tmpdir(), "agy-tasks-desc-"));
+    const taskDir = path.join(brainDir, "c-desc", ".system_generated", "tasks");
+    await fs.mkdir(taskDir, { recursive: true });
+    const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+      detached: true,
+      stdio: "ignore",
+    });
+    try {
+      await fs.writeFile(path.join(taskDir, "task-1.log"), "long-running command\n");
+      const [task] = await listAgyTasks("c-desc", { brainDir, agyPids: [process.pid] });
+      assert.ok(task);
+      assert.deepEqual(task.pids, [], "ancestry alone is not stoppable ownership");
+      assert.deepEqual(task.ambiguous, [child.pid]);
+      assert.deepEqual(task.orphans, []);
+      assert.equal(agyTaskStopPids(task).length, 0);
+    } finally {
+      if (child.pid !== undefined) {
+        try {
+          process.kill(-child.pid, "SIGKILL");
+        } catch {
+          // Already gone.
+        }
       }
+      await fs.rm(brainDir, { recursive: true, force: true });
     }
-    await fs.rm(brainDir, { recursive: true, force: true });
-  }
-});
+  },
+);
 
-test("listAgyTasks leaves tasks done when no agy ancestor is supplied", async () => {
+test("listAgyTasks leaves tasks done when no agy ancestor is supplied", posix, async () => {
   const brainDir = await fs.mkdtemp(path.join(os.tmpdir(), "agy-tasks-node-"));
   const taskDir = path.join(brainDir, "c-none", ".system_generated", "tasks");
   await fs.mkdir(taskDir, { recursive: true });
@@ -198,93 +208,101 @@ test("task stop sets contain only proven holders — orphans never qualify", () 
   assert.deepEqual(agyTaskStopPids(orphanOnly), []);
 });
 
-test("tasks started within ps resolution are never claimed as one task's own pids", async () => {
-  // `ps` etime is second-resolution, so two commands launched milliseconds
-  // apart cannot be resolved by start time. Guessing is dangerous: stopping a
-  // task signals its whole process group, so a wrong guess kills a sibling.
-  const brainDir = await fs.mkdtemp(path.join(os.tmpdir(), "agy-tasks-tie-"));
-  const taskDir = path.join(brainDir, "c-tie", ".system_generated", "tasks");
-  await fs.mkdir(taskDir, { recursive: true });
-  const kids = [] as Array<{ pid?: number }>;
-  try {
-    await fs.writeFile(path.join(taskDir, "task-1.log"), "first command\n");
-    kids.push(
-      spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
-        detached: true,
-        stdio: "ignore",
-      }),
-    );
-    await new Promise((resolve) => setTimeout(resolve, 30));
-    await fs.writeFile(path.join(taskDir, "task-2.log"), "second command\n");
-    kids.push(
-      spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
-        detached: true,
-        stdio: "ignore",
-      }),
-    );
+test(
+  "tasks started within ps resolution are never claimed as one task's own pids",
+  posix,
+  async () => {
+    // `ps` etime is second-resolution, so two commands launched milliseconds
+    // apart cannot be resolved by start time. Guessing is dangerous: stopping a
+    // task signals its whole process group, so a wrong guess kills a sibling.
+    const brainDir = await fs.mkdtemp(path.join(os.tmpdir(), "agy-tasks-tie-"));
+    const taskDir = path.join(brainDir, "c-tie", ".system_generated", "tasks");
+    await fs.mkdir(taskDir, { recursive: true });
+    const kids = [] as Array<{ pid?: number }>;
+    try {
+      await fs.writeFile(path.join(taskDir, "task-1.log"), "first command\n");
+      kids.push(
+        spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+          detached: true,
+          stdio: "ignore",
+        }),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      await fs.writeFile(path.join(taskDir, "task-2.log"), "second command\n");
+      kids.push(
+        spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+          detached: true,
+          stdio: "ignore",
+        }),
+      );
 
-    const tasks = await listAgyTasks("c-tie", { brainDir, agyPids: [process.pid] });
-    assert.equal(tasks.length, 2);
-    // No task may own a pid it cannot be proven to own...
-    for (const task of tasks) {
-      assert.deepEqual(task.pids, [], `${task.id} must not claim an ambiguous pid`);
-    }
-    // ...and the uncertainty must still be visible rather than silently dropped.
-    const flagged = tasks.filter((task) => task.ambiguous.length > 0);
-    assert.ok(flagged.length > 0, "ambiguous liveness must be reported somewhere");
-    assert.equal(
-      agyTaskStopPids({ pids: [] }).length,
-      0,
-      "ambiguous pids are not part of the stop set",
-    );
-  } finally {
-    for (const kid of kids) {
-      if (kid.pid !== undefined) {
-        try {
-          process.kill(-kid.pid, "SIGKILL");
-        } catch {
-          // Already gone.
-        }
+      const tasks = await listAgyTasks("c-tie", { brainDir, agyPids: [process.pid] });
+      assert.equal(tasks.length, 2);
+      // No task may own a pid it cannot be proven to own...
+      for (const task of tasks) {
+        assert.deepEqual(task.pids, [], `${task.id} must not claim an ambiguous pid`);
       }
-    }
-    await fs.rm(brainDir, { recursive: true, force: true });
-  }
-});
-
-test("agyGroupLeadingDescendants returns detached children without attributing them", async () => {
-  // The shutdown sweep needs every task-shaped child of our agy processes —
-  // proof is ancestry alone, so no task-log matching applies. Non-leading
-  // children (sharing agy's group) are excluded: they die with the parent.
-  const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
-    detached: true,
-    stdio: "ignore",
-  });
-  const inGroup = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
-    stdio: "ignore",
-  });
-  try {
-    const leaders = await agyGroupLeadingDescendants([process.pid]);
-    assert.ok(leaders.includes(child.pid as number), "the detached child is a group leader");
-    assert.ok(
-      !leaders.includes(inGroup.pid as number),
-      "a same-group child is not a task candidate",
-    );
-  } finally {
-    for (const pid of [child.pid, inGroup.pid]) {
-      if (pid !== undefined) {
-        try {
-          process.kill(-pid, "SIGKILL");
-        } catch {
+      // ...and the uncertainty must still be visible rather than silently dropped.
+      const flagged = tasks.filter((task) => task.ambiguous.length > 0);
+      assert.ok(flagged.length > 0, "ambiguous liveness must be reported somewhere");
+      assert.equal(
+        agyTaskStopPids({ pids: [] }).length,
+        0,
+        "ambiguous pids are not part of the stop set",
+      );
+    } finally {
+      for (const kid of kids) {
+        if (kid.pid !== undefined) {
           try {
-            process.kill(pid, "SIGKILL");
+            process.kill(-kid.pid, "SIGKILL");
           } catch {
             // Already gone.
           }
         }
       }
+      await fs.rm(brainDir, { recursive: true, force: true });
     }
-  }
-});
+  },
+);
+
+test(
+  "agyGroupLeadingDescendants returns detached children without attributing them",
+  posix,
+  async () => {
+    // The shutdown sweep needs every task-shaped child of our agy processes —
+    // proof is ancestry alone, so no task-log matching applies. Non-leading
+    // children (sharing agy's group) are excluded: they die with the parent.
+    const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+      detached: true,
+      stdio: "ignore",
+    });
+    const inGroup = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+      stdio: "ignore",
+    });
+    try {
+      const leaders = await agyGroupLeadingDescendants([process.pid]);
+      assert.ok(leaders.includes(child.pid as number), "the detached child is a group leader");
+      assert.ok(
+        !leaders.includes(inGroup.pid as number),
+        "a same-group child is not a task candidate",
+      );
+    } finally {
+      for (const pid of [child.pid, inGroup.pid]) {
+        if (pid !== undefined) {
+          try {
+            process.kill(-pid, "SIGKILL");
+          } catch {
+            try {
+              process.kill(pid, "SIGKILL");
+            } catch {
+              // Already gone.
+            }
+          }
+        }
+      }
+    }
+  },
+);
 
 test("transcriptTailVerdict detects agy's finished-but-withheld answer", () => {
   const step = (index: number, type: string, status: string) =>
@@ -388,7 +406,7 @@ test("agyTurnTranscriptVerdict reads the conversation transcript tail", async ()
   }
 });
 
-test("agyGroupSurvivors reports groups that still hold members", async () => {
+test("agyGroupSurvivors reports groups that still hold members", posix, async () => {
   const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
     detached: true,
     stdio: "ignore",
@@ -409,7 +427,7 @@ test("agyGroupSurvivors reports groups that still hold members", async () => {
   }
 });
 
-test("recorded task orphans surface as advisory only — never in a stop set", async () => {
+test("recorded task orphans surface as advisory only — never in a stop set", posix, async () => {
   // recordAgyTaskOrphans proves conversation-level provenance, but nothing
   // binds a recorded process to a specific task: a sibling foreground
   // `run_command` has the identical shape and may even share the command
@@ -474,7 +492,7 @@ test("recorded task orphans surface as advisory only — never in a stop set", a
   }
 });
 
-test("a dead orphan leader keeps its record while its group still lives", async () => {
+test("a dead orphan leader keeps its record while its group still lives", posix, async () => {
   // A wrapper that exited while its children still run must not lose its
   // orphan record: the group (pgid == recorded pid) is still ours — visible
   // in the listing, and reachable by whole-pi cleanup.
@@ -530,7 +548,7 @@ test("a dead orphan leader keeps its record while its group still lives", async 
   }
 });
 
-test("a stale orphan record is identity-checked before any signal", async () => {
+test("a stale orphan record is identity-checked before any signal", posix, async () => {
   // A record whose stored start time does not match the live process is a
   // reused pid — it must be pruned and must never be signalled, no matter
   // which exit path sweeps it. This is the killAllAgyTrees path.
@@ -563,7 +581,7 @@ test("a stale orphan record is identity-checked before any signal", async () => 
   }
 });
 
-test("signalVerifiedAgyOrphans sweeps only verified, in-scope orphan groups", async () => {
+test("signalVerifiedAgyOrphans sweeps only verified, in-scope orphan groups", posix, async () => {
   // The unified cleanup entry point: whole-pi (no conversation filter) or
   // scoped to one conversation — but always identity-verified first.
   const inScope = spawn("/bin/sleep", ["300"], { detached: true, stdio: "ignore" });
@@ -615,7 +633,7 @@ test("signalVerifiedAgyOrphans sweeps only verified, in-scope orphan groups", as
   }
 });
 
-test("a failed scan verifies nothing but prunes nothing either", async () => {
+test("a failed scan verifies nothing but prunes nothing either", posix, async () => {
   // `verifyAgyOrphans(undefined)` is the contract every scan failure must
   // keep: ownership records survive a transient `ps` failure so the next
   // successful sweep can still find the processes they name.
@@ -645,7 +663,7 @@ test("a failed scan verifies nothing but prunes nothing either", async () => {
   }
 });
 
-test("real listAgyTasks and killAllAgyTrees keep records through a failed ps", async () => {
+test("real listAgyTasks and killAllAgyTrees keep records through a failed ps", posix, async () => {
   // Failure-injection through PATH: a `ps` that exits 1 must not make the
   // async listing or the exit sweep treat "scan failed" as "all processes
   // gone" — records are retained and verify again once ps recovers.
@@ -716,7 +734,7 @@ test("real listAgyTasks and killAllAgyTrees keep records through a failed ps", a
   }
 });
 
-test("a late-joining member keeps a leaderless group verifiable", async () => {
+test("a late-joining member keeps a leaderless group verifiable", posix, async () => {
   // Builds and watchers spawn children long after their leader started. A
   // member's identity is captured while the leader still verifies; after the
   // leader exits, that recorded identity — not any time window — is what
@@ -792,7 +810,7 @@ test("a late-joining member keeps a leaderless group verifiable", async () => {
   }
 });
 
-test("an unrecorded member cannot prove a leaderless group", async () => {
+test("an unrecorded member cannot prove a leaderless group", posix, async () => {
   // The mirror of the refresh path: a member whose identity was never
   // captured (it spawned after the last live verification, then the leader
   // died) leaves the group unverifiable — it stays recorded but is never
@@ -851,55 +869,59 @@ test("an unrecorded member cannot prove a leaderless group", async () => {
   }
 });
 
-test("a recorded orphan already claimed by a holder task is never re-attributed", async () => {
-  // The holder is task-1's process (it holds the log open); the same pid is
-  // also in the orphan registry. Claimed groups must be excluded before any
-  // orphan matching — otherwise task-2 displays it and cleanup paths could
-  // reach task-1's process.
-  const brainDir = await fs.mkdtemp(path.join(os.tmpdir(), "agy-tasks-claimed-"));
-  const taskDir = path.join(brainDir, "conv-c", ".system_generated", "tasks");
-  await fs.mkdir(taskDir, { recursive: true });
-  const holderLog = path.join(taskDir, "task-1.log");
-  await fs.writeFile(holderLog, "holder command\n");
-  await fs.writeFile(path.join(taskDir, "task-2.log"), "orphan command\n");
-  const holder = spawn(
-    process.execPath,
-    [
-      "-e",
-      `require('node:fs').openSync(${JSON.stringify(holderLog)}, 'a');` +
-        "setInterval(() => {}, 1000)",
-    ],
-    { detached: true, stdio: "ignore" },
-  );
-  try {
-    assert.ok(holder.pid !== undefined);
-    await new Promise((resolve) => setTimeout(resolve, 400));
-    recordAgyTaskOrphans(process.pid, "conv-c");
-    const tasks = await listAgyTasks("conv-c", { brainDir, agyPids: [process.pid] });
-    const first = tasks.find((task) => task.id === "task-1");
-    const second = tasks.find((task) => task.id === "task-2");
-    assert.ok(first && second);
-    assert.ok(first.pids.includes(holder.pid), "the holder is task-1's process");
-    for (const bucket of [second.pids, second.orphans, second.ambiguous]) {
-      assert.ok(
-        !bucket.includes(holder.pid),
-        `task-2 must not reference task-1's claimed pid ${holder.pid}`,
-      );
-    }
-  } finally {
-    getAgyChildrenRegistry().taskOrphans.delete(holder.pid as number);
-    if (holder.pid !== undefined) {
-      try {
-        process.kill(-holder.pid, "SIGKILL");
-      } catch {
-        // Already gone.
+test(
+  "a recorded orphan already claimed by a holder task is never re-attributed",
+  posix,
+  async () => {
+    // The holder is task-1's process (it holds the log open); the same pid is
+    // also in the orphan registry. Claimed groups must be excluded before any
+    // orphan matching — otherwise task-2 displays it and cleanup paths could
+    // reach task-1's process.
+    const brainDir = await fs.mkdtemp(path.join(os.tmpdir(), "agy-tasks-claimed-"));
+    const taskDir = path.join(brainDir, "conv-c", ".system_generated", "tasks");
+    await fs.mkdir(taskDir, { recursive: true });
+    const holderLog = path.join(taskDir, "task-1.log");
+    await fs.writeFile(holderLog, "holder command\n");
+    await fs.writeFile(path.join(taskDir, "task-2.log"), "orphan command\n");
+    const holder = spawn(
+      process.execPath,
+      [
+        "-e",
+        `require('node:fs').openSync(${JSON.stringify(holderLog)}, 'a');` +
+          "setInterval(() => {}, 1000)",
+      ],
+      { detached: true, stdio: "ignore" },
+    );
+    try {
+      assert.ok(holder.pid !== undefined);
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      recordAgyTaskOrphans(process.pid, "conv-c");
+      const tasks = await listAgyTasks("conv-c", { brainDir, agyPids: [process.pid] });
+      const first = tasks.find((task) => task.id === "task-1");
+      const second = tasks.find((task) => task.id === "task-2");
+      assert.ok(first && second);
+      assert.ok(first.pids.includes(holder.pid), "the holder is task-1's process");
+      for (const bucket of [second.pids, second.orphans, second.ambiguous]) {
+        assert.ok(
+          !bucket.includes(holder.pid),
+          `task-2 must not reference task-1's claimed pid ${holder.pid}`,
+        );
       }
+    } finally {
+      getAgyChildrenRegistry().taskOrphans.delete(holder.pid as number);
+      if (holder.pid !== undefined) {
+        try {
+          process.kill(-holder.pid, "SIGKILL");
+        } catch {
+          // Already gone.
+        }
+      }
+      await fs.rm(brainDir, { recursive: true, force: true });
     }
-    await fs.rm(brainDir, { recursive: true, force: true });
-  }
-});
+  },
+);
 
-test("a cwd+time orphan without recorded provenance is never stoppable", async () => {
+test("a cwd+time orphan without recorded provenance is never stoppable", posix, async () => {
   // The agy config cwd is shared across conversations, so a launchd-orphaned
   // process matching cwd+time can name another session's work. Without a
   // recordAgyTaskOrphans entry it must stay out of `orphans` (and thus out of
@@ -961,70 +983,74 @@ test("a cwd+time orphan without recorded provenance is never stoppable", async (
   }
 });
 
-test("mixed holder/ancestry detection never reassigns a confirmed task's process", async () => {
-  // task-1 is detected authoritatively (its process holds the log open); task-2
-  // has no holder and falls back to ancestry. The ancestry candidate pool must
-  // exclude everything already claimed, or task-2 inherits task-1's pid and
-  // stopping task-2 kills task-1 (stops signal the whole process group).
-  const brainDir = await fs.mkdtemp(path.join(os.tmpdir(), "agy-tasks-mixed-"));
-  const taskDir = path.join(brainDir, "c-mixed", ".system_generated", "tasks");
-  await fs.mkdir(taskDir, { recursive: true });
-  const holderLog = path.join(taskDir, "task-1.log");
-  const kids: Array<{ pid?: number }> = [];
-  try {
-    await fs.writeFile(holderLog, "holder command\n");
-    // Group-leading child of this process that also holds task-1.log open.
-    const holder = spawn(
-      process.execPath,
-      [
-        "-e",
-        `require('node:fs').openSync(${JSON.stringify(holderLog)}, 'a');` +
-          "setInterval(() => {}, 1000)",
-      ],
-      { detached: true, stdio: "ignore" },
-    );
-    kids.push(holder);
-    await new Promise((resolve) => setTimeout(resolve, 400));
-
-    await fs.writeFile(path.join(taskDir, "task-2.log"), "ancestry command\n");
-    const other = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
-      detached: true,
-      stdio: "ignore",
-    });
-    kids.push(other);
-    await new Promise((resolve) => setTimeout(resolve, 400));
-
-    const tasks = await listAgyTasks("c-mixed", { brainDir, agyPids: [process.pid] });
-    const first = tasks.find((task) => task.id === "task-1");
-    const second = tasks.find((task) => task.id === "task-2");
-    assert.ok(first && second);
-
-    // The authoritative match stands and stays stoppable.
-    assert.deepEqual(first?.pids, [holder.pid]);
-    // The ancestry candidate is visible but advisory — never stoppable, and
-    // never attributed to the confirmed task's process.
-    assert.deepEqual(second?.pids, []);
-    assert.deepEqual(second?.ambiguous, [other.pid]);
-    for (const bucket of [second?.pids, second?.ambiguous, second?.orphans]) {
-      assert.ok(
-        !(bucket ?? []).includes(holder.pid as number),
-        `task-2 must not reference task-1's pid ${holder.pid}`,
+test(
+  "mixed holder/ancestry detection never reassigns a confirmed task's process",
+  posix,
+  async () => {
+    // task-1 is detected authoritatively (its process holds the log open); task-2
+    // has no holder and falls back to ancestry. The ancestry candidate pool must
+    // exclude everything already claimed, or task-2 inherits task-1's pid and
+    // stopping task-2 kills task-1 (stops signal the whole process group).
+    const brainDir = await fs.mkdtemp(path.join(os.tmpdir(), "agy-tasks-mixed-"));
+    const taskDir = path.join(brainDir, "c-mixed", ".system_generated", "tasks");
+    await fs.mkdir(taskDir, { recursive: true });
+    const holderLog = path.join(taskDir, "task-1.log");
+    const kids: Array<{ pid?: number }> = [];
+    try {
+      await fs.writeFile(holderLog, "holder command\n");
+      // Group-leading child of this process that also holds task-1.log open.
+      const holder = spawn(
+        process.execPath,
+        [
+          "-e",
+          `require('node:fs').openSync(${JSON.stringify(holderLog)}, 'a');` +
+            "setInterval(() => {}, 1000)",
+        ],
+        { detached: true, stdio: "ignore" },
       );
-    }
-    assert.ok(
-      !agyTaskStopPids(second as AgyTask).includes(other.pid as number),
-      "stopping task-2 must not signal its ambiguous match",
-    );
-  } finally {
-    for (const kid of kids) {
-      if (kid.pid !== undefined) {
-        try {
-          process.kill(-kid.pid, "SIGKILL");
-        } catch {
-          // Already gone.
+      kids.push(holder);
+      await new Promise((resolve) => setTimeout(resolve, 400));
+
+      await fs.writeFile(path.join(taskDir, "task-2.log"), "ancestry command\n");
+      const other = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+        detached: true,
+        stdio: "ignore",
+      });
+      kids.push(other);
+      await new Promise((resolve) => setTimeout(resolve, 400));
+
+      const tasks = await listAgyTasks("c-mixed", { brainDir, agyPids: [process.pid] });
+      const first = tasks.find((task) => task.id === "task-1");
+      const second = tasks.find((task) => task.id === "task-2");
+      assert.ok(first && second);
+
+      // The authoritative match stands and stays stoppable.
+      assert.deepEqual(first?.pids, [holder.pid]);
+      // The ancestry candidate is visible but advisory — never stoppable, and
+      // never attributed to the confirmed task's process.
+      assert.deepEqual(second?.pids, []);
+      assert.deepEqual(second?.ambiguous, [other.pid]);
+      for (const bucket of [second?.pids, second?.ambiguous, second?.orphans]) {
+        assert.ok(
+          !(bucket ?? []).includes(holder.pid as number),
+          `task-2 must not reference task-1's pid ${holder.pid}`,
+        );
+      }
+      assert.ok(
+        !agyTaskStopPids(second as AgyTask).includes(other.pid as number),
+        "stopping task-2 must not signal its ambiguous match",
+      );
+    } finally {
+      for (const kid of kids) {
+        if (kid.pid !== undefined) {
+          try {
+            process.kill(-kid.pid, "SIGKILL");
+          } catch {
+            // Already gone.
+          }
         }
       }
+      await fs.rm(brainDir, { recursive: true, force: true });
     }
-    await fs.rm(brainDir, { recursive: true, force: true });
-  }
-});
+  },
+);

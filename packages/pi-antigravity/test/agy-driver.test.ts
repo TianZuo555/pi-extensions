@@ -1542,7 +1542,9 @@ test("a cleared parked state falls back to liveness probing and the stall kill",
   }
 });
 
-test("recycling a parked child records its detached task as a proven orphan", async () => {
+test("recycling a parked child records its detached task as a proven orphan", {
+  skip: process.platform === "win32" ? "POSIX orphan recording" : false,
+}, async () => {
   // The SIGTERM-ignoring detached worker outlives the recycled agy child —
   // but it was recorded as this conversation's orphan while ancestry could
   // still prove it, so /agy-tasks and shutdown can stop it afterwards.
