@@ -19,6 +19,7 @@ import type {
   ExtensionUIContext,
   ProviderModelConfig,
 } from "@earendil-works/pi-coding-agent";
+import { getDocsPath, getExamplesPath, getReadmePath } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { randomUUID } from "node:crypto";
@@ -46,7 +47,7 @@ import {
   activateSkillDescription,
   activateSkillParameters,
   handleActivateSkill,
-  nonWorkspaceSkills,
+  piPrivateSkills,
   usableSkillCatalog,
   type SkillLite,
 } from "./lib/skills.ts";
@@ -89,7 +90,11 @@ import {
 import { formatAgySubagents, trackAgySubagent, type AgySubagentEntry } from "./lib/subagents.ts";
 import { findAgyArtifact, listAgyArtifacts } from "./lib/artifacts.ts";
 import { fetchAgyUsage } from "./lib/usage.ts";
-import { WRAPPER_TOOL_DESCRIPTION, WRAPPER_TOOL_NAME } from "./lib/prompt.ts";
+import {
+  buildAgyRelayedInstructions,
+  WRAPPER_TOOL_DESCRIPTION,
+  WRAPPER_TOOL_NAME,
+} from "./lib/prompt.ts";
 import { wrapperToolActiveAfterModelSwitch } from "./lib/wrapper-activation.ts";
 import { openAgyTasksPicker } from "./src/tasks-ui.ts";
 import { openArtifact, openAgyArtifactsPicker } from "./src/artifacts-ui.ts";
@@ -355,6 +360,9 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
       await execAgy(["mcp", "remove", serverName], SHUTDOWN_AGY_TIMEOUT_MS);
     },
     evictMcpCache: removeMcpCacheEntry,
+    // tasksUi is populated by the session_start handler; read it lazily so a
+    // warning raised before UI attach is simply dropped rather than throwing.
+    notifyWarning: (message) => tasksUi?.notify(message, "warning"),
   });
 
   /**
@@ -381,6 +389,18 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
   // is respected. Model-invocation-disabled skills are excluded.
   let loadedSkills: SkillLite[] = [];
 
+  /**
+   * The instruction block relayed to agy on fresh conversations: pi's
+   * documentation section only — boilerplate, tool inventory, skills and
+   * workspace rules all reach agy through other channels or not at all.
+   */
+  const getSystemPromptRelay = () =>
+    buildAgyRelayedInstructions({
+      readme: getReadmePath(),
+      docs: getDocsPath(),
+      examples: getExamplesPath(),
+    });
+
   function captureSkills(skills: unknown): void {
     if (!Array.isArray(skills)) return;
     loadedSkills = skills
@@ -396,15 +416,18 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
       }));
   }
 
-  const bridgedSkills = () => usableSkillCatalog(nonWorkspaceSkills(loadedSkills, tasksSessionCwd));
+  const bridgedSkills = () => usableSkillCatalog(piPrivateSkills(loadedSkills, tasksSessionCwd));
 
   /**
    * Bridge mode keeps the catalog in activate_skill's schema (refreshed on
-   * every agy spawn), so nothing is appended to the prompt. When the bridge is
-   * off OR failed to register with agy, fall back to the direct-mode path
-   * catalog so skills never become silently invisible.
+   * every agy spawn), so nothing is appended to the prompt. When the bridge
+   * is off OR failed to register, pi-private skills are simply unavailable —
+   * warn the user once instead of stuffing the catalog into the prompt.
    */
-  const getBootstrapSuffix = () => bridgeManager.getBootstrapSuffix(bridgedSkills());
+  const getBootstrapSuffix = () => {
+    bridgeManager.warnSkillsUnavailable(bridgedSkills());
+    return undefined;
+  };
 
   /** Publish one `pi__p<pid>__activate_skill` tool for global pi skills. */
   function refreshSkillTools(): void {
@@ -678,6 +701,7 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
         (modelId) => currentCache.models.find((candidate) => candidate.id === modelId),
         readAgyProcessProfile,
         bridgeManager.processRevision,
+        getSystemPromptRelay,
       ),
     });
   };
@@ -695,7 +719,9 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
   // correct list even when the default model is not from antigravity (the
   // session_start/model_select hooks only refresh once agy is selected): a
   // no-op for fresh caches, otherwise a background heal of the registration.
-  void refreshStaleModelsWhenSelected();
+  void refreshStaleModelsWhenSelected().catch((error) => {
+    console.error("pi-antigravity: background model refresh failed", error);
+  });
 
   pi.on("before_agent_start", (event) => {
     captureSkills(event.systemPromptOptions?.skills);

@@ -418,8 +418,8 @@ test("relayed instructions omit Pi's tool inventory but keep all other guidance"
   assert.match(relayed, /## Coding Principles/);
   assert.match(relayed, /Do not preserve backward compatibility\./);
   assert.match(relayed, /project_instructions path="\/repo\/AGENTS\.md"/);
-  // The framing still tells agy the relayed tool guidance is not its own.
-  assert.match(relayed, /cannot call it/);
+  // The framing still scopes agy to its own tool schemas.
+  assert.match(relayed, /actual agy or Pi bridge tool schemas/);
   assert.match(relayed, /## End of Pi instructions/);
 });
 

@@ -518,11 +518,12 @@ test("createBridgeLifecycleManager handles start-success/add-failure, retry, tea
     assert.equal(warnings.length, 1);
     assert.match(warnings[0], /pi-tool bridge unavailable/);
 
-    // Fallback: direct skill catalog is provided because registration failed
-    const fallbackSuffix = manager.getBootstrapSuffix(skills);
-    assert.ok(fallbackSuffix);
-    assert.match(fallbackSuffix, /## pi Agent Skills/);
-    assert.match(fallbackSuffix, /herdr/);
+    // Registration failed: no prompt catalog is ever injected — the user is
+    // warned once that pi-private skills are unavailable.
+    manager.warnSkillsUnavailable(skills);
+    manager.warnSkillsUnavailable(skills);
+    assert.equal(warnings.length, 2);
+    assert.match(warnings[1], /pi-private skills are unavailable/);
 
     // 2. Retry attempt: addMcpServer succeeds
     mcpAddShouldFail = false;
@@ -532,8 +533,9 @@ test("createBridgeLifecycleManager handles start-success/add-failure, retry, tea
     assert.equal(manager.isRegistered(), true, "marked as registered");
     assert.equal(addCalls, 2);
 
-    // When registered: bootstrap suffix is suppressed (empty/undefined)
-    assert.equal(manager.getBootstrapSuffix(skills), undefined);
+    // When registered there is nothing to warn about.
+    manager.warnSkillsUnavailable(skills);
+    assert.equal(warnings.length, 2);
 
     // Idempotent: calling ensureRegistered again when already registered is a no-op
     const thirdResult = await manager.ensureRegistered();
@@ -546,9 +548,6 @@ test("createBridgeLifecycleManager handles start-success/add-failure, retry, tea
     assert.equal(manager.isRegistered(), false, "marked as unregistered");
     assert.equal(removeCalls, 1, "removeMcpServer called");
     assert.equal(evictCalls, 1, "evictMcpCache called");
-
-    // Post-teardown: fallback catalog is provided again
-    assert.ok(manager.getBootstrapSuffix(skills));
   } finally {
     await manager.teardown();
   }
@@ -557,6 +556,7 @@ test("createBridgeLifecycleManager handles start-success/add-failure, retry, tea
 test("createBridgeLifecycleManager respects disabled setting", async () => {
   const bridge = new AgyPiBridge("pi-bridge-disabled");
   let addCalled = false;
+  const warnings: string[] = [];
   const manager = createBridgeLifecycleManager({
     bridge,
     bridgeToken: "test-token",
@@ -566,6 +566,7 @@ test("createBridgeLifecycleManager respects disabled setting", async () => {
     },
     removeMcpServer: async () => {},
     evictMcpCache: async () => {},
+    notifyWarning: (msg) => warnings.push(msg),
   });
 
   const skills: SkillLite[] = [
@@ -582,5 +583,21 @@ test("createBridgeLifecycleManager respects disabled setting", async () => {
   assert.equal(addCalled, false, "did not attempt MCP registration");
   assert.equal(manager.isRunning(), false);
   assert.equal(manager.isRegistered(), false);
-  assert.ok(manager.getBootstrapSuffix(skills));
+  // Bridge disabled: the user hears about unreachable pi-private skills once.
+  manager.warnSkillsUnavailable(skills);
+  manager.warnSkillsUnavailable(skills);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /disabled.*pi-private skills/);
+  // An empty catalog never warns at all.
+  const fresh = createBridgeLifecycleManager({
+    bridge,
+    bridgeToken: "t",
+    enabled: false,
+    addMcpServer: async () => {},
+    removeMcpServer: async () => {},
+    evictMcpCache: async () => {},
+    notifyWarning: (msg) => warnings.push(msg),
+  });
+  fresh.warnSkillsUnavailable([]);
+  assert.equal(warnings.length, 1);
 });

@@ -239,6 +239,13 @@ export function streamAntigravity(
   getProcessProfile: () => AgyProcessProfile = readAgyProcessProfile,
   /** Combined bridge registration/catalog revision. */
   getBridgeRevision: () => string | undefined = () => undefined,
+  /**
+   * The instruction block relayed to agy on fresh conversations, composed
+   * from pi's structured systemPromptOptions — only what agy cannot reach
+   * itself (pi docs paths, user custom prompt, out-of-workspace context
+   * files). Falls back to pi's rendered systemPrompt when absent (tests).
+   */
+  getSystemPromptRelay?: () => string | undefined,
 ) {
   return (
     model: Model<string>,
@@ -332,7 +339,12 @@ export function streamAntigravity(
         const controller = await turnRuntime.runPromise(
           turnService.beginStreamTurn({
             prompt,
-            systemPrompt: context.systemPrompt,
+            // Summary requests (compaction, branch summaries) carry their own
+            // instructions in context.systemPrompt — the docs-only relay is
+            // for user turns only and must not override them.
+            systemPrompt: summaryRequest
+              ? context.systemPrompt
+              : (getSystemPromptRelay?.() ?? context.systemPrompt),
             historyBootstrap: summaryRequest ? undefined : piHistoryBootstrap(context),
             bootstrapSuffix: summaryRequest ? undefined : getBootstrapSuffix?.(),
             modelId: model.id,

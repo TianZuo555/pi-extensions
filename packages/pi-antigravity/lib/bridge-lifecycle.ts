@@ -1,5 +1,5 @@
 import type { AgyPiBridge } from "./bridge.ts";
-import { formatSkillCatalog, type SkillLite } from "./skills.ts";
+import type { SkillLite } from "./skills.ts";
 
 export interface BridgeLifecycleDeps {
   bridge: AgyPiBridge;
@@ -19,13 +19,20 @@ export interface BridgeLifecycleManager {
   readonly teardown: () => Promise<void>;
   readonly registrationGeneration: () => number;
   readonly processRevision: () => string;
-  readonly getBootstrapSuffix: (skills: SkillLite[]) => string | undefined;
+  /**
+   * Warn once that pi-private skills cannot reach agy without the bridge.
+   * The skill catalog is never injected into prompts — `activate_skill` is
+   * the only channel, so a missing bridge means those skills are simply
+   * unavailable and the user should hear about it.
+   */
+  readonly warnSkillsUnavailable: (skills: SkillLite[]) => void;
 }
 
 export function createBridgeLifecycleManager(deps: BridgeLifecycleDeps): BridgeLifecycleManager {
   const enabled = deps.enabled ?? true;
   let registered = false;
   let generation = 0;
+  let warnedSkillsUnavailable = false;
 
   return {
     isRegistered: () => registered,
@@ -84,7 +91,15 @@ export function createBridgeLifecycleManager(deps: BridgeLifecycleDeps): BridgeL
       if (changed) generation += 1;
     },
 
-    getBootstrapSuffix: (skills: SkillLite[]) =>
-      enabled && registered ? undefined : formatSkillCatalog(skills),
+    warnSkillsUnavailable: (skills) => {
+      if (warnedSkillsUnavailable || skills.length === 0) return;
+      if (enabled && registered) return;
+      warnedSkillsUnavailable = true;
+      deps.notifyWarning?.(
+        enabled
+          ? "antigravity: pi-tool bridge failed to register — pi-private skills are unavailable to agy this session."
+          : "antigravity: pi-tool bridge is disabled — pi-private skills are unavailable to agy this session.",
+      );
+    },
   };
 }

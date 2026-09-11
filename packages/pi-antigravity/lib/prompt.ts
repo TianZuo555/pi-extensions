@@ -92,8 +92,8 @@ export function stripPiToolInventory(instructions: string): string {
   for (; end < lines.length; end += 1) {
     const line = lines[end];
     if (line.trim() === "") continue;
-    // Pi renders each builtin as "- name: description".
-    if (/^-\s+\w[\w.[\]]*:\s+\S/.test(line)) {
+    // Pi renders each builtin as "- name: description" (names may hyphenate).
+    if (/^-\s+\w[\w.[\]-]*:\s+\S/.test(line)) {
       bullets += 1;
       continue;
     }
@@ -111,13 +111,47 @@ export function stripPiToolInventory(instructions: string): string {
     .trim();
 }
 
+/** Absolute paths into pi's own documentation install. */
+export interface PiDocsPaths {
+  readme: string;
+  docs: string;
+  examples: string;
+}
+
+/**
+ * The instruction block relayed to agy on fresh conversations — pi's own
+ * documentation section only, rebuilt from the installed package's path
+ * getters rather than parsed out of the rendered prompt (the wording is
+ * copied from pi's buildSystemPrompt so agy sees the canonical guidance).
+ *
+ * Nothing else in pi's rendered system prompt is worth relaying: the
+ * boilerplate and guidelines describe pi's own tools (which agy cannot
+ * call), workspace AGENTS.md/rules files are agy's own native discovery,
+ * skills arrive through the activate_skill bridge, and user-authored
+ * customizations (customPrompt, appendSystemPrompt, promptGuidelines) are
+ * pi-side agent config — not agy input. Summary requests never see this
+ * block: they keep their own instructions.
+ */
+export function buildAgyRelayedInstructions(piDocs: PiDocsPaths): string {
+  return [
+    "Pi documentation (read only when the user asks about pi itself, its SDK, extensions, themes, skills, or TUI):",
+    `- Main documentation: ${piDocs.readme}`,
+    `- Additional docs: ${piDocs.docs}`,
+    `- Examples: ${piDocs.examples} (extensions, custom tools, SDK)`,
+    "- When reading pi docs or examples, resolve docs/... under Additional docs and examples/... under Examples, not the current working directory",
+    "- When asked about: extensions (docs/extensions.md, examples/extensions/), themes (docs/themes.md), skills (docs/skills.md), prompt templates (docs/prompt-templates.md), TUI components (docs/tui.md), keybindings (docs/keybindings.md), SDK integrations (docs/sdk.md), custom providers (docs/custom-provider.md), adding models (docs/models.md), pi packages (docs/packages.md), environment variables (docs/environment-variables.md)",
+    "- When working on pi topics, read the docs and examples, and follow .md cross-references before implementing",
+    "- Always read pi .md files completely and follow links to related docs (e.g., tui.md for TUI API details)",
+  ].join("\n");
+}
+
 /** agy's CLI has no system-role input; relay Pi instructions explicitly as prompt text. */
 export function piSystemInstructionsPrompt(instructions: string): string {
   const relayed = stripPiToolInventory(instructions);
   return [
     "## Current Pi instructions",
     "The following is Pi's current instruction snapshot, relayed as user-prompt text because this CLI has no system-prompt channel. It replaces any earlier Pi instruction snapshot in this conversation; native system instructions still take precedence.",
-    "Pi's own tool inventory is omitted because you cannot call it, and any tool guidance below describes Pi's tools rather than yours. Use only the actual agy or Pi bridge tool schemas available to you, while respecting applicable project and user guidance.",
+    "Use only the actual agy or Pi bridge tool schemas available to you, while respecting applicable project and user guidance.",
     relayed ||
       "Pi's instruction snapshot is now empty. Stop applying earlier relayed Pi instructions.",
     "## End of Pi instructions",

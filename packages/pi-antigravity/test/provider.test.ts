@@ -330,14 +330,23 @@ for (const status of ["OK", "ERROR", "missing-result"] as const) {
 
 /** Harness for stream-level tests: a turn controller behind a fake runtime. */
 function makeStreamHarness(
-  options: { prompt?: string; context?: Context; createIsolatedRuntime?: () => any } = {},
+  options: {
+    prompt?: string;
+    context?: Context;
+    createIsolatedRuntime?: () => any;
+    getSystemPromptRelay?: () => string | undefined;
+  } = {},
 ) {
   const prompt = options.prompt ?? "hello";
   const controller = new AgyTurnController(prompt);
   let sharedBeginCount = 0;
-  let request: { prompt: string; historyBootstrap?: string } | undefined;
+  let request: { prompt: string; historyBootstrap?: string; systemPrompt?: string } | undefined;
   const fakeService = {
-    beginStreamTurn: (input: { prompt: string; historyBootstrap?: string }) =>
+    beginStreamTurn: (input: {
+      prompt: string;
+      historyBootstrap?: string;
+      systemPrompt?: string;
+    }) =>
       Effect.sync(() => {
         request = input;
         sharedBeginCount += 1;
@@ -369,6 +378,10 @@ function makeStreamHarness(
     undefined,
     undefined,
     options.createIsolatedRuntime,
+    undefined,
+    undefined,
+    undefined,
+    options.getSystemPromptRelay,
   );
   const model: Model<string> = {
     id: "gemini-3.7-flash",
@@ -562,6 +575,8 @@ test("streamAntigravity isolates pi summarization from the resumed agy conversat
       systemPrompt: "Pi summary instructions",
     },
     createIsolatedRuntime: () => isolatedRuntime as any,
+    // A live relay getter must not override the summary's own instructions.
+    getSystemPromptRelay: () => "DOCS-ONLY-RELAY",
   });
   const eventsPromise = harness.collect();
 
@@ -577,12 +592,35 @@ test("streamAntigravity isolates pi summarization from the resumed agy conversat
   assert.equal(harness.getSharedBeginCount(), 0);
   assert.equal(isolatedBeginCount, 1);
   assert.deepEqual(isolatedPrompts, [summaryPrompt]);
+  // The summary keeps its own caller instructions — the docs-only relay is
+  // for user turns only.
   assert.equal(isolatedSystemPrompt, "Pi summary instructions");
   const done = events.find((event) => event.type === "done");
   assert.equal(done?.message.content[0]?.text, "Compact summary");
   assert.equal(done?.message.usage.totalTokens, 0);
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.equal(disposed, true);
+});
+
+test("streamAntigravity relays the docs-only block on user turns", async () => {
+  const harness = makeStreamHarness({
+    prompt: "hello",
+    context: {
+      ...contextWith([{ role: "user", content: "hello" }]),
+      systemPrompt: "full pi system prompt blob",
+    },
+    getSystemPromptRelay: () => "DOCS-ONLY-RELAY",
+  });
+  const eventsPromise = harness.collect();
+  harness.controller.push({
+    type: "result",
+    status: "OK",
+    response: "done",
+    error: undefined,
+    usage: undefined,
+  });
+  await eventsPromise;
+  assert.equal(harness.getRequest()?.systemPrompt, "DOCS-ONLY-RELAY");
 });
 
 test("streamAntigravity sends print-mode caller text with appended extension context", async () => {
