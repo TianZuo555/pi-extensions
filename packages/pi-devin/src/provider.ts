@@ -24,7 +24,7 @@ import type { ContentBlock } from "@agentclientprotocol/sdk";
 import type { DevinRuntimeInstance, DevinRuntimeShape } from "./runtime.ts";
 import type { DevinActivity, DevinTurnController, DevinUsage } from "./turn.ts";
 import type { DevinReplayStore } from "../lib/replay.ts";
-import { devinIncompleteToolError } from "../lib/prompt.ts";
+import { devinBackgroundToolNote, devinIncompleteToolError } from "../lib/prompt.ts";
 import { summarizeDevinCall, type DevinToolView } from "../lib/tool-content.ts";
 import type { DevinModelFamily } from "../lib/models.ts";
 import { findDevinGroup, resolveDevinModelRow } from "../lib/models.ts";
@@ -127,11 +127,16 @@ export function isSummarizationRequest(prompt: string): boolean {
 
 /** Map devin usage fields to pi usage fields. */
 export function mapUsage(u: DevinUsage | undefined): AssistantMessage["usage"] {
+  // Devin's inputTokens is the TOTAL prompt size and already includes
+  // cachedReadTokens; pi's usage.input is the non-cached portion (Anthropic
+  // convention). Passing the total through double-counts cache reads and
+  // trips pi's per-turn "Cache miss" detector.
+  const cached = u?.cachedReadTokens ?? 0;
   return {
-    input: u?.inputTokens ?? 0,
+    input: Math.max(0, (u?.inputTokens ?? 0) - cached),
     output: u?.outputTokens ?? 0,
     reasoning: undefined,
-    cacheRead: u?.cachedReadTokens ?? 0,
+    cacheRead: cached,
     cacheWrite: 0,
     totalTokens: u?.contextUsed ?? (u?.inputTokens ?? 0) + (u?.outputTokens ?? 0),
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
@@ -221,10 +226,15 @@ export function streamDevin(deps: DevinProviderDeps) {
           throw new Error("devin: no user content found in the request context.");
         }
 
+        const group = findDevinGroup(deps.families(), model.id);
+        const concreteModelId = group
+          ? resolveDevinModelRow(group, options?.reasoning).id
+          : model.id;
+
         const summaryRequest = isSummarizationRequest(prompt);
         if (summaryRequest) {
           const result = await runtime.runPromise(
-            service.runSummaryTurn(prompt, options?.signal),
+            service.runSummaryTurn(prompt, options?.signal, concreteModelId),
             options?.signal ? { signal: options.signal } : undefined,
           );
           output.content.push({ type: "text", text: result.text });
@@ -247,11 +257,6 @@ export function streamDevin(deps: DevinProviderDeps) {
           stream.end();
           return;
         }
-
-        const group = findDevinGroup(deps.families(), model.id);
-        const concreteModelId = group
-          ? resolveDevinModelRow(group, options?.reasoning).id
-          : model.id;
 
         const blocks: ContentBlock[] = images
           .filter(
@@ -384,19 +389,32 @@ export function streamDevin(deps: DevinProviderDeps) {
 
         /**
          * Tool calls that never reached a terminal status get failed replay
-         * cards so pi's toolUse loop stays consistent.
+         * cards — or a neutral note for still-running background shells — so
+         * pi's toolUse loop stays consistent.
          */
         const sweepIncompleteTools = (): number => {
           const incomplete = controller.takeIncompleteTools();
           for (const view of incomplete) {
             const pending = pendingTools.get(view.id);
             const id = pending?.id ?? `devin-replay-${++replayCallSeq}`;
-            replay.record(id, {
-              title: view.title ?? "tool call",
-              kind: view.kind,
-              tool: view.tool,
-              error: devinIncompleteToolError(view.title ?? "tool call"),
-            });
+            if (view.background) {
+              // A detached shell outliving the turn is normal — replay it as a
+              // note, not a failure.
+              const note = devinBackgroundToolNote(view.shellId);
+              replay.record(id, {
+                title: view.title ?? "tool call",
+                kind: view.kind,
+                tool: view.tool,
+                output: view.output ? `${view.output}\n${note}` : note,
+              });
+            } else {
+              replay.record(id, {
+                title: view.title ?? "tool call",
+                kind: view.kind,
+                tool: view.tool,
+                error: devinIncompleteToolError(view.title ?? "tool call"),
+              });
+            }
             const index = pending?.index ?? output.content.length;
             const toolCall = pending
               ? output.content[index]

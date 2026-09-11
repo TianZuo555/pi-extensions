@@ -45,10 +45,23 @@ unavailable.
 - `/devin` — current session, model, mode, and turn stats
 - `/devin reset` — drop the Devin session binding (next turn starts fresh)
 - `/devin sessions` — list Devin sessions; attach or delete one
+- `/devin tasks` — list Devin operations still in flight (slow execs, detached
+  background shells), with elapsed time; background shells offer a kill
+  shortcut that asks Devin to stop them
 - `/devin mode [ask|plan|accept-edits|bypass]` — get/set Devin's permission mode
 - `/devin models` — re-discover models and re-register the picker
 - `/devin login` — trigger Devin's browser authentication
 - `/devin doctor` — binary, auth, catalog, and runtime diagnostics
+- `/devin-<sub>` — the hyphenated aliases (`/devin-tasks`, `/devin-sessions`,
+  `/devin-reset`, `/devin-models`, `/devin-mode`, `/devin-login`,
+  `/devin-doctor`) run the matching `/devin <sub>` command inline
+- `/devin-<name>` — run Devin's own slash commands and skills-as-commands
+  (e.g. `/devin-compact`). Only exists while a Devin model is selected;
+  forwards `/<name> args` into the ACP session
+- `/compact` under a Devin model runs *Devin's* compaction instead — pi's
+  pass is vetoed (`session_before_compact`) and `/compact` is forwarded into
+  the ACP session. `/skill:<name>` under a Devin model runs Devin's
+  same-named skill-command; pi's own skill never expands.
 
 ## How it works
 
@@ -62,8 +75,19 @@ unavailable.
   them by replaying the recorded Devin result, then re-enters the provider.
 - `session/request_permission` prompts through pi's select UI. Headless runs
   deny by default; set `PI_DEVIN_HEADLESS_PERMISSION=allow` to auto-allow.
-- Pi compaction/summarization requests run in disposable ACP sessions so they
-  never pollute the real Devin session's history.
+- Pi-side compaction is skipped for Devin models (`session_before_compact`
+  veto) — Devin compacts its context server-side. Branch-summary prompts
+  still run in disposable ACP sessions, synced to the selected model, so
+  they never pollute the real Devin session's history.
+- Switching between Devin models keeps the live session — the new model is
+  applied via `session/set_config_option`. Switching to or from another
+  provider re-bootstraps the next turn from pi's transcript.
+- Long-running Devin operations (foreground `sleep`-style execs, shells
+  detached to the background via `_meta["cognition.ai/background"]`) are
+  tracked as live ops: a status-bar widget shows `devin: N running — …` while
+  any are in flight, and `/devin tasks` lists them. A backgrounded shell that
+  outlives its turn replays as a neutral note (with its shell id) instead of
+  a failure card; it drops off the list when its `terminal_exit` arrives.
 
 ## Environment variables
 
@@ -82,8 +106,10 @@ unavailable.
   `session/new` if a stored session is gone.
 - MCP servers cannot be attached through ACP (`mcpCapabilities` accepts stdio
   only, unused here); Devin's own MCP config applies.
-- Devin's slash commands surface via `available_commands_update`; they run on
-  the Devin side.
+- Devin's slash commands and skills-as-commands arrive via
+  `available_commands_update` (counted in `/devin` status); `/devin-<name>`
+  is intercepted and forwards `/<name> args` to Devin, which runs it
+  server-side.
 
 ## Development
 

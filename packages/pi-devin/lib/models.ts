@@ -235,7 +235,8 @@ export function buildGroups(family: {
  * - undefined → the group's default row;
  * - "off" → a `none` effort row, else an unmarked row, else the default;
  * - an exact effort row wins, then the highest effort at or below the
- *   request, then a binary `-thinking` row, then the default.
+ *   request, then a binary `-thinking` row, then the lowest effort
+ *   available (a request below the floor clamps down, never up to max).
  */
 export function resolveDevinModelRow(
   group: DevinModelGroup,
@@ -260,7 +261,7 @@ export function resolveDevinModelRow(
   if (atOrBelow) return atOrBelow;
   const thinking = rows.find((row) => row.thinking);
   if (thinking) return thinking;
-  return ranked[0] ?? group.defaultRow;
+  return ranked.at(-1) ?? group.defaultRow;
 }
 
 /** Pi model list metadata for one group (registration-time view). */

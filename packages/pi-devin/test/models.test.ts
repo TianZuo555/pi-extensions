@@ -148,6 +148,48 @@ test("resolveDevinModelRow maps thinking levels to concrete variants", () => {
   // xhigh missing in fixture → falls back to highest at-or-below
   assert.equal(resolveDevinModelRow(gpt, "xhigh").id, "gpt-5-4-high");
 
+  // Below the family's effort floor → clamps to the lowest row, never up
+  // to a higher-effort (e.g. -max) variant.
+  const floorOnly: Parameters<typeof resolveDevinModelRow>[0] = {
+    id: "swe-2",
+    name: "SWE-2",
+    contextWindow: 262_000,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    reasoning: true,
+    defaultRow: {
+      id: "swe-2-medium",
+      name: "SWE-2 Medium",
+      contextWindow: 262_000,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      effort: "medium",
+    },
+    rows: [
+      {
+        id: "swe-2-high",
+        name: "SWE-2 High",
+        contextWindow: 262_000,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        effort: "high",
+      },
+      {
+        id: "swe-2-medium",
+        name: "SWE-2 Medium",
+        contextWindow: 262_000,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        effort: "medium",
+      },
+      {
+        id: "swe-2-max",
+        name: "SWE-2 Max",
+        contextWindow: 262_000,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        effort: "max",
+      },
+    ],
+  };
+  assert.equal(resolveDevinModelRow(floorOnly, "low").id, "swe-2-medium");
+  assert.equal(resolveDevinModelRow(floorOnly, "minimal").id, "swe-2-medium");
+
   const fast = findDevinGroup(families, "gpt-5.4-fast")!;
   assert.equal(resolveDevinModelRow(fast, "high").id, "gpt-5-4-high-priority");
 
