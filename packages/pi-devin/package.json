@@ -1,0 +1,64 @@
+{
+  "name": "@tian.zuo/pi-devin",
+  "version": "0.0.1",
+  "description": "Use Devin (devin acp) models inside the pi coding agent over the Agent Client Protocol, with pi as the UI.",
+  "type": "module",
+  "keywords": [
+    "pi",
+    "pi-package",
+    "pi-extension",
+    "pi-coding-agent",
+    "devin",
+    "acp",
+    "agent-client-protocol",
+    "swe"
+  ],
+  "author": "Tian Zuo",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TianZuo555/pi-extensions.git",
+    "directory": "packages/pi-devin"
+  },
+  "homepage": "https://github.com/TianZuo555/pi-extensions#devin",
+  "bugs": {
+    "url": "https://github.com/TianZuo555/pi-extensions/issues"
+  },
+  "files": [
+    "index.ts",
+    "lib",
+    "src",
+    "CHANGELOG.md"
+  ],
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "scripts": {
+    "check": "tsc --noEmit -p .",
+    "test": "node --test --experimental-strip-types test/*.test.ts"
+  },
+  "dependencies": {
+    "@agentclientprotocol/sdk": "1.4.0",
+    "effect": "4.0.0-beta.101",
+    "semver": "^7.8.5",
+    "which": "^7.0.0",
+    "zod": "^4.4.3"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@effect/language-service": "^0.87.2",
+    "@types/semver": "^7.8.0",
+    "@types/which": "^3.0.4",
+    "typescript": "^7.0.2"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
