@@ -1012,6 +1012,7 @@ test("terminal_log_read pages a multi-byte archive without corrupting it", async
       runtime,
       manager.start({
         command: nodeCmd(
+          // biome-ignore lint/suspicious/noTemplateCurlyInString: placeholders are evaluated by the child node process, not here
           'for (let i = 0; i < 4000; i++) console.log(`行${i}:${"漢".repeat(20)}🚀`);',
         ),
         title: "utf8-archive",

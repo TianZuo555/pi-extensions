@@ -270,8 +270,9 @@ export class ProfileCatalog {
 
   resolve(ref: string): ProfileDefinition {
     const trimmed = ref.trim();
-    if (this.profiles.has(trimmed)) {
-      return this.profiles.get(trimmed)!;
+    const profile = this.profiles.get(trimmed);
+    if (profile !== undefined) {
+      return profile;
     }
     const matches = this.byShortName.get(trimmed);
     if (!matches?.length) {

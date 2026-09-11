@@ -595,7 +595,7 @@ test("streamAntigravity sends print-mode caller text with appended extension con
     assert.equal(events.at(-1)?.type, "done");
     assert.equal(
       harness.getRequest()?.prompt,
-      "Reply with exactly: PONG" + (injected.length ? "\nContext-mode is active." : ""),
+      `Reply with exactly: PONG${injected.length ? "\nContext-mode is active." : ""}`,
     );
     assert.equal(harness.getRequest()?.historyBootstrap, undefined);
   }

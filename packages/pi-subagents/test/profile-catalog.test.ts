@@ -180,7 +180,7 @@ Broken
     const unsafeCases: { file: string; agentArgs: string }[] = [
       { file: "semi.md", agentArgs: "--plan;rm" },
       { file: "backtick.md", agentArgs: "`whoami`" },
-      { file: "dollar.md", agentArgs: "\${HOME}" },
+      { file: "dollar.md", agentArgs: `\${HOME}` },
       { file: "pipe.md", agentArgs: "a|b" },
       { file: "space-quote.md", agentArgs: '--foo "bar"' },
     ];
@@ -208,7 +208,7 @@ Broken
     assert.equal(SAFE_AGENT_ARG_PATTERN.test("--model"), true);
     assert.equal(SAFE_AGENT_ARG_PATTERN.test("a;b"), false);
     assert.equal(SAFE_AGENT_ARG_PATTERN.test("`id`"), false);
-    assert.equal(SAFE_AGENT_ARG_PATTERN.test("\${PATH}"), false);
+    assert.equal(SAFE_AGENT_ARG_PATTERN.test(`\${PATH}`), false);
     assert.equal(SAFE_AGENT_ARG_PATTERN.test("a|b"), false);
     assert.equal(SAFE_AGENT_ARG_PATTERN.test('"quoted"'), false);
     assert.equal(SAFE_AGENT_ARG_PATTERN.test("foo bar"), false);

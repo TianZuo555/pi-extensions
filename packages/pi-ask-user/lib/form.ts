@@ -268,11 +268,12 @@ export class AskUserForm implements Component, Focusable {
     return {
       answers: this.questions.map((question, questionIndex) => {
         const answer = this.answers[questionIndex];
+        const optionIndex = answer.optionIndex ?? 0;
         const choice: AskUserChoice = answer.customAnswer
           ? { label: answer.customAnswer, wasCustom: true }
           : {
-              label: question.options[answer.optionIndex!].label,
-              optionIndex: answer.optionIndex! + 1,
+              label: question.options[optionIndex].label,
+              optionIndex: optionIndex + 1,
               wasCustom: false,
             };
         return {

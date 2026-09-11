@@ -142,7 +142,7 @@ class SkillToggleList extends Container {
     const end = Math.min(start + visibleRows, this.skills.length);
 
     for (let i = start; i < end; i++) {
-      const s = this.skills[i]!;
+      const s = this.skills[i];
       const selected = i === this.selectedIndex;
       const off = this.isSkillDisabled(s.name);
       const box = off ? t.fg("muted", "[ ]") : t.fg("accent", "[x]");

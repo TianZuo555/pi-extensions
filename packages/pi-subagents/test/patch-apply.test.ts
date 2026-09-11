@@ -4,7 +4,6 @@ import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 import {
   applyVerifiedPatch,
@@ -16,17 +15,6 @@ import { SubagentSupervisor } from "../lib/supervisor.ts";
 import { hermeticGitProcessEnv } from "./git-env.ts";
 
 hermeticGitProcessEnv();
-
-const FIXTURE = path.join(
-  path.dirname(fileURLToPath(import.meta.url)),
-  "fixtures",
-  "fake-rpc-child.mjs",
-);
-
-const fakeModel = {
-  provider: "openai",
-  id: "gpt-4.1-mini",
-} as import("@earendil-works/pi-ai").Model<import("@earendil-works/pi-ai").Api>;
 
 function initGitRepo(dir: string): void {
   execFileSync("git", ["init"], { cwd: dir, stdio: "pipe" });

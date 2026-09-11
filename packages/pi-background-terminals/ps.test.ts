@@ -17,7 +17,7 @@ for (const diskBacked of [false, true]) {
   test(`detail scrolling freezes ${diskBacked ? "spill" : "retained"} output until G`, async () => {
     const dir = await fs.mkdtemp(path.join(os.tmpdir(), "bt-view-test-"));
     const file = path.join(dir, "output");
-    const original = Array.from({ length: 2000 }, (_, i) => `line-${i}`).join("\n") + "\n";
+    const original = Array.from({ length: 2000 }, (_, i) => `line-${i}\n`).join("");
     await fs.writeFile(file, original);
     const output = {
       text: original,
@@ -70,7 +70,7 @@ for (const diskBacked of [false, true]) {
               component.render(100).filter((line: string) => /^ {2}(line-|new-)/.test(line));
             const before = visible();
             assert.ok(before.length > 0);
-            const growth = Array.from({ length: 100 }, (_, i) => `new-${i}`).join("\n") + "\n";
+            const growth = Array.from({ length: 100 }, (_, i) => `new-${i}\n`).join("");
             output.text += growth;
             output.totalBytes += growth.length;
             await fs.appendFile(file, growth);

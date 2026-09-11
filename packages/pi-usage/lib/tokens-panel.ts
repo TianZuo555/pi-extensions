@@ -248,7 +248,7 @@ export class TokensPanel {
 
       lines.push(clip(` ${t.fg("muted", headerText)}`, renderWidth));
       for (let i = 0; i < visibleModels.length; i++) {
-        const [model, usage] = visibleModels[i]!;
+        const [model, usage] = visibleModels[i];
         const rank = safeOffset + i + 1;
         const row = `${rank}. ${model}  ${formatTokensCompact(usage.totalTokens)}  ${formatCostCompact(usage.costUSD)}`;
         lines.push(clip(`   ${row}`, renderWidth));

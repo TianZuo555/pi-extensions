@@ -73,11 +73,11 @@ export function buildBarChart(options: BarChartOptions): string[] {
     let line = "";
     for (let index = 0; index < buckets.length; index++) {
       const barWidth = slot - 1;
-      const bucket = buckets[index]!;
+      const bucket = buckets[index];
       const gapWidth = index < buckets.length - 1 ? slot - barWidth : 0;
       const isPeak = index === peakIndex && buckets.length > 1;
       const paint = isPeak ? (theme.peakBar ?? theme.bar) : theme.bar;
-      if (heights[index]! >= row) {
+      if (heights[index] >= row) {
         const block = BLOCK.repeat(barWidth);
         line += paint ? paint(block) : block;
         line += " ".repeat(gapWidth);

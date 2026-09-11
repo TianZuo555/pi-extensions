@@ -113,7 +113,7 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
-      let server = servers[0]!;
+      let server = servers[0];
       if (servers.length > 1) {
         const labels = servers.map(
           (entry) =>
@@ -123,7 +123,7 @@ export default function (pi: ExtensionAPI) {
         if (!picked) return;
         const index = labels.indexOf(picked);
         if (index < 0) return;
-        server = servers[index]!;
+        server = servers[index];
       }
 
       const hello = {
