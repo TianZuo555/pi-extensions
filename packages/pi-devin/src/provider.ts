@@ -439,7 +439,6 @@ export function streamDevin(deps: DevinProviderDeps) {
                 textMessageId = activity.messageId;
                 stream.push({ type: "text_start", contentIndex: textIndex, partial: output });
               }
-              controller.recordEmittedText(activity.delta);
               textBuffer += activity.delta;
               const block = output.content[textIndex];
               if (block.type === "text") block.text = textBuffer;

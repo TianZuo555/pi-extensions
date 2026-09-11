@@ -70,7 +70,6 @@ export class DevinTurnController {
   #closed = false;
   #failure: Error | undefined;
   #incompleteTools = new Map<string, DevinToolView>();
-  #emittedText = "";
 
   constructor(prompt: string, sessionId: string) {
     this.prompt = prompt;
@@ -121,11 +120,6 @@ export class DevinTurnController {
    */
   deferResult(result: Extract<DevinActivity, { type: "result" }>): void {
     this.#queue.unshift(result);
-  }
-
-  /** Track rendered text so the terminal result can compute the suffix. */
-  recordEmittedText(delta: string): void {
-    this.#emittedText += delta;
   }
 
   close(): void {
