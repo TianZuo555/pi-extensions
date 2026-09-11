@@ -687,6 +687,7 @@ export function streamAntigravity(
               break;
             }
             case "tool_start": {
+              controller.beginTextSegment();
               if (isBridgedMcpStep(activity, bridge.serverName)) break;
               closeText();
               emitStartedReplayTool(activity);
@@ -744,7 +745,7 @@ export function streamAntigravity(
                 textBuffer = "";
                 stream.push({ type: "text_start", contentIndex: textIndex, partial: output });
               }
-              controller.recordEmittedText(activity.delta);
+              controller.recordEmittedText(activity.delta, activity.stepId);
               textBuffer += activity.delta;
               const block = output.content[textIndex];
               if (block.type === "text") block.text = textBuffer;

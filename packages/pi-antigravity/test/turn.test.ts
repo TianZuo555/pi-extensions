@@ -82,6 +82,39 @@ test("turn usage treats a lower terminal counter as an agy reset", () => {
   );
 });
 
+test("a partial final-only response is completed without repeating its prefix", () => {
+  const controller = new AgyTurnController("p");
+  controller.recordEmittedText("Checking the build.\n", 0);
+  controller.recordEmittedText("All ", 2);
+  controller.recordEmittedText("tests", 2);
+  assert.equal(controller.remainingResponseText("All tests passed."), " passed.");
+  assert.equal(
+    controller.remainingResponseText("A different final answer."),
+    "A different final answer.",
+  );
+  assert.equal(
+    controller.remainingResponseText("Checking the build.\nAll tests passed."),
+    " passed.",
+  );
+});
+
+test("id-less text uses a consumed tool boundary to separate commentary", () => {
+  const controller = new AgyTurnController("p");
+  controller.recordEmittedText("Checking.\n");
+  controller.beginTextSegment();
+  controller.recordEmittedText("All tests");
+  assert.equal(controller.remainingResponseText("All tests passed."), " passed.");
+});
+
+test("one response identity survives a Pi text/tool handoff", () => {
+  const controller = new AgyTurnController("p");
+  controller.recordEmittedText("Commentary.", 0);
+  controller.recordEmittedText("All ", 2);
+  controller.beginTextSegment();
+  controller.recordEmittedText("tests", 2);
+  assert.equal(controller.remainingResponseText("All tests passed."), " passed.");
+});
+
 test("remainingResponseText tolerates trailing-newline drift between deltas and result", () => {
   // agy streams "…text.\n" as deltas but reports "…text." in result.response
   // (measured against agy 1.2.0), and a result can carry either the whole

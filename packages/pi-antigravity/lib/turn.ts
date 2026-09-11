@@ -23,6 +23,9 @@ export class AgyTurnController {
   #reportedUsage: AgyUsage;
   #thoughtReported = false;
   #emittedText = "";
+  #responseText = "";
+  #responseStepId: number | undefined;
+  #nextTextSegment = false;
 
   constructor(prompt: string, conversationUsage: AgyUsage = {}) {
     this.prompt = prompt;
@@ -71,8 +74,19 @@ export class AgyTurnController {
     this.#queue.unshift(result);
   }
 
-  /** Track rendered deltas across Pi messages, including closed text blocks. */
-  recordEmittedText(delta: string): void {
+  /** A native tool boundary separates id-less commentary from the next response. */
+  beginTextSegment(): void {
+    this.#nextTextSegment = true;
+  }
+
+  /** Track both the whole turn and the latest response across Pi tool handoffs. */
+  recordEmittedText(delta: string, stepId?: number): void {
+    if (stepId !== this.#responseStepId || (stepId === undefined && this.#nextTextSegment)) {
+      this.#responseText = "";
+    }
+    this.#responseStepId = stepId;
+    this.#nextTextSegment = false;
+    this.#responseText += delta;
     this.#emittedText += delta;
   }
 
@@ -85,6 +99,11 @@ export class AgyTurnController {
   remainingResponseText(response: string): string {
     if (response.startsWith(this.#emittedText)) return response.slice(this.#emittedText.length);
     if (this.#emittedText.trimEnd().endsWith(response.trimEnd())) return "";
+    // A final-only result may complete a partially streamed response after
+    // earlier commentary. Compare that response, not the concatenated turn.
+    if (this.#responseText && response.startsWith(this.#responseText)) {
+      return response.slice(this.#responseText.length);
+    }
     return response;
   }
 

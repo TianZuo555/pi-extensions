@@ -30,6 +30,12 @@ const conversation = "driver-conversation";
 const rl = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
 rl.on("line", async (line) => {
   const event = JSON.parse(line);
+  if (event.message.content === "finish-late-result") {
+    console.log(JSON.stringify({ event: "result", result: {
+      status: "SUCCESS", response: "late answer", conversation_id: conversation, num_turns: turns
+    } }));
+    return;
+  }
   turns += 1;
   console.log(JSON.stringify({ event: "init", conversation_id: conversation, init: {} }));
   if (event.message.content === "tool-silent") {
@@ -85,6 +91,12 @@ rl.on("line", async (line) => {
       tool_info: { name: "run_command", parameters: { CommandLine: "sleep 60" } }
     }
   });
+  if (event.message.content === "late-result") {
+    console.log(activeToolStep);
+    // The test releases the result after its first parked probe, avoiding a
+    // timer race with the driver's synchronous process-table scan.
+    return;
+  }
   if (event.message.content === "background") console.log(activeToolStep);
   if (["background-graceful", "background-stubborn"].includes(event.message.content)) {
     const worker = spawn(process.execPath, ["--input-type=module", "-e", [
@@ -106,6 +118,16 @@ rl.on("line", async (line) => {
       }
     });
     console.log(activeToolStep);
+  }
+  if (event.message.content === "detached-worker-silent") {
+    // A background task that outlives agy: its own process group, and it
+    // ignores SIGTERM — exactly the leftover the orphan registry exists for.
+    const worker = spawn(process.execPath, ["-e",
+      'process.on("SIGTERM", () => {}); setInterval(() => {}, 1000);'
+    ], { detached: true, stdio: "ignore" });
+    worker.unref();
+    console.log(activeToolStep);
+    return;
   }
   if (event.message.content === "burst-crash") {
     // Two distinct tool starts in one burst: the first spawns a detached
@@ -1084,9 +1106,14 @@ test("a verifiably working tool process extends the stall budget instead of dyin
   const fixture = await stepSequenceFixture();
   const executor = new AgyDriverSession();
   let probes = 0;
+  let parkedProbes = 0;
   // Report "working" twice, then stop: the turn must outlive the first two
   // budgets and only fail once the evidence of progress disappears.
   executor.setStallLivenessProbe(async () => ++probes <= 2);
+  executor.setTurnParkedProbe(async () => {
+    parkedProbes += 1;
+    return { finished: false };
+  });
   const start = Date.now();
   try {
     await assert.rejects(
@@ -1104,7 +1131,10 @@ test("a verifiably working tool process extends the stall budget instead of dyin
         assert.ok(error instanceof AgyStallError, `expected AgyStallError, got ${error}`);
         assert.equal(error.toolActive, true);
         assert.equal(probes, 3, "probed once per expiry until evidence vanished");
-        // Two forgiven budgets means it survived well past a single 120ms one.
+        assert.equal(parkedProbes, 3, "the transcript check runs before each liveness verdict");
+        // Two forgiven budgets means it survived well past a single 120ms one,
+        // and the reported stall covers the whole silence, not one budget.
+        assert.equal(error.stalledMs, 360);
         assert.ok(
           Date.now() - start >= 360,
           `expected at least three tool budgets to elapse, got ${Date.now() - start}ms`,
@@ -1252,6 +1282,305 @@ rl.on("line", () => {
   } finally {
     await executor.close("shutdown");
     await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a turn parked on a background task ends gracefully instead of stalling", async () => {
+  // agy >= 1.2.0 holds the result event while a backgrounded command runs
+  // (bounded by the ~25d print timeout), but its transcript already shows the
+  // agent's answer is final. Waiting for the task is not an option — end the
+  // turn so the still-ACTIVE tool step replays as an incomplete-tool card and
+  // the parked agy child is recycled like any backgrounded turn.
+  const fixture = await driverFixture();
+  const executor = new AgyDriverSession();
+  let probes = 0;
+  const parkedCalls: Array<{ conversationId: string | undefined; indexes: number[] }> = [];
+  executor.setStallLivenessProbe(async () => {
+    probes += 1;
+    return true;
+  });
+  executor.setTurnParkedProbe(
+    async (conversationId, activeStepIndexes) => {
+      parkedCalls.push({ conversationId, indexes: activeStepIndexes });
+      return { finished: true, response: "the withheld answer" };
+    },
+    { pollMs: 25, limit: 1 },
+  );
+  const activities: Array<{ type: string; response?: string }> = [];
+  const start = Date.now();
+  try {
+    const outcome = await executor.run({
+      prompt: "tool-silent",
+      binary: fixture.script,
+      cwd: fixture.dir,
+      inactivityTimeoutMs: 5_000,
+      toolInactivityTimeoutMs: 60,
+      timeoutMs: 10_000,
+      spawnOverride: fixtureSpawn(fixture.script),
+      onActivity: (activity) =>
+        activities.push({
+          type: activity.type,
+          response: activity.type === "result" ? activity.response : undefined,
+        }),
+    });
+    assert.equal(outcome.status, "OK");
+    assert.match(outcome.error ?? "", /background task/);
+    // The transcript recovered the withheld answer — it lands on both the
+    // outcome and the synthetic result activity the provider renders.
+    assert.equal(outcome.response, "the withheld answer");
+    assert.ok(
+      Date.now() - start < 5_000,
+      "a parked turn must end near the tool budget, not the overall deadline",
+    );
+    assert.equal(probes, 0, "parked detection pre-empts the liveness probe");
+    // The probe sees the conversation id and the ACTIVE step's index.
+    assert.deepEqual(parkedCalls[0], {
+      conversationId: "driver-conversation",
+      indexes: [1],
+    });
+    assert.ok(parkedCalls.length >= 2, "the parked grace polls at least once before settling");
+    assert.ok(activities.some((a) => a.type === "tool_start"));
+    const result = activities.find((a) => a.type === "result");
+    assert.ok(result, "a synthetic result closes the turn");
+    assert.equal(result.response, "the withheld answer");
+    const snapshot = executor.snapshot();
+    assert.ok(snapshot.lifecycle.some((line) => line.includes("stall:task-parked")));
+    assert.equal(snapshot.stats?.lastRecycleReason, "background-task");
+  } finally {
+    await executor.close("shutdown");
+    await rm(fixture.dir, { recursive: true, force: true });
+  }
+});
+
+test("a final answer appearing during liveness grace is recovered before the deadline", async () => {
+  const fixture = await driverFixture();
+  const executor = new AgyDriverSession();
+  let transcriptProbes = 0;
+  let livenessProbes = 0;
+  executor.setStallLivenessProbe(async () => {
+    livenessProbes += 1;
+    return true;
+  });
+  executor.setTurnParkedProbe(
+    async () => ({ finished: ++transcriptProbes > 1, response: "late final answer" }),
+    { pollMs: 50, limit: 1 },
+  );
+  try {
+    const outcome = await executor.run({
+      prompt: "tool-silent",
+      binary: fixture.script,
+      cwd: fixture.dir,
+      inactivityTimeoutMs: 5_000,
+      toolInactivityTimeoutMs: 800,
+      timeoutMs: 1_500,
+      spawnOverride: fixtureSpawn(fixture.script),
+    });
+    assert.equal(outcome.status, "OK");
+    assert.equal(outcome.response, "late final answer");
+    assert.equal(livenessProbes, 1, "the renewed 800ms budget has not expired");
+    assert.equal(transcriptProbes, 3, "finality is checked inside that renewed budget");
+    assert.equal(executor.snapshot().stats?.lastRecycleReason, "background-task");
+  } finally {
+    await executor.close("shutdown");
+    await rm(fixture.dir, { recursive: true, force: true });
+  }
+});
+
+test("short finality polls do not consume the liveness grace ceiling", async () => {
+  const fixture = await driverFixture();
+  const executor = new AgyDriverSession();
+  let livenessProbes = 0;
+  let transcriptProbes = 0;
+  executor.setStallLivenessProbe(async () => {
+    livenessProbes += 1;
+    return true;
+  }, 2);
+  executor.setTurnParkedProbe(
+    async () => {
+      transcriptProbes += 1;
+      return { finished: false };
+    },
+    { pollMs: 20 },
+  );
+  try {
+    await assert.rejects(
+      executor.run({
+        prompt: "tool-silent",
+        binary: fixture.script,
+        cwd: fixture.dir,
+        inactivityTimeoutMs: 5_000,
+        toolInactivityTimeoutMs: 120,
+        timeoutMs: 5_000,
+        spawnOverride: fixtureSpawn(fixture.script),
+      }),
+      (error: unknown) => {
+        assert.ok(error instanceof AgyStallError);
+        assert.equal(error.stalledMs, 360);
+        assert.equal(livenessProbes, 2);
+        assert.ok(transcriptProbes > 3, "transcript polling is independent of grace accounting");
+        return true;
+      },
+    );
+  } finally {
+    await executor.close("shutdown");
+    await rm(fixture.dir, { recursive: true, force: true });
+  }
+});
+
+test("a known final answer skips parked grace that would cross the deadline", async () => {
+  const fixture = await driverFixture();
+  const executor = new AgyDriverSession();
+  executor.setTurnParkedProbe(async () => ({ finished: true, response: "ready" }), {
+    pollMs: 1_000,
+  });
+  try {
+    const outcome = await executor.run({
+      prompt: "tool-silent",
+      binary: fixture.script,
+      cwd: fixture.dir,
+      inactivityTimeoutMs: 5_000,
+      toolInactivityTimeoutMs: 100,
+      timeoutMs: 900,
+      spawnOverride: fixtureSpawn(fixture.script),
+    });
+    assert.equal(outcome.status, "OK");
+    assert.equal(outcome.response, "ready");
+  } finally {
+    await executor.close("shutdown");
+    await rm(fixture.dir, { recursive: true, force: true });
+  }
+});
+
+test("a real result arriving inside the parked grace wins over the synthetic end", async () => {
+  // The task finished just after the first expiry marked the turn parked:
+  // stream activity clears the parked rearm, so the genuine result (not the
+  // synthesized one) settles the turn.
+  const fixture = await driverFixture();
+  const executor = new AgyDriverSession();
+  let parkedCalls = 0;
+  let child: ReturnType<typeof spawn> | undefined;
+  executor.setTurnParkedProbe(
+    async () => {
+      parkedCalls += 1;
+      assert.ok(child?.stdin);
+      child.stdin.write(
+        `${JSON.stringify({ event: "user", message: { content: "finish-late-result" } })}\n`,
+      );
+      return { finished: true, response: "ignored — the real result wins" };
+    },
+    { pollMs: 120 },
+  );
+  try {
+    const outcome = await executor.run({
+      prompt: "late-result",
+      binary: fixture.script,
+      cwd: fixture.dir,
+      inactivityTimeoutMs: 5_000,
+      toolInactivityTimeoutMs: 40,
+      timeoutMs: 10_000,
+      spawnOverride: ((
+        _binary: string,
+        args: readonly string[],
+        options: Parameters<typeof spawn>[2],
+      ) => {
+        child = spawn(process.execPath, [fixture.script, ...args], options);
+        return child;
+      }) as typeof spawn,
+    });
+    assert.equal(outcome.status, "OK");
+    assert.equal(outcome.response, "late answer");
+    assert.equal(parkedCalls, 1, "the result lands before the parked rearm fires");
+    assert.equal(outcome.error, undefined, "a real result carries no synthetic error");
+  } finally {
+    await executor.close("shutdown");
+    await rm(fixture.dir, { recursive: true, force: true });
+  }
+});
+
+test("a cleared parked state falls back to liveness probing and the stall kill", async () => {
+  // The transcript said "finished" at the first expiry, but the next poll no
+  // longer does — the turn must return to the normal liveness-grace path and
+  // still die once that evidence disappears.
+  const fixture = await driverFixture();
+  const executor = new AgyDriverSession();
+  let parkedCalls = 0;
+  let livenessProbes = 0;
+  executor.setTurnParkedProbe(async () => ({ finished: ++parkedCalls <= 1 }), {
+    pollMs: 30,
+  });
+  executor.setStallLivenessProbe(async () => ++livenessProbes <= 2);
+  try {
+    await assert.rejects(
+      () =>
+        executor.run({
+          prompt: "tool-silent",
+          binary: fixture.script,
+          cwd: fixture.dir,
+          inactivityTimeoutMs: 5_000,
+          toolInactivityTimeoutMs: 60,
+          timeoutMs: 10_000,
+          spawnOverride: fixtureSpawn(fixture.script),
+        }),
+      (error: unknown) => {
+        assert.ok(error instanceof AgyStallError, `expected AgyStallError, got ${error}`);
+        assert.equal(error.toolActive, true);
+        // Silence accumulates across the tool budget, the parked poll, and
+        // each forgiven liveness budget: 60 + 30 + 60 + 60 = 210.
+        assert.equal(error.stalledMs, 210);
+        // Finality is also checked halfway through each 60ms liveness grace.
+        // These extra polls do not consume either of the two graces.
+        assert.equal(parkedCalls, 6);
+        assert.equal(livenessProbes, 3);
+        return true;
+      },
+    );
+  } finally {
+    await executor.close("shutdown");
+    await rm(fixture.dir, { recursive: true, force: true });
+  }
+});
+
+test("recycling a parked child records its detached task as a proven orphan", async () => {
+  // The SIGTERM-ignoring detached worker outlives the recycled agy child —
+  // but it was recorded as this conversation's orphan while ancestry could
+  // still prove it, so /agy-tasks and shutdown can stop it afterwards.
+  const fixture = await driverFixture();
+  const executor = new AgyDriverSession();
+  executor.setTurnParkedProbe(async () => ({ finished: true }), { pollMs: 25, limit: 1 });
+  let orphanPid: number | undefined;
+  try {
+    const outcome = await executor.run({
+      prompt: "detached-worker-silent",
+      binary: fixture.script,
+      cwd: fixture.dir,
+      inactivityTimeoutMs: 5_000,
+      toolInactivityTimeoutMs: 60,
+      timeoutMs: 10_000,
+      spawnOverride: fixtureSpawn(fixture.script),
+    });
+    assert.equal(outcome.status, "OK");
+    const recorded = [...getAgyChildrenRegistry().taskOrphans.entries()].filter(
+      ([, rec]) => rec.conversationId === "driver-conversation",
+    );
+    assert.equal(recorded.length, 1, "the detached worker was recorded as a proven orphan");
+    orphanPid = recorded[0][0];
+    // It survived the recycle's SIGTERM — that is the orphan case.
+    try {
+      process.kill(orphanPid, 0);
+    } catch {
+      assert.fail("the SIGTERM-ignoring worker must still be alive");
+    }
+  } finally {
+    if (orphanPid !== undefined) {
+      getAgyChildrenRegistry().taskOrphans.delete(orphanPid);
+      try {
+        process.kill(-orphanPid, "SIGKILL");
+      } catch {
+        // Already gone.
+      }
+    }
+    await executor.close("shutdown");
+    await rm(fixture.dir, { recursive: true, force: true });
   }
 });
 

@@ -19,6 +19,15 @@ export const BRIDGE_PENDING_TOOL_MESSAGE =
   "Started and still running at tool handoff. Unfinished commands may be cancelled when " +
   "the agy turn ends. Refresh /agy-tasks to check current process status and partial output.";
 
+/**
+ * Terminal error synthesized when the driver ends a turn that agy parked on
+ * still-running background work: the agent's answer is final but agy holds
+ * the result until every task exits. Matches agy's own headless wording so
+ * the run_command incomplete-tool message below applies.
+ */
+export const AGY_PARKED_TURN_ERROR =
+  "timeout waiting for response — agy is still running work as a background task";
+
 /** Replay diagnostics must not promise that an unobserved task survived or stopped. */
 export function agyIncompleteToolError(tool: string, resultError?: string): string {
   if (tool === "schedule") {

@@ -409,6 +409,12 @@ for (const { before, after, response, expected } of [
     expected: "Different final text.",
   },
   { before: "Started.", after: "Final answer.", response: "Final answer.", expected: "" },
+  {
+    before: "Checking the build.\n",
+    after: "All tests",
+    response: "All tests passed.",
+    expected: " passed.",
+  },
   // agy's deltas normally end with a newline its result text omits, so the
   // already-rendered check must ignore trailing whitespace or the whole final
   // answer gets emitted a second time.
@@ -841,6 +847,30 @@ test("streamAntigravity emits the missing tail as a delta when the response drif
   // content[0] is the reserved (empty) thought slot; the answer follows it.
   assert.equal(doneEvent.message.content[1].text, "streamed partial plus tail");
   // The tail must arrive as a real delta, not a silent rewrite of the block.
+  assertDeltasMatchPartial(events);
+});
+
+test("response step identities deduplicate a partially streamed final-only result", async () => {
+  const { controller, collect } = makeStreamHarness();
+  const pending = collect();
+  controller.push({ type: "text", stepId: 0, delta: "Checking.\n" });
+  controller.push({ type: "text", stepId: 2, delta: "All " });
+  controller.push({ type: "text", stepId: 2, delta: "tests" });
+  controller.push({
+    type: "result",
+    status: "OK",
+    response: "All tests passed.",
+    error: undefined,
+    usage: undefined,
+  });
+  const events = await pending;
+  assert.equal(
+    events
+      .filter((event) => event.type === "text_delta")
+      .map((event) => event.delta)
+      .join(""),
+    "Checking.\nAll tests passed.",
+  );
   assertDeltasMatchPartial(events);
 });
 
