@@ -1,0 +1,54 @@
+{
+  "name": "@tian.zuo/pi-compact",
+  "version": "0.1.0",
+  "description": "Codex Responses remote compaction via a configurable cheaper model (e.g. gpt-5.6-luna).",
+  "type": "module",
+  "keywords": [
+    "pi",
+    "pi-package",
+    "pi-extension",
+    "pi-coding-agent",
+    "codex",
+    "compaction",
+    "openai"
+  ],
+  "author": "Tian Zuo",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TianZuo555/pi-extensions.git",
+    "directory": "packages/pi-compact"
+  },
+  "homepage": "https://github.com/TianZuo555/pi-extensions#pi-compact",
+  "bugs": {
+    "url": "https://github.com/TianZuo555/pi-extensions/issues"
+  },
+  "files": [
+    "index.ts",
+    "src",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "scripts": {
+    "check": "tsc --noEmit -p .",
+    "test": "node --test --experimental-strip-types test/*.test.ts"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-agent-core": "*",
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@effect/language-service": "^0.87.2",
+    "typescript": "^7.0.2"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
