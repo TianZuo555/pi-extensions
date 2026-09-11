@@ -5,7 +5,7 @@ Use **Google Antigravity** (`agy`) models inside the [pi coding agent](https://p
 ## Highlights
 
 - **Persistent stream driver** — ordinary user turns reuse one healthy `agy` process; conversation, model, workspace, agent, mode, and bridge changes recycle it safely.
-- **Actionable diagnostics** — `/agy doctor` explains executable selection, checks every candidate and the minimum version, and reports models, driver spawn/recycle counters, bridge revision, conversation database, and display metadata without spending model tokens.
+- **Actionable diagnostics** — `/agy-doctor` explains executable selection, checks every candidate and the minimum version, and reports models, driver spawn/recycle counters, bridge revision, conversation database, and display metadata without spending model tokens.
 - **Native rendering, not mimicry** — agy's read-only tools (`view_file`, `grep_search`, `find_by_name`, `list_dir`) are re-executed as real pi builtins (`read` / `grep` / `find` / `ls`), so their cards use pi's own renderers and show live, accurate output. Everything else renders through one display-only `antigravity` wrapper.
 - **Skills & MCP bridge** — your global pi Agent Skills are one `pi__p<pid>__activate_skill` tool (pass `{ name }` from the tool's enum), and pi's MCP servers (via the `pi-mcp-adapter` tools) are reachable from agy with pi's permissions, hooks, and rendering. Per-session tool names keep concurrent pi sessions fully isolated.
 - **Background-task manager** — long-running agy commands are tracked in a dashboard and stoppable with one keystroke (`/agy-tasks`).
@@ -46,7 +46,7 @@ Claude and GPT models
 
 ## Context and permissions
 
-The first agy turn receives the active Pi conversation history, including earlier work with another provider. `/agy reset` deliberately starts fresh without replaying that history; it does not delete the Pi transcript. A later provider switch or branch move can restore the active history again.
+The first agy turn receives the active Pi conversation history, including earlier work with another provider. `/agy-reset` deliberately starts fresh without replaying that history; it does not delete the Pi transcript. A later provider switch or branch move can restore the active history again.
 
 Pi's current system instructions (including project guidance and extension additions) are relayed on the first native turn, after a native conversation restore, and when they change. Unchanged instructions are not repeated on each turn or tool-loop re-entry; removing them sends an explicit clearing notice. Unacknowledged instruction and skill-catalog updates are retained across stall retries. Disposable summaries receive their own instructions without changing the live conversation.
 
@@ -59,10 +59,11 @@ Pi's current system instructions (including project guidance and extension addit
 | Command          | What it does                                                                                                    |
 | ---------------- | --------------------------------------------------------------------------------------------------------------- |
 | `/agy`           | Conversation title/status (id, model, turns, process, native context)                                           |
-| `/agy reset`     | Drop the agy conversation and driver; next turn starts fresh                                                    |
-| `/agy models`    | Re-discover models and re-register the provider                                                                 |
-| `/agy agents`    | List configured custom agy agents without inference                                                             |
-| `/agy doctor`    | Diagnose all binary candidates/selection, models, driver spawn/recycle counters, bridge, and conversation state |
+| `/agy-reset`     | Drop the agy conversation and driver; next turn starts fresh                                                    |
+| `/agy-models`    | Re-discover models and re-register the provider                                                                 |
+| `/agy-agents`    | List configured custom agy agents without inference                                                             |
+| `/agy-doctor`    | Diagnose all binary candidates/selection, models, driver spawn/recycle counters, bridge, and conversation state |
+| `/agy-subagents` | List live subagent activity observed on the agy stream (spawns, messages, kills) — no model tokens             |
 | `/agy-tasks`     | Background-task dashboard (`stop <task-id> \| all` for scripts)                                                 |
 | `/agy-artifacts` | Artifact browser (`open <name>` for scripts)                                                                    |
 | `/agy-usage`     | Model quotas (weekly and 5-hour remaining per group)                                                            |
