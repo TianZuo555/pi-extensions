@@ -741,6 +741,8 @@ test("a late-joining member keeps a leaderless group verifiable", posix, async (
   // proves the surviving group is the recorded one. Leader spawns a
   // SIGTERM-immune same-group member after recording, reports its pid, then
   // exits on TERM.
+  const readyDir = await fs.mkdtemp(path.join(os.tmpdir(), "agy-late-member-"));
+  const memberReady = path.join(readyDir, "member-ready");
   const leader = spawn(
     process.execPath,
     [
@@ -749,13 +751,19 @@ test("a late-joining member keeps a leaderless group verifiable", posix, async (
        process.stdout.write("ready");
        setTimeout(() => {
          const c = spawn(process.execPath, ["-e",
-           "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"],
-           { stdio: "ignore" });
+           "process.on('SIGTERM', () => {}); " +
+           "require('fs').writeFileSync(process.env.M_READY, ''); " +
+           "setInterval(() => {}, 1000)"],
+           { stdio: "ignore", env: { ...process.env, M_READY: process.env.M_READY } });
          process.stdout.write("M" + c.pid);
        }, 300);
        setInterval(() => {}, 1000);`,
     ],
-    { detached: true, stdio: ["ignore", "pipe", "ignore"] },
+    {
+      detached: true,
+      stdio: ["ignore", "pipe", "ignore"],
+      env: { ...process.env, M_READY: memberReady },
+    },
   );
   const leaderPid = leader.pid;
   let memberPid: number | undefined;
@@ -773,6 +781,20 @@ test("a late-joining member keeps a leaderless group verifiable", posix, async (
         if (text.startsWith("M")) resolve(Number.parseInt(text.slice(1), 10));
       });
     });
+    // Node's startup takes real time under CI load: wait until the member has
+    // actually installed its SIGTERM handler before the TERM wave, or it dies
+    // mid-exec and the group is empty when verified.
+    for (let i = 0; i < 200; i++) {
+      if (
+        await fs.stat(memberReady).then(
+          () => true,
+          () => false,
+        )
+      )
+        break;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    await fs.stat(memberReady);
     // A verification while the leader is still alive refreshes the recorded
     // member identities — this is what captures the late joiner.
     assert.ok(verifiedAgyOrphanPids().includes(leaderPid));
@@ -807,6 +829,7 @@ test("a late-joining member keeps a leaderless group verifiable", posix, async (
         // Group already gone.
       }
     }
+    await fs.rm(readyDir, { recursive: true, force: true });
   }
 });
 
