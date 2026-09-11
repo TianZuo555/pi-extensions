@@ -18,12 +18,14 @@ class FakeClient {
   started = false;
   sessions = new Map<string, DevinSessionListener>();
   createdSessions: string[] = [];
+  loaded: string[] = [];
   prompts: { sessionId: string; blocks: ContentBlock[] }[] = [];
   nextId = 0;
   failLoads = new Set<string>();
   deleted: string[] = [];
   modes: string[] = [];
   configSets: { configId: string; value: string }[] = [];
+  onClose: (() => void) | undefined;
 
   async ensureStarted() {
     this.started = true;
@@ -34,13 +36,16 @@ class FakeClient {
   }
   setCustomNotificationHandler() {}
   setPermissionHandler() {}
-  setOnClose() {}
+  setOnClose(fn: (() => void) | undefined) {
+    this.onClose = fn;
+  }
   async newSession(_cwd: string) {
     const id = `sess-${++this.nextId}`;
     this.createdSessions.push(id);
     return { sessionId: id, modes: { currentModeId: "accept-edits" } };
   }
   async loadSession(id: string) {
+    this.loaded.push(id);
     if (this.failLoads.has(id)) throw new Error("Session not found");
     return { sessionId: id };
   }
@@ -172,5 +177,54 @@ test("reset drops the session binding", async () => {
   const snapshot = await runDevin(runtime, service.snapshot);
   assert.equal(snapshot.sessionId, undefined);
   assert.equal(snapshot.turns, 0);
+  await runtime.dispose();
+});
+
+test("devin acp process exit retries the same session via session/load", async () => {
+  const { fake, runtime, service } = await makeRuntime();
+  const first = await runDevin(runtime, service.beginStreamTurn(TURN()));
+  for (;;) {
+    if ((await first.next()) === null) break;
+  }
+  // Simulate the child process dying.
+  fake.onClose?.();
+  const snapshot = await runDevin(runtime, service.snapshot);
+  assert.equal(snapshot.sessionId, undefined);
+
+  const controller = await runDevin(runtime, service.beginStreamTurn(TURN()));
+  assert.deepEqual(fake.loaded, ["sess-1"], "next turn reloads the same session");
+  assert.equal(fake.createdSessions.length, 1, "no fresh session while load succeeds");
+  assert.equal(fake.prompts.at(-1)?.sessionId, "sess-1");
+  for (;;) {
+    if ((await controller.next()) === null) break;
+  }
+  await runtime.dispose();
+});
+
+test("devin acp process exit falls back to a bootstrapped fresh session", async () => {
+  const { fake, runtime, service } = await makeRuntime();
+  const first = await runDevin(runtime, service.beginStreamTurn(TURN()));
+  for (;;) {
+    if ((await first.next()) === null) break;
+  }
+  fake.failLoads.add("sess-1");
+  fake.onClose?.();
+
+  const controller = await runDevin(
+    runtime,
+    service.beginStreamTurn(TURN({ historyBootstrap: "user:\nprevious question" })),
+  );
+  assert.equal(fake.createdSessions.length, 2, "load failure creates a fresh session");
+  const sent = fake.prompts.at(-1);
+  assert.ok(
+    sent?.blocks.some((b) => b.type === "resource"),
+    "fresh session receives the pi history bootstrap",
+  );
+  for (;;) {
+    if ((await controller.next()) === null) break;
+  }
+  const snapshot = await runDevin(runtime, service.snapshot);
+  assert.equal(snapshot.sessionId, "sess-2");
+  assert.equal(snapshot.turns, 1, "stale counters from the dead session are dropped");
   await runtime.dispose();
 });

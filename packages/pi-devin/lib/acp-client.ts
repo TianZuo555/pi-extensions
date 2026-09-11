@@ -153,6 +153,14 @@ export class DevinAcpClient {
       }
     });
     child.on("exit", () => this.#onClose?.());
+    // Spawn failures (ENOENT/EACCES on the resolved binary) emit "error"
+    // without "exit"; surface them through the same close path so the
+    // runtime recovers deterministically instead of relying on stdio
+    // teardown.
+    child.on("error", (error) => {
+      this.#options.onLog?.(`child error: ${error.message}`);
+      this.#onClose?.();
+    });
 
     const stream = acp.ndJsonStream(
       Writable.toWeb(child.stdin!) as WritableStream<Uint8Array>,

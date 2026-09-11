@@ -155,3 +155,91 @@ test("streamDevin ends with toolUse after a completed tool call and replays the 
   assert.equal(recorded?.output, "done");
   assert.equal(recorded?.title, "Wrote /tmp/x");
 });
+
+test("non-terminal tool updates keep the card pending; the terminal update closes it once", async () => {
+  const { service, runtime } = fakeRuntime([
+    {
+      type: "tool_start",
+      view: { id: "cmd_1", title: "Ran tests", kind: "execute", tool: "shell" },
+    },
+    {
+      type: "tool_update",
+      view: { id: "cmd_1", status: "in_progress", output: "partial…" },
+    },
+    {
+      type: "tool_update",
+      view: { id: "cmd_1", status: "in_progress", output: "still running" },
+    },
+    {
+      type: "tool_update",
+      view: { id: "cmd_1", status: "completed", output: "all passed" },
+    },
+  ]);
+  const replay = new DevinReplayStore();
+  const stream = streamDevin({
+    runtime,
+    service,
+    replay,
+    families: () => FAMILIES,
+    cwd: () => "/tmp",
+  })(MODEL as never, CONTEXT, undefined);
+  const events = await drain(stream);
+  const done = events.find((e) => e.type === "done");
+  assert.ok(done && done.type === "done");
+  assert.equal(done.reason, "toolUse");
+  const toolCalls = done.message.content.filter((c) => c.type === "toolCall");
+  assert.equal(toolCalls.length, 1, "one card despite progress updates");
+  // Exactly one start/end pair for that card.
+  assert.equal(events.filter((e) => e.type === "toolcall_start").length, 1);
+  assert.equal(events.filter((e) => e.type === "toolcall_end").length, 1);
+  const recorded = replay.take(toolCalls[0].id);
+  assert.equal(recorded?.output, "all passed");
+});
+
+test("usage merge never clobbers known fields and honors the prompt response", async () => {
+  const { service, runtime } = fakeRuntime([
+    {
+      type: "usage",
+      usage: { inputTokens: 10, outputTokens: 5, cachedReadTokens: 3 },
+    },
+    // A context-only usage_update (no token counters) must not zero them.
+    { type: "usage", usage: { contextUsed: 15, contextSize: 262000 } },
+    {
+      type: "result",
+      stopReason: "end_turn",
+      usage: { inputTokens: 12, outputTokens: 6 },
+    },
+  ]);
+  const stream = streamDevin({
+    runtime,
+    service,
+    replay: new DevinReplayStore(),
+    families: () => FAMILIES,
+    cwd: () => "/tmp",
+  })(MODEL as never, CONTEXT, undefined);
+  const events = await drain(stream);
+  const done = events.find((e) => e.type === "done");
+  assert.ok(done && done.type === "done");
+  assert.equal(done.message.usage.input, 12);
+  assert.equal(done.message.usage.output, 6);
+  assert.equal(done.message.usage.cacheRead, 3);
+  assert.equal(done.message.usage.totalTokens, 15);
+});
+
+test("turns without usage_update still report the prompt-response usage", async () => {
+  const { service, runtime } = fakeRuntime([
+    { type: "result", stopReason: "end_turn", usage: { inputTokens: 7, outputTokens: 4 } },
+  ]);
+  const stream = streamDevin({
+    runtime,
+    service,
+    replay: new DevinReplayStore(),
+    families: () => FAMILIES,
+    cwd: () => "/tmp",
+  })(MODEL as never, CONTEXT, undefined);
+  const events = await drain(stream);
+  const done = events.find((e) => e.type === "done");
+  assert.ok(done && done.type === "done");
+  assert.equal(done.message.usage.input, 7);
+  assert.equal(done.message.usage.output, 4);
+});

@@ -23,9 +23,10 @@ test("DevinAcpClient performs a real ACP prompt round-trip", {
     binary: binary.ok ? binary.binary : "devin",
   });
   client.setCustomNotificationHandler((method) => custom.push(method));
+  let created: { sessionId: string } | undefined;
   try {
     await client.ensureStarted();
-    const created = await client.newSession(process.cwd());
+    created = await client.newSession(process.cwd());
     assert.ok(created.sessionId, "session/new must return a sessionId");
 
     client.setSessionListener(created.sessionId, (update) => {
@@ -43,6 +44,13 @@ test("DevinAcpClient performs a real ACP prompt round-trip", {
       "expected the Cognition agent_stopped notification",
     );
   } finally {
+    if (created) {
+      try {
+        await client.deleteSession(created.sessionId);
+      } catch {
+        // Best-effort cleanup; the round-trip itself already passed.
+      }
+    }
     await client.close();
   }
 });

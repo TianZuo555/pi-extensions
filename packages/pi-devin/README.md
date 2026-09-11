@@ -13,7 +13,7 @@ permissions, modes, and persistent sessions.
 
 ## Requirements
 
-- `devin` CLI ≥ `3000.9.0` on `PATH` (or `DEVIN_BINARY=/path/to/devin`)
+- `devin` CLI ≥ `3000.10.0` on `PATH` (or `DEVIN_BINARY=/path/to/devin`)
 - Authenticated once via `devin auth login` (or `WINDSURF_API_KEY`)
 
 ## Models

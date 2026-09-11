@@ -147,6 +147,21 @@ const STOP_REASON_MAP: Record<string, "stop" | "length" | "aborted" | "error"> =
   max_turn_requests: "error",
 };
 
+/**
+ * Merge usage snapshots. Update payloads omit fields they do not carry, and
+ * those omissions must not clobber values an earlier update established.
+ */
+export function mergeDevinUsage(
+  base: DevinUsage | undefined,
+  next: DevinUsage | undefined,
+): DevinUsage {
+  const merged: DevinUsage = { ...(base ?? {}) };
+  for (const [key, value] of Object.entries(next ?? {})) {
+    if (value !== undefined) merged[key as keyof DevinUsage] = value;
+  }
+  return merged;
+}
+
 export interface DevinProviderDeps {
   runtime: DevinRuntimeInstance;
   service: DevinRuntimeShape;
@@ -478,21 +493,14 @@ export function streamDevin(deps: DevinProviderDeps) {
               emitToolStart(activity.view);
               break;
             case "tool_update": {
-              const pending = pendingTools.get(activity.view.id);
-              if (pending) {
-                emitToolEnd(activity.view);
-              }
-              // Terminal updates for tools pi never saw started still get a card.
-              if (
-                !pending &&
-                (activity.view.status === "completed" || activity.view.status === "failed")
-              ) {
-                emitToolEnd(activity.view);
-              }
-              if (
-                pendingTools.size === 0 &&
-                (activity.view.status === "completed" || activity.view.status === "failed")
-              ) {
+              // Progress-only updates keep the card pending; the controller
+              // merges the view so the terminal update renders the full
+              // picture without duplicate cards.
+              const terminal =
+                activity.view.status === "completed" || activity.view.status === "failed";
+              if (!terminal) break;
+              emitToolEnd(activity.view);
+              if (pendingTools.size === 0) {
                 endWithToolUse();
                 return;
               }
@@ -545,7 +553,7 @@ export function streamDevin(deps: DevinProviderDeps) {
               break;
             }
             case "usage":
-              usage = { ...usage, ...activity.usage };
+              usage = mergeDevinUsage(usage, activity.usage);
               controller.lastUsage = usage;
               break;
             case "stopped":
@@ -562,6 +570,10 @@ export function streamDevin(deps: DevinProviderDeps) {
               }
               closeText();
               closeThinking();
+              // The prompt response carries the canonical turn usage; merge
+              // it over whatever usage_update reported during streaming.
+              usage = mergeDevinUsage(usage, activity.usage);
+              controller.lastUsage = usage;
               attachUsage(usage);
 
               const reason = STOP_REASON_MAP[activity.stopReason] ?? "error";

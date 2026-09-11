@@ -153,9 +153,15 @@ const makeRuntime = (createClient: DevinClientFactory) =>
           const turn = active;
           active = undefined;
           turn?.fail(new Error("devin acp process exited."));
-          client = undefined;
+          if (sessionId && !pendingLoadId) {
+            // Devin persists sessions server-side: retry session/load on the
+            // next turn; its failure path falls back to a fresh session
+            // bootstrapped from pi history.
+            pendingLoadId = sessionId;
+          }
           sessionId = undefined;
           syncedModelId = undefined;
+          client = undefined;
         });
         client.setCustomNotificationHandler((method, params) => {
           if (method !== "_cognition.ai/agent_stopped") return;
@@ -265,6 +271,11 @@ const makeRuntime = (createClient: DevinClientFactory) =>
           syncedModelId = undefined;
           needsBootstrap = true;
           lastSentSystemPrompt = undefined;
+          // The loaded session never materialized; drop its stale counters.
+          turns = 0;
+          contextTokens = undefined;
+          contextSize = undefined;
+          title = undefined;
         } finally {
           pendingLoadId = undefined;
         }
