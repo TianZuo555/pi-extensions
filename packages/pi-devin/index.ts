@@ -13,7 +13,7 @@ import type {
   ExtensionContext,
   ProviderModelConfig,
 } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { DevinAcpClient } from "./lib/acp-client.ts";
 import { piConfigDir, readJson, writeJson } from "./lib/config.ts";
 import { checkDevinBinary, MIN_DEVIN_VERSION, runDevinCommand } from "./lib/diagnostics.ts";
@@ -35,8 +35,20 @@ import {
 import { streamDevin } from "./src/provider.ts";
 import { createDevinRuntime, DevinRuntime, runDevin } from "./src/runtime.ts";
 import { runDevinSessionsPicker } from "./src/sessions-ui.ts";
+import { describeLiveOp, runDevinTasksPicker } from "./src/tasks-ui.ts";
 
 const DEVIN_PROVIDER = "devin";
+const DEVIN_COMMAND_PREFIX = "/devin-";
+/** Pi-side `/devin` subcommands also reachable as `/devin-<name>` aliases. */
+const LOCAL_DEVIN_SUBCOMMANDS = new Set([
+  "reset",
+  "models",
+  "sessions",
+  "tasks",
+  "mode",
+  "login",
+  "doctor",
+]);
 const MODEL_CACHE_FILE = `${piConfigDir("devin")}/models.json`;
 const DEFAULT_MODE = "accept-edits";
 
@@ -370,6 +382,52 @@ export default function piDevinExtension(pi: ExtensionAPI): void {
   let persistedSessionKey: string | undefined;
   let piSessionId = "";
 
+  // --- Status-bar hint for in-flight devin operations -----------------------
+
+  const DEVIN_OPS_WIDGET_KEY = "devin-ops";
+  let opsSubscribed = false;
+  let opsTicker: ReturnType<typeof setInterval> | undefined;
+
+  const refreshOpsWidget = async () => {
+    const ui = sessionCtx?.hasUI ? sessionCtx.ui : undefined;
+    if (!ui) return;
+    const ops = await runDevin(runtime, service.snapshot)
+      .then((s) => s.liveOps)
+      .catch(() => []);
+    if (ops.length === 0) {
+      if (opsTicker) {
+        clearInterval(opsTicker);
+        opsTicker = undefined;
+      }
+      try {
+        ui.setWidget(DEVIN_OPS_WIDGET_KEY, undefined);
+      } catch {
+        // UI may be gone during teardown.
+      }
+      return;
+    }
+    if (!opsTicker) {
+      opsTicker = setInterval(() => void refreshOpsWidget(), 1_000);
+      opsTicker.unref?.();
+    }
+    try {
+      ui.setWidget(DEVIN_OPS_WIDGET_KEY, (_tui, theme) => {
+        const line =
+          theme.fg("warning", "■ ") +
+          theme.fg("text", `devin: ${ops.length} running — ${describeLiveOp(ops[0], Date.now())}`) +
+          theme.fg("dim", " • ") +
+          theme.fg("accent", "/devin tasks") +
+          theme.fg("dim", " to view");
+        return {
+          render: (width: number) => [truncateToWidth(line, width, "")],
+          invalidate: () => {},
+        };
+      });
+    } catch {
+      // UI may be unavailable (print/RPC modes or teardown).
+    }
+  };
+
   const runtime = createDevinRuntime(() => {
     const client = new DevinAcpClient({
       binary: resolvedBinary ?? process.env.DEVIN_BINARY?.trim() ?? "devin",
@@ -393,12 +451,14 @@ export default function piDevinExtension(pi: ExtensionAPI): void {
         return { outcome: { outcome: "cancelled" as const } };
       }
       const title = params.toolCall?.title ?? "tool call";
-      const picked = await ui.select(
-        `devin requests permission: ${oneLine(title, 80)}`,
-        options.map((o) => o.name ?? o.optionId),
+      const names = options.map((o) => o.name ?? o.optionId);
+      const duplicated = new Set(names.filter((name, i) => names.indexOf(name) !== i));
+      const labels = options.map((o, i) =>
+        duplicated.has(names[i]) ? `${names[i]} (${o.kind ?? o.optionId})` : names[i],
       );
+      const picked = await ui.select(`devin requests permission: ${oneLine(title, 80)}`, labels);
       if (!picked) return { outcome: { outcome: "cancelled" as const } };
-      const index = options.findIndex((o) => (o.name ?? o.optionId) === picked);
+      const index = labels.indexOf(picked);
       return index >= 0
         ? { outcome: { outcome: "selected" as const, optionId: options[index].optionId } }
         : { outcome: { outcome: "cancelled" as const } };
@@ -580,6 +640,19 @@ export default function piDevinExtension(pi: ExtensionAPI): void {
     sessionCtx = ctx;
     cwd = ctx.cwd;
     piSessionId = ctx.sessionManager.getSessionId();
+    if (!opsSubscribed && ctx.hasUI) {
+      opsSubscribed = true;
+      void runDevin(
+        runtime,
+        service.onActivity((activity) => {
+          if (activity.type === "tool_start" || activity.type === "tool_update") {
+            void refreshOpsWidget();
+          }
+        }),
+      ).catch(() => {
+        opsSubscribed = false;
+      });
+    }
     syncWrapperToolActivation(ctx.model?.provider);
     selectedModelKey = ctx.model ? `${ctx.model.provider}:${ctx.model.id}` : undefined;
     const restored =
@@ -613,9 +686,13 @@ export default function piDevinExtension(pi: ExtensionAPI): void {
   pi.on("model_select", async (event, ctx) => {
     syncWrapperToolActivation(event.model?.provider);
     const nextKey = event.model ? `${event.model.provider}:${event.model.id}` : undefined;
-    if (selectedModelKey?.startsWith(`${DEVIN_PROVIDER}:`) && selectedModelKey !== nextKey) {
-      // Another provider/model can add context the devin session never saw;
-      // re-bootstrap the next turn instead of resuming stale history.
+    const wasDevin = selectedModelKey?.startsWith(`${DEVIN_PROVIDER}:`) === true;
+    const isDevin = nextKey?.startsWith(`${DEVIN_PROVIDER}:`) === true;
+    if (selectedModelKey !== nextKey && !(wasDevin && isDevin)) {
+      // Crossing the provider boundary in either direction means context the
+      // bound devin session never saw; re-bootstrap the next turn. A
+      // devin→devin switch keeps the session — syncConfig applies the new
+      // model live via set_config_option.
       await runDevin(runtime, service.setSession(ctx.cwd, { rebootstrap: true }));
       persistedSessionKey = undefined;
     }
@@ -635,12 +712,93 @@ export default function piDevinExtension(pi: ExtensionAPI): void {
     await persistSessionState(ctx);
   });
 
+  /**
+   * `/devin-<name> args` — two surfaces share the hyphenated form:
+   * - pi-side subcommands (`/devin-tasks`, `/devin-sessions`, …) run the
+   *   `/devin` handler inline (transformed text would go to the model, not
+   *   back through pi's command dispatch);
+   * - anything else forwards `/<name> args` to devin — ACP agents receive
+   *   their advertised slash commands (skills-as-commands included) as prompt
+   *   text.
+   * Done via input interception rather than registerCommand so the
+   * pseudo-commands only exist while a devin model is selected (local
+   * subcommands always work), and via `transform` (not a re-entrant
+   * sendUserMessage) so print mode waits for the forwarded turn normally.
+   */
+  pi.on("input", async (event, ctx) => {
+    const text = event.text;
+    if (!text.startsWith("/")) return;
+    const isDevin = ctx.model?.provider === DEVIN_PROVIDER;
+    if (text.startsWith(DEVIN_COMMAND_PREFIX)) {
+      const body = text.slice(DEVIN_COMMAND_PREFIX.length);
+      const spaceIndex = body.indexOf(" ");
+      const name = (spaceIndex === -1 ? body : body.slice(0, spaceIndex)).trim();
+      if (!name) return;
+      const args = spaceIndex === -1 ? "" : body.slice(spaceIndex + 1).trim();
+      if (LOCAL_DEVIN_SUBCOMMANDS.has(name)) {
+        // Local pi-side command — run the /devin handler inline (a transform
+        // would go to the model, not back through pi's command dispatch).
+        await devinCommandHandler(`${name}${args ? ` ${args}` : ""}`, ctx);
+        return { action: "handled" as const };
+      }
+      if (!isDevin) {
+        ctx.ui.notify(`${DEVIN_COMMAND_PREFIX}${name} requires a devin model.`, "error");
+        return { action: "handled" as const };
+      }
+      return {
+        action: "transform" as const,
+        text: `/${name}${args ? ` ${args}` : ""}`,
+        images: event.images,
+      };
+    }
+    // `/skill:x args` under devin runs devin's own `x` skill-command — pi's
+    // same-named skill never expands (input interception precedes pi's
+    // skill/template expansion step).
+    if (isDevin && text.startsWith("/skill:")) {
+      const rest = text.slice("/skill:".length);
+      const spaceIndex = rest.indexOf(" ");
+      const name = (spaceIndex === -1 ? rest : rest.slice(0, spaceIndex)).trim();
+      if (!name) return;
+      const args = spaceIndex === -1 ? "" : rest.slice(spaceIndex + 1).trim();
+      return {
+        action: "transform" as const,
+        text: `/${name}${args ? ` ${args}` : ""}`,
+        images: event.images,
+      };
+    }
+  });
+
+  pi.on("session_before_compact", (event, ctx) => {
+    if (ctx.model?.provider !== DEVIN_PROVIDER) return;
+    if (event.reason === "manual" && ctx.hasUI) {
+      // Route pi's /compact to devin's own compaction: cancel pi's pass and
+      // send the bare command through a normal turn. Deferred one tick so the
+      // cancelled command finishes before the new prompt is submitted.
+      ctx.ui.notify("devin owns context — running devin's /compact instead.", "info");
+      setTimeout(() => {
+        void pi.sendUserMessage("/compact", { expandPromptTemplates: false });
+      }, 0);
+    }
+    // Devin compacts its context server-side; truncating pi's transcript
+    // cannot shrink the ACP session, so pi-side compaction is skipped.
+    return { cancel: true };
+  });
+
   pi.on("session_compact", async (_event, ctx: ExtensionContext) => {
     // Pi compaction changes the branch; re-anchor the same ACP session.
     await persistSessionState(ctx, true);
   });
 
   pi.on("session_shutdown", async () => {
+    if (opsTicker) {
+      clearInterval(opsTicker);
+      opsTicker = undefined;
+    }
+    try {
+      sessionCtx?.hasUI && sessionCtx.ui.setWidget(DEVIN_OPS_WIDGET_KEY, undefined);
+    } catch {
+      // UI already gone.
+    }
     try {
       await runDevin(runtime, service.close);
     } catch {
@@ -653,172 +811,188 @@ export default function piDevinExtension(pi: ExtensionAPI): void {
     }
   });
 
-  pi.registerCommand("devin", {
-    description:
-      "Manage the devin backend: status | reset | models | sessions | mode | login | doctor",
-    handler: async (args, ctx) => {
-      sessionCtx = ctx;
-      const sub = args.trim().toLowerCase();
+  const devinCommandHandler = async (args: string, ctx: ExtensionContext): Promise<void> => {
+    sessionCtx = ctx;
+    const sub = args.trim().toLowerCase();
 
-      if (sub === "reset") {
-        await runDevin(runtime, service.reset);
-        appendSessionReset(ctx);
-        ctx.ui.notify("devin: session binding reset; next turn starts fresh.", "info");
-        return;
-      }
+    if (sub === "reset") {
+      await runDevin(runtime, service.reset);
+      appendSessionReset(ctx);
+      ctx.ui.notify("devin: session binding reset; next turn starts fresh.", "info");
+      return;
+    }
 
-      if (sub === "models") {
-        try {
-          const next = await discoverModels(true);
-          registerDevinProvider(next.families);
-          ctx.ui.notify(
-            `devin: ${devinGroups(next.families).length} models registered (${next.source}).`,
-            "info",
-          );
-        } catch (error) {
-          ctx.ui.notify(
-            `devin: model refresh failed (${error instanceof Error ? error.message : error}).`,
-            "error",
-          );
-        }
-        return;
-      }
-
-      if (sub === "sessions") {
-        try {
-          await runDevinSessionsPicker(ctx, {
-            listSessions: () => runDevin(runtime, service.listSessions),
-            currentSessionId: () =>
-              runtime
-                .runPromise(service.snapshot)
-                .then((s) => s.sessionId)
-                .catch(() => undefined),
-            loadSession: async (acpSessionId) => {
-              await runDevin(
-                runtime,
-                service.restoreSession({
-                  acpSessionId,
-                  cwd: ctx.cwd,
-                  modelId: ctx.model?.id ?? "adaptive",
-                  turns: 0,
-                }),
-              );
-              ctx.ui.notify("devin: session attached; it loads into the next turn.", "info");
-            },
-            deleteSession: async (acpSessionId) => {
-              await runDevin(runtime, service.deleteSession(acpSessionId));
-              appendSessionReset(ctx);
-            },
-          });
-        } catch (error) {
-          ctx.ui.notify(
-            `devin: sessions failed (${error instanceof Error ? error.message : error}).`,
-            "error",
-          );
-        }
-        return;
-      }
-
-      const modeMatch = sub.match(/^mode(?:\s+(\S+))?$/);
-      if (modeMatch) {
-        const requested = modeMatch[1];
-        if (!requested) {
-          const snapshot = await runDevin(runtime, service.snapshot);
-          const known = ["ask", "plan", DEFAULT_MODE, "bypass"];
-          ctx.ui.notify(
-            `devin mode: ${snapshot.modeId ?? "default"} — set with /devin mode ${known.join("|")}`,
-            "info",
-          );
-          return;
-        }
-        try {
-          await runDevin(runtime, service.setMode(requested));
-          ctx.ui.notify(`devin mode: ${requested}`, "info");
-        } catch (error) {
-          ctx.ui.notify(
-            `devin: set mode failed (${error instanceof Error ? error.message : error}).`,
-            "error",
-          );
-        }
-        return;
-      }
-
-      if (sub === "login") {
-        try {
-          await runDevin(runtime, service.authenticate("devin-browser"));
-          ctx.ui.notify("devin: authentication request sent (check your browser).", "info");
-        } catch (error) {
-          ctx.ui.notify(
-            `devin login failed (${error instanceof Error ? error.message : error}). Try \`devin auth login\` in a terminal.`,
-            "error",
-          );
-        }
-        return;
-      }
-
-      if (sub === "doctor") {
-        const lines = ["devin doctor"];
-        const binary = await checkDevinBinary({ refresh: true });
-        if (binary.ok) {
-          resolvedBinary = binary.binary;
-          lines.push(
-            `binary: ${binary.binary} (${binary.version}${binary.revision ? `, ${binary.revision}` : ""}, ${binary.source})`,
-            `minimum: ${MIN_DEVIN_VERSION}`,
-          );
-        } else {
-          lines.push(
-            `binary: ERROR [${binary.category}] ${binary.message}`,
-            `minimum: ${MIN_DEVIN_VERSION}`,
-          );
-        }
-        try {
-          const discovered = await discoverModels(true);
-          registerDevinProvider(discovered.families);
-          lines.push(`models: ${devinGroups(discovered.families).length} (live)`);
-        } catch (error) {
-          lines.push(
-            `models: ERROR ${error instanceof Error ? error.message : error}; ${devinGroups(catalog.families).length} cached (${catalog.source})`,
-          );
-        }
-        try {
-          const snapshot = await runDevin(runtime, service.snapshot);
-          lines.push(
-            `session: ${snapshot.sessionId ?? "none"}${snapshot.title ? ` "${snapshot.title}"` : ""}`,
-            `mode: ${snapshot.modeId ?? "default"} · model: ${snapshot.concreteModel ?? snapshot.model ?? "none"}`,
-            `turns: ${snapshot.turns} · context: ${snapshot.contextTokens ?? "?"}/${snapshot.contextSize ?? "?"}`,
-            `client: spawned=${snapshot.client.spawned} pid=${snapshot.client.pid ?? "none"} requests=${snapshot.client.requestsSent} notifications=${snapshot.client.notificationsReceived}`,
-          );
-        } catch (error) {
-          lines.push(`runtime: ERROR ${error instanceof Error ? error.message : error}`);
-        }
-        ctx.ui.notify(lines.join("\n"), binary.ok ? "info" : "error");
-        return;
-      }
-
-      if (sub) {
+    if (sub === "models") {
+      try {
+        const next = await discoverModels(true);
+        registerDevinProvider(next.families);
         ctx.ui.notify(
-          `devin: unknown argument "${sub}". Use reset | models | sessions | mode | login | doctor.`,
+          `devin: ${devinGroups(next.families).length} models registered (${next.source}).`,
+          "info",
+        );
+      } catch (error) {
+        ctx.ui.notify(
+          `devin: model refresh failed (${error instanceof Error ? error.message : error}).`,
           "error",
+        );
+      }
+      return;
+    }
+
+    if (sub === "tasks") {
+      await runDevinTasksPicker(ctx, {
+        listOps: async () => (await runDevin(runtime, service.snapshot)).liveOps,
+        sendToSession: (text) => {
+          void pi.sendUserMessage(text, { expandPromptTemplates: false });
+        },
+      });
+      return;
+    }
+
+    if (sub === "sessions") {
+      try {
+        await runDevinSessionsPicker(ctx, {
+          listSessions: () => runDevin(runtime, service.listSessions),
+          currentSessionId: () =>
+            runtime
+              .runPromise(service.snapshot)
+              .then((s) => s.sessionId)
+              .catch(() => undefined),
+          loadSession: async (acpSessionId) => {
+            await runDevin(
+              runtime,
+              service.restoreSession({
+                acpSessionId,
+                cwd: ctx.cwd,
+                modelId: ctx.model?.id ?? "adaptive",
+                turns: 0,
+              }),
+            );
+            ctx.ui.notify("devin: session attached; it loads into the next turn.", "info");
+          },
+          deleteSession: async (acpSessionId) => {
+            await runDevin(runtime, service.deleteSession(acpSessionId));
+            appendSessionReset(ctx);
+          },
+        });
+      } catch (error) {
+        ctx.ui.notify(
+          `devin: sessions failed (${error instanceof Error ? error.message : error}).`,
+          "error",
+        );
+      }
+      return;
+    }
+
+    const modeMatch = sub.match(/^mode(?:\s+(\S+))?$/);
+    if (modeMatch) {
+      const requested = modeMatch[1];
+      if (!requested) {
+        const snapshot = await runDevin(runtime, service.snapshot);
+        const known = ["ask", "plan", DEFAULT_MODE, "bypass"];
+        ctx.ui.notify(
+          `devin mode: ${snapshot.modeId ?? "default"} — set with /devin mode ${known.join("|")}`,
+          "info",
         );
         return;
       }
+      try {
+        await runDevin(runtime, service.setMode(requested));
+        ctx.ui.notify(`devin mode: ${requested}`, "info");
+      } catch (error) {
+        ctx.ui.notify(
+          `devin: set mode failed (${error instanceof Error ? error.message : error}).`,
+          "error",
+        );
+      }
+      return;
+    }
 
-      const snapshot = await runDevin(runtime, service.snapshot);
-      const details = [
-        `model: ${snapshot.concreteModel ?? snapshot.model ?? "unselected"}`,
-        `mode: ${snapshot.modeId ?? "default"}`,
-        `turns: ${snapshot.turns}`,
-        snapshot.contextTokens === undefined
-          ? undefined
-          : `context: ${snapshot.contextTokens}/${snapshot.contextSize ?? "?"}`,
-        snapshot.lastTurnStats?.tokensPerSec === undefined
-          ? undefined
-          : `last turn: ${snapshot.lastTurnStats.tokensPerSec.toFixed(1)} tok/s`,
-      ].filter((part): part is string => part !== undefined);
+    if (sub === "login") {
+      try {
+        await runDevin(runtime, service.authenticate("devin-browser"));
+        ctx.ui.notify("devin: authentication request sent (check your browser).", "info");
+      } catch (error) {
+        ctx.ui.notify(
+          `devin login failed (${error instanceof Error ? error.message : error}). Try \`devin auth login\` in a terminal.`,
+          "error",
+        );
+      }
+      return;
+    }
+
+    if (sub === "doctor") {
+      const lines = ["devin doctor"];
+      const binary = await checkDevinBinary({ refresh: true });
+      if (binary.ok) {
+        resolvedBinary = binary.binary;
+        lines.push(
+          `binary: ${binary.binary} (${binary.version}${binary.revision ? `, ${binary.revision}` : ""}, ${binary.source})`,
+          `minimum: ${MIN_DEVIN_VERSION}`,
+        );
+      } else {
+        lines.push(
+          `binary: ERROR [${binary.category}] ${binary.message}`,
+          `minimum: ${MIN_DEVIN_VERSION}`,
+        );
+      }
+      try {
+        const discovered = await discoverModels(true);
+        registerDevinProvider(discovered.families);
+        lines.push(`models: ${devinGroups(discovered.families).length} (live)`);
+      } catch (error) {
+        lines.push(
+          `models: ERROR ${error instanceof Error ? error.message : error}; ${devinGroups(catalog.families).length} cached (${catalog.source})`,
+        );
+      }
+      try {
+        const snapshot = await runDevin(runtime, service.snapshot);
+        lines.push(
+          `session: ${snapshot.sessionId ?? "none"}${snapshot.title ? ` "${snapshot.title}"` : ""}`,
+          `mode: ${snapshot.modeId ?? "default"} · model: ${snapshot.concreteModel ?? snapshot.model ?? "none"}`,
+          `turns: ${snapshot.turns} · context: ${snapshot.contextTokens ?? "?"}/${snapshot.contextSize ?? "?"}`,
+          `client: spawned=${snapshot.client.spawned} pid=${snapshot.client.pid ?? "none"} requests=${snapshot.client.requestsSent} notifications=${snapshot.client.notificationsReceived}`,
+        );
+      } catch (error) {
+        lines.push(`runtime: ERROR ${error instanceof Error ? error.message : error}`);
+      }
+      ctx.ui.notify(lines.join("\n"), binary.ok ? "info" : "error");
+      return;
+    }
+
+    if (sub) {
       ctx.ui.notify(
-        `devin: ${snapshot.title ?? snapshot.sessionId ?? "no session yet"}\nsession: ${snapshot.sessionId ?? "none"}\n${details.join(" · ")}`,
-        "info",
+        `devin: unknown argument "${sub}". Use reset | models | sessions | tasks | mode | login | doctor.`,
+        "error",
       );
-    },
+      return;
+    }
+
+    const snapshot = await runDevin(runtime, service.snapshot);
+    const details = [
+      `model: ${snapshot.concreteModel ?? snapshot.model ?? "unselected"}`,
+      `mode: ${snapshot.modeId ?? "default"}`,
+      `turns: ${snapshot.turns}`,
+      snapshot.contextTokens === undefined
+        ? undefined
+        : `context: ${snapshot.contextTokens}/${snapshot.contextSize ?? "?"}`,
+      snapshot.lastTurnStats?.tokensPerSec === undefined
+        ? undefined
+        : `last turn: ${snapshot.lastTurnStats.tokensPerSec.toFixed(1)} tok/s`,
+      snapshot.availableCommands?.length
+        ? `commands: ${snapshot.availableCommands.length} (via /devin-<name>)`
+        : undefined,
+      snapshot.liveOps.length ? `ops: ${snapshot.liveOps.length} (/devin tasks)` : undefined,
+    ].filter((part): part is string => part !== undefined);
+    ctx.ui.notify(
+      `devin: ${snapshot.title ?? snapshot.sessionId ?? "no session yet"}\nsession: ${snapshot.sessionId ?? "none"}\n${details.join(" · ")}`,
+      "info",
+    );
+  };
+
+  pi.registerCommand("devin", {
+    description:
+      "Manage the devin backend: status | reset | models | sessions | tasks | mode | login | doctor — devin's own slash commands run as /devin-<name>",
+    handler: devinCommandHandler,
   });
 }

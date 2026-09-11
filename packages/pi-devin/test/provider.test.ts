@@ -32,7 +32,10 @@ const FAMILIES: DevinModelFamily[] = [
 ];
 
 /** Drive a canned activity sequence through a real controller. */
-function fakeRuntime(activities: DevinActivity[], capture: { prompts?: number } = {}) {
+function fakeRuntime(
+  activities: DevinActivity[],
+  capture: { prompts?: number; summaryModelId?: string } = {},
+) {
   const controllers: DevinTurnController[] = [];
   const service = {
     beginStreamTurn: () => {
@@ -48,7 +51,10 @@ function fakeRuntime(activities: DevinActivity[], capture: { prompts?: number } 
       return controller;
     },
     finishTurn: { pipe: () => ({}) },
-    runSummaryTurn: () => Promise.resolve({ text: "summary" }),
+    runSummaryTurn: (_prompt: string, _signal: unknown, modelId?: string) => {
+      capture.summaryModelId = modelId;
+      return Promise.resolve({ text: "summary" });
+    },
   } as unknown as DevinRuntimeShape;
   const runtime = {
     runPromise: (effect: unknown) =>
@@ -196,6 +202,43 @@ test("non-terminal tool updates keep the card pending; the terminal update close
   assert.equal(recorded?.output, "all passed");
 });
 
+test("a background shell left open at turn end replays as a note, not an error", async () => {
+  const { service, runtime } = fakeRuntime([
+    {
+      type: "tool_start",
+      view: { id: "exec_0", title: "Ran sleep 60", kind: "execute", tool: "exec" },
+    },
+    {
+      type: "tool_update",
+      view: {
+        id: "exec_0",
+        status: "in_progress",
+        background: true,
+        shellId: "444264",
+        output: "bg started (pid 63007)",
+      },
+    },
+  ]);
+  const replay = new DevinReplayStore();
+  const stream = streamDevin({
+    runtime,
+    service,
+    replay,
+    families: () => FAMILIES,
+    cwd: () => "/tmp",
+  })(MODEL as never, CONTEXT, undefined);
+  const events = await drain(stream);
+  const done = events.find((e) => e.type === "done");
+  assert.ok(done && done.type === "done");
+  assert.equal(done.reason, "toolUse", "sweep ends the segment for replay");
+  const toolCall = done.message.content.find((c) => c.type === "toolCall");
+  assert.ok(toolCall && toolCall.type === "toolCall");
+  const recorded = replay.take(toolCall.id);
+  assert.equal(recorded?.error, undefined, "background shell is not a failure");
+  assert.match(recorded?.output ?? "", /background shell 444264/);
+  assert.match(recorded?.output ?? "", /bg started \(pid 63007\)/);
+});
+
 test("usage merge never clobbers known fields and honors the prompt response", async () => {
   const { service, runtime } = fakeRuntime([
     {
@@ -220,10 +263,37 @@ test("usage merge never clobbers known fields and honors the prompt response", a
   const events = await drain(stream);
   const done = events.find((e) => e.type === "done");
   assert.ok(done && done.type === "done");
-  assert.equal(done.message.usage.input, 12);
+  // devin inputTokens includes cachedReadTokens; pi usage.input is fresh-only.
+  assert.equal(done.message.usage.input, 9);
   assert.equal(done.message.usage.output, 6);
   assert.equal(done.message.usage.cacheRead, 3);
   assert.equal(done.message.usage.totalTokens, 15);
+});
+
+test("summarization requests run in a disposable session with the resolved model", async () => {
+  const capture: { summaryModelId?: string } = {};
+  const { service, runtime } = fakeRuntime([], capture);
+  const stream = streamDevin({
+    runtime,
+    service,
+    replay: new DevinReplayStore(),
+    families: () => FAMILIES,
+    cwd: () => "/tmp",
+  })(
+    MODEL as never,
+    {
+      systemPrompt: undefined,
+      messages: [{ role: "user", content: "<conversation>\nprior chat\n</conversation>" }],
+    } as never,
+    undefined,
+  );
+  const events = await drain(stream);
+  const done = events.find((e) => e.type === "done");
+  assert.ok(done && done.type === "done");
+  assert.equal(done.message.stopReason, "stop");
+  assert.equal(done.message.content[0]?.type, "text");
+  // The family's default row (medium) is forwarded to the disposable session.
+  assert.equal(capture.summaryModelId, "swe-2-medium");
 });
 
 test("turns without usage_update still report the prompt-response usage", async () => {

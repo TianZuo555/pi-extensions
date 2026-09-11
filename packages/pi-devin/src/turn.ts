@@ -53,7 +53,7 @@ export type DevinActivity =
 
 type Waiter = (activity: DevinActivity | null, error: Error | undefined) => void;
 
-const TERMINAL_TOOL_STATUSES = new Set(["completed", "failed"]);
+export const TERMINAL_TOOL_STATUSES = new Set(["completed", "failed"]);
 
 export class DevinTurnController {
   /** The base user prompt text, used to match provider re-attachment. */

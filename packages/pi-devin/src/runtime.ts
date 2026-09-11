@@ -18,7 +18,13 @@ import {
   restoredPiContextPrompt,
 } from "../lib/prompt.ts";
 import { acpUpdateToActivities, agentStoppedToActivity } from "./updates.ts";
-import { DevinTurnController, type DevinTurnStats } from "./turn.ts";
+import {
+  DevinTurnController,
+  TERMINAL_TOOL_STATUSES,
+  type DevinActivity,
+  type DevinTurnStats,
+} from "./turn.ts";
+import type { DevinToolView } from "../lib/tool-content.ts";
 
 export class DevinRuntimeClosedError extends Data.TaggedError("DevinRuntimeClosedError")<{
   readonly message: string;
@@ -52,7 +58,15 @@ export interface DevinStateSnapshot {
   configOptions: DevinConfigOption[] | undefined;
   availableCommands: { name: string; description?: string; hint?: string }[] | undefined;
   lastTurnStats: DevinTurnStats | undefined;
+  /** Devin-side operations still in flight (long execs, detached shells). */
+  liveOps: DevinLiveOp[];
   client: { pid?: number; spawned: number; requestsSent: number; notificationsReceived: number };
+}
+
+/** A tool call devin has not finished — may still run past the turn's end. */
+export interface DevinLiveOp {
+  view: DevinToolView;
+  startedAt: number;
 }
 
 export interface DevinTurnRequest {
@@ -94,12 +108,17 @@ export interface DevinRuntimeShape {
   readonly runSummaryTurn: (
     prompt: string,
     signal?: AbortSignal,
+    modelId?: string,
   ) => Effect.Effect<DevinSummaryResult, DevinRuntimeClosedError | DevinSessionError>;
   /** Set the desired devin session mode (ask/plan/accept-edits/bypass). */
   readonly setMode: (
     modeId: string,
   ) => Effect.Effect<void, DevinRuntimeClosedError | DevinSessionError>;
   readonly reset: Effect.Effect<void, DevinRuntimeClosedError>;
+  /** Subscribe to session activities (for UI surfaces like live-op widgets). */
+  readonly onActivity: (
+    fn: (activity: DevinActivity) => void,
+  ) => Effect.Effect<() => void, DevinRuntimeClosedError>;
   readonly snapshot: Effect.Effect<DevinStateSnapshot, DevinRuntimeClosedError>;
   readonly listSessions: Effect.Effect<
     DevinListSessionInfo[],
@@ -140,6 +159,9 @@ const makeRuntime = (createClient: DevinClientFactory) =>
     /** Session marked for lazy load on the next turn. */
     let pendingLoadId: string | undefined;
     let needsBootstrap = false;
+    /** Devin-side tool calls still in flight; keyed by toolCallId. */
+    const liveOps = new Map<string, DevinLiveOp>();
+    const activitySubscribers = new Set<(activity: DevinActivity) => void>();
     let lastSentSystemPrompt: string | undefined;
     let closed = false;
     let active: DevinTurnController | undefined;
@@ -148,8 +170,12 @@ const makeRuntime = (createClient: DevinClientFactory) =>
 
     const ensureClient = (): DevinAcpClient => {
       if (!client) {
-        client = createClient();
-        client.setOnClose(() => {
+        const created = createClient();
+        client = created;
+        created.setOnClose(() => {
+          // A delayed exit from a replaced process must not clobber the
+          // binding a newer client already established.
+          if (client !== created) return;
           const turn = active;
           active = undefined;
           turn?.fail(new Error("devin acp process exited."));
@@ -163,7 +189,7 @@ const makeRuntime = (createClient: DevinClientFactory) =>
           syncedModelId = undefined;
           client = undefined;
         });
-        client.setCustomNotificationHandler((method, params) => {
+        created.setCustomNotificationHandler((method, params) => {
           if (method !== "_cognition.ai/agent_stopped") return;
           const activity = agentStoppedToActivity(params);
           if (activity?.type !== "stopped") return;
@@ -202,6 +228,7 @@ const makeRuntime = (createClient: DevinClientFactory) =>
       configOptions = undefined;
       needsBootstrap = bootstrap;
       lastSentSystemPrompt = undefined;
+      liveOps.clear();
     };
 
     const ensureOpen: Effect.Effect<void, DevinRuntimeClosedError> = Effect.suspend(() =>
@@ -214,6 +241,33 @@ const makeRuntime = (createClient: DevinClientFactory) =>
       new DevinSessionError({
         message: error instanceof Error ? error.message : String(error),
       });
+
+    /**
+     * Track in-flight devin operations across turns: a backgrounded shell or
+     * a slow exec stays listed until its terminal status (or terminal_exit)
+     * arrives — which may happen between turns, through the live listener.
+     */
+    const trackLiveOp = (activity: DevinActivity) => {
+      if (activity.type !== "tool_start" && activity.type !== "tool_update") return;
+      const view = activity.view;
+      const prev = liveOps.get(view.id);
+      const merged = prev ? { ...prev.view, ...view } : view;
+      if (TERMINAL_TOOL_STATUSES.has(merged.status ?? "") || merged.exitCode !== undefined) {
+        liveOps.delete(view.id);
+      } else {
+        liveOps.set(view.id, { view: merged, startedAt: prev?.startedAt ?? Date.now() });
+      }
+    };
+
+    const notifySubscribers = (activity: DevinActivity) => {
+      for (const fn of activitySubscribers) {
+        try {
+          fn(activity);
+        } catch {
+          // A UI subscriber must never break the turn pipeline.
+        }
+      }
+    };
 
     /**
      * Apply state-only updates (mode/config/title/commands/usage) arriving
@@ -237,7 +291,11 @@ const makeRuntime = (createClient: DevinClientFactory) =>
       ensureClient().setSessionListener(id, (update) => {
         const activities = acpUpdateToActivities(update);
         applyStateUpdate(activities);
-        for (const activity of activities) controller.push(activity);
+        for (const activity of activities) {
+          trackLiveOp(activity);
+          notifySubscribers(activity);
+          controller.push(activity);
+        }
       });
     };
 
@@ -369,34 +427,41 @@ const makeRuntime = (createClient: DevinClientFactory) =>
 
                 // Compose prompt blocks: bootstrap resources on fresh
                 // sessions, an instruction snapshot when pi's system prompt
-                // changed, then the request's content blocks.
+                // changed, then the request's content blocks. A bare
+                // "/name args" prompt is a devin command — attaching
+                // resources makes devin treat it as plain text, so command
+                // turns carry no extras and leave bootstrap state pending
+                // for the next real turn.
+                const isCommandPrompt = /^\/\S/.test(request.prompt);
                 const blocks: ContentBlock[] = [];
-                if (needsBootstrap && request.historyBootstrap) {
-                  blocks.push({
-                    type: "resource",
-                    resource: {
-                      uri: HISTORY_RESOURCE_URI,
-                      mimeType: "text/plain",
-                      text: restoredPiContextPrompt(request.historyBootstrap),
-                    },
-                  });
-                }
-                if (
-                  request.systemPrompt !== undefined &&
-                  request.systemPrompt !== lastSentSystemPrompt
-                ) {
-                  blocks.push({
-                    type: "resource",
-                    resource: {
-                      uri: INSTRUCTIONS_RESOURCE_URI,
-                      mimeType: "text/plain",
-                      text: piSystemInstructionsPrompt(request.systemPrompt),
-                    },
-                  });
-                  lastSentSystemPrompt = request.systemPrompt;
+                if (!isCommandPrompt) {
+                  if (needsBootstrap && request.historyBootstrap) {
+                    blocks.push({
+                      type: "resource",
+                      resource: {
+                        uri: HISTORY_RESOURCE_URI,
+                        mimeType: "text/plain",
+                        text: restoredPiContextPrompt(request.historyBootstrap),
+                      },
+                    });
+                  }
+                  if (
+                    request.systemPrompt !== undefined &&
+                    request.systemPrompt !== lastSentSystemPrompt
+                  ) {
+                    blocks.push({
+                      type: "resource",
+                      resource: {
+                        uri: INSTRUCTIONS_RESOURCE_URI,
+                        mimeType: "text/plain",
+                        text: piSystemInstructionsPrompt(request.systemPrompt),
+                      },
+                    });
+                    lastSentSystemPrompt = request.systemPrompt;
+                  }
+                  needsBootstrap = false;
                 }
                 blocks.push(...request.blocks);
-                needsBootstrap = false;
 
                 const cancelled = new Promise<never>((_resolve, reject) => {
                   turnAbort.signal.addEventListener(
@@ -416,7 +481,7 @@ const makeRuntime = (createClient: DevinClientFactory) =>
                       controller.close();
                       return;
                     }
-                    turns += 1;
+                    if (result.stopReason !== "cancelled") turns += 1;
                     controller.push({
                       type: "result",
                       stopReason: result.stopReason ?? "end_turn",
@@ -455,7 +520,7 @@ const makeRuntime = (createClient: DevinClientFactory) =>
         if (active?.isClosed()) active = undefined;
       }),
 
-      runSummaryTurn: (prompt, signal) =>
+      runSummaryTurn: (prompt, signal, modelId) =>
         ensureOpen.pipe(
           Effect.andThen(
             Effect.tryPromise({
@@ -463,6 +528,13 @@ const makeRuntime = (createClient: DevinClientFactory) =>
                 const acp = ensureClient();
                 await acp.ensureStarted();
                 const created = await acp.newSession(sessionCwd ?? process.cwd());
+                if (modelId) {
+                  try {
+                    await acp.setConfigOption(created.sessionId, "model", modelId);
+                  } catch {
+                    // Best-effort: a summary on the session default beats none.
+                  }
+                }
                 const collected: string[] = [];
                 acp.setSessionListener(created.sessionId, (update) => {
                   for (const activity of acpUpdateToActivities(update)) {
@@ -526,6 +598,16 @@ const makeRuntime = (createClient: DevinClientFactory) =>
         ),
       ),
 
+      onActivity: (fn) =>
+        ensureOpen.pipe(
+          Effect.map(() => {
+            activitySubscribers.add(fn);
+            return () => {
+              activitySubscribers.delete(fn);
+            };
+          }),
+        ),
+
       snapshot: Effect.suspend(() =>
         ensureOpen.pipe(
           Effect.map(() => ({
@@ -541,6 +623,7 @@ const makeRuntime = (createClient: DevinClientFactory) =>
             configOptions,
             availableCommands,
             lastTurnStats,
+            liveOps: [...liveOps.values()],
             client: client?.stats ?? {
               spawned: 0,
               requestsSent: 0,

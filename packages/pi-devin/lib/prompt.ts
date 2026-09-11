@@ -19,6 +19,11 @@ export function devinIncompleteToolError(title: string): string {
   return `devin did not report a result for "${title}". The tool may still have run server-side; verify before retrying.`;
 }
 
+/** Replay note when a turn ends while a devin background shell is still open. */
+export function devinBackgroundToolNote(shellId: string | undefined): string {
+  return `devin detached this command to background shell ${shellId ?? "?"}; it may still be running server-side.`;
+}
+
 /** `devin acp` has no system-role input; relay Pi instructions as a labeled resource. */
 export function piSystemInstructionsPrompt(instructions: string): string {
   return [

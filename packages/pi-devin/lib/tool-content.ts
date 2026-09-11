@@ -25,6 +25,12 @@ export interface DevinToolView {
   diff?: DevinToolDiff[];
   locations?: string[];
   rawInput?: unknown;
+  /** Devin detached the command to a background shell; it may outlive the turn. */
+  background?: boolean;
+  /** Devin background shell id, when reported. */
+  shellId?: string;
+  /** The underlying terminal exited (`_meta["cognition.ai/terminal_exit"]`). */
+  exitCode?: number;
 }
 
 function metaToolName(meta: unknown): string | undefined {
@@ -91,6 +97,20 @@ export function mergeDevinTool(
   if (status !== undefined) view.status = status;
   const tool = metaToolName(merged._meta) ?? metaToolName(start?._meta);
   if (tool !== undefined) view.tool = tool;
+  const meta =
+    typeof merged._meta === "object" && merged._meta !== null
+      ? (merged._meta as Record<string, unknown>)
+      : undefined;
+  if (meta?.["cognition.ai/background"] === true) view.background = true;
+  const shellId = meta?.["cognition.ai/backgroundShellId"];
+  if (typeof shellId === "string" && shellId) view.shellId = shellId;
+  else if (typeof shellId === "number") view.shellId = String(shellId);
+  const terminalExit = meta?.["cognition.ai/terminal_exit"];
+  if (typeof terminalExit === "object" && terminalExit !== null) {
+    const code = (terminalExit as Record<string, unknown>).exit_code;
+    if (typeof code === "number") view.exitCode = code;
+    else view.exitCode = -1;
+  }
   if (output !== undefined) view.output = output;
   if (diff !== undefined) view.diff = diff;
   const locations = locationPaths(merged.locations ?? start?.locations);
@@ -107,7 +127,16 @@ export function summarizeDevinCall(view: DevinToolView): string {
   if (view.locations?.length) bits.push(view.locations.join(", "));
   if (view.rawInput && typeof view.rawInput === "object") {
     const input = view.rawInput as Record<string, unknown>;
-    for (const key of ["command", "cmd", "query", "pattern", "file_path", "path", "url"]) {
+    for (const key of [
+      "command",
+      "cmd",
+      "query",
+      "pattern",
+      "file_path",
+      "path",
+      "url",
+      "shell_id",
+    ]) {
       const value = input[key];
       if (typeof value === "string" && value) {
         bits.push(value.length > 80 ? `${value.slice(0, 77)}…` : value);
