@@ -7,7 +7,7 @@ Use **Google Antigravity** (`agy`) models inside the [pi coding agent](https://p
 - **Persistent stream driver** — ordinary user turns reuse one healthy `agy` process; conversation, model, workspace, agent, mode, and bridge changes recycle it safely.
 - **Actionable diagnostics** — `/agy-doctor` explains executable selection, checks every candidate and the minimum version, and reports models, driver spawn/recycle counters, bridge revision, conversation database, and display metadata without spending model tokens.
 - **Native rendering, not mimicry** — agy's read-only tools (`view_file`, `grep_search`, `find_by_name`, `list_dir`) are re-executed as real pi builtins (`read` / `grep` / `find` / `ls`), so their cards use pi's own renderers and show live, accurate output. Everything else renders through one display-only `antigravity` wrapper.
-- **Skills & MCP bridge** — your global pi Agent Skills are one `pi__p<pid>__activate_skill` tool (pass `{ name }` from the tool's enum), and pi's MCP servers (via the `pi-mcp-adapter` tools) are reachable from agy with pi's permissions, hooks, and rendering. Per-session tool names keep concurrent pi sessions fully isolated.
+- **Skills & MCP bridge** — pi-private skills (`~/.pi/agent/skills`, `<project>/.pi/skills`, pi-package installs) are one `pi__p<pid>__activate_skill` tool (pass `{ name }` from the tool's enum), and pi's MCP servers (via the `pi-mcp-adapter` tools) are reachable from agy with pi's permissions, hooks, and rendering. Shared `.agents/skills` roots are agy's own discovery. Per-session tool names keep concurrent pi sessions fully isolated.
 - **Background-task manager** — long-running agy commands are tracked in a dashboard and stoppable with one keystroke (`/agy-tasks`).
 - **Artifact browser** — direct conversation files, generated media, and uploads are listed via `/agy-artifacts`; markdown plans/reports have a bounded read-only preview with checklist progress.
 - **Model quotas** — `/agy-usage` ports agy's `/usage` into the same Refresh/Close menu as `/usage`: weekly and 5-hour remaining bars per model group, refreshed without spending tokens.
@@ -19,6 +19,8 @@ Long-running commands (dev servers, watchers) become agy background tasks. A hin
 ```text
 ■ 1 agy background task • /agy-tasks to view
 ```
+
+Task liveness is detected from the filesystem and the process table. Only a process holding a task's log open counts as proven per-task ownership — everything else is advisory. Recorded orphans (group-leading children recorded against this conversation while its agy was still alive, re-verified by start-time identity on every scan) display as `orphan`, but are never signalled by a per-task stop: nothing can bind a recorded process to one task, since a sibling foreground `run_command` has the same shape. `/agy-tasks stop all` reaps recorded groups only after their original agy parent has exited — and works even after `/agy reset` cleared the conversation snapshot, sweeping every recorded group this pi owns. A recorded group whose parent is still alive remains `unclear` and is protected as potentially foreground work. Shutdown can reap both attached groups and orphans. These sweeps re-check process identities before signalling, and shutdown escalates the actual PGIDs reached by SIGTERM, including groups whose log holder is not the leader. agy ≥ 1.2.0 pipes task output through itself (nothing holds the log) and runs every `run_command` — foreground or background — as an agy child in its own process group near a task log's birth, so an unclear marker means "this might be your foreground command". When pi exits, detached task groups and proven orphans get SIGTERM, then SIGKILL on any group still holding members — closing pi does not leave `sleep`/dev-server processes running.
 
 ### Artifacts (`/agy-artifacts`)
 
@@ -48,9 +50,9 @@ Claude and GPT models
 
 The first agy turn receives the active Pi conversation history, including earlier work with another provider. `/agy-reset` deliberately starts fresh without replaying that history; it does not delete the Pi transcript. A later provider switch or branch move can restore the active history again.
 
-Pi's current system instructions (including project guidance and extension additions) are relayed on the first native turn, after a native conversation restore, and when they change. Unchanged instructions are not repeated on each turn or tool-loop re-entry; removing them sends an explicit clearing notice. Unacknowledged instruction and skill-catalog updates are retained across stall retries. Disposable summaries receive their own instructions without changing the live conversation.
+Pi's system instructions are relayed on the first native turn, after a native conversation restore, and when they change. Unchanged instructions are not repeated on each turn or tool-loop re-entry; removing them sends an explicit clearing notice. Unacknowledged instruction and skill-catalog updates are retained across stall retries. Disposable summaries receive their own instructions without changing the live conversation.
 
-**This is a text adapter, not a native system role.** agy's CLI has no system-prompt input, so Pi instructions are included as a labeled user-prompt snapshot. They cannot override agy's native system instructions. Forwarding Pi tool references does not make those tools available: agy uses its actual native and bridge schemas.
+**This is a text adapter, not a native system role.** agy's CLI has no system-prompt input, so the relay is a labeled user-prompt snapshot — and it is deliberately minimal: only pi's documentation paths, rebuilt from the installed pi package. Everything else in pi's rendered system prompt is dropped by design: pi's tool inventory and guidelines describe tools agy cannot call, workspace `AGENTS.md`/`GEMINI.md`/`.agents/rules` files are agy's own native discovery, skills arrive through the `activate_skill` bridge, and user-authored pi customizations (`customPrompt`, `appendSystemPrompt`) configure the pi agent — not agy. Summarization requests keep their own caller instructions untouched.
 
 **Native agy tools bypass Pi's pre-execution permission hooks.** Both execution modes always pass `--dangerously-skip-permissions` because headless agy otherwise denies permission prompts. Native commands, file edits, browser actions, and reads execute inside agy; their Pi cards are replayed afterward. Blocking or disabling a Pi tool cannot prevent a native operation that already happened. Only tools routed through the Pi bridge execute under Pi's hooks and permissions. Use this extension only where you trust agy's access to the workspace; the replay UI is not a security boundary.
 
@@ -72,14 +74,14 @@ Pi's current system instructions (including project guidance and extension addit
 
 | Flag                                     | Effect                                                                                                                                       |
 | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PI_ANTIGRAVITY_PI_TOOL_BRIDGE=0`        | Turn the bridge off. Skills fall back to a direct path catalog and direct `SKILL.md` reads.                                                  |
-| `PI_ANTIGRAVITY_DRIVER=0`                | Operational rollback: spawn one `agy --print` process per logical turn.                                                                      |
+| `PI_ANTIGRAVITY_PI_TOOL_BRIDGE=0`        | Turn the bridge off. pi-private skills become unavailable to agy (a one-time warning); shared `.agents` skills still reach agy natively.       |
+| `PI_ANTIGRAVITY_DRIVER=0`                | Operational rollback: spawn one `agy --print` process per logical turn. Its stall watchdog is pure inactivity — no liveness or parked-turn probing — so a quiet tool or parked background task still dies at `AGY_TOOL_STALL_TIMEOUT_MS`. |
 | `PI_ANTIGRAVITY_AGENT=<name>`            | Select a custom agy agent. Empty, control-character-containing, and overlong values are rejected before spawn.                               |
 | `PI_ANTIGRAVITY_MODE=plan\|accept-edits` | Select agy's stable CLI execution mode. Other values fail before spawn.                                                                      |
 | `AGY_BINARY=/path/to/agy`                | Strictly use a specific agy binary; no fallback if it fails.                                                                                 |
-| `AGY_TURN_TIMEOUT_MS=600000`             | Pi-owned overall budget for one logical turn, including startup, fallback, stall retries, and backoff. Retries receive only the remaining budget. Persistent mode does not pass `--print-timeout`.                                  |
+| `AGY_TURN_TIMEOUT_MS=600000`             | Pi-owned overall budget for one logical turn, including startup, fallback, stall retries, and backoff. Retries receive only the remaining budget. Persistent mode sets agy's separate `--print-timeout` above Node's maximum timer budget so its default five-minute wait cannot silently end a live turn; Pi's deadline and abort still stop the process.                                  |
 | `AGY_STALL_TIMEOUT_MS=120000`            | Kill the turn when the stream produces no bytes for this long and retry by resuming the conversation. `0` disables the watchdog.             |
-| `AGY_TOOL_STALL_TIMEOUT_MS=300000`       | Stall budget while a tool step is ACTIVE — a quiet foreground tool is legitimate, so silence inside a tool gets a longer leash.              |
+| `AGY_TOOL_STALL_TIMEOUT_MS=300000`       | Stall budget while a tool step is ACTIVE — a quiet foreground tool is legitimate, so silence inside a tool gets a longer leash. When this budget expires the transcript is checked first: if agy already finished its answer but is parked on background work (it holds `result` until every task exits, bounded by the ~25-day `--print-timeout`), the turn ends gracefully after a short parked grace — the still-ACTIVE step surfaces as an incomplete-tool card pointing at `/agy-tasks`. Otherwise a `ps` check extends the budget while a live process-group-leading agy child proves real work (up to 12 consecutive budgets; a completed tool resets the count). During each extended budget the transcript is checked every 30 seconds without consuming extra liveness graces; a known final answer skips any parked grace that would cross the turn deadline. Transcript reads expand from 64 KiB to at most 8 MiB to recover complete large JSONL responses. Tools that spawn nothing (`schedule`, `search_web`) have no such evidence, so this timeout remains their bound. |
 | `AGY_STALL_RETRY_BACKOFF_MS=3000`        | Pause before each stall retry. Stalls retry at most twice, rendered as a collapsed "agy stream stalled … restarting the turn" thinking line. |
 
 ## Terms of Service & account safety
@@ -103,7 +105,7 @@ flowchart TB
         Prov["antigravity provider\n(persistent stream-json driver)"]
         Native["pi builtins\n(read / grep / find / ls)\nre-execute read-only steps"]
         Bridge["skills & MCP bridge\n(local MCP server on 127.0.0.1)"]
-        Skills["pi Agent Skills"]
+        Skills["pi-private skills\n(.pi trees)"]
         Mcp["pi MCP servers\n(pi-mcp-adapter tools)"]
     end
 
@@ -123,7 +125,7 @@ flowchart TB
     UI -- "pi executes the REAL tool" --> Mcp
     Mcp -- "result" --> Prov
     Prov -- "result back to agy" --> Bridge
-    Skills -- "global skills become\npi__p<pid>__activate_skill" --> Bridge
+    Skills -- "pi-private skills become\npi__p<pid>__activate_skill" --> Bridge
 ```
 
 ## Release notes

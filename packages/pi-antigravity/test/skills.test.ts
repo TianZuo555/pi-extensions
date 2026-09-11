@@ -3,14 +3,14 @@ import { test } from "node:test";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import {
   ACTIVATE_SKILL_TOOL_NAME,
   activateSkillDescription,
   activateSkillParameters,
   findSkillByName,
-  formatSkillCatalog,
   handleActivateSkill,
-  nonWorkspaceSkills,
+  piPrivateSkills,
   readSkillBundle,
   usableSkillCatalog,
   type SkillLite,
@@ -70,25 +70,6 @@ test("usableSkillCatalog skips empty paths and keeps the first name", () => {
     [SKILL.filePath],
   );
   assert.equal(findSkillByName([SKILL, dup], " grilling "), SKILL);
-});
-
-test("formatSkillCatalog lists name, one-liner, and path for direct reads", () => {
-  const block = formatSkillCatalog([SKILL]);
-  assert.ok(block);
-  assert.ok(block.includes("## pi Agent Skills"));
-  assert.ok(block.includes("- grilling: Interview the user relentlessly"));
-  assert.ok(block.includes("/skills/grilling/SKILL.md"));
-  assert.ok(block.includes("read its SKILL.md file directly"));
-  assert.ok(!block.includes("pi__skill__"));
-  assert.ok(!block.includes("activate_skill"));
-});
-
-test("formatSkillCatalog truncates long descriptions and returns undefined when empty", () => {
-  const long: SkillLite = { ...SKILL, description: "x".repeat(500) };
-  const block = formatSkillCatalog([long]);
-  assert.ok(block);
-  assert.ok(block.length < 700);
-  assert.equal(formatSkillCatalog([]), undefined);
 });
 
 test("handleActivateSkill returns the bundle or lists available names", async () => {
@@ -169,31 +150,80 @@ test("readSkillBundle returns the complete SKILL.md instructions", async () => {
   }
 });
 
-test("nonWorkspaceSkills drops skills inside the session cwd, keeps globals", () => {
-  const project: SkillLite = { ...SKILL, filePath: "/repo/.agents/skills/proj/SKILL.md" };
-  const ancestorProject: SkillLite = {
+test("piPrivateSkills keeps pi roots and drops shared/foreign sources", () => {
+  const cwd = "/repo";
+  const piGlobal: SkillLite = {
     ...SKILL,
-    name: "ancestor",
-    filePath: "/repo/.agents/skills/ancestor/SKILL.md",
+    name: "pi-global",
+    filePath: path.join(getAgentDir(), "skills/pi-global/SKILL.md"),
   };
-  const global: SkillLite = {
+  const piPackage: SkillLite = {
     ...SKILL,
-    name: "herdr",
-    filePath: "/Users/x/.pi/agent/skills/herdr/SKILL.md",
+    name: "pi-package",
+    filePath: path.join(getAgentDir(), "extensions/demo/skills/pi-package/SKILL.md"),
   };
-  const homeGlobal: SkillLite = {
+  const piProject: SkillLite = {
     ...SKILL,
-    name: "home-global",
-    filePath: path.join(homedir(), ".agents/skills/home-global/SKILL.md"),
+    name: "pi-project",
+    filePath: "/repo/.pi/skills/pi-project/SKILL.md",
   };
-  const filtered = nonWorkspaceSkills(
-    [project, ancestorProject, global, homeGlobal],
-    "/repo/packages/child",
-  );
+  const sharedGlobal: SkillLite = {
+    ...SKILL,
+    name: "shared-global",
+    filePath: path.join(homedir(), ".agents/skills/shared-global/SKILL.md"),
+  };
+  const sharedProject: SkillLite = {
+    ...SKILL,
+    name: "shared-project",
+    filePath: "/repo/.agents/skills/shared-project/SKILL.md",
+  };
+  // A workspace inside a .pi tree: a shared project skill under it is still
+  // shared — a bare ".pi" path segment does not make it pi-private.
+  const sharedUnderPi: SkillLite = {
+    ...SKILL,
+    name: "shared-under-pi",
+    filePath: "/repo/.pi/worktrees/wt/.agents/skills/shared-under-pi/SKILL.md",
+  };
+  // A skill living outside every pi root is not pi-private just because it
+  // sits outside the workspace — only pi's roots are bridged.
+  const foreign: SkillLite = {
+    ...SKILL,
+    name: "foreign",
+    filePath: "/opt/ext/skills/foreign/SKILL.md",
+  };
   assert.deepEqual(
-    filtered.map((skill) => skill.name),
-    ["herdr", "home-global"],
+    piPrivateSkills(
+      [piGlobal, piPackage, piProject, sharedGlobal, sharedProject, sharedUnderPi, foreign],
+      cwd,
+    ).map((skill) => skill.name),
+    ["pi-global", "pi-package", "pi-project"],
   );
-  // No session cwd (pre-session_start) → keep everything.
-  assert.equal(nonWorkspaceSkills([project], undefined).length, 1);
+});
+
+test("piPrivateSkills follows a customized PI_CODING_AGENT_DIR — even one named .agents", () => {
+  const prev = process.env.PI_CODING_AGENT_DIR;
+  // A custom agent dir may itself live under a directory named .agents —
+  // only an actual `.agents/skills/` boundary marks the shared format.
+  process.env.PI_CODING_AGENT_DIR = "/tmp/.agents/pi-agent";
+  try {
+    const custom: SkillLite = {
+      ...SKILL,
+      name: "custom-dir",
+      filePath: "/tmp/.agents/pi-agent/skills/custom-dir/SKILL.md",
+    };
+    assert.equal(piPrivateSkills([custom], "/repo").length, 1);
+  } finally {
+    if (prev === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = prev;
+  }
+});
+
+test("piPrivateSkills keeps project .pi skills when the workspace sits under .agents", () => {
+  const cwd = "/tmp/.agents/worktrees/repo";
+  const nested: SkillLite = {
+    ...SKILL,
+    name: "nested-private",
+    filePath: `${cwd}/.pi/skills/nested-private/SKILL.md`,
+  };
+  assert.equal(piPrivateSkills([nested], cwd).length, 1);
 });

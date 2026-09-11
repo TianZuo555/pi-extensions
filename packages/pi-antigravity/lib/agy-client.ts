@@ -123,12 +123,19 @@ export function buildOneShotAgyArgs(request: AgyTurnRequest): string[] {
 }
 
 export function buildDriverAgyArgs(request: Omit<AgyTurnRequest, "prompt">): string[] {
+  // stream-json input still uses agy's print wait (default: 5 minutes).
+  // Expiry can report SUCCESS with an empty/partial response while the agent
+  // keeps running. Zero expires immediately, so keep this wait above Node's
+  // maximum setTimeout budget; Pi's per-turn deadline/abort owns termination.
+  // A fixed process argument also avoids recycling when remaining budgets vary.
   return appendProcessArgs(
     [
       "--input-format",
       "stream-json",
       "--output-format",
       "stream-json",
+      "--print-timeout",
+      "2147484s",
       "--dangerously-skip-permissions",
       "--disable-slash-commands",
     ],

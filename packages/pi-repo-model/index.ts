@@ -277,7 +277,7 @@ class RepoModelPicker extends Container {
       const end = Math.min(start + visibleRows, this.modelOptions.length);
 
       for (let i = start; i < end; i++) {
-        const opt = this.modelOptions[i]!;
+        const opt = this.modelOptions[i];
         const selected = i === this.modelIndex;
         const prefix = selected ? t.fg("accent", "❯ ") : "  ";
         const text = selected ? t.bold(opt.label) : opt.label;
@@ -296,7 +296,8 @@ class RepoModelPicker extends Container {
       for (let i = 0; i < this.thinkingOptions.length; i++) {
         const selected = i === this.thinkingIndex;
         const prefix = selected ? t.fg("accent", "❯ ") : "  ";
-        const text = selected ? t.bold(this.thinkingOptions[i]!) : this.thinkingOptions[i]!;
+        const option = this.thinkingOptions[i];
+        const text = selected ? t.bold(option) : option;
         lines.push(`${prefix}${text}`);
       }
     }

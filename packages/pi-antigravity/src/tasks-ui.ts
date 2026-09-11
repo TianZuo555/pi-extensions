@@ -17,11 +17,14 @@ import type { Component, TUI } from "@earendil-works/pi-tui";
 import { stripTerminalSequences, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { stopAgyTask, type AgyTask } from "../lib/tasks.ts";
 
-export type AgyTaskStatus = "running" | "orphan" | "done";
+export type AgyTaskStatus = "running" | "orphan" | "unclear" | "done";
 
 export function agyTaskStatus(task: AgyTask): AgyTaskStatus {
   if (task.pids.length > 0) return "running";
   if (task.orphans.length > 0) return "orphan";
+  // A live process that could be this task or a sibling: report the
+  // uncertainty rather than claiming the task finished.
+  if (task.ambiguous.length > 0) return "unclear";
   return "done";
 }
 
@@ -31,6 +34,8 @@ function statusGlyph(status: AgyTaskStatus, theme: Theme) {
       return theme.fg("warning", "■");
     case "orphan":
       return theme.fg("error", "■");
+    case "unclear":
+      return theme.fg("muted", "▨");
     case "done":
       return theme.fg("muted", "■");
   }
@@ -42,9 +47,24 @@ function statusWord(status: AgyTaskStatus, theme: Theme) {
       return theme.fg("warning", "running");
     case "orphan":
       return theme.fg("error", "orphan");
+    case "unclear":
+      return theme.fg("muted", "unclear");
     case "done":
       return theme.fg("muted", "done");
   }
+}
+
+/**
+ * Pids to display for a task. Ambiguous matches are shown with a `?` marker so
+ * a live-but-unattributable process is never rendered as "pid -" (idle), while
+ * staying out of every stop path. Orphans get the same marker — they are
+ * provably this conversation's processes, but which task they ran for is not.
+ */
+function displayPids(task: AgyTask): string {
+  if (task.pids.length > 0) return `pid ${task.pids.join(",")}`;
+  if (task.orphans.length > 0) return `pid ${task.orphans.join(",")}?`;
+  if (task.ambiguous.length > 0) return `pid ${task.ambiguous.join(",")}?`;
+  return "pid -";
 }
 
 function oneLine(text: string) {
@@ -114,7 +134,16 @@ export async function openAgyTasksPicker(
     refresh: async () => {
       tasks = await rescan();
     },
-    kill: (task) => stopAgyTask(task),
+    kill: async (task) => {
+      const { signaled } = await stopAgyTask(task);
+      if (signaled === 0) {
+        ctx.ui.notify(
+          `${task.id}: no provably-owned process found — unclear matches are never signalled. Check the process manually before killing.`,
+          "warning",
+        );
+      }
+      return signaled;
+    },
     readLog: (task) => fs.readFile(task.logPath, "utf8").catch(() => ""),
   };
   await ctx.ui.custom<null>(
@@ -473,7 +502,6 @@ export class AgyTasksDashboard implements Component {
   ): string[] {
     const theme = this.theme;
     const status = agyTaskStatus(task);
-    const pids = task.pids.length > 0 ? task.pids : task.orphans;
     const dot = theme.fg("dim", " · ");
 
     const viewport = Math.max(1, height - DETAIL_META_LINES);
@@ -492,7 +520,7 @@ export class AgyTasksDashboard implements Component {
       theme.fg("border", "─".repeat(Math.max(0, width - 1 - visibleWidth(position))));
 
     const out = [
-      ` ${statusWord(status, theme)}${dot}${theme.fg("muted", pids.length > 0 ? `pid ${pids.join(",")}` : "pid -")}${dot}${theme.fg("muted", `${task.bytes}B`)}`,
+      ` ${statusWord(status, theme)}${dot}${theme.fg("muted", displayPids(task))}${dot}${theme.fg("muted", `${task.bytes}B`)}`,
       ` ${theme.fg("dim", task.logPath)}`,
       separator,
     ];
@@ -524,12 +552,12 @@ export class AgyTasksDashboard implements Component {
       const title = isSelected
         ? theme.fg("accent", oneLine(task.description))
         : theme.fg("text", oneLine(task.description));
-      const pids = task.pids.length > 0 ? task.pids : task.orphans;
+
       const left = ` ${marker} ${statusGlyph(status, theme)} ${title} ${theme.fg("dim", task.id)}`;
 
       const dot = theme.fg("dim", " · ");
       const rightParts = [
-        theme.fg("muted", pids.length > 0 ? `pid ${pids.join(",")}` : "pid -"),
+        theme.fg("muted", displayPids(task)),
         theme.fg("muted", `${task.bytes}B`),
         statusWord(status, theme),
       ];

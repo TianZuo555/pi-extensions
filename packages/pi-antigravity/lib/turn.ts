@@ -23,6 +23,9 @@ export class AgyTurnController {
   #reportedUsage: AgyUsage;
   #thoughtReported = false;
   #emittedText = "";
+  #responseText = "";
+  #responseStepId: number | undefined;
+  #nextTextSegment = false;
 
   constructor(prompt: string, conversationUsage: AgyUsage = {}) {
     this.prompt = prompt;
@@ -71,16 +74,37 @@ export class AgyTurnController {
     this.#queue.unshift(result);
   }
 
-  /** Track rendered deltas across Pi messages, including closed text blocks. */
-  recordEmittedText(delta: string): void {
+  /** A native tool boundary separates id-less commentary from the next response. */
+  beginTextSegment(): void {
+    this.#nextTextSegment = true;
+  }
+
+  /** Track both the whole turn and the latest response across Pi tool handoffs. */
+  recordEmittedText(delta: string, stepId?: number): void {
+    if (stepId !== this.#responseStepId || (stepId === undefined && this.#nextTextSegment)) {
+      this.#responseText = "";
+    }
+    this.#responseStepId = stepId;
+    this.#nextTextSegment = false;
+    this.#responseText += delta;
     this.#emittedText += delta;
   }
 
-  /** The terminal response normally concatenates the turn's streamed deltas.
-   * On divergence, preserve already-rendered text rather than repeat/replace it.
+  /** Results can contain the whole turn or just its final answer. Never drop
+   * a distinct final answer merely because earlier commentary was streamed,
+   * and never repeat one that was already rendered. Trailing-whitespace drift
+   * between agy's deltas and its result text is normal (deltas usually end
+   * with a newline the result omits), so the already-seen check ignores it.
    */
   remainingResponseText(response: string): string {
-    return response.startsWith(this.#emittedText) ? response.slice(this.#emittedText.length) : "";
+    if (response.startsWith(this.#emittedText)) return response.slice(this.#emittedText.length);
+    if (this.#emittedText.trimEnd().endsWith(response.trimEnd())) return "";
+    // A final-only result may complete a partially streamed response after
+    // earlier commentary. Compare that response, not the concatenated turn.
+    if (this.#responseText && response.startsWith(this.#responseText)) {
+      return response.slice(this.#responseText.length);
+    }
+    return response;
   }
 
   /** Show at most one synthetic thought summary per logical agy turn. */

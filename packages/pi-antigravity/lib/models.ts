@@ -204,3 +204,11 @@ export const FALLBACK_CACHE_TTL_MS = 5 * 60 * 1000;
 export function modelCacheTtlMs(source: "live" | "fallback" | undefined): number {
   return source === "fallback" ? FALLBACK_CACHE_TTL_MS : LIVE_CACHE_TTL_MS;
 }
+
+/** Whether a cached model list is still usable without a fresh `agy models` probe. */
+export function modelCacheIsFresh(
+  cache: { fetchedAt?: number; source?: "live" | "fallback" },
+  now = Date.now(),
+): boolean {
+  return Boolean(cache.fetchedAt && now - cache.fetchedAt < modelCacheTtlMs(cache.source));
+}

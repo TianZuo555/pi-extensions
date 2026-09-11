@@ -378,3 +378,118 @@ test("deadline bounds non-cooperative startup and fences late native callbacks",
   assert.equal(snapshot.turns, 0);
   assert.equal(getEventListeners(f.requests[0].signal!, "abort").length, 0);
 });
+
+test("relayed instructions omit Pi's tool inventory but keep all other guidance", () => {
+  // Shape of Pi's real system prompt (see the captured relay in
+  // ~/.pi/agent/antigravity/debug/). agy cannot call any Pi builtin:
+  // selectBridgedTools bridges MCP-adapter tools only.
+  const instructions = [
+    "You are an expert coding assistant operating inside pi.",
+    "",
+    "Available tools:",
+    "- read: Read file contents",
+    "- bash: Run Bash; long commands yield and notify on exit",
+    "- web_fetch: Fetch a web page",
+    "",
+    "In addition to the tools above, you may have access to other custom tools.",
+    "",
+    "Guidelines:",
+    "- Be concise in your responses",
+    "",
+    '<project_instructions path="/repo/AGENTS.md">',
+    "## Coding Principles",
+    "- Do not preserve backward compatibility.",
+    "</project_instructions>",
+  ].join("\n");
+
+  const relayed = piSystemInstructionsPrompt(instructions);
+
+  // The inventory block and its trailing caveat are gone.
+  assert.doesNotMatch(relayed, /Available tools:/);
+  assert.doesNotMatch(relayed, /- read: Read file contents/);
+  assert.doesNotMatch(relayed, /- bash: Run Bash/);
+  assert.doesNotMatch(relayed, /- web_fetch: Fetch a web page/);
+  assert.doesNotMatch(relayed, /In addition to the tools above/);
+
+  // Everything else survives verbatim, including project guidance.
+  assert.match(relayed, /expert coding assistant/);
+  assert.match(relayed, /Guidelines:/);
+  assert.match(relayed, /- Be concise in your responses/);
+  assert.match(relayed, /## Coding Principles/);
+  assert.match(relayed, /Do not preserve backward compatibility\./);
+  assert.match(relayed, /project_instructions path="\/repo\/AGENTS\.md"/);
+  // The framing still scopes agy to its own tool schemas.
+  assert.match(relayed, /actual agy or Pi bridge tool schemas/);
+  assert.match(relayed, /## End of Pi instructions/);
+});
+
+test("an instruction snapshot that is only Pi's tool inventory relays as empty", () => {
+  // The full validated block (bullets plus the closing caveat) is Pi's own, so
+  // stripping it can legitimately leave nothing to relay.
+  const relayed = piSystemInstructionsPrompt(
+    [
+      "Available tools:",
+      "- read: Read file contents",
+      "",
+      "In addition to the tools above, you may have access to other custom tools.",
+    ].join("\n"),
+  );
+  assert.match(relayed, /instruction snapshot is now empty/);
+});
+
+test("an inventory missing Pi's closing caveat is relayed rather than guessed at", () => {
+  // Without the caveat this cannot be confirmed as Pi's block; relaying a few
+  // redundant lines is strictly safer than deleting unknown guidance.
+  const relayed = piSystemInstructionsPrompt(
+    ["Available tools:", "- deploy: ship it", "", "Ask before deploying."].join("\n"),
+  );
+  assert.match(relayed, /- deploy: ship it/);
+  assert.match(relayed, /Ask before deploying\./);
+});
+
+test("tool-inventory stripping never touches project instructions", () => {
+  // "Available tools:" is ordinary prose that project guidance may use. Losing
+  // a user's deployment rules is far worse than relaying redundant lines, so
+  // only Pi's validated top-level inventory may be removed.
+  const instructions = [
+    "You are an expert coding assistant operating inside pi.",
+    "",
+    "Available tools:",
+    "- read: Read file contents",
+    "- bash: Run Bash; long commands yield and notify on exit",
+    "",
+    "In addition to the tools above, you may have access to other custom tools.",
+    "",
+    '<project_instructions path="/repo/AGENTS.md">',
+    "## Deployment",
+    "Available tools: terraform, kubectl, helm.",
+    "- Never deploy to prod without written approval from the on-call lead.",
+    "- Always run `terraform plan` and attach the diff to the ticket.",
+    "</project_instructions>",
+  ].join("\n");
+
+  const relayed = piSystemInstructionsPrompt(instructions);
+
+  // Pi's own inventory is gone.
+  assert.doesNotMatch(relayed, /- read: Read file contents/);
+  assert.doesNotMatch(relayed, /In addition to the tools above/);
+  // The project's own section, including its "Available tools:" line, survives.
+  assert.match(relayed, /Available tools: terraform, kubectl, helm\./);
+  assert.match(relayed, /Never deploy to prod without written approval/);
+  assert.match(relayed, /Always run `terraform plan`/);
+});
+
+test("an unvalidated Available tools block is left untouched", () => {
+  // No trailing Pi caveat and no "- name: description" bullets: not Pi's
+  // inventory, so the text must relay verbatim.
+  const prose = [
+    "Notes for the operator.",
+    "",
+    "Available tools: see the wiki.",
+    "",
+    "Be careful.",
+  ].join("\n");
+  const relayed = piSystemInstructionsPrompt(prose);
+  assert.match(relayed, /Available tools: see the wiki\./);
+  assert.match(relayed, /Be careful\./);
+});

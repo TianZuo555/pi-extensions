@@ -238,6 +238,16 @@ test("agyIncompleteToolError explains agy background tasks for run_command", () 
   );
 });
 
+test("incomplete schedules explain the missing completion without claiming cancellation", () => {
+  const message = agyIncompleteToolError("schedule");
+  assert.match(message, /scheduled wait/);
+  assert.match(message, /final state is unknown/);
+  assert.doesNotMatch(message, /was cancelled|was aborted|keeps running/);
+  // agy runs schedule timers in-process, so they never hold a task pid and
+  // /agy-tasks always renders them as done. Never send the model there.
+  assert.doesNotMatch(message, /agy-tasks/);
+});
+
 for (const status of ["OK", "ERROR", "missing-result"] as const) {
   test(`incomplete tool replay preserves ${status} completion without resubmitting the prompt`, async () => {
     const requests: string[] = [];
@@ -320,14 +330,23 @@ for (const status of ["OK", "ERROR", "missing-result"] as const) {
 
 /** Harness for stream-level tests: a turn controller behind a fake runtime. */
 function makeStreamHarness(
-  options: { prompt?: string; context?: Context; createIsolatedRuntime?: () => any } = {},
+  options: {
+    prompt?: string;
+    context?: Context;
+    createIsolatedRuntime?: () => any;
+    getSystemPromptRelay?: () => string | undefined;
+  } = {},
 ) {
   const prompt = options.prompt ?? "hello";
   const controller = new AgyTurnController(prompt);
   let sharedBeginCount = 0;
-  let request: { prompt: string; historyBootstrap?: string } | undefined;
+  let request: { prompt: string; historyBootstrap?: string; systemPrompt?: string } | undefined;
   const fakeService = {
-    beginStreamTurn: (input: { prompt: string; historyBootstrap?: string }) =>
+    beginStreamTurn: (input: {
+      prompt: string;
+      historyBootstrap?: string;
+      systemPrompt?: string;
+    }) =>
       Effect.sync(() => {
         request = input;
         sharedBeginCount += 1;
@@ -359,6 +378,10 @@ function makeStreamHarness(
     undefined,
     undefined,
     options.createIsolatedRuntime,
+    undefined,
+    undefined,
+    undefined,
+    options.getSystemPromptRelay,
   );
   const model: Model<string> = {
     id: "gemini-3.7-flash",
@@ -392,7 +415,25 @@ for (const { before, after, response, expected } of [
   { before: "Started.", after: "", response: "Started.", expected: "" },
   { before: "Started", after: "", response: "Started at :3000.", expected: " at :3000." },
   { before: "", after: "", response: "Started.", expected: "Started." },
-  { before: "Started.", after: "", response: "Different final text.", expected: "" },
+  {
+    before: "Started.",
+    after: "",
+    response: "Different final text.",
+    expected: "Different final text.",
+  },
+  { before: "Started.", after: "Final answer.", response: "Final answer.", expected: "" },
+  {
+    before: "Checking the build.\n",
+    after: "All tests",
+    response: "All tests passed.",
+    expected: " passed.",
+  },
+  // agy's deltas normally end with a newline its result text omits, so the
+  // already-rendered check must ignore trailing whitespace or the whole final
+  // answer gets emitted a second time.
+  { before: "Started.", after: "Final answer.\n", response: "Final answer.", expected: "" },
+  { before: "Started.", after: "Final answer.", response: "Final answer.\n", expected: "" },
+  { before: "", after: "Final answer.\n", response: "Final answer.", expected: "" },
   { before: "Started", after: " at :3000", response: "Started at :3000.", expected: "." },
 ]) {
   test(`deferred response emits only unseen text: ${JSON.stringify({ before, after, response })}`, async () => {
@@ -534,6 +575,8 @@ test("streamAntigravity isolates pi summarization from the resumed agy conversat
       systemPrompt: "Pi summary instructions",
     },
     createIsolatedRuntime: () => isolatedRuntime as any,
+    // A live relay getter must not override the summary's own instructions.
+    getSystemPromptRelay: () => "DOCS-ONLY-RELAY",
   });
   const eventsPromise = harness.collect();
 
@@ -549,12 +592,35 @@ test("streamAntigravity isolates pi summarization from the resumed agy conversat
   assert.equal(harness.getSharedBeginCount(), 0);
   assert.equal(isolatedBeginCount, 1);
   assert.deepEqual(isolatedPrompts, [summaryPrompt]);
+  // The summary keeps its own caller instructions — the docs-only relay is
+  // for user turns only.
   assert.equal(isolatedSystemPrompt, "Pi summary instructions");
   const done = events.find((event) => event.type === "done");
   assert.equal(done?.message.content[0]?.text, "Compact summary");
   assert.equal(done?.message.usage.totalTokens, 0);
   await new Promise<void>((resolve) => setImmediate(resolve));
   assert.equal(disposed, true);
+});
+
+test("streamAntigravity relays the docs-only block on user turns", async () => {
+  const harness = makeStreamHarness({
+    prompt: "hello",
+    context: {
+      ...contextWith([{ role: "user", content: "hello" }]),
+      systemPrompt: "full pi system prompt blob",
+    },
+    getSystemPromptRelay: () => "DOCS-ONLY-RELAY",
+  });
+  const eventsPromise = harness.collect();
+  harness.controller.push({
+    type: "result",
+    status: "OK",
+    response: "done",
+    error: undefined,
+    usage: undefined,
+  });
+  await eventsPromise;
+  assert.equal(harness.getRequest()?.systemPrompt, "DOCS-ONLY-RELAY");
 });
 
 test("streamAntigravity sends print-mode caller text with appended extension context", async () => {
@@ -573,7 +639,7 @@ test("streamAntigravity sends print-mode caller text with appended extension con
     assert.equal(events.at(-1)?.type, "done");
     assert.equal(
       harness.getRequest()?.prompt,
-      "Reply with exactly: PONG" + (injected.length ? "\nContext-mode is active." : ""),
+      `Reply with exactly: PONG${injected.length ? "\nContext-mode is active." : ""}`,
     );
     assert.equal(harness.getRequest()?.historyBootstrap, undefined);
   }
@@ -822,7 +888,31 @@ test("streamAntigravity emits the missing tail as a delta when the response drif
   assertDeltasMatchPartial(events);
 });
 
-test("streamAntigravity keeps streamed text when the response truly diverges", async () => {
+test("response step identities deduplicate a partially streamed final-only result", async () => {
+  const { controller, collect } = makeStreamHarness();
+  const pending = collect();
+  controller.push({ type: "text", stepId: 0, delta: "Checking.\n" });
+  controller.push({ type: "text", stepId: 2, delta: "All " });
+  controller.push({ type: "text", stepId: 2, delta: "tests" });
+  controller.push({
+    type: "result",
+    status: "OK",
+    response: "All tests passed.",
+    error: undefined,
+    usage: undefined,
+  });
+  const events = await pending;
+  assert.equal(
+    events
+      .filter((event) => event.type === "text_delta")
+      .map((event) => event.delta)
+      .join(""),
+    "Checking.\nAll tests passed.",
+  );
+  assertDeltasMatchPartial(events);
+});
+
+test("streamAntigravity preserves a distinct final answer in a separate text block", async () => {
   const { controller, collect } = makeStreamHarness();
   const eventsPromise = collect();
 
@@ -836,9 +926,12 @@ test("streamAntigravity keeps streamed text when the response truly diverges", a
   });
 
   const events = await eventsPromise;
-  const textEnd = events.find((e) => e.type === "text_end");
-  // Streamed deltas cannot be retracted, so consumers keep what they saw.
-  assert.equal(textEnd.content, "streamed partial");
+  // Streamed deltas cannot be retracted, but the final answer must not vanish
+  // or be glued directly onto the final word of the previous block.
+  assert.deepEqual(
+    events.filter((event) => event.type === "text_end").map((event) => event.content),
+    ["streamed partial", "completely different text"],
+  );
   assertDeltasMatchPartial(events);
 });
 

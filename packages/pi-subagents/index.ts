@@ -224,10 +224,11 @@ export default function subagentsExtension(pi: ExtensionAPI) {
     session.closing = (async () => {
       const closingRuntime = session.subagentRuntime;
       const closingService = session.subagentService;
+      if (!closingRuntime || !closingService) return;
       try {
-        await runSubagent(closingRuntime!, closingService!.close);
+        await runSubagent(closingRuntime, closingService.close);
       } finally {
-        await closingRuntime!.dispose();
+        await closingRuntime.dispose();
         if (session.subagentRuntime === closingRuntime) {
           session.subagentRuntime = undefined;
           session.subagentService = undefined;

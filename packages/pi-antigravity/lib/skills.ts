@@ -2,25 +2,24 @@
  * Skill passing for agy — Phase 2 of the pi-tool & skill bridge.
  *
  * agy's native skill expansion is disabled by our always-on
- * `--disable-slash-commands`, so pi skills reach agy two ways:
- *   - bridge mode: one `activate_skill` MCP tool (session-prefixed) whose
- *     JSON-schema enum is the catalog and whose description carries each
- *     skill's one-liner — pi's progressive disclosure, so agy can tell when a
- *     skill applies. Calling it returns the full SKILL.md. Nothing is appended
- *     to the user prompt: tools/list is refreshed on every agy spawn,
- *     including after pi compaction.
- *   - direct mode (bridge off, or a bridge that failed to register): a compact
- *     catalog of absolute SKILL.md paths is appended on the first turn of a
- *     fresh agy conversation, and headless agy reads them straight from disk
- *     (verified 2026-08-21).
+ * `--disable-slash-commands`, so pi-private skills reach agy through one
+ * `activate_skill` MCP tool (session-prefixed) whose JSON-schema enum is the
+ * catalog and whose description carries each skill's one-liner — pi's
+ * progressive disclosure, so agy can tell when a skill applies. Calling it
+ * returns the full SKILL.md. Nothing is appended to the user prompt:
+ * tools/list is refreshed on every agy spawn, including after pi compaction.
+ *
+ * When the bridge is off or fails to register, the catalog is NOT injected
+ * into the prompt — shared/agy-native skills still reach agy on their own,
+ * and the user is warned once that pi-private skills are unavailable.
  *
  * Catalogs stay name + one-liner only — oversized catalogs derail headless
  * turns the same way agy's built-in antigravity_guide skill does.
  */
 
 import { readdir, readFile } from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
+import { CONFIG_DIR_NAME, getAgentDir } from "@earendil-works/pi-coding-agent";
 
 /** Minimal shape of pi's loaded skills (from systemPromptOptions.skills). */
 export interface SkillLite {
@@ -38,36 +37,39 @@ export const ACTIVATE_SKILL_TOOL_NAME = "activate_skill";
 const MAX_DESCRIPTION = 120;
 const MAX_RESOURCES = 20;
 
+function isUnderDir(filePath: string, dir: string): boolean {
+  const root = dir.endsWith(path.sep) ? dir : dir + path.sep;
+  return filePath.startsWith(root);
+}
+
 /**
- * Skills agy cannot discover on its own.
+ * Skills only pi can provide — paths under pi's actual roots, not just any
+ * directory segment that happens to be named like a config tree:
  *
- * agy natively scans `<workspace>/.agents/skills/` (walking up from its cwd
- * to the repo root) and injects those skills' names/descriptions itself —
- * verified 2026-08-21, even under `--disable-slash-commands`. Injecting
- * those again would duplicate agy's own catalog, so the bridged catalog
- * only includes skills OUTSIDE the session workspace (pi-only globals like
- * `~/.pi/agent/skills` and `~/.agents/skills`, which agy never scans).
+ * - `getAgentDir()` (`~/.pi/agent`, or `PI_CODING_AGENT_DIR` when
+ *   customized): global pi skills and pi-package installs.
+ * - `<session cwd>/<CONFIG_DIR_NAME>` (`<project>/.pi`): project-private pi
+ *   skills.
+ *
+ * Shared `.agents/skills` roots (user-global and project walk-up) are the
+ * agents format — agy scans the workspace ones itself and the global ones
+ * belong to other agents; never bridged. The exclusion targets the actual
+ * `<dir>/.agents/skills/` root boundary, not any ancestor named `.agents` —
+ * a pi agent dir or a workspace nested under some `.agents` directory keeps
+ * its own private skills. Anything else outside those two roots is excluded
+ * too: sitting outside the workspace does not make a skill pi-private.
  */
-export function nonWorkspaceSkills(
-  skills: SkillLite[],
-  sessionCwd: string | undefined,
-): SkillLite[] {
-  if (!sessionCwd) return skills;
-  const resolvedCwd = path.resolve(sessionCwd);
-  const cwdPrefix = resolvedCwd.endsWith(path.sep) ? resolvedCwd : resolvedCwd + path.sep;
-  const home = path.resolve(os.homedir());
+export function piPrivateSkills(skills: SkillLite[], sessionCwd: string | undefined): SkillLite[] {
+  const roots = [path.resolve(getAgentDir())];
+  if (sessionCwd) roots.push(path.resolve(sessionCwd, CONFIG_DIR_NAME));
   return skills.filter((skill) => {
     const filePath = path.resolve(skill.filePath);
-    if (filePath.startsWith(cwdPrefix)) return false;
-    const marker = `${path.sep}.agents${path.sep}skills${path.sep}`;
-    const markerIndex = filePath.indexOf(marker);
-    if (markerIndex < 0) return true;
-    const skillWorkspace = filePath.slice(0, markerIndex) || path.parse(filePath).root;
-    if (path.resolve(skillWorkspace) === home) return true; // ~/.agents/skills is global.
-    return !(
-      resolvedCwd === path.resolve(skillWorkspace) ||
-      resolvedCwd.startsWith(`${path.resolve(skillWorkspace)}${path.sep}`)
+    const segments = filePath.split(path.sep);
+    const underSharedSkillsRoot = segments.some(
+      (segment, index) => segment === ".agents" && segments[index + 1] === "skills",
     );
+    if (underSharedSkillsRoot) return false;
+    return roots.some((root) => isUnderDir(filePath, root));
   });
 }
 
@@ -140,29 +142,6 @@ export async function handleActivateSkill(
     };
   }
   return readSkillBundle(skill);
-}
-
-/**
- * Direct-mode bootstrap catalog (bridge off or unavailable). Returns undefined
- * when there are no model-invocable skills, so nothing is injected.
- */
-export function formatSkillCatalog(skills: SkillLite[]): string | undefined {
-  const usable = usableSkillCatalog(skills);
-  if (usable.length === 0) return undefined;
-  const lines = usable.map((skill) => {
-    const description =
-      skill.description.replace(/\s+/g, " ").trim().slice(0, MAX_DESCRIPTION) || "(no description)";
-    return `- ${skill.name}: ${description} (${skill.filePath})`;
-  });
-  return [
-    "## pi Agent Skills",
-    "",
-    "The following pi Agent Skills are available in this session:",
-    ...lines,
-    "",
-    "To activate a skill, read its SKILL.md file directly.",
-    "Activate a skill BEFORE attempting its workflow; follow the activated instructions.",
-  ].join("\n");
 }
 
 /**

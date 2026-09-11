@@ -164,13 +164,9 @@ export async function searchMonid(
   const capped =
     options.numResults && options.numResults > 0 ? raw.slice(0, options.numResults) : raw;
 
-  const results: SearchResult[] = capped
-    .filter((item) => item.url)
-    .map((item) => ({
-      title: item.title || item.url || "",
-      url: item.url!,
-      snippet: item.snippet ?? "",
-    }));
+  const results: SearchResult[] = capped.flatMap((item) =>
+    item.url ? [{ title: item.title || item.url, url: item.url, snippet: item.snippet ?? "" }] : [],
+  );
 
   return { query, results, provider: "monid" };
 }

@@ -316,7 +316,7 @@ const makeBridgeClient = (retryDelaysMs: number[]) =>
             const servers = yield* discover(hello.piCwd);
             if (servers.length === 0) continue;
 
-            const result = yield* Effect.result(connectOnce(servers[0]!, hello, callbacks));
+            const result = yield* Effect.result(connectOnce(servers[0], hello, callbacks));
             if (Result.isSuccess(result)) {
               callbacks.onReattached();
               return;

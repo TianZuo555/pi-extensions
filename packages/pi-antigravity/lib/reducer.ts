@@ -59,7 +59,7 @@ export type AgyActivity =
       stalledMs: number;
       toolActive: boolean;
     }
-  | { type: "text"; delta: string }
+  | { type: "text"; delta: string; stepId?: number }
   | {
       /** agy's own collapsed reasoning line — thought text is never streamed,
        * only its token count (and the response step's duration) are. */
@@ -160,7 +160,7 @@ export function applyEvent(outcome: AgyTurnOutcome, event: ParsedAgyEvent): AgyA
         // thought text in print mode; thinking_tokens in usage is the only
         // reasoning trace.
         if (typeof step.text_delta === "string" && step.text_delta) {
-          activities.push({ type: "text", delta: step.text_delta });
+          activities.push({ type: "text", delta: step.text_delta, stepId: step.step_index });
         }
         if (step.usage) {
           // Running per-response usage; the result event carries the totals.

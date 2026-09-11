@@ -19,12 +19,19 @@ import type {
   ExtensionUIContext,
   ProviderModelConfig,
 } from "@earendil-works/pi-coding-agent";
+import { getDocsPath, getExamplesPath, getReadmePath } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { piConfigDir, readJson, writeJson } from "./lib/config.ts";
-import { installAgyDeathHooks, killAllAgyTrees } from "./lib/agy-children.ts";
+import {
+  getAgyChildrenRegistry,
+  installAgyDeathHooks,
+  killAllAgyTrees,
+  signalAgyTree,
+  signalVerifiedAgyOrphans,
+} from "./lib/agy-children.ts";
 import { checkAgyBinary, MIN_AGY_VERSION, runAgyCommand } from "./lib/agy-diagnostics.ts";
 import { parseAgyAgents, readAgyProcessProfile } from "./lib/agy-profile.ts";
 import { pruneBridgeMcpCache, removeMcpCacheEntry } from "./lib/mcp-cache.ts";
@@ -40,7 +47,7 @@ import {
   activateSkillDescription,
   activateSkillParameters,
   handleActivateSkill,
-  nonWorkspaceSkills,
+  piPrivateSkills,
   usableSkillCatalog,
   type SkillLite,
 } from "./lib/skills.ts";
@@ -48,7 +55,7 @@ import {
   capabilitiesForModel,
   FALLBACK_MODELS,
   mergeAgyModels,
-  modelCacheTtlMs,
+  modelCacheIsFresh,
   parseAgyModels,
   pricingForModel,
   resolveAgyModelEffort,
@@ -71,11 +78,23 @@ import {
 } from "./lib/conversation-state.ts";
 import { readAgyConversationMetadata } from "./lib/conversation-metadata.ts";
 import { AgyReplayStore, type RecordedAgyTool } from "./lib/replay.ts";
-import { findAgyTask, listAgyTasks, stopAgyTask } from "./lib/tasks.ts";
+import {
+  agyGroupLeadingDescendants,
+  agyGroupSurvivors,
+  agyTaskStopPids,
+  findAgyTask,
+  listAgyTasks,
+  stopAgyTask,
+  type AgyTask,
+} from "./lib/tasks.ts";
 import { formatAgySubagents, trackAgySubagent, type AgySubagentEntry } from "./lib/subagents.ts";
 import { findAgyArtifact, listAgyArtifacts } from "./lib/artifacts.ts";
 import { fetchAgyUsage } from "./lib/usage.ts";
-import { WRAPPER_TOOL_DESCRIPTION, WRAPPER_TOOL_NAME } from "./lib/prompt.ts";
+import {
+  buildAgyRelayedInstructions,
+  WRAPPER_TOOL_DESCRIPTION,
+  WRAPPER_TOOL_NAME,
+} from "./lib/prompt.ts";
 import { wrapperToolActiveAfterModelSwitch } from "./lib/wrapper-activation.ts";
 import { openAgyTasksPicker } from "./src/tasks-ui.ts";
 import { openArtifact, openAgyArtifactsPicker } from "./src/artifacts-ui.ts";
@@ -206,9 +225,13 @@ async function listAgyModels(): Promise<AgyModelInfo[]> {
 
 function getInitialModelCache(): ModelCache {
   const cached = readJson<ModelCache | null>(MODEL_CACHE_FILE, null);
-  if (cached?.models?.length) {
+  if (cached?.models?.length && modelCacheIsFresh(cached)) {
     return { ...cached, models: normalizeModels(cached.models) };
   }
+  // An expired or missing cache may have been written by an older extension
+  // (e.g. a fallback catalog that predates newer models), so never register
+  // stale disk state at startup: use the catalog baked into this build and
+  // let the startup refresh pull the live list.
   return {
     fetchedAt: 0,
     source: "fallback",
@@ -219,11 +242,7 @@ function getInitialModelCache(): ModelCache {
 async function discoverModels(refresh = false): Promise<ModelCache> {
   if (!refresh) {
     const cached = readJson<ModelCache | null>(MODEL_CACHE_FILE, null);
-    if (
-      cached?.models?.length &&
-      cached.fetchedAt &&
-      Date.now() - cached.fetchedAt < modelCacheTtlMs(cached.source)
-    ) {
+    if (cached?.models?.length && modelCacheIsFresh(cached)) {
       return { ...cached, models: normalizeModels(cached.models) };
     }
   }
@@ -341,6 +360,9 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
       await execAgy(["mcp", "remove", serverName], SHUTDOWN_AGY_TIMEOUT_MS);
     },
     evictMcpCache: removeMcpCacheEntry,
+    // tasksUi is populated by the session_start handler; read it lazily so a
+    // warning raised before UI attach is simply dropped rather than throwing.
+    notifyWarning: (message) => tasksUi?.notify(message, "warning"),
   });
 
   /**
@@ -367,6 +389,18 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
   // is respected. Model-invocation-disabled skills are excluded.
   let loadedSkills: SkillLite[] = [];
 
+  /**
+   * The instruction block relayed to agy on fresh conversations: pi's
+   * documentation section only — boilerplate, tool inventory, skills and
+   * workspace rules all reach agy through other channels or not at all.
+   */
+  const getSystemPromptRelay = () =>
+    buildAgyRelayedInstructions({
+      readme: getReadmePath(),
+      docs: getDocsPath(),
+      examples: getExamplesPath(),
+    });
+
   function captureSkills(skills: unknown): void {
     if (!Array.isArray(skills)) return;
     loadedSkills = skills
@@ -382,15 +416,18 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
       }));
   }
 
-  const bridgedSkills = () => usableSkillCatalog(nonWorkspaceSkills(loadedSkills, tasksSessionCwd));
+  const bridgedSkills = () => usableSkillCatalog(piPrivateSkills(loadedSkills, tasksSessionCwd));
 
   /**
    * Bridge mode keeps the catalog in activate_skill's schema (refreshed on
-   * every agy spawn), so nothing is appended to the prompt. When the bridge is
-   * off OR failed to register with agy, fall back to the direct-mode path
-   * catalog so skills never become silently invisible.
+   * every agy spawn), so nothing is appended to the prompt. When the bridge
+   * is off OR failed to register, pi-private skills are simply unavailable —
+   * warn the user once instead of stuffing the catalog into the prompt.
    */
-  const getBootstrapSuffix = () => bridgeManager.getBootstrapSuffix(bridgedSkills());
+  const getBootstrapSuffix = () => {
+    bridgeManager.warnSkillsUnavailable(bridgedSkills());
+    return undefined;
+  };
 
   /** Publish one `pi__p<pid>__activate_skill` tool for global pi skills. */
   function refreshSkillTools(): void {
@@ -529,11 +566,14 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
         const [tasks, artifacts] = await Promise.all([
           listAgyTasks(snapshot.conversationId, {
             sessionCwd: tasksSessionCwd,
+            agyPids: [...getAgyChildrenRegistry().live],
           }),
           listAgyArtifacts(snapshot.conversationId),
         ]);
         setAgyTasksWidget(
-          tasks.filter((task) => task.pids.length > 0 || task.orphans.length > 0).length,
+          tasks.filter(
+            (task) => task.pids.length > 0 || task.orphans.length > 0 || task.ambiguous.length > 0,
+          ).length,
         );
         setAgyArtifactsWidget(artifacts.length);
       } catch {
@@ -661,6 +701,7 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
         (modelId) => currentCache.models.find((candidate) => candidate.id === modelId),
         readAgyProcessProfile,
         bridgeManager.processRevision,
+        getSystemPromptRelay,
       ),
     });
   };
@@ -668,16 +709,19 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
   registerAntigravityProvider(currentCache.models);
 
   async function refreshStaleModelsWhenSelected(): Promise<void> {
-    if (
-      currentCache.fetchedAt &&
-      Date.now() - currentCache.fetchedAt < modelCacheTtlMs(currentCache.source)
-    ) {
-      return;
-    }
+    if (modelCacheIsFresh(currentCache)) return;
     const fresh = await discoverModels(true);
     currentCache = fresh;
     registerAntigravityProvider(fresh.models);
   }
+
+  // Startup registration must stay synchronous, and the picker needs a
+  // correct list even when the default model is not from antigravity (the
+  // session_start/model_select hooks only refresh once agy is selected): a
+  // no-op for fresh caches, otherwise a background heal of the registration.
+  void refreshStaleModelsWhenSelected().catch((error) => {
+    console.error("pi-antigravity: background model refresh failed", error);
+  });
 
   pi.on("before_agent_start", (event) => {
     captureSkills(event.systemPromptOptions?.skills);
@@ -811,10 +855,34 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
     if (widgetPollTimer) clearInterval(widgetPollTimer);
     widgetPollTimer = undefined;
     widgetScanQueued = false;
+    // Group ids signalled at the top of shutdown; survivors get SIGKILL after
+    // service.close has given SIGTERM its grace. Every target in this set was
+    // verified by live ancestry or a current lsof hold moments earlier.
+    const sweepTargets = new Set<number>();
+    // Signal every process-group-leading child of our tracked agy processes.
+    // agy >= 1.2.0 runs tasks in their own process groups, so killAllAgyTrees
+    // (which only reaches agy's own group) leaves them running; ancestry is
+    // proof of ownership here — no per-task attribution needed — while agy is
+    // still alive to be their parent.
+    try {
+      const leaders = await agyGroupLeadingDescendants([...getAgyChildrenRegistry().live]);
+      for (const pid of leaders) {
+        sweepTargets.add(pid);
+        signalAgyTree({ pid }, "SIGTERM");
+      }
+    } catch {
+      // Process scan failed; service.close and killAllAgyTrees still run.
+    }
+    // Orphans recorded at earlier recycles are proven descendants of agy
+    // processes this pi spawned — ours regardless of which conversation the
+    // service snapshot currently names (or whether a /agy reset cleared it).
+    // signalVerifiedAgyOrphans re-checks each record's identity first, so a
+    // stale record can never signal a reused pid or a stranger's group.
+    signalVerifiedAgyOrphans("SIGTERM");
     // Stop any live agy background tasks so closing pi leaves nothing
-    // running silently. Only processes holding the task log open are certain
-    // enough to stop automatically; heuristic orphan matches stay visible in
-    // /agy-tasks but require an explicit user stop to avoid false positives.
+    // running silently. A task stop only ever signals proven log holders;
+    // recorded orphans were covered above, and advisory matches are never
+    // signalled.
     try {
       const snapshot = await runAntigravity(runtime, service.snapshot);
       if (snapshot.conversationId) {
@@ -822,7 +890,10 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
           sessionCwd: tasksSessionCwd,
         });
         const live = tasks.filter((task) => task.pids.length > 0);
-        await Promise.all(live.map((task) => stopAgyTask(task, { includeOrphans: false })));
+        const stopped = await Promise.all(live.map((task) => stopAgyTask(task)));
+        for (const { pgids } of stopped) {
+          for (const pgid of pgids) sweepTargets.add(pgid);
+        }
       }
     } catch {
       // Runtime closed or scan failed; nothing to stop.
@@ -852,6 +923,23 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
     } catch {
       // Disposed gracefully
     }
+    // Escalate: any signalled group that still holds members ignored its
+    // SIGTERM — force it now. -pgid addresses the group, so a dead leader's
+    // pid can never be confused with a reused process. Recorded orphans go
+    // through signalVerifiedAgyOrphans again — identity is re-checked, never
+    // inherited from the earlier sweep.
+    try {
+      for (const pgid of await agyGroupSurvivors(sweepTargets)) {
+        try {
+          process.kill(-pgid, "SIGKILL");
+        } catch {
+          // Group already gone.
+        }
+      }
+    } catch {
+      // Escalation scan failed; killAllAgyTrees still runs.
+    }
+    signalVerifiedAgyOrphans("SIGKILL");
     // Sweep any remaining tracked agy process trees (including earlier turns
     // that finished logically while grandchildren held stdio open).
     killAllAgyTrees();
@@ -1078,40 +1166,101 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
       const arg = args.trim().toLowerCase();
       const snapshot = await runAntigravity(runtime, service.snapshot);
       const conversationId = snapshot.conversationId;
-      if (!conversationId) {
-        ctx.ui.notify("agy-tasks: no agy conversation in this session yet.", "error");
-        return;
-      }
-      const rescan = () => listAgyTasks(conversationId, { sessionCwd: ctx.cwd });
 
       // No arguments: interactive dashboard overlay (x stops, r rescans).
       if (!arg) {
+        if (!conversationId) {
+          ctx.ui.notify("agy-tasks: no agy conversation in this session yet.", "error");
+          return;
+        }
+        const rescan = () =>
+          listAgyTasks(conversationId, {
+            sessionCwd: ctx.cwd,
+            agyPids: [...getAgyChildrenRegistry().live],
+          });
         await openAgyTasksPicker(ctx, rescan);
         updateAgyTasksWidget();
         return;
       }
 
-      const tasks = await rescan();
       const stopMatch = arg.match(/^stop\s+(.+)$/);
       if (!stopMatch) {
         ctx.ui.notify('agy-tasks: usage "/agy-tasks" or "/agy-tasks stop <task-id>|all".', "error");
         return;
       }
       const target = stopMatch[1].trim();
+      // `stop all` reaps recorded groups whose agy parent has exited — scoped
+      // to the identity-verified registry, not to the task list, so missing
+      // or deleted task logs never block it. With no live conversation (a
+      // /agy reset cleared the snapshot, not the registry) the sweep runs
+      // unscoped: every recorded group is this pi's own work either way.
+      // protectAttached keeps still-attached groups safe in both cases —
+      // they may be a foreground command under a running driver. Per-task
+      // stops can never do this: nothing binds a recorded process to a task.
+      const orphanGroups =
+        target === "all"
+          ? signalVerifiedAgyOrphans("SIGTERM", {
+              conversationId,
+              protectAttached: true,
+            })
+          : 0;
+      if (!conversationId) {
+        ctx.ui.notify(
+          orphanGroups > 0
+            ? `agy-tasks: reaped ${orphanGroups} recorded orphan group(s).`
+            : "agy-tasks: no agy conversation in this session yet.",
+          orphanGroups > 0 ? "info" : "error",
+        );
+        if (orphanGroups > 0) updateAgyTasksWidget();
+        return;
+      }
+      // The task listing is best-effort — a log disappearing mid-scan or a
+      // failed `ps` must not block the verified orphan sweep above.
+      let tasks: AgyTask[] = [];
+      try {
+        tasks = await listAgyTasks(conversationId, {
+          sessionCwd: ctx.cwd,
+          agyPids: [...getAgyChildrenRegistry().live],
+        });
+      } catch (error) {
+        ctx.ui.notify(
+          `agy-tasks: task scan failed (${error instanceof Error ? error.message : String(error)}).`,
+          "warning",
+        );
+      }
       const selected =
         target === "all"
-          ? tasks.filter((task) => task.pids.length > 0 || task.orphans.length > 0)
+          ? tasks.filter(
+              (task) =>
+                task.pids.length > 0 || task.orphans.length > 0 || task.ambiguous.length > 0,
+            )
           : [findAgyTask(tasks, target)].filter(
               (task): task is NonNullable<typeof task> => task !== undefined,
             );
       if (selected.length === 0) {
-        ctx.ui.notify(`agy-tasks: no running task "${target}" in this conversation.`, "error");
+        ctx.ui.notify(
+          orphanGroups > 0
+            ? `agy-tasks: no running task "${target}" in this conversation; reaped ${orphanGroups} recorded orphan group(s).`
+            : `agy-tasks: no running task "${target}" in this conversation.`,
+          orphanGroups > 0 ? "info" : "error",
+        );
+        if (orphanGroups > 0) updateAgyTasksWidget();
         return;
       }
-      const results = await Promise.all(selected.map((task) => stopAgyTask(task)));
-      const stopped = selected.map((task) => task.id).join(", ");
+      const stoppable = selected.filter((task) => agyTaskStopPids(task).length > 0);
+      if (stoppable.length === 0 && orphanGroups === 0) {
+        ctx.ui.notify(
+          `agy-tasks: ${selected.map((task) => task.id).join(", ")} has no provably-owned process (unclear); nothing signalled. Check the process manually before killing.`,
+          "warning",
+        );
+        return;
+      }
+      const results = await Promise.all(stoppable.map((task) => stopAgyTask(task)));
+      const stopped = stoppable.map((task) => task.id).join(", ");
+      const skipped = selected.length - stoppable.length;
+      const signalled = results.reduce((sum, result) => sum + result.signaled, 0) + orphanGroups;
       ctx.ui.notify(
-        `agy-tasks: sent SIGTERM to ${stopped} (${results.reduce((sum, count) => sum + count, 0)} process(es)).`,
+        `agy-tasks: sent SIGTERM to ${signalled} process(es)${stopped ? ` via ${stopped}` : ""}${orphanGroups > 0 ? `, incl. ${orphanGroups} recorded orphan group(s)` : ""}${skipped > 0 ? `; ${skipped} skipped as unclear` : ""}.`,
         "info",
       );
       updateAgyTasksWidget();

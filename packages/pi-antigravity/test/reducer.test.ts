@@ -125,6 +125,14 @@ test("reducer emits a thought marker for response steps that burned thinking tok
       }),
     ].join("\n"),
   );
+  assert.deepEqual(
+    outcome.activities.find((a) => a.type === "text"),
+    {
+      type: "text",
+      delta: "answer",
+      stepId: 1,
+    },
+  );
   const thought = outcome.activities.find((a) => a.type === "thought");
   assert.ok(thought && thought.type === "thought");
   assert.equal(thought.tokens, 289);

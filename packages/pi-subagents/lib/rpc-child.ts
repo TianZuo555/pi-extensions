@@ -5,7 +5,7 @@
  * The trusted child runtime is loaded explicitly via `-e`.
  */
 
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -159,7 +159,7 @@ export async function runRpcChild(input: RpcChildRunInput): Promise<RpcChildRunO
   }
 
   const invocation = input.spawnOverride ?? getPiInvocation(args);
-  const child: ChildProcess = spawn(invocation.command, invocation.args, {
+  const child = spawn(invocation.command, invocation.args, {
     cwd: input.cwd,
     shell: false,
     detached: process.platform !== "win32",
@@ -231,7 +231,7 @@ export async function runRpcChild(input: RpcChildRunInput): Promise<RpcChildRunO
     });
   }
 
-  attachJsonlReader(child.stdout!, (line) => {
+  attachJsonlReader(child.stdout, (line) => {
     let parsed: RpcLine;
     try {
       parsed = JSON.parse(line) as RpcLine;

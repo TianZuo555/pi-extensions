@@ -27,8 +27,8 @@ export function isSupportedVersion(binary: SearchBinary, versionOutput: string):
   const actual = [Number(match[1]), Number(match[2]), Number(match[3] ?? 0)] as const;
   const minimum = MINIMUM_VERSIONS[binary];
   for (let index = 0; index < minimum.length; index++) {
-    if (actual[index]! > minimum[index]!) return true;
-    if (actual[index]! < minimum[index]!) return false;
+    if (actual[index] > minimum[index]) return true;
+    if (actual[index] < minimum[index]) return false;
   }
   return true;
 }

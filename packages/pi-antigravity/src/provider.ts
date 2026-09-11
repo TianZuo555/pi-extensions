@@ -239,6 +239,13 @@ export function streamAntigravity(
   getProcessProfile: () => AgyProcessProfile = readAgyProcessProfile,
   /** Combined bridge registration/catalog revision. */
   getBridgeRevision: () => string | undefined = () => undefined,
+  /**
+   * The instruction block relayed to agy on fresh conversations, composed
+   * from pi's structured systemPromptOptions — only what agy cannot reach
+   * itself (pi docs paths, user custom prompt, out-of-workspace context
+   * files). Falls back to pi's rendered systemPrompt when absent (tests).
+   */
+  getSystemPromptRelay?: () => string | undefined,
 ) {
   return (
     model: Model<string>,
@@ -332,7 +339,12 @@ export function streamAntigravity(
         const controller = await turnRuntime.runPromise(
           turnService.beginStreamTurn({
             prompt,
-            systemPrompt: context.systemPrompt,
+            // Summary requests (compaction, branch summaries) carry their own
+            // instructions in context.systemPrompt — the docs-only relay is
+            // for user turns only and must not override them.
+            systemPrompt: summaryRequest
+              ? context.systemPrompt
+              : (getSystemPromptRelay?.() ?? context.systemPrompt),
             historyBootstrap: summaryRequest ? undefined : piHistoryBootstrap(context),
             bootstrapSuffix: summaryRequest ? undefined : getBootstrapSuffix?.(),
             modelId: model.id,
@@ -687,6 +699,7 @@ export function streamAntigravity(
               break;
             }
             case "tool_start": {
+              controller.beginTextSegment();
               if (isBridgedMcpStep(activity, bridge.serverName)) break;
               closeText();
               emitStartedReplayTool(activity);
@@ -744,7 +757,7 @@ export function streamAntigravity(
                 textBuffer = "";
                 stream.push({ type: "text_start", contentIndex: textIndex, partial: output });
               }
-              controller.recordEmittedText(activity.delta);
+              controller.recordEmittedText(activity.delta, activity.stepId);
               textBuffer += activity.delta;
               const block = output.content[textIndex];
               if (block.type === "text") block.text = textBuffer;
@@ -776,6 +789,9 @@ export function streamAntigravity(
               // not just this closure's textBuffer (which tool boundaries clear).
               const suffix = controller.remainingResponseText(activity.response);
               if (suffix) {
+                // A distinct final answer is its own block, not a continuation
+                // glued onto the last word of streamed commentary.
+                if (suffix === activity.response) closeText();
                 controller.recordEmittedText(suffix);
                 if (textIndex !== null) {
                   textBuffer += suffix;
