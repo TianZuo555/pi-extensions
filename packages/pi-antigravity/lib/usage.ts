@@ -223,6 +223,7 @@ function defaultExec(
   const child = spawn(file, [...args], {
     stdio: ["ignore", "pipe", "pipe"],
     detached: true,
+    windowsHide: true,
     signal: options.signal,
   });
   trackAgyChild(child);

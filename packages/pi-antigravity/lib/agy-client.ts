@@ -169,6 +169,7 @@ export async function runAgyTurn(request: AgyTurnRequest): Promise<AgyTurnOutcom
       // Own process group so one negative-pid SIGKILL reaps agy's whole
       // tree on timeout/abort instead of leaving grandchildren running.
       detached: true,
+      windowsHide: true,
     });
     trackAgyChild(child);
     const outcome = newTurnOutcome();

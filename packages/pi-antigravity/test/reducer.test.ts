@@ -75,6 +75,71 @@ test("reducer reads tool output from tool_info when top-level output is absent",
   assert.equal(done.output, "./a.ts: hi");
 });
 
+test("reducer surfaces subagent steps as tool activities", () => {
+  // Captured from agy 1.2.1 stream-json: invoke_subagent arrives as
+  // step_type "subagent" with subagent_info instead of tool_info.
+  const outcome = reduceAgyStream(
+    [
+      JSON.stringify({
+        event: "step_update",
+        step_update: {
+          conversation_id: "c-sub-1",
+          step_index: 2,
+          state: "ACTIVE",
+          step_type: "subagent",
+          tool_name: "invoke_subagent",
+          subagent_info: {
+            subagents: [
+              {
+                type_name: "research",
+                role: "File Counter",
+                initial_prompt: "Count files in the current directory.",
+              },
+            ],
+          },
+        },
+      }),
+      JSON.stringify({
+        event: "step_update",
+        step_update: {
+          conversation_id: "c-sub-1",
+          step_index: 2,
+          state: "DONE",
+          step_type: "subagent",
+          tool_name: "invoke_subagent",
+          duration_seconds: 0.145,
+          subagent_info: {
+            subagents: [
+              {
+                type_name: "research",
+                role: "File Counter",
+                initial_prompt: "Count files in the current directory.",
+                conversation_id: "8b8d97c1-2409-435f-bbf6-926328a5a12f",
+                log_uri: "file:///brain/8b8d97c1/transcript.jsonl",
+              },
+            ],
+          },
+        },
+      }),
+      JSON.stringify({ event: "result", result: { status: "SUCCESS", response: "14" } }),
+    ].join("\n"),
+  );
+
+  const start = outcome.activities.find((a) => a.type === "tool_start");
+  assert.ok(start && start.type === "tool_start");
+  assert.equal(start.name, "invoke_subagent");
+  assert.equal(start.stepId, 2);
+  assert.equal(start.args.Name, "File Counter");
+  assert.equal(start.args.Type, "research");
+  assert.equal(start.args.Task, "Count files in the current directory.");
+
+  const done = outcome.activities.find((a) => a.type === "tool_done");
+  assert.ok(done && done.type === "tool_done");
+  assert.equal(done.name, "invoke_subagent");
+  assert.ok(done.output?.includes("8b8d97c1-2409-435f-bbf6-926328a5a12f"));
+  assert.equal(done.durationSeconds, 0.145);
+});
+
 test("reducer folds a successful turn", () => {
   const outcome = reduceAgyStream(OK_CAPTURE);
   assert.equal(outcome.status, "OK");

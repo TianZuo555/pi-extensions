@@ -37,7 +37,24 @@ export interface AgyToolInfo {
 }
 
 export type AgyStepState = "ACTIVE" | "DONE" | "ERROR" | string;
-export type AgyStepType = "user_input" | "checkpoint" | "agent_response" | "tool" | (string & {});
+export type AgyStepType =
+  | "user_input"
+  | "checkpoint"
+  | "agent_response"
+  | "tool"
+  | "subagent"
+  | "system_message"
+  | (string & {});
+
+/** One spawned subagent record inside a `subagent` step's `subagent_info`. */
+export interface AgySubagentSpawn {
+  type_name?: string;
+  role?: string;
+  initial_prompt?: string;
+  /** Set once the spawn completes (DONE state). */
+  conversation_id?: string;
+  log_uri?: string;
+}
 
 export interface AgyStepUpdate {
   conversation_id?: string;
@@ -46,6 +63,11 @@ export interface AgyStepUpdate {
   step_type?: AgyStepType;
   tool_name?: string;
   tool_info?: AgyToolInfo;
+  /**
+   * `step_type: "subagent"` steps (invoke_subagent & friends) carry their
+   * payload here instead of tool_info — parameters are absent entirely.
+   */
+  subagent_info?: { subagents?: AgySubagentSpawn[] };
   duration_seconds?: number;
   usage?: AgyUsage;
   output?: string;
