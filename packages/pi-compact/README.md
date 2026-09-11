@@ -36,22 +36,16 @@ Settings live in `~/.pi/agent/pi-compact.json`:
 ```
 
 `compactionModel` is `provider/modelId` — must be an `openai-codex/*` model (same backend as the
-session), otherwise the session model is used. Set it to `""` (or `/remote-compact model session`)
-to restore upstream behavior.
+session), otherwise the session model is used. Set it to `""` to restore upstream behavior.
 
-## Command
-
-```text
-/remote-compact              status: enabled, route, session model, compaction model
-/remote-compact now          compact immediately
-/remote-compact on|off       toggle remote compaction
-/remote-compact model X      set compaction model ("session" to clear)
-```
+There are no commands: pi's built-in `/compact` (and automatic compaction) is intercepted via
+`session_before_compact` — on `openai-codex` sessions it performs remote compaction through the
+configured model; elsewhere it does nothing and Pi's native summary runs as usual.
 
 ## Differences from upstream
 
-- `compactionModel` setting + `/remote-compact` text command instead of the TUI menu
-  (drops the `@narumitw/pi-tui-kit` dependency).
+- `compactionModel` setting; no commands or TUI menu (drops the `@narumitw/pi-tui-kit`
+  dependency) — built-in `/compact` is intercepted transparently on codex sessions.
 - Checkpoint `details.modelId`/`api` record the **session** model (the replay gate is unchanged).
 - Remote compaction is skipped entirely when the session model cannot replay a checkpoint
   (non-Responses API) — falls back to Pi native.
