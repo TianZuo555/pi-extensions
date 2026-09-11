@@ -52,6 +52,7 @@ import {
   type SkillLite,
 } from "./lib/skills.ts";
 import {
+  AGY_PI_SCHEDULING_CONTEXT_WINDOW,
   capabilitiesForModel,
   FALLBACK_MODELS,
   mergeAgyModels,
@@ -293,16 +294,39 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
     turns: number;
   }): string => `${state.conversationId}:${state.modelId}:${state.turns}`;
 
+  /**
+   * Every session-bound getter on a stale ctx throws once pi invalidates the
+   * extension runner (dispose/newSession/fork/switchSession/reload), and
+   * events dispatched around the swap — e.g. agent_settled landing after a
+   * /new or a shutdown — still reach our handlers. Probe first; a dead session
+   * has nothing to persist into and no widget to update.
+   */
+  function probeCtx<T>(read: () => T): { stale: true } | { stale: false; value: T } {
+    try {
+      return { stale: false, value: read() };
+    } catch {
+      return { stale: true };
+    }
+  }
+
   async function persistConversationState(ctx: ExtensionContext, force = false): Promise<void> {
-    if (ctx.model?.provider !== "antigravity") return;
+    // Read every session-bound field before the first await — the stale window
+    // widens once this handler yields.
+    const probe = probeCtx(() => ({
+      provider: ctx.model?.provider,
+      sessionId: ctx.sessionManager.getSessionId(),
+      cwd: ctx.cwd,
+    }));
+    if (probe.stale || probe.value.provider !== "antigravity") return;
+    const { sessionId, cwd } = probe.value;
     const snapshot = await runAntigravity(runtime, service.snapshot);
-    if (!snapshot.conversationId || !snapshot.model || snapshot.cwd !== ctx.cwd) return;
+    if (!snapshot.conversationId || !snapshot.model || snapshot.cwd !== cwd) return;
     const state: PersistedAgyConversation = {
       version: 1,
       kind: "conversation",
-      sessionId: ctx.sessionManager.getSessionId(),
+      sessionId,
       conversationId: snapshot.conversationId,
-      cwd: ctx.cwd,
+      cwd,
       modelId: snapshot.model,
       turns: snapshot.turns,
       usage: snapshot.conversationUsage,
@@ -310,18 +334,31 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
     };
     const key = conversationStateKey(state);
     if (!force && key === persistedConversationKey) return;
-    pi.appendEntry(AGY_CONVERSATION_STATE_ENTRY, state);
+    try {
+      pi.appendEntry(AGY_CONVERSATION_STATE_ENTRY, state);
+    } catch {
+      return; // Session went stale mid-persist.
+    }
     persistedConversationKey = key;
   }
 
   function appendConversationReset(ctx: ExtensionContext): void {
+    const probe = probeCtx(() => ({
+      sessionId: ctx.sessionManager.getSessionId(),
+      cwd: ctx.cwd,
+    }));
+    if (probe.stale) return;
     const reset: PersistedAgyReset = {
       version: 1,
       kind: "reset",
-      sessionId: ctx.sessionManager.getSessionId(),
-      cwd: ctx.cwd,
+      sessionId: probe.value.sessionId,
+      cwd: probe.value.cwd,
     };
-    pi.appendEntry(AGY_CONVERSATION_STATE_ENTRY, reset);
+    try {
+      pi.appendEntry(AGY_CONVERSATION_STATE_ENTRY, reset);
+    } catch {
+      return;
+    }
     observedContextTokens = undefined;
     persistedConversationKey = undefined;
   }
@@ -423,6 +460,8 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
    * every agy spawn), so nothing is appended to the prompt. When the bridge
    * is off OR failed to register, pi-private skills are simply unavailable —
    * warn the user once instead of stuffing the catalog into the prompt.
+   * The undefined return is intentional; the runtime's bootstrapSuffix
+   * plumbing stays so a future direct-mode catalog needs no new wiring.
    */
   const getBootstrapSuffix = () => {
     bridgeManager.warnSkillsUnavailable(bridgedSkills());
@@ -607,7 +646,11 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
           ...compaction,
           detectedAt: new Date().toISOString(),
         };
-        pi.appendEntry(AGY_COMPACTION_ENTRY, marker);
+        try {
+          pi.appendEntry(AGY_COMPACTION_ENTRY, marker);
+        } catch {
+          // Session replaced mid-activity; the marker is advisory only.
+        }
       }
       observedContextTokens = nextContextTokens;
       return;
@@ -733,16 +776,20 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
   // source while the agent or any discovered task is live, then stop when
   // both are idle. This keeps the widget current without a permanent timer.
   pi.on("agent_start", (_event, ctx) => {
-    if (ctx.model?.provider !== "antigravity") return;
+    const probe = probeCtx(() => ctx.model?.provider);
+    if (probe.stale || probe.value !== "antigravity") return;
     agyAgentActive = true;
     updateAgyTasksWidget();
     reconcileWidgetPolling();
   });
 
-  pi.on("agent_settled", (_event, ctx) => {
-    if (ctx.model?.provider !== "antigravity" && !agyAgentActive) return;
-    agyAgentActive = false;
-    updateAgyTasksWidget();
+  pi.on("agent_settled", async (_event, ctx: ExtensionContext) => {
+    const probe = probeCtx(() => ctx.model?.provider);
+    if (!probe.stale && (probe.value === "antigravity" || agyAgentActive)) {
+      agyAgentActive = false;
+      updateAgyTasksWidget();
+    }
+    await persistConversationState(ctx);
   });
 
   // The display-only `antigravity` wrapper tool only matters while an agy
@@ -751,13 +798,17 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
   // active-tool state whenever the selected model changes, including the
   // session's initial restore.
   const syncWrapperToolActivation = (provider: string | undefined) => {
-    const next = wrapperToolActiveAfterModelSwitch(
-      pi.getActiveTools(),
-      WRAPPER_TOOL_NAME,
-      provider,
-      "antigravity",
-    );
-    if (next) pi.setActiveTools([...next]);
+    try {
+      const next = wrapperToolActiveAfterModelSwitch(
+        pi.getActiveTools(),
+        WRAPPER_TOOL_NAME,
+        provider,
+        "antigravity",
+      );
+      if (next) pi.setActiveTools([...next]);
+    } catch {
+      // Tool APIs unavailable (print/RPC edge) — leave the set untouched.
+    }
   };
 
   pi.on("session_start", async (event, ctx: ExtensionContext) => {
@@ -817,14 +868,18 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
       // Another provider/model can add context that the mutable agy
       // conversation never saw. Force a branch bootstrap when agy is selected
       // again instead of silently resuming stale native history.
-      await runAntigravity(runtime, service.setSession(ctx.cwd, undefined, true));
-      observedContextTokens = undefined;
-      persistedConversationKey = undefined;
+      const cwd = probeCtx(() => ctx.cwd);
+      if (!cwd.stale) {
+        await runAntigravity(runtime, service.setSession(cwd.value, undefined, true));
+        observedContextTokens = undefined;
+        persistedConversationKey = undefined;
+      }
     }
     selectedModelKey = nextModelKey;
     // The bridge exists only while an Antigravity model is selected.
     if (event.model?.provider === "antigravity") {
-      await ensureBridgeRegistered(ctx?.ui);
+      const ui = probeCtx(() => ctx?.ui);
+      await ensureBridgeRegistered(ui.stale ? undefined : ui.value);
       await refreshStaleModelsWhenSelected();
     } else {
       await teardownBridge();
@@ -834,14 +889,13 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
   pi.on("session_tree", async (_event, ctx: ExtensionContext) => {
     // An agy conversation cannot be rewound to match a different pi branch.
     // Restart it and bootstrap the selected branch on the next provider call.
-    await runAntigravity(runtime, service.setSession(ctx.cwd, undefined, true));
+    const cwd = probeCtx(() => ctx.cwd);
+    if (cwd.stale) return;
+    await runAntigravity(runtime, service.setSession(cwd.value, undefined, true));
     appendConversationReset(ctx);
+    subagentRoster.clear();
     setAgyTasksWidget(0);
     setAgyArtifactsWidget(0);
-  });
-
-  pi.on("agent_settled", async (_event, ctx: ExtensionContext) => {
-    await persistConversationState(ctx);
   });
 
   pi.on("session_compact", async (_event, ctx: ExtensionContext) => {
@@ -950,7 +1004,7 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
     handler: async (args, ctx) => {
       if (args.trim()) {
         ctx.ui.notify(
-          'antigravity: use "/agy-reset", "/agy-models", "/agy-agents", "/agy-subagents", or "/agy-doctor".',
+          'antigravity: use "/agy-reset", "/agy-models", "/agy-agents", "/agy-doctor", "/agy-subagents", "/agy-tasks", "/agy-artifacts", or "/agy-usage".',
           "error",
         );
         return;
@@ -971,7 +1025,7 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
         `driver: ${snapshot.executor.mode}/${snapshot.executor.state}${snapshot.executor.pid ? ` pid=${snapshot.executor.pid}` : ""}`,
         observedContextTokens === undefined
           ? undefined
-          : `native context: ~${formatAgyContextTokens(observedContextTokens)}/185k`,
+          : `native context: ~${formatAgyContextTokens(observedContextTokens)}/${formatAgyContextTokens(AGY_PI_SCHEDULING_CONTEXT_WINDOW)}`,
         metadata?.metadata?.numSteps === undefined
           ? undefined
           : `native steps: ${metadata.metadata.numSteps}`,

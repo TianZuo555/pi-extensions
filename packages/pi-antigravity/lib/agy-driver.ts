@@ -14,6 +14,7 @@ import {
   agyHasRunningToolProcess,
   agyTurnTranscriptVerdict,
   recordAgyTaskOrphans,
+  recordAgyTaskOrphansAsync,
   type AgyTranscriptVerdict,
 } from "./tasks.ts";
 import { agyToolStepKey, trackActiveToolStep } from "./tool-steps.ts";
@@ -221,6 +222,16 @@ export class AgyDriverSession implements AgyTurnExecutor {
   ) => Promise<AgyTranscriptVerdict | undefined> = agyTurnTranscriptVerdict;
   #parkedPollMs = STALL_PARKED_POLL_MS;
   #parkedLimit = STALL_PARKED_LIMIT;
+  /**
+   * Async orphan-scan queue for tool-start activity. A `ps` snapshot is a
+   * subprocess spawn, so the line handler must not run it synchronously;
+   * scans coalesce because one fresh table already captures every
+   * group-leading child agy currently has — only the latest request needs a
+   * trailing run.
+   */
+  #orphanScanPending: { pid: number; conversationId: string } | undefined;
+  #orphanScanRunning = false;
+  #orphanScanTail: Promise<void> = Promise.resolve();
 
   /** Test hook: override the tool-liveness probe and its grace ceiling. */
   setStallLivenessProbe(
@@ -725,16 +736,17 @@ export class AgyDriverSession implements AgyTurnExecutor {
     for (const activity of applyEvent(turn.outcome, parsed)) {
       // agy can repeat the same ACTIVE step line; only a genuinely new tool
       // start may have spawned a process group worth recording. Repeated
-      // updates for a step already tracked skip the synchronous `ps` scan,
-      // but a NEW tool start never does — a missed snapshot means an agy
-      // crash later leaves the worker orphaned and unrecorded.
+      // updates for a step already tracked skip the scan, but a NEW tool
+      // start never does — a missed snapshot means an agy crash later leaves
+      // the worker orphaned and unrecorded.
       const newToolStart =
         activity.type === "tool_start" && !turn.activeTools.has(agyToolStepKey(activity));
       trackActiveToolStep(turn.activeTools, activity);
       // Snapshot task-shaped children while agy can still be their parent:
       // a later unexpected agy exit re-parents them and the linkage is gone.
+      // The scan is queued async so a `ps` spawn never blocks line handling.
       if (newToolStart && this.#child) {
-        recordAgyTaskOrphans(
+        this.#queueOrphanScan(
           this.#child.pid,
           turn.outcome.conversationId ?? this.#boundConversationId,
         );
@@ -767,6 +779,31 @@ export class AgyDriverSession implements AgyTurnExecutor {
     }
   }
 
+  /**
+   * Queue a process-table snapshot for a fresh tool start. Recording is
+   * advisory, so the `ps` spawn must not sit inside the line handler: one
+   * scan already captures every group-leading child agy currently has, so
+   * requests coalesce and only the latest needs a trailing run.
+   */
+  #queueOrphanScan(pid: number | undefined, conversationId: string | undefined): void {
+    if (pid === undefined || !conversationId) return;
+    this.#orphanScanPending = { pid, conversationId };
+    if (this.#orphanScanRunning) return;
+    this.#orphanScanRunning = true;
+    this.#orphanScanTail = (async () => {
+      try {
+        for (;;) {
+          const pending = this.#orphanScanPending;
+          this.#orphanScanPending = undefined;
+          if (!pending) break;
+          await recordAgyTaskOrphansAsync(pending.pid, pending.conversationId);
+        }
+      } finally {
+        this.#orphanScanRunning = false;
+      }
+    })();
+  }
+
   #onChildClose(generation: number, code: number | null, signal: NodeJS.Signals | null): void {
     if (generation !== this.#generation) return;
     if (this.#stdoutBuffer.trim() && this.#active) {
@@ -786,12 +823,20 @@ export class AgyDriverSession implements AgyTurnExecutor {
         : ` (no stderr${this.#config?.model ? ` model=${this.#config.model}` : ""}${
             this.#boundConversationId ? ` conv=${this.#boundConversationId.slice(0, 8)}` : ""
           }). The cause is unknown. Try /agy-reset before retrying, or set PI_ANTIGRAVITY_DRIVER=0 for one-shot mode. Check for commands still running before retrying; use pi's own bash for long-lived commands.`;
-      this.#settleTurn(turn, {
-        error: new AgySpawnError(
-          `agy exited with code ${code ?? signal ?? "signal"} before producing a result${hint}`,
-          this.#stderrTail,
-        ),
-      });
+      const settle = () =>
+        this.#settleTurn(turn, {
+          error: new AgySpawnError(
+            `agy exited with code ${code ?? signal ?? "signal"} before producing a result${hint}`,
+            this.#stderrTail,
+          ),
+        });
+      // Let any queued orphan snapshot land before reporting the turn dead:
+      // its scan was scheduled while this agy could still be the parent.
+      if (this.#orphanScanRunning || this.#orphanScanPending) {
+        void this.#orphanScanTail.then(settle, settle);
+      } else {
+        settle();
+      }
     }
   }
 

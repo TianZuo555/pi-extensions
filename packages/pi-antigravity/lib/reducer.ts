@@ -8,7 +8,7 @@
  * events the provider renders as native pi tool cards.
  */
 
-import type { AgyUsage, ParsedAgyEvent } from "./events.ts";
+import type { AgyStepUpdate, AgyUsage, ParsedAgyEvent } from "./events.ts";
 import { parseAgyLine } from "./events.ts";
 
 /**
@@ -94,6 +94,40 @@ export interface AgyTurnOutcome {
   finished: boolean;
 }
 
+/**
+ * Flatten `subagent_info.subagents` into the arg map the roster's
+ * pickName/pickDetail and the call renderer already read (Name/Type/Task).
+ * The first spawn leads; extra spawns in the same step fold into the name.
+ */
+function subagentStepArgs(step: AgyStepUpdate): Record<string, unknown> {
+  const subs = step.subagent_info?.subagents;
+  if (!subs?.length) return {};
+  const first = subs[0];
+  const args: Record<string, unknown> = {};
+  if (first.role) args.Name = subs.length > 1 ? `${first.role} +${subs.length - 1}` : first.role;
+  if (first.type_name) args.Type = first.type_name;
+  if (first.initial_prompt) args.Task = first.initial_prompt;
+  if (first.conversation_id) args.ConversationId = first.conversation_id;
+  if (first.log_uri) args.LogUri = first.log_uri;
+  return args;
+}
+
+/** DONE subagent steps carry no output field; summarize the spawn records. */
+function subagentStepOutput(step: AgyStepUpdate): string | undefined {
+  const subs = step.subagent_info?.subagents;
+  if (!subs?.length) return undefined;
+  return subs
+    .map((sub) =>
+      [
+        `subagent ${sub.role ?? sub.type_name ?? "spawned"}`,
+        sub.conversation_id ? `conversation ${sub.conversation_id}` : undefined,
+      ]
+        .filter(Boolean)
+        .join(" · "),
+    )
+    .join("\n");
+}
+
 export function newTurnOutcome(): AgyTurnOutcome {
   return {
     conversationId: undefined,
@@ -120,14 +154,18 @@ export function applyEvent(outcome: AgyTurnOutcome, event: ParsedAgyEvent): AgyA
       if (step.conversation_id && !outcome.conversationId) {
         outcome.conversationId = step.conversation_id;
       }
-      if (step.step_type === "tool") {
+      if (step.step_type === "tool" || step.step_type === "subagent") {
+        // Subagent steps (invoke_subagent/send_message/manage_subagents/…)
+        // arrive as step_type "subagent" with the payload under subagent_info,
+        // not tool_info — normalize both into the activity arg/output shape.
         const name = step.tool_name ?? step.tool_info?.name ?? "tool";
+        const args = step.tool_info?.parameters ?? subagentStepArgs(step);
         if (step.state === "ACTIVE") {
           activities.push({
             type: "tool_start",
             stepId: step.step_index,
             name,
-            args: step.tool_info?.parameters ?? {},
+            args,
           });
         } else if (step.state === "DONE") {
           activities.push({
@@ -135,12 +173,12 @@ export function applyEvent(outcome: AgyTurnOutcome, event: ParsedAgyEvent): AgyA
             stepId: step.step_index,
             name,
             // agy nests tool output under tool_info on DONE steps.
-            output: step.output ?? step.tool_info?.output,
+            output: step.output ?? step.tool_info?.output ?? subagentStepOutput(step),
             durationSeconds:
               typeof step.duration_seconds === "number" ? step.duration_seconds : undefined,
             // Kept so call_mcp_tool completions can be correlated with the
             // bridged server (ServerName) by the provider.
-            args: step.tool_info?.parameters ?? {},
+            args,
           });
         } else if (step.state === "ERROR") {
           // agy puts the error detail under tool_info on ERROR steps (e.g.
@@ -150,7 +188,7 @@ export function applyEvent(outcome: AgyTurnOutcome, event: ParsedAgyEvent): AgyA
             type: "tool_error",
             stepId: step.step_index,
             name,
-            args: step.tool_info?.parameters ?? {},
+            args,
             message: message.replace(/\s+/g, " ").slice(0, 160),
           });
         }

@@ -40,7 +40,6 @@
 
 import { execFile } from "node:child_process";
 import { promises as fs } from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
 import {
   agyTaskParentIsAlive,
@@ -87,9 +86,8 @@ export interface AgyTask {
   bytes: number;
 }
 
-export function agyBrainDir(): string {
-  return path.join(os.homedir(), ".gemini", "antigravity-cli", "brain");
-}
+import { agyBrainDir } from "./agy-paths.ts";
+export { agyBrainDir };
 
 /** Extract unique positive pids from `lsof -t` output. */
 export function parseLsofPids(output: string): number[] {
@@ -109,6 +107,25 @@ export function describeTaskLog(content: string): string {
     .find((entry) => entry && !entry.startsWith("npm warn"));
   if (!line) return "(no output)";
   return line.length > 64 ? `${line.slice(0, 63)}…` : line;
+}
+
+/**
+ * Only the head of a task log is ever used (the description line), so
+ * polling must not read whole files — a long-lived task's log grows without
+ * bound while the widget/dashboard rescans it every second or two.
+ */
+const TASK_LOG_HEAD_BYTES = 8_192;
+
+async function readTaskLogHead(logPath: string): Promise<string> {
+  const handle = await fs.open(logPath, "r").catch(() => undefined);
+  if (!handle) return "";
+  try {
+    const buffer = Buffer.alloc(TASK_LOG_HEAD_BYTES);
+    const { bytesRead } = await handle.read(buffer, 0, TASK_LOG_HEAD_BYTES, 0);
+    return buffer.toString("utf8", 0, bytesRead);
+  } finally {
+    await handle.close().catch(() => {});
+  }
 }
 
 /**
@@ -213,6 +230,35 @@ export async function agyGroupSurvivors(pids: Iterable<number>): Promise<number[
   return [...new Set(rows.filter((row) => wanted.has(row.pgid)).map((row) => row.pgid))];
 }
 
+function recordAgyTaskOrphansFromRows(
+  rows: AgyProcessRow[] | undefined,
+  agyPid: number,
+  conversationId: string,
+): void {
+  const parent = rows?.find((row) => row.pid === agyPid);
+  if (rows === undefined || parent === undefined) return;
+  const { taskOrphans } = getAgyChildrenRegistry();
+  for (const { pid, startMs } of selectAgyTaskDescendants(rows, [agyPid])) {
+    const members = new Map<number, number>();
+    for (const row of rows) {
+      if (row.pgid === pid) members.set(row.pid, row.startMs);
+    }
+    taskOrphans.set(pid, {
+      conversationId,
+      parent: { pid: parent.pid, startMs: parent.startMs },
+      startMs,
+      members,
+    });
+  }
+  // Entries prune lazily during task scans once their process disappears;
+  // the cap only guards processes that outlive every scan.
+  while (taskOrphans.size > 256) {
+    const oldest = taskOrphans.keys().next().value;
+    if (oldest === undefined) break;
+    taskOrphans.delete(oldest);
+  }
+}
+
 /**
  * Record an agy process's live task-shaped children as orphans of
  * `conversationId` — the only orphan attribution that survives reparenting.
@@ -223,6 +269,9 @@ export async function agyGroupSurvivors(pids: Iterable<number>): Promise<number[
  * the recorded one after its leader exits. A failed scan records nothing —
  * writing an unverifiable record would be worse than writing none.
  * Best effort — orphan bookkeeping must never delay a teardown.
+ *
+ * Synchronous by design: teardown paths are already committed to killing the
+ * child, so the `ps` scan's blocking spawn is not on any render hot path.
  */
 export function recordAgyTaskOrphans(
   agyPid: number | undefined,
@@ -230,31 +279,28 @@ export function recordAgyTaskOrphans(
 ): void {
   if (agyPid === undefined || !conversationId) return;
   try {
-    const rows = syncAgyProcessRows();
-    const parent = rows?.find((row) => row.pid === agyPid);
-    if (rows === undefined || parent === undefined) return;
-    const { taskOrphans } = getAgyChildrenRegistry();
-    for (const { pid, startMs } of selectAgyTaskDescendants(rows, [agyPid])) {
-      const members = new Map<number, number>();
-      for (const row of rows) {
-        if (row.pgid === pid) members.set(row.pid, row.startMs);
-      }
-      taskOrphans.set(pid, {
-        conversationId,
-        parent: { pid: parent.pid, startMs: parent.startMs },
-        startMs,
-        members,
-      });
-    }
-    // Entries prune lazily during task scans once their process disappears;
-    // the cap only guards processes that outlive every scan.
-    while (taskOrphans.size > 256) {
-      const oldest = taskOrphans.keys().next().value;
-      if (oldest === undefined) break;
-      taskOrphans.delete(oldest);
-    }
+    recordAgyTaskOrphansFromRows(syncAgyProcessRows(), agyPid, conversationId);
   } catch {
     // Orphan bookkeeping is advisory; never let it break a kill path.
+  }
+}
+
+/**
+ * Async variant for the stream hot path (tool-start activity). The `ps`
+ * snapshot runs in a subprocess instead of blocking the event loop inside
+ * the driver's line handler; it still lands while agy can be the children's
+ * parent. Only a crash inside the scan's own spawn window slips past —
+ * best-effort like every other recording path.
+ */
+export async function recordAgyTaskOrphansAsync(
+  agyPid: number | undefined,
+  conversationId: string | undefined,
+): Promise<void> {
+  if (agyPid === undefined || !conversationId) return;
+  try {
+    recordAgyTaskOrphansFromRows(await agyProcessRows(), agyPid, conversationId);
+  } catch {
+    // Orphan bookkeeping is advisory; never let it break a stream handler.
   }
 }
 
@@ -646,18 +692,22 @@ export async function listAgyTasks(
     return [];
   }
   const logs = entries.filter((name) => /^task-.+\.log$/.test(name)).sort(compareAgyTaskLogNames);
-  const metadata = await Promise.all(
-    logs.map(async (name) => {
-      const logPath = path.join(dir, name);
-      const stat = await fs.stat(logPath);
-      return {
-        name,
-        logPath,
-        stat,
-        birthMs: stat.birthtimeMs || stat.mtimeMs,
-      };
-    }),
-  );
+  const metadata = (
+    await Promise.all(
+      logs.map(async (name) => {
+        const logPath = path.join(dir, name);
+        // A log deleted mid-scan must not fail the whole listing.
+        const stat = await fs.stat(logPath).catch(() => undefined);
+        if (!stat) return undefined;
+        return {
+          name,
+          logPath,
+          stat,
+          birthMs: stat.birthtimeMs || stat.mtimeMs,
+        };
+      }),
+    )
+  ).filter((entry): entry is NonNullable<typeof entry> => entry !== undefined);
 
   // Liveness must be sampled before readFile opens the logs. Running both in
   // one Promise.all made lsof randomly identify pi itself as every task's pid.
@@ -669,7 +719,7 @@ export async function listAgyTasks(
   // re-matched to an unowned one by the ancestry/orphan heuristics.
   const claimedPids = new Set([...holders.values()].flat());
   const [contents, unowned] = await Promise.all([
-    Promise.all(metadata.map(({ logPath }) => fs.readFile(logPath, "utf8").catch(() => ""))),
+    Promise.all(metadata.map(({ logPath }) => readTaskLogHead(logPath))),
     scanUnownedProcesses(
       options.sessionCwd,
       options.agyPids ?? [],
@@ -753,7 +803,9 @@ export async function stopAgyTask(task: AgyTask): Promise<AgyTaskStopResult> {
       try {
         process.kill(-pgid, "SIGTERM");
         pgids.add(pgid);
+        // The group signal already covers the holder pid — count it once.
         signaled++;
+        continue;
       } catch {
         // Fall through to the single-pid kill.
       }

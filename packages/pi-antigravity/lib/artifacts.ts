@@ -1,8 +1,8 @@
 /** Safe discovery of user-facing files in an agy conversation brain directory. */
 
 import { promises as fs, type Dirent } from "node:fs";
-import * as os from "node:os";
 import * as path from "node:path";
+import { agyBrainDir } from "./agy-paths.ts";
 
 export interface AgyArtifact {
   name: string;
@@ -11,10 +11,6 @@ export interface AgyArtifact {
   mediaType: "image" | "audio" | "video" | "pdf" | "markdown" | "other";
   bytes: number;
   modifiedMs: number;
-}
-
-export function agyBrainDir(): string {
-  return path.join(os.homedir(), ".gemini", "antigravity-cli", "brain");
 }
 
 const MEDIA_TYPES: Record<string, AgyArtifact["mediaType"]> = {
