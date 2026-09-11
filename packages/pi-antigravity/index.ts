@@ -28,6 +28,8 @@ import {
   getAgyChildrenRegistry,
   installAgyDeathHooks,
   killAllAgyTrees,
+  signalAgyTree,
+  signalVerifiedAgyOrphans,
 } from "./lib/agy-children.ts";
 import { checkAgyBinary, MIN_AGY_VERSION, runAgyCommand } from "./lib/agy-diagnostics.ts";
 import { parseAgyAgents, readAgyProcessProfile } from "./lib/agy-profile.ts";
@@ -75,7 +77,15 @@ import {
 } from "./lib/conversation-state.ts";
 import { readAgyConversationMetadata } from "./lib/conversation-metadata.ts";
 import { AgyReplayStore, type RecordedAgyTool } from "./lib/replay.ts";
-import { findAgyTask, listAgyTasks, stopAgyTask } from "./lib/tasks.ts";
+import {
+  agyGroupLeadingDescendants,
+  agyGroupSurvivors,
+  agyTaskStopPids,
+  findAgyTask,
+  listAgyTasks,
+  stopAgyTask,
+  type AgyTask,
+} from "./lib/tasks.ts";
 import { formatAgySubagents, trackAgySubagent, type AgySubagentEntry } from "./lib/subagents.ts";
 import { findAgyArtifact, listAgyArtifacts } from "./lib/artifacts.ts";
 import { fetchAgyUsage } from "./lib/usage.ts";
@@ -819,10 +829,34 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
     if (widgetPollTimer) clearInterval(widgetPollTimer);
     widgetPollTimer = undefined;
     widgetScanQueued = false;
+    // Group ids signalled at the top of shutdown; survivors get SIGKILL after
+    // service.close has given SIGTERM its grace. Every target in this set was
+    // verified by live ancestry or a current lsof hold moments earlier.
+    const sweepTargets = new Set<number>();
+    // Signal every process-group-leading child of our tracked agy processes.
+    // agy >= 1.2.0 runs tasks in their own process groups, so killAllAgyTrees
+    // (which only reaches agy's own group) leaves them running; ancestry is
+    // proof of ownership here — no per-task attribution needed — while agy is
+    // still alive to be their parent.
+    try {
+      const leaders = await agyGroupLeadingDescendants([...getAgyChildrenRegistry().live]);
+      for (const pid of leaders) {
+        sweepTargets.add(pid);
+        signalAgyTree({ pid }, "SIGTERM");
+      }
+    } catch {
+      // Process scan failed; service.close and killAllAgyTrees still run.
+    }
+    // Orphans recorded at earlier recycles are proven descendants of agy
+    // processes this pi spawned — ours regardless of which conversation the
+    // service snapshot currently names (or whether a /agy reset cleared it).
+    // signalVerifiedAgyOrphans re-checks each record's identity first, so a
+    // stale record can never signal a reused pid or a stranger's group.
+    signalVerifiedAgyOrphans("SIGTERM");
     // Stop any live agy background tasks so closing pi leaves nothing
-    // running silently. Only processes holding the task log open are certain
-    // enough to stop automatically; heuristic orphan matches stay visible in
-    // /agy-tasks but require an explicit user stop to avoid false positives.
+    // running silently. A task stop only ever signals proven log holders;
+    // recorded orphans were covered above, and advisory matches are never
+    // signalled.
     try {
       const snapshot = await runAntigravity(runtime, service.snapshot);
       if (snapshot.conversationId) {
@@ -830,7 +864,10 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
           sessionCwd: tasksSessionCwd,
         });
         const live = tasks.filter((task) => task.pids.length > 0);
-        await Promise.all(live.map((task) => stopAgyTask(task, { includeOrphans: false })));
+        const stopped = await Promise.all(live.map((task) => stopAgyTask(task)));
+        for (const { pgids } of stopped) {
+          for (const pgid of pgids) sweepTargets.add(pgid);
+        }
       }
     } catch {
       // Runtime closed or scan failed; nothing to stop.
@@ -860,6 +897,23 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
     } catch {
       // Disposed gracefully
     }
+    // Escalate: any signalled group that still holds members ignored its
+    // SIGTERM — force it now. -pgid addresses the group, so a dead leader's
+    // pid can never be confused with a reused process. Recorded orphans go
+    // through signalVerifiedAgyOrphans again — identity is re-checked, never
+    // inherited from the earlier sweep.
+    try {
+      for (const pgid of await agyGroupSurvivors(sweepTargets)) {
+        try {
+          process.kill(-pgid, "SIGKILL");
+        } catch {
+          // Group already gone.
+        }
+      }
+    } catch {
+      // Escalation scan failed; killAllAgyTrees still runs.
+    }
+    signalVerifiedAgyOrphans("SIGKILL");
     // Sweep any remaining tracked agy process trees (including earlier turns
     // that finished logically while grandchildren held stdio open).
     killAllAgyTrees();
@@ -1086,44 +1140,101 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
       const arg = args.trim().toLowerCase();
       const snapshot = await runAntigravity(runtime, service.snapshot);
       const conversationId = snapshot.conversationId;
-      if (!conversationId) {
-        ctx.ui.notify("agy-tasks: no agy conversation in this session yet.", "error");
-        return;
-      }
-      const rescan = () =>
-        listAgyTasks(conversationId, {
-          sessionCwd: ctx.cwd,
-          agyPids: [...getAgyChildrenRegistry().live],
-        });
 
       // No arguments: interactive dashboard overlay (x stops, r rescans).
       if (!arg) {
+        if (!conversationId) {
+          ctx.ui.notify("agy-tasks: no agy conversation in this session yet.", "error");
+          return;
+        }
+        const rescan = () =>
+          listAgyTasks(conversationId, {
+            sessionCwd: ctx.cwd,
+            agyPids: [...getAgyChildrenRegistry().live],
+          });
         await openAgyTasksPicker(ctx, rescan);
         updateAgyTasksWidget();
         return;
       }
 
-      const tasks = await rescan();
       const stopMatch = arg.match(/^stop\s+(.+)$/);
       if (!stopMatch) {
         ctx.ui.notify('agy-tasks: usage "/agy-tasks" or "/agy-tasks stop <task-id>|all".', "error");
         return;
       }
       const target = stopMatch[1].trim();
+      // `stop all` reaps recorded groups whose agy parent has exited — scoped
+      // to the identity-verified registry, not to the task list, so missing
+      // or deleted task logs never block it. With no live conversation (a
+      // /agy reset cleared the snapshot, not the registry) the sweep runs
+      // unscoped: every recorded group is this pi's own work either way.
+      // protectAttached keeps still-attached groups safe in both cases —
+      // they may be a foreground command under a running driver. Per-task
+      // stops can never do this: nothing binds a recorded process to a task.
+      const orphanGroups =
+        target === "all"
+          ? signalVerifiedAgyOrphans("SIGTERM", {
+              conversationId,
+              protectAttached: true,
+            })
+          : 0;
+      if (!conversationId) {
+        ctx.ui.notify(
+          orphanGroups > 0
+            ? `agy-tasks: reaped ${orphanGroups} recorded orphan group(s).`
+            : "agy-tasks: no agy conversation in this session yet.",
+          orphanGroups > 0 ? "info" : "error",
+        );
+        if (orphanGroups > 0) updateAgyTasksWidget();
+        return;
+      }
+      // The task listing is best-effort — a log disappearing mid-scan or a
+      // failed `ps` must not block the verified orphan sweep above.
+      let tasks: AgyTask[] = [];
+      try {
+        tasks = await listAgyTasks(conversationId, {
+          sessionCwd: ctx.cwd,
+          agyPids: [...getAgyChildrenRegistry().live],
+        });
+      } catch (error) {
+        ctx.ui.notify(
+          `agy-tasks: task scan failed (${error instanceof Error ? error.message : String(error)}).`,
+          "warning",
+        );
+      }
       const selected =
         target === "all"
-          ? tasks.filter((task) => task.pids.length > 0 || task.orphans.length > 0)
+          ? tasks.filter(
+              (task) =>
+                task.pids.length > 0 || task.orphans.length > 0 || task.ambiguous.length > 0,
+            )
           : [findAgyTask(tasks, target)].filter(
               (task): task is NonNullable<typeof task> => task !== undefined,
             );
       if (selected.length === 0) {
-        ctx.ui.notify(`agy-tasks: no running task "${target}" in this conversation.`, "error");
+        ctx.ui.notify(
+          orphanGroups > 0
+            ? `agy-tasks: no running task "${target}" in this conversation; reaped ${orphanGroups} recorded orphan group(s).`
+            : `agy-tasks: no running task "${target}" in this conversation.`,
+          orphanGroups > 0 ? "info" : "error",
+        );
+        if (orphanGroups > 0) updateAgyTasksWidget();
         return;
       }
-      const results = await Promise.all(selected.map((task) => stopAgyTask(task)));
-      const stopped = selected.map((task) => task.id).join(", ");
+      const stoppable = selected.filter((task) => agyTaskStopPids(task).length > 0);
+      if (stoppable.length === 0 && orphanGroups === 0) {
+        ctx.ui.notify(
+          `agy-tasks: ${selected.map((task) => task.id).join(", ")} has no provably-owned process (unclear); nothing signalled. Check the process manually before killing.`,
+          "warning",
+        );
+        return;
+      }
+      const results = await Promise.all(stoppable.map((task) => stopAgyTask(task)));
+      const stopped = stoppable.map((task) => task.id).join(", ");
+      const skipped = selected.length - stoppable.length;
+      const signalled = results.reduce((sum, result) => sum + result.signaled, 0) + orphanGroups;
       ctx.ui.notify(
-        `agy-tasks: sent SIGTERM to ${stopped} (${results.reduce((sum, count) => sum + count, 0)} process(es)).`,
+        `agy-tasks: sent SIGTERM to ${signalled} process(es)${stopped ? ` via ${stopped}` : ""}${orphanGroups > 0 ? `, incl. ${orphanGroups} recorded orphan group(s)` : ""}${skipped > 0 ? `; ${skipped} skipped as unclear` : ""}.`,
         "info",
       );
       updateAgyTasksWidget();

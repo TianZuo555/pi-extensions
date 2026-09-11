@@ -13,7 +13,7 @@ import {
   type AgyTurnRequest,
 } from "../lib/agy-client.ts";
 import { AgyDriverSession, AgyOneShotExecutor } from "../lib/agy-driver.ts";
-import { getAgyChildrenRegistry } from "../lib/agy-children.ts";
+import { getAgyChildrenRegistry, signalVerifiedAgyOrphans } from "../lib/agy-children.ts";
 
 async function driverFixture(): Promise<{ dir: string; script: string }> {
   const dir = await mkdtemp(path.join(tmpdir(), "agy-driver-"));
@@ -23,7 +23,7 @@ async function driverFixture(): Promise<{ dir: string; script: string }> {
     `#!/usr/bin/env node
 import readline from "node:readline";
 import { writeFileSync } from "node:fs";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 const args = process.argv.slice(2);
 let turns = 0;
 const conversation = "driver-conversation";
@@ -106,6 +106,30 @@ rl.on("line", async (line) => {
       }
     });
     console.log(activeToolStep);
+  }
+  if (event.message.content === "burst-crash") {
+    // Two distinct tool starts in one burst: the first spawns a detached
+    // worker, the second arrives while it is alive. A time throttle that
+    // skips the second start would leave the worker unrecorded when we die.
+    console.log(activeToolStep);
+    const worker = spawn(process.execPath, ["-e",
+      'process.on("SIGTERM", () => {}); setInterval(() => {}, 1000);'
+    ], { detached: true, stdio: "ignore" });
+    worker.unref();
+    // Wait until the worker leads its own process group — the scan only
+    // records group-leading children, and setsid timing varies under load.
+    for (let i = 0; i < 200; i++) {
+      const probe = spawnSync("ps", ["-o", "pgid=", "-p", String(worker.pid)]);
+      if (probe.status === 0 && probe.stdout.toString().trim() === String(worker.pid)) break;
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+    const second = JSON.parse(activeToolStep);
+    second.step_update.step_index = turns + 1000;
+    console.log(JSON.stringify(second));
+    // Stay alive a beat after the line: exiting immediately re-parents the
+    // worker before the driver's line processing can scan our children.
+    await new Promise(resolve => setTimeout(resolve, 500));
+    process.exit(7);
   }
   if (event.message.content === "completed-tool") {
     console.log(activeToolStep);
@@ -1228,5 +1252,63 @@ rl.on("line", () => {
   } finally {
     await executor.close("shutdown");
     await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("a new tool start in a burst is still snapshotted before agy crashes", {
+  skip: process.platform === "win32" ? "POSIX process groups" : false,
+}, async () => {
+  // The fixture emits two DISTINCT tool starts back-to-back and dies right
+  // after — the worker spawned between them is only recoverable if the
+  // second start's scan actually ran (a time throttle would skip it).
+  const fixture = await driverFixture();
+  const executor = new AgyDriverSession();
+  const registry = getAgyChildrenRegistry();
+  const before = new Set(registry.taskOrphans.keys());
+  const recorded: number[] = [];
+  try {
+    await assert.rejects(
+      () =>
+        executor.run({
+          prompt: "burst-crash",
+          binary: fixture.script,
+          cwd: fixture.dir,
+          spawnOverride: fixtureSpawn(fixture.script),
+        }),
+      (error: unknown) => error instanceof AgySpawnError,
+    );
+    recorded.push(...[...registry.taskOrphans.keys()].filter((pid) => !before.has(pid)));
+    assert.ok(
+      recorded.length >= 1,
+      "the worker spawned between the burst's tool starts was recorded",
+    );
+    for (const pid of recorded) process.kill(pid, 0); // still alive post-crash
+    // And the verified sweep can clean it — the whole point of the record.
+    const signaled = signalVerifiedAgyOrphans("SIGKILL");
+    assert.ok(signaled >= 1, "the recorded worker was signalled");
+    for (const pid of recorded) {
+      await new Promise<void>((resolve) => {
+        const check = () => {
+          try {
+            process.kill(pid, 0);
+            setTimeout(check, 25);
+          } catch {
+            resolve();
+          }
+        };
+        check();
+      });
+    }
+  } finally {
+    for (const pid of recorded) {
+      registry.taskOrphans.delete(pid);
+      try {
+        process.kill(-pid, "SIGKILL");
+      } catch {
+        // Already gone.
+      }
+    }
+    await executor.close("shutdown");
+    await rm(fixture.dir, { recursive: true, force: true });
   }
 });

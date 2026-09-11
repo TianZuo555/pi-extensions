@@ -57,11 +57,12 @@ function statusWord(status: AgyTaskStatus, theme: Theme) {
 /**
  * Pids to display for a task. Ambiguous matches are shown with a `?` marker so
  * a live-but-unattributable process is never rendered as "pid -" (idle), while
- * staying out of every stop path.
+ * staying out of every stop path. Orphans get the same marker — they are
+ * provably this conversation's processes, but which task they ran for is not.
  */
 function displayPids(task: AgyTask): string {
   if (task.pids.length > 0) return `pid ${task.pids.join(",")}`;
-  if (task.orphans.length > 0) return `pid ${task.orphans.join(",")}`;
+  if (task.orphans.length > 0) return `pid ${task.orphans.join(",")}?`;
   if (task.ambiguous.length > 0) return `pid ${task.ambiguous.join(",")}?`;
   return "pid -";
 }
@@ -133,7 +134,16 @@ export async function openAgyTasksPicker(
     refresh: async () => {
       tasks = await rescan();
     },
-    kill: (task) => stopAgyTask(task),
+    kill: async (task) => {
+      const { signaled } = await stopAgyTask(task);
+      if (signaled === 0) {
+        ctx.ui.notify(
+          `${task.id}: no provably-owned process found — unclear matches are never signalled. Check the process manually before killing.`,
+          "warning",
+        );
+      }
+      return signaled;
+    },
     readLog: (task) => fs.readFile(task.logPath, "utf8").catch(() => ""),
   };
   await ctx.ui.custom<null>(

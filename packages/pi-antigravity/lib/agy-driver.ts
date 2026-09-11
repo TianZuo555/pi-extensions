@@ -9,8 +9,8 @@ import {
 import { killAgyTree, signalAgyTree, trackAgyChild, untrackAgyChild } from "./agy-children.ts";
 import { AgyCompatibilityError, checkAgyBinary } from "./agy-diagnostics.ts";
 import { parseAgyLine } from "./events.ts";
-import { agyHasRunningToolProcess } from "./tasks.ts";
-import { trackActiveToolStep } from "./tool-steps.ts";
+import { agyHasRunningToolProcess, recordAgyTaskOrphans } from "./tasks.ts";
+import { agyToolStepKey, trackActiveToolStep } from "./tool-steps.ts";
 import { applyEvent, newTurnOutcome, type AgyTurnOutcome } from "./reducer.ts";
 
 export type AgyDriverState = "idle" | "starting" | "ready" | "running" | "stopping" | "dead";
@@ -247,6 +247,10 @@ export class AgyDriverSession implements AgyTurnExecutor {
     }
 
     this.#state = "stopping";
+    // Record orphans BEFORE asking agy to exit: stdin.end can make agy exit
+    // immediately, and once it does its children re-parent and their
+    // conversation provenance is unrecoverable.
+    recordAgyTaskOrphans(child.pid, this.#boundConversationId);
     try {
       child.stdin.end();
     } catch {
@@ -578,7 +582,22 @@ export class AgyDriverSession implements AgyTurnExecutor {
       }
     }
     for (const activity of applyEvent(turn.outcome, parsed)) {
+      // agy can repeat the same ACTIVE step line; only a genuinely new tool
+      // start may have spawned a process group worth recording. Repeated
+      // updates for a step already tracked skip the synchronous `ps` scan,
+      // but a NEW tool start never does — a missed snapshot means an agy
+      // crash later leaves the worker orphaned and unrecorded.
+      const newToolStart =
+        activity.type === "tool_start" && !turn.activeTools.has(agyToolStepKey(activity));
       trackActiveToolStep(turn.activeTools, activity);
+      // Snapshot task-shaped children while agy can still be their parent:
+      // a later unexpected agy exit re-parents them and the linkage is gone.
+      if (newToolStart && this.#child) {
+        recordAgyTaskOrphans(
+          this.#child.pid,
+          turn.outcome.conversationId ?? this.#boundConversationId,
+        );
+      }
       turn.request.onActivity?.(activity);
     }
     if (turn.outcome.conversationId) this.#boundConversationId = turn.outcome.conversationId;
@@ -679,6 +698,13 @@ export class AgyDriverSession implements AgyTurnExecutor {
 
   #detachChild(child: DriverChild, nextState: AgyDriverState): void {
     if (this.#child !== child) return;
+    // The child is about to be killed or has died: snapshot its task-shaped
+    // descendants as proven orphans of this conversation — the last moment
+    // ancestry can attribute them (afterwards they re-parent to launchd).
+    recordAgyTaskOrphans(
+      child.pid,
+      this.#active?.outcome.conversationId ?? this.#boundConversationId,
+    );
     untrackAgyChild(child);
     this.#child = undefined;
     this.#currentProcessTurns = 0;
