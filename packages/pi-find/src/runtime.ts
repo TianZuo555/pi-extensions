@@ -37,6 +37,8 @@ export interface GrepOutcome {
   readonly matches: readonly GrepMatch[];
   readonly truncated: boolean;
   readonly timedOut: boolean;
+  /** Records too large to buffer; the whole record is dropped because a partial one cannot be decoded. */
+  readonly skippedRecords: number;
 }
 
 export interface FindRequest {
@@ -50,6 +52,8 @@ export interface FindOutcome {
   readonly files: readonly string[];
   readonly truncated: boolean;
   readonly timedOut: boolean;
+  /** Records too large to buffer; they are dropped because a partial path is not a path. */
+  readonly skippedRecords: number;
 }
 
 export interface SearchRuntimeShape {
@@ -132,11 +136,21 @@ function isExplicitHiddenPath(searchPath: string | undefined): boolean {
 /** Files larger than this are skipped: giant blobs (caches, bundles, sourcemaps) are what turns a broad search into an overnight scan. Matches OMP's native grep ceiling. */
 const GREP_MAX_FILESIZE = "4M";
 
-/** Safe basename prefilter only; complex globs are left to Minimatch. */
+/** The glob without its optional leading negation marker. */
+function globBody(pattern: string): string {
+  return pattern.startsWith("!") ? pattern.slice(1) : pattern;
+}
+
+/**
+ * Safe basename prefilter only; complex globs are left to Minimatch. Negated
+ * globs cannot be expressed as a file-type filter, so they scan everything and
+ * let Minimatch remove the exclusions.
+ */
 function basenamePrefilter(pattern: string | undefined): string {
-  const basename = pattern?.split("/").at(-1);
+  if (pattern === undefined || pattern.startsWith("!")) return "*";
+  const basename = pattern.split("/").at(-1);
   // Restrict the entire pattern: a brace/extglob alternative can contain slashes.
-  return pattern !== undefined && /^[a-zA-Z0-9_./*?-]+$/.test(pattern) && basename ? basename : "*";
+  return /^[a-zA-Z0-9_./*?-]+$/.test(pattern) && basename ? basename : "*";
 }
 
 export function buildRgArgs(request: GrepRequest, searchRoot: string): string[] {
@@ -173,21 +187,35 @@ export function buildFdArgs(request: FindRequest, searchRoot: string): string[] 
   return args;
 }
 
-/** Match slash globs relative to the search root, otherwise match basenames. */
+/**
+ * Compile one glob into a result-path predicate.
+ *
+ * A leading `!` excludes instead of includes, like ripgrep's own globs. Slash
+ * globs are matched against both the search root and the cwd: callers pass
+ * `path` as the scope and write globs from either place, and both spellings
+ * can only ever match results inside that scope.
+ */
 function pathMatcher(pattern: string | undefined, root: string, cwd: string) {
+  const negated = pattern?.startsWith("!") === true;
+  const body = pattern === undefined ? undefined : globBody(pattern);
   const matcher =
-    pattern === undefined
+    body === undefined || body.length === 0
       ? undefined
-      : new Minimatch(pattern, {
+      : new Minimatch(body, {
           dot: true,
-          matchBase: !pattern.includes("/"),
+          matchBase: !body.includes("/"),
           nonegate: true,
           nocomment: true,
           nocase: false,
         });
-  return (file: string): boolean =>
-    matcher === undefined ||
-    matcher.match(normalizeResultPath(nodePath.relative(root, nodePath.resolve(cwd, file))));
+  return (file: string): boolean => {
+    if (matcher === undefined) return true;
+    const absolute = nodePath.resolve(cwd, file);
+    const matched =
+      matcher.match(normalizeResultPath(nodePath.relative(root, absolute))) ||
+      matcher.match(normalizeResultPath(nodePath.relative(cwd, absolute)));
+    return negated ? !matched : matched;
+  };
 }
 
 const makeSearchRuntime = Effect.gen(function* () {
@@ -196,7 +224,7 @@ const makeSearchRuntime = Effect.gen(function* () {
       if (request.pattern.length === 0) {
         return Effect.fail(new SearchInputError({ message: EMPTY_PATTERN_ERROR }));
       }
-      if (request.glob !== undefined && request.glob.length === 0) {
+      if (request.glob !== undefined && globBody(request.glob).length === 0) {
         return Effect.fail(new SearchInputError({ message: EMPTY_PATTERN_ERROR }));
       }
       const target = searchTarget(request.cwd, request.path, false);
@@ -205,12 +233,18 @@ const makeSearchRuntime = Effect.gen(function* () {
       const accepts = pathMatcher(request.glob, target.root, request.cwd);
       const matches: GrepMatch[] = [];
       let sawOverflow = false;
+      let skippedRecords = 0;
       return streamLines({
         binary: "rg",
         args: buildRgArgs({ ...request, path: target.argument }, target.root),
         cwd: request.cwd,
         signal: request.signal,
-        onLine(line) {
+        onLine(line, clipped) {
+          // A clipped JSON record cannot be decoded, and its head is not a match.
+          if (clipped) {
+            skippedRecords += 1;
+            return true;
+          }
           const event = decodeRgEvent(line);
           if (event === undefined || !accepts(event.path)) return true;
           if (matches.length >= GREP_RESULT_LIMIT) {
@@ -231,6 +265,7 @@ const makeSearchRuntime = Effect.gen(function* () {
               matches,
               truncated: sawOverflow || result.stoppedEarly,
               timedOut: result.timedOut,
+              skippedRecords,
             }) satisfies GrepOutcome,
         ),
       );
@@ -238,7 +273,7 @@ const makeSearchRuntime = Effect.gen(function* () {
 
   const find = (request: FindRequest): Effect.Effect<FindOutcome, SearchError> =>
     Effect.suspend<FindOutcome, SearchError, never>(() => {
-      if (request.pattern.length === 0) {
+      if (globBody(request.pattern).length === 0) {
         return Effect.fail(new SearchInputError({ message: EMPTY_PATTERN_ERROR }));
       }
       const target = searchTarget(request.cwd, request.path, true);
@@ -247,13 +282,19 @@ const makeSearchRuntime = Effect.gen(function* () {
       const accepts = pathMatcher(request.pattern, target.root, request.cwd);
       const files: string[] = [];
       let sawOverflow = false;
+      let skippedRecords = 0;
       return streamLines({
         binary: "fd",
         args: buildFdArgs({ ...request, path: target.argument }, target.root),
         delimiter: "\0",
         cwd: request.cwd,
         signal: request.signal,
-        onLine(line) {
+        onLine(line, clipped) {
+          // A clipped record is a partial path; a partial path is not a result.
+          if (clipped) {
+            skippedRecords += 1;
+            return true;
+          }
           const file = line;
           if (file.length === 0 || !accepts(file)) return true;
           if (files.length >= FIND_RESULT_LIMIT) {
@@ -270,6 +311,7 @@ const makeSearchRuntime = Effect.gen(function* () {
               files,
               truncated: sawOverflow || result.stoppedEarly,
               timedOut: result.timedOut,
+              skippedRecords,
             }) satisfies FindOutcome,
         ),
       );

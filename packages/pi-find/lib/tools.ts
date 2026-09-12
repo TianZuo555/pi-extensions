@@ -23,6 +23,7 @@ import {
   NO_FILES_FOUND,
   NO_GREP_MATCHES,
   outputLimitNotice,
+  oversizedRecordNotice,
   QUOTED_PATH_NOTICE,
   resultLimitNotice,
   SEARCH_TIMEOUT_MS,
@@ -34,6 +35,7 @@ import {
   SearchRuntime,
   type SearchRuntimeInstance,
 } from "../src/runtime.ts";
+import { MAX_RECORD_BYTES } from "../src/stream.ts";
 
 export const GrepParams = Type.Object({
   pattern: Type.String({
@@ -146,10 +148,11 @@ export function registerTools(pi: ExtensionAPI, runtime: SearchRuntimeInstance):
           ? [QUOTED_PATH_NOTICE]
           : []),
         ...(outcome.truncated ? [resultLimitNotice("matches", GREP_RESULT_LIMIT)] : []),
+        ...(outcome.skippedRecords > 0 ? [oversizedRecordNotice(MAX_RECORD_BYTES)] : []),
         ...(outcome.timedOut ? [searchTimeoutNotice(SEARCH_TIMEOUT_MS)] : []),
       ];
-      // A timed-out search must never read as a completed empty one: the
-      // notice travels even when nothing was gathered.
+      // A timed-out or truncated search must never read as a completed empty
+      // one: those notices travel even when nothing was gathered.
       if (matchCount === 0 && notices.length === 0) {
         return {
           content: [
@@ -226,8 +229,9 @@ export function registerTools(pi: ExtensionAPI, runtime: SearchRuntimeInstance):
       );
 
       if (outcome.files.length === 0 && !outcome.timedOut) {
+        const skipped = outcome.skippedRecords > 0 ? [oversizedRecordNotice(MAX_RECORD_BYTES)] : [];
         return {
-          content: [{ type: "text" as const, text: NO_FILES_FOUND }],
+          content: [{ type: "text" as const, text: resultText(NO_FILES_FOUND, "", skipped) }],
           details: {
             kind: "find",
             query: params.pattern,
@@ -242,6 +246,7 @@ export function registerTools(pi: ExtensionAPI, runtime: SearchRuntimeInstance):
       const body = boundedBody(outcome.files.map(displayPath), "find");
       const count = outcome.files.length;
       const notices = [
+        ...(outcome.skippedRecords > 0 ? [oversizedRecordNotice(MAX_RECORD_BYTES)] : []),
         ...(outcome.files.some((path) => displayPath(path) !== path) ? [QUOTED_PATH_NOTICE] : []),
         ...(outcome.truncated ? [resultLimitNotice("files", FIND_RESULT_LIMIT)] : []),
         ...(outcome.timedOut ? [searchTimeoutNotice(SEARCH_TIMEOUT_MS)] : []),
