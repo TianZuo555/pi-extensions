@@ -1,6 +1,6 @@
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 
-export const DEVIN_SESSION_STATE_ENTRY = "pi-devin-session-state";
+export const DEVIN_SESSION_STATE_ENTRY = "pi-devin-acp-session-state";
 
 export interface PersistedDevinSession {
   version: 1;

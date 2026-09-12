@@ -1,4 +1,4 @@
-# Plan: `pi-devin` — Devin models inside pi via `devin acp` (ACP)
+# Plan: `pi-devin-acp` — Devin models inside pi via `devin acp` (ACP)
 
 pi stays the UI (chat, model picker, tool cards, sessions); the selected Devin
 model runs underneath through a persistent `devin acp` child speaking the
@@ -127,8 +127,8 @@ Key structural differences from pi-antigravity:
    methods. Stage 0 includes a smoke script; hand-rolled NDJSON
    (~350 LOC, `agy-client.ts` style) is the documented fallback if the SDK
    drops unknown notifications or fights Node's type stripper.
-2. **Naming.** Provider `devin`, package `@tian.zuo/pi-devin` in
-   `packages/pi-devin`, commands `/devin …`, state under `~/.pi/devin/`.
+2. **Naming.** Provider `devin`, package `@tian.zuo/pi-devin-acp` in
+   `packages/pi-devin-acp`, commands `/devin …`, state under `~/.pi/devin-acp/`.
 3. **Models: family-level registration + thinking suffix.** Parse
    `devin models list` into families; register one pi model per family
    (`devin/claude-opus-5`, `devin/swe-2`, …) with contextWindow/cost from
@@ -137,7 +137,7 @@ Key structural differences from pi-antigravity:
    at turn time, then `session/set_config_option {configId:"model"}` syncs
    it. `-fast`/`-priority` variants become their own selectable families
    (`devin/claude-opus-5-fast:high`). Models with no variants (plain rows)
-   accept no thinking suffix. Cache at `~/.pi/devin/model-list.json` with a
+   accept no thinking suffix. Cache at `~/.pi/devin-acp/model-list.json` with a
    bundled fallback snapshot; `session/new`'s `configOptions` is the live
    cross-check.
 4. **Pi↔ACP session mapping.** Persist `{sessionId, cwd, modelId, turns}`
