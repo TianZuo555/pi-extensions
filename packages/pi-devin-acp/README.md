@@ -1,10 +1,10 @@
-# @tian.zuo/pi-devin
+# @tian.zuo/pi-devin-acp
 
 Use [Devin](https://devin.ai) models inside [pi](https://pi.dev) by driving the
 Devin CLI as an ACP (Agent Client Protocol) server.
 
 ```bash
-pi -e ./extensions/pi-devin.ts --model devin/swe-2
+pi -e ./extensions/pi-devin-acp.ts --model devin/swe-2
 ```
 
 Devin runs its own agent loop server-side — this extension keeps that loop
@@ -37,7 +37,7 @@ Requested thinking levels resolve to the highest available Devin variant at or
 below that level (e.g. `:xhigh` on a family without xhigh picks `high`).
 
 Model discovery runs `devin models list`, caches the parsed catalog in
-`~/.pi/devin/models.json`, and falls back to a bundled snapshot when the CLI is
+`~/.pi/devin-acp/models.json`, and falls back to a bundled snapshot when the CLI is
 unavailable.
 
 ## Commands
@@ -67,7 +67,7 @@ unavailable.
 
 - One `devin acp` child process (stdio NDJSON/JSON-RPC) hosts ACP sessions.
 - Each pi session branch binds to one Devin session id; the binding persists in
-  pi's session file (`pi-devin-session-state` entries) so reloading pi resumes
+  pi's session file (`pi-devin-acp-session-state` entries) so reloading pi resumes
   the same Devin session via `session/load`.
 - Streamed `session/update` notifications become pi thinking/text blocks,
   tool-card placeholders, and usage.

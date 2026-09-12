@@ -1,5 +1,5 @@
 /**
- * pi-devin — use Devin models in pi via `devin acp` (Agent Client Protocol).
+ * pi-devin-acp — use Devin models in pi via `devin acp` (Agent Client Protocol).
  *
  * One `devin acp` child process hosts ACP sessions; the current pi branch is
  * bound to one devin session id, persisted across reloads. devin's own agent
@@ -49,7 +49,7 @@ const LOCAL_DEVIN_SUBCOMMANDS = new Set([
   "login",
   "doctor",
 ]);
-const MODEL_CACHE_FILE = `${piConfigDir("devin")}/models.json`;
+const MODEL_CACHE_FILE = `${piConfigDir("devin-acp")}/models.json`;
 const DEFAULT_MODE = "accept-edits";
 
 interface DevinModelCache {
@@ -372,7 +372,7 @@ function sessionStateKey(state: PersistedDevinSession): string {
   return `${state.acpSessionId}:${state.turns}:${state.contextTokens ?? 0}`;
 }
 
-export default function piDevinExtension(pi: ExtensionAPI): void {
+export default function piDevinAcpExtension(pi: ExtensionAPI): void {
   const replay = new DevinReplayStore();
   let cwd = process.cwd();
   let catalog = loadModelCache();

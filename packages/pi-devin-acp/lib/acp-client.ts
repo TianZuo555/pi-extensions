@@ -169,7 +169,7 @@ export class DevinAcpClient {
 
     const passthrough = (params: unknown) => params;
     const app = acp
-      .client(this.#options.clientInfo ?? { name: "pi-devin" })
+      .client(this.#options.clientInfo ?? { name: "pi-devin-acp" })
       .onRequest(
         acp.methods.client.session.requestPermission,
         async (ctx): Promise<acp.RequestPermissionResponse> => {
@@ -205,7 +205,7 @@ export class DevinAcpClient {
         fs: { readTextFile: false, writeTextFile: false },
         terminal: false,
       },
-      clientInfo: this.#options.clientInfo ?? { name: "pi-devin", version: "0.0.0" },
+      clientInfo: this.#options.clientInfo ?? { name: "pi-devin-acp", version: "0.0.0" },
     });
   }
 

@@ -1,5 +1,5 @@
 {
-  "name": "@tian.zuo/pi-devin",
+  "name": "@tian.zuo/pi-devin-acp",
   "version": "0.1.0",
   "description": "Use Devin (devin acp) models inside the pi coding agent over the Agent Client Protocol, with pi as the UI.",
   "type": "module",
@@ -18,7 +18,7 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/TianZuo555/pi-extensions.git",
-    "directory": "packages/pi-devin"
+    "directory": "packages/pi-devin-acp"
   },
   "homepage": "https://github.com/TianZuo555/pi-extensions#devin",
   "bugs": {

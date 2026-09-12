@@ -134,7 +134,7 @@ export interface DevinRuntimeShape {
 }
 
 export class DevinRuntime extends Context.Service<DevinRuntime, DevinRuntimeShape>()(
-  "pi-devin/DevinRuntime",
+  "pi-devin-acp/DevinRuntime",
 ) {}
 
 export type DevinClientFactory = () => DevinAcpClient;

@@ -27,6 +27,8 @@ Each extension has its own package and its own README under
 | [pi-web-search](packages/pi-web-search/README.md) | tools `web_search`/`web_fetch`, `/websearch-order` | Web search and fetch with tabbed fallback-order configuration across six providers plus direct fetch. |
 | [pi-antigravity](packages/pi-antigravity/README.md) | `/agy`, `/agy-tasks`, `/agy-artifacts`, `/agy-usage` | Google Antigravity (`agy`) models inside pi via stream-json RPC. |
 | [pi-vscode-bridge](packages/pi-vscode-bridge/README.md) | `/vscode-connect` | Send file/line/diff-hunk refs from VS Code into pi's editor. |
+| [pi-compact](packages/pi-compact/README.md) | intercepts `/compact` | Remote Codex compaction on a configurable cheaper model (openai-codex only). |
+| [pi-devin-acp](packages/pi-devin-acp/README.md) | models `devin/*`, `/devin`, `/devin-<sub>` | Devin models inside pi by driving the Devin CLI as an ACP server. |
 
 ## Install
 
