@@ -19,15 +19,20 @@ export interface StreamRequest {
   readonly args: readonly string[];
   readonly cwd: string;
   /**
-   * Called for each stdout line. Return false to stop consuming; the child is
+   * Called for each stdout record. Return false to stop consuming; the child is
    * killed and the run settles successfully with what was gathered so far.
+   *
+   * `clipped` marks a record that was longer than `maxRecordBytes`: only its
+   * head is delivered, so callers must treat the tail as unknown.
    */
-  readonly onLine: (line: string) => boolean;
+  readonly onLine: (line: string, clipped: boolean) => boolean;
   /** fd uses NUL records so newlines in filenames remain intact. */
   readonly delimiter?: "\n" | "\0";
   readonly signal?: AbortSignal;
   /** Wall-clock budget; defaults to SEARCH_TIMEOUT_MS. Overridable for tests. */
   readonly timeoutMs?: number;
+  /** Bytes buffered per record before the tail is dropped; overridable for tests. */
+  readonly maxRecordBytes?: number;
 }
 
 export interface StreamResult {
@@ -37,6 +42,16 @@ export interface StreamResult {
   readonly timedOut: boolean;
   readonly exitCode: number | null;
 }
+
+/**
+ * Bytes buffered per record. A record is one rg JSON match or one fd path, so
+ * this only ever cuts pathological lines: without it, a 100 MiB single-line
+ * file (an explicitly named bundle, sourcemap, or lockfile bypasses
+ * --max-filesize) buffers the whole line and its decode copies, which measured
+ * at 866 MiB RSS. Twice the traversal file cap leaves room for JSON escaping,
+ * so ordinary searches are never cut.
+ */
+export const MAX_RECORD_BYTES = 8 * 1024 * 1024;
 
 /**
  * Exit codes that are not failures. rg uses 1 for "no matches", which is a
@@ -105,7 +120,9 @@ export function streamLines(
     });
 
     const delimiter = request.delimiter ?? "\n";
+    const maxRecordBytes = request.maxRecordBytes ?? MAX_RECORD_BYTES;
     let pending = "";
+    let cutting = false;
     let stderr = "";
     let stoppedEarly = false;
     let timedOut = false;
@@ -159,11 +176,11 @@ export function streamLines(
       if (stderr.length < 4096) stderr = (stderr + chunk.toString("utf8")).slice(0, 4096);
     });
 
-    function onLine(line: string) {
+    function onLine(line: string, clipped: boolean) {
       if (settled || stoppedEarly || aborted) return;
       let wantsMore: boolean;
       try {
-        wantsMore = request.onLine(line);
+        wantsMore = request.onLine(line, clipped);
       } catch (error) {
         stoppedEarly = true;
         stopChild("SIGKILL");
@@ -183,18 +200,49 @@ export function streamLines(
       }
     }
 
+    /** Emit the buffered record, cut short when it outgrew the buffer. */
+    function flush(cut: boolean) {
+      const line = pending;
+      pending = "";
+      cutting = false;
+      onLine(line, cut);
+    }
+
     function onData(chunk: string) {
       if (settled || stoppedEarly || aborted) return;
-      pending += chunk;
       let start = 0;
-      let end = pending.indexOf(delimiter, start);
-      while (end !== -1) {
-        onLine(pending.slice(start, end));
+      for (;;) {
+        const end = chunk.indexOf(delimiter, start);
+        if (cutting) {
+          // Discard the tail of an over-long record; its head is already buffered.
+          if (end === -1) return;
+          flush(true);
+          if (settled || stoppedEarly || aborted) return;
+          start = end + 1;
+          continue;
+        }
+
+        const room = maxRecordBytes - pending.length;
+        const segment = end === -1 ? chunk.slice(start) : chunk.slice(start, end);
+        if (segment.length > room) {
+          pending += segment.slice(0, room);
+          // Drop the tail, wherever it ended: the record cannot be decoded whole.
+          if (end === -1) {
+            cutting = true;
+            return;
+          }
+          flush(true);
+          if (settled || stoppedEarly || aborted) return;
+          start = end + 1;
+          continue;
+        }
+
+        pending += segment;
+        if (end === -1) return;
+        flush(false);
+        if (settled || stoppedEarly || aborted) return;
         start = end + 1;
-        if (settled || stoppedEarly || aborted) break;
-        end = pending.indexOf(delimiter, start);
       }
-      pending = settled || stoppedEarly || aborted ? "" : pending.slice(start);
     }
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", onData);
@@ -209,11 +257,13 @@ export function streamLines(
     });
 
     child.on("close", (code: number | null, signal: NodeJS.Signals | null) => {
-      // A killed producer's trailing fragment is garbage, not a record: rg's
-      // partial JSON is dropped by the decoder, but a truncated fd path would
-      // silently become a bogus result. Only flush on a natural exit.
-      if (!timedOut && pending.length > 0) onLine(pending);
+      // A killed producer's trailing fragment is garbage, not a record: a
+      // partial rg match would be dropped by the decoder anyway, but a
+      // truncated fd path would silently become a bogus result. Only flush on a
+      // natural exit, and only flush a cut record as cut.
+      if (!timedOut && (pending.length > 0 || cutting)) flush(cutting);
       pending = "";
+      cutting = false;
       if (aborted) {
         settle(
           new SearchAbortedError({

@@ -107,6 +107,39 @@ test("grep path is one file or directory and glob filters file names", {
   );
 });
 
+test("a slash glob matches from the search root or the cwd", { skip: !hasRg }, async () => {
+  // `path` scopes the search; the glob may still be written from the cwd.
+  const scoped = await grep({ pattern: "needle", path: "src", glob: "src/*.ts" });
+  assert.deepEqual(
+    scoped.matches.map((match) => match.path),
+    ["src/main.ts"],
+  );
+
+  const nested = await grep({ pattern: "needle", path: "src", glob: "deep/*.ts" });
+  assert.deepEqual(
+    nested.matches.map((match) => match.path),
+    ["src/deep/test.ts"],
+  );
+});
+
+test("a leading ! excludes like ripgrep's own globs", { skip: !hasRg }, async () => {
+  const excluded = await grep({ pattern: "needle", glob: "!*.js" });
+  assert.equal(
+    excluded.matches.some((match) => match.path.endsWith(".js")),
+    false,
+  );
+  assert.ok(excluded.matches.some((match) => match.path === "src/main.ts"));
+
+  const excludedFromCwd = await grep({ pattern: "needle", path: "src", glob: "!src/*.ts" });
+  assert.equal(
+    excludedFromCwd.matches.some((match) => match.path === "src/main.ts"),
+    false,
+  );
+  assert.ok(excludedFromCwd.matches.some((match) => match.path === "src/other.js"));
+
+  await assert.rejects(() => grep({ pattern: "needle", glob: "!" }), /cannot be empty/);
+});
+
 test("grep skips hidden and ignored files by default", { skip: !hasRg }, async () => {
   const outcome = await grep({ pattern: "needle" });
   const paths = new Set(outcome.matches.map((match) => match.path));
@@ -184,9 +217,54 @@ test("a wedged search is killed at the wall-clock budget and stays partial", {
   assert.equal(result.stoppedEarly, false);
 });
 
+test("an over-long record is cut instead of buffered whole", { skip: !hasRg }, async () => {
+  writeFileSync(path.join(root, "wide.txt"), `needle ${"x".repeat(4000)}\n`);
+  const records: Array<{ line: string; clipped: boolean }> = [];
+  await Effect.runPromise(
+    streamLines({
+      binary: "rg",
+      args: ["--no-config", "--json", "--regexp", "needle", "--", "wide.txt"],
+      cwd: root,
+      maxRecordBytes: 64,
+      onLine: (line, clipped) => {
+        records.push({ line, clipped });
+        return true;
+      },
+    }),
+  );
+
+  const cut = records.filter((record) => record.clipped);
+  const match = cut.find((record) => record.line.startsWith('{"type":"match"'));
+  assert.ok(match !== undefined, "the match record must arrive cut");
+  assert.equal(match.line.length, 64);
+  for (const record of records) assert.ok(record.line.length <= 64);
+});
+
+test("grep drops an over-long record and says so", { skip: !hasRg }, async () => {
+  // Explicit files bypass --max-filesize, so the record cap is the only bound.
+  writeFileSync(path.join(root, "huge.txt"), `needle ${"x".repeat(9 * 1024 * 1024)}\n`);
+  const outcome = await grep({ pattern: "needle", path: "huge.txt" });
+  assert.deepEqual(outcome.matches, []);
+  assert.equal(outcome.skippedRecords, 1);
+  assert.equal(outcome.timedOut, false);
+  rmSync(path.join(root, "huge.txt"));
+});
+
 test("find uses one glob under one directory", { skip: !hasFd }, async () => {
   const outcome = await find({ pattern: "*.ts", path: "src" });
   assert.deepEqual([...outcome.files].sort(), ["src/deep/test.ts", "src/main.ts"]);
+
+  const fromCwd = await find({ pattern: "src/*.ts", path: "src" });
+  assert.deepEqual(fromCwd.files, ["src/main.ts"]);
+
+  const excluded = await find({ pattern: "!*.ts" });
+  assert.equal(
+    excluded.files.some((file) => file.endsWith(".ts")),
+    false,
+  );
+  assert.ok(excluded.files.includes("src/other.js"));
+
+  await assert.rejects(() => find({ pattern: "!" }), /cannot be empty/);
 });
 
 test("find skips hidden and ignored files unless a hidden directory is explicit", {
@@ -244,6 +322,7 @@ test("searches are abortable", { skip: !hasRg }, async () => {
 
 test("engine arguments contain only the fixed simple behavior", () => {
   const rg = buildRgArgs({ pattern: "needle", path: "src", glob: "*.ts", cwd: root }, root);
+  assert.ok(rg.includes("--json"));
   assert.ok(rg.includes("--regexp"));
   // Simple basename prefilters avoid scanning unrelated file contents.
   assert.ok(rg.includes("--type-add"));

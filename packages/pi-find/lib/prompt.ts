@@ -13,7 +13,7 @@ export const GREP_PROMPT_SNIPPET = "Search file contents with a regex";
 export const GREP_PARAMETER_DESCRIPTIONS = {
   pattern: "Case-sensitive ripgrep regex.",
   path: "Search file or directory; defaults to cwd.",
-  glob: "Case-sensitive glob: basename ('*.ts') or search-root-relative ('src/*.ts').",
+  glob: "Case-sensitive glob: basename ('*.ts') or path ('src/*.ts'); prefix ! to exclude.",
 };
 
 export const FIND_TOOL_DESCRIPTION =
@@ -21,7 +21,7 @@ export const FIND_TOOL_DESCRIPTION =
 export const FIND_PROMPT_SNIPPET = "Find files with a glob";
 
 export const FIND_PARAMETER_DESCRIPTIONS = {
-  pattern: "Case-sensitive glob: basename ('*.ts') or search-root-relative ('src/*.ts').",
+  pattern: "Case-sensitive glob: basename ('*.ts') or path ('src/*.ts'); prefix ! to exclude.",
   path: "Search directory; defaults to cwd.",
 };
 
@@ -62,4 +62,9 @@ export function outputLimitNotice(kind: "grep" | "find"): string {
 export function searchTimeoutNotice(timeoutMs: number): string {
   const seconds = Math.round(timeoutMs / 1000);
   return `[Search timed out after ${seconds}s; results are partial. Narrow the path, pattern, or glob.]`;
+}
+
+/** A record too large to buffer was dropped instead of read into memory. */
+export function oversizedRecordNotice(limitBytes: number): string {
+  return `[Skipped a record larger than ${Math.round(limitBytes / (1024 * 1024))} MiB; narrow the search.]`;
 }

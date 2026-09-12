@@ -46,9 +46,13 @@ find(pattern, path?)
   roots, files inside them, and symlink aliases to them are rejected.
 - Globs without `/` match basenames at any depth. Globs containing `/` match
   paths relative to the search directory (or the parent of an explicit grep
-  file). For example, `src/*.ts` matches direct children of `src`, while
+  file) *or* to the working directory, so both `{ "path": "src", "glob":
+  "src/*.ts" }` and `{ "path": "src", "glob": "deep/*.ts" }` select files
+  under `src`. `src/*.ts` matches direct children of `src`, while
   `src/**/*.ts` includes descendants. Use `/` in globs on every platform.
   Glob filtering never re-includes ignored files.
+- A leading `!` excludes instead of includes, like ripgrep's own `--glob`: for
+  example `glob: "!*.test.ts"` or `pattern: "!**/*.generated.ts"`.
 - A leading `@` is stripped from input paths; `~` and `~/...` expand to the
   home directory. Ripgrep user configuration is ignored so it cannot change
   the tool's case sensitivity or ignore behavior.
@@ -59,6 +63,10 @@ find(pattern, path?)
 - Grep skips files larger than 4 MiB during directory traversal. Explicitly
   named files follow ripgrep's explicit-file behavior and can exceed that limit.
 - Grep lines longer than 400 characters are clipped.
+- A single match or path record larger than 8 MiB is skipped instead of being
+  buffered, and the result says so. Explicitly named files bypass
+  ripgrep's traversal size cap, so this is what keeps a search of a
+  single-line bundle, sourcemap, or lockfile from ballooning memory.
 - Search output also has a hard byte limit, and running searches are
   cancellable.
 - Relative result paths can be passed directly to pi's `read` and `edit` tools.

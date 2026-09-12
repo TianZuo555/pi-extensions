@@ -9,6 +9,7 @@ import {
   GREP_PROMPT_SNIPPET,
   GREP_TOOL_DESCRIPTION,
   outputLimitNotice,
+  oversizedRecordNotice,
   resultLimitNotice,
   searchTimeoutNotice,
 } from "../lib/prompt.ts";
@@ -19,6 +20,7 @@ function outcome(matches: ReadonlyArray<[string, number, string]>): GrepOutcome 
     matches: matches.map(([path, lineNumber, text]) => ({ path, lineNumber, text })),
     truncated: false,
     timedOut: false,
+    skippedRecords: 0,
   };
 }
 
@@ -86,6 +88,7 @@ test("result text keeps one blank line between sections", () => {
 test("fixed limit notices tell the caller to narrow the search", () => {
   assert.match(resultLimitNotice("matches", 100), /narrow pattern, path, or glob/);
   assert.match(outputLimitNotice("find"), /omitted files/);
+  assert.match(oversizedRecordNotice(8 * 1024 * 1024), /larger than 8 MiB/);
 });
 
 test("timeout notices say the results are partial and how to narrow", () => {
