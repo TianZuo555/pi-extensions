@@ -1,6 +1,6 @@
 {
   "name": "@tian.zuo/pi-compact",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Codex Responses remote compaction via a configurable cheaper model (e.g. gpt-5.6-luna).",
   "type": "module",
   "keywords": [
