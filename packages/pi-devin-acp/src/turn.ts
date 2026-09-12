@@ -62,7 +62,7 @@ export class DevinTurnController {
   sessionId: string;
   /**
    * Latest usage_update seen this turn, carried across pi message
-   * boundaries so each re-entered segment reports the cumulative counters.
+   * boundaries so the final message can account for the whole ACP turn.
    */
   lastUsage?: DevinUsage;
   #queue: DevinActivity[] = [];
@@ -88,7 +88,9 @@ export class DevinTurnController {
     if (this.#closed) return;
     let delivered = activity;
     if (activity.type === "tool_start") {
-      this.#incompleteTools.set(activity.view.id, activity.view);
+      if (!TERMINAL_TOOL_STATUSES.has(activity.view.status ?? "")) {
+        this.#incompleteTools.set(activity.view.id, activity.view);
+      }
     } else if (activity.type === "tool_update") {
       // Updates carry only changed fields (no title/kind/locations) — merge
       // over the started view so cards keep the full picture.

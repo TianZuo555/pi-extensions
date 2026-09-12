@@ -176,9 +176,7 @@ const makeRuntime = (createClient: DevinClientFactory) =>
           // A delayed exit from a replaced process must not clobber the
           // binding a newer client already established.
           if (client !== created) return;
-          const turn = active;
-          active = undefined;
-          turn?.fail(new Error("devin acp process exited."));
+          invalidateActiveTurn();
           if (sessionId && !pendingLoadId) {
             // Devin persists sessions server-side: retry session/load on the
             // next turn; its failure path falls back to a fresh session
@@ -190,7 +188,7 @@ const makeRuntime = (createClient: DevinClientFactory) =>
           client = undefined;
         });
         created.setCustomNotificationHandler((method, params) => {
-          if (method !== "_cognition.ai/agent_stopped") return;
+          if (client !== created || method !== "_cognition.ai/agent_stopped") return;
           const activity = agentStoppedToActivity(params);
           if (activity?.type !== "stopped") return;
           lastTurnStats = activity.stats;
@@ -225,7 +223,11 @@ const makeRuntime = (createClient: DevinClientFactory) =>
       contextTokens = undefined;
       contextSize = undefined;
       title = undefined;
+      model = undefined;
+      modeId = undefined;
       configOptions = undefined;
+      availableCommands = undefined;
+      lastTurnStats = undefined;
       needsBootstrap = bootstrap;
       lastSentSystemPrompt = undefined;
       liveOps.clear();
@@ -288,7 +290,10 @@ const makeRuntime = (createClient: DevinClientFactory) =>
 
     /** Wire a live controller to a session's update stream. */
     const attachSessionListener = (id: string, controller: DevinTurnController) => {
-      ensureClient().setSessionListener(id, (update) => {
+      const acp = ensureClient();
+      const listenerGeneration = generation;
+      acp.setSessionListener(id, (update) => {
+        if (client !== acp || sessionId !== id || generation !== listenerGeneration) return;
         const activities = acpUpdateToActivities(update);
         applyStateUpdate(activities);
         for (const activity of activities) {
@@ -305,16 +310,20 @@ const makeRuntime = (createClient: DevinClientFactory) =>
      * reports a missing session. The session listener must already be wired
      * to the turn controller so replayed state updates are captured.
      */
-    const ensureSession = async (cwd: string, controller: DevinTurnController): Promise<string> => {
+    const ensureSession = async (
+      cwd: string,
+      controller: DevinTurnController,
+      check: () => void,
+    ): Promise<string> => {
       const acp = ensureClient();
       await acp.ensureStarted();
+      check();
       if (sessionId && sessionCwd === cwd && !pendingLoadId) {
         // Re-point the session listener at this turn's controller — the
         // previous turn's controller is closed.
         attachSessionListener(sessionId, controller);
         return sessionId;
       }
-      if (sessionId && sessionCwd !== cwd) dropSession(true);
       if (pendingLoadId) {
         const loadId = pendingLoadId;
         sessionId = loadId;
@@ -322,8 +331,14 @@ const makeRuntime = (createClient: DevinClientFactory) =>
         attachSessionListener(loadId, controller);
         try {
           await acp.loadSession(loadId, cwd);
+          check();
+          pendingLoadId = undefined;
           return loadId;
         } catch {
+          // Cancellation/supersession is not a missing session. Never let
+          // an old load clear a newer binding or fall back to session/new.
+          check();
+          pendingLoadId = undefined;
           acp.setSessionListener(loadId, undefined);
           sessionId = undefined;
           syncedModelId = undefined;
@@ -334,11 +349,16 @@ const makeRuntime = (createClient: DevinClientFactory) =>
           contextTokens = undefined;
           contextSize = undefined;
           title = undefined;
-        } finally {
-          pendingLoadId = undefined;
         }
       }
       const created = await acp.newSession(cwd);
+      try {
+        check();
+      } catch (error) {
+        // A cancelled session/new may still have created an empty remote session.
+        void acp.deleteSession(created.sessionId).catch(() => {});
+        throw error;
+      }
       sessionId = created.sessionId;
       sessionCwd = cwd;
       modeId = created.modes?.currentModeId ?? modeId;
@@ -347,14 +367,21 @@ const makeRuntime = (createClient: DevinClientFactory) =>
       return created.sessionId;
     };
 
-    const syncConfig = async (id: string, concreteModelId: string): Promise<void> => {
+    const syncConfig = async (
+      id: string,
+      concreteModelId: string,
+      check: () => void,
+    ): Promise<void> => {
       const acp = ensureClient();
       if (desiredModeId && desiredModeId !== modeId) {
-        await acp.setMode(id, desiredModeId);
-        modeId = desiredModeId;
+        const next = desiredModeId;
+        await acp.setMode(id, next);
+        check();
+        modeId = next;
       }
       if (concreteModelId && syncedModelId !== concreteModelId) {
         await acp.setConfigOption(id, "model", concreteModelId);
+        check();
         syncedModelId = concreteModelId;
       }
     };
@@ -377,7 +404,7 @@ const makeRuntime = (createClient: DevinClientFactory) =>
         ensureOpen.pipe(
           Effect.andThen(
             Effect.sync(() => {
-              invalidateActiveTurn();
+              dropSession(false);
               sessionId = state.acpSessionId;
               sessionCwd = state.cwd;
               model = state.modelId;
@@ -396,120 +423,125 @@ const makeRuntime = (createClient: DevinClientFactory) =>
           Effect.andThen(
             Effect.tryPromise({
               try: async () => {
+                request.signal?.throwIfAborted();
+                if (sessionCwd !== undefined && sessionCwd !== request.cwd) dropSession(true);
                 if (
                   active &&
+                  !activeAbort?.signal.aborted &&
                   active.prompt === request.prompt &&
                   (!active.isClosed() || active.hasPending())
                 ) {
                   return active;
                 }
-                if (active) invalidateActiveTurn();
-
-                const acp = ensureClient();
-                await acp.ensureStarted();
-                const controller = new DevinTurnController(request.prompt, "");
-                const liveSessionId = await ensureSession(request.cwd, controller);
-                controller.sessionId = liveSessionId;
-                await syncConfig(liveSessionId, request.concreteModelId);
-
-                model = request.modelId;
-
+                invalidateActiveTurn();
+                const turnGeneration = generation;
                 const turnAbort = new AbortController();
                 activeAbort = turnAbort;
-                const turnGeneration = generation;
-                if (request.signal) {
-                  if (request.signal.aborted) turnAbort.abort();
-                  else
-                    request.signal.addEventListener("abort", () => turnAbort.abort(), {
-                      once: true,
-                    });
-                }
+                const onAbort = () => turnAbort.abort();
+                request.signal?.addEventListener("abort", onAbort, { once: true });
+                const check = () => {
+                  if (turnGeneration !== generation) throw new Error("devin turn was superseded.");
+                  if (turnAbort.signal.aborted) throw new Error("devin turn was aborted.");
+                };
+                const cleanup = () => {
+                  request.signal?.removeEventListener("abort", onAbort);
+                  if (activeAbort === turnAbort) activeAbort = undefined;
+                };
+                const controller = new DevinTurnController(request.prompt, "");
+                active = controller;
+                try {
+                  check();
+                  const acp = ensureClient();
+                  const liveSessionId = await ensureSession(request.cwd, controller, check);
+                  check();
+                  controller.sessionId = liveSessionId;
+                  await syncConfig(liveSessionId, request.concreteModelId, check);
+                  check();
+                  model = request.modelId;
 
-                // Compose prompt blocks: bootstrap resources on fresh
-                // sessions, an instruction snapshot when pi's system prompt
-                // changed, then the request's content blocks. A bare
-                // "/name args" prompt is a devin command — attaching
-                // resources makes devin treat it as plain text, so command
-                // turns carry no extras and leave bootstrap state pending
-                // for the next real turn.
-                const isCommandPrompt = /^\/\S/.test(request.prompt);
-                const blocks: ContentBlock[] = [];
-                if (!isCommandPrompt) {
-                  if (needsBootstrap && request.historyBootstrap) {
-                    blocks.push({
-                      type: "resource",
-                      resource: {
-                        uri: HISTORY_RESOURCE_URI,
-                        mimeType: "text/plain",
-                        text: restoredPiContextPrompt(request.historyBootstrap),
-                      },
-                    });
-                  }
-                  if (
-                    request.systemPrompt !== undefined &&
-                    request.systemPrompt !== lastSentSystemPrompt
-                  ) {
-                    blocks.push({
-                      type: "resource",
-                      resource: {
-                        uri: INSTRUCTIONS_RESOURCE_URI,
-                        mimeType: "text/plain",
-                        text: piSystemInstructionsPrompt(request.systemPrompt),
-                      },
-                    });
-                    lastSentSystemPrompt = request.systemPrompt;
-                  }
-                  needsBootstrap = false;
-                }
-                blocks.push(...request.blocks);
-
-                const cancelled = new Promise<never>((_resolve, reject) => {
-                  turnAbort.signal.addEventListener(
-                    "abort",
-                    () => reject(new Error("devin turn was aborted.")),
-                    { once: true },
-                  );
-                  if (turnAbort.signal.aborted) {
-                    reject(new Error("devin turn was aborted."));
-                  }
-                });
-
-                const promptPromise = acp.prompt(liveSessionId, blocks);
-                void Promise.race([promptPromise, cancelled])
-                  .then((result) => {
-                    if (turnGeneration !== generation) {
-                      controller.close();
-                      return;
+                  // Compose prompt blocks: bootstrap resources on fresh
+                  // sessions, an instruction snapshot when pi's system prompt
+                  // changed, then the request's content blocks. A bare
+                  // "/name args" prompt is a devin command — attaching
+                  // resources makes devin treat it as plain text, so command
+                  // turns carry no extras and leave bootstrap state pending
+                  // for the next real turn.
+                  const isCommandPrompt = /^\/\S/.test(request.prompt);
+                  const blocks: ContentBlock[] = [];
+                  if (!isCommandPrompt) {
+                    if (needsBootstrap && request.historyBootstrap) {
+                      blocks.push({
+                        type: "resource",
+                        resource: {
+                          uri: HISTORY_RESOURCE_URI,
+                          mimeType: "text/plain",
+                          text: restoredPiContextPrompt(request.historyBootstrap),
+                        },
+                      });
                     }
-                    if (result.stopReason !== "cancelled") turns += 1;
-                    controller.push({
-                      type: "result",
-                      stopReason: result.stopReason ?? "end_turn",
-                      usage: {
-                        inputTokens: result.usage?.inputTokens,
-                        outputTokens: result.usage?.outputTokens,
-                      },
-                    });
-                    controller.close();
-                  })
-                  .catch((cause: unknown) => {
-                    if (turnGeneration !== generation) {
-                      controller.close();
-                      return;
+                    if (
+                      request.systemPrompt !== undefined &&
+                      request.systemPrompt !== lastSentSystemPrompt
+                    ) {
+                      blocks.push({
+                        type: "resource",
+                        resource: {
+                          uri: INSTRUCTIONS_RESOURCE_URI,
+                          mimeType: "text/plain",
+                          text: piSystemInstructionsPrompt(request.systemPrompt),
+                        },
+                      });
+                      lastSentSystemPrompt = request.systemPrompt;
                     }
-                    controller.fail(cause instanceof Error ? cause : new Error(String(cause)));
+                    needsBootstrap = false;
+                  }
+                  blocks.push(...request.blocks);
+
+                  const cancelled = new Promise<never>((_resolve, reject) => {
+                    turnAbort.signal.addEventListener(
+                      "abort",
+                      () => {
+                        void acp.cancel(liveSessionId).catch(() => {});
+                        reject(new Error("devin turn was aborted."));
+                      },
+                      { once: true },
+                    );
                   });
 
-                turnAbort.signal.addEventListener(
-                  "abort",
-                  () => {
-                    void acp.cancel(liveSessionId).catch(() => {});
-                  },
-                  { once: true },
-                );
+                  const promptPromise = acp.prompt(liveSessionId, blocks);
+                  void Promise.race([promptPromise, cancelled])
+                    .then((result) => {
+                      if (turnGeneration !== generation) {
+                        controller.close();
+                        return;
+                      }
+                      if (result.stopReason !== "cancelled") turns += 1;
+                      controller.push({
+                        type: "result",
+                        stopReason: result.stopReason ?? "end_turn",
+                        usage: {
+                          inputTokens: result.usage?.inputTokens,
+                          outputTokens: result.usage?.outputTokens,
+                        },
+                      });
+                      controller.close();
+                    })
+                    .catch((cause: unknown) => {
+                      if (turnGeneration !== generation) {
+                        controller.close();
+                        return;
+                      }
+                      controller.fail(cause instanceof Error ? cause : new Error(String(cause)));
+                    })
+                    .finally(cleanup);
 
-                active = controller;
-                return controller;
+                  return controller;
+                } catch (error) {
+                  cleanup();
+                  controller.fail(error instanceof Error ? error : new Error(String(error)));
+                  if (active === controller) active = undefined;
+                  throw error;
+                }
               },
               catch: (error) => failSession(error),
             }),
@@ -525,48 +557,63 @@ const makeRuntime = (createClient: DevinClientFactory) =>
           Effect.andThen(
             Effect.tryPromise({
               try: async () => {
+                const summaryGeneration = generation;
+                const check = () => {
+                  signal?.throwIfAborted();
+                  if (closed || summaryGeneration !== generation) {
+                    throw new Error("devin summary turn was superseded.");
+                  }
+                };
+                check();
                 const acp = ensureClient();
                 await acp.ensureStarted();
+                check();
                 const created = await acp.newSession(sessionCwd ?? process.cwd());
-                if (modelId) {
-                  try {
-                    await acp.setConfigOption(created.sessionId, "model", modelId);
-                  } catch {
-                    // Best-effort: a summary on the session default beats none.
-                  }
-                }
-                const collected: string[] = [];
-                acp.setSessionListener(created.sessionId, (update) => {
-                  for (const activity of acpUpdateToActivities(update)) {
-                    if (activity.type === "text") collected.push(activity.delta);
-                  }
-                });
                 try {
-                  const abort = new AbortController();
-                  const onAbort = () => {
-                    abort.abort();
-                    void acp.cancel(created.sessionId).catch(() => {});
-                  };
-                  signal?.addEventListener("abort", onAbort, { once: true });
-                  try {
-                    await Promise.race([
-                      acp.prompt(created.sessionId, [{ type: "text", text: prompt }]),
-                      new Promise<never>((_r, reject) =>
-                        abort.signal.addEventListener(
-                          "abort",
-                          () => reject(new Error("devin summary turn aborted.")),
-                          { once: true },
-                        ),
-                      ),
-                    ]);
-                  } finally {
-                    signal?.removeEventListener("abort", onAbort);
+                  check();
+                  if (modelId) {
+                    try {
+                      await acp.setConfigOption(created.sessionId, "model", modelId);
+                    } catch {
+                      // Best-effort: a summary on the session default beats none.
+                    }
+                    check();
                   }
+                  const collected: string[] = [];
+                  acp.setSessionListener(created.sessionId, (update) => {
+                    for (const activity of acpUpdateToActivities(update)) {
+                      if (activity.type === "text") collected.push(activity.delta);
+                    }
+                  });
+                  try {
+                    const abort = new AbortController();
+                    const onAbort = () => {
+                      abort.abort();
+                      void acp.cancel(created.sessionId).catch(() => {});
+                    };
+                    const cancelled = new Promise<never>((_r, reject) =>
+                      abort.signal.addEventListener(
+                        "abort",
+                        () => reject(new Error("devin summary turn aborted.")),
+                        { once: true },
+                      ),
+                    );
+                    signal?.addEventListener("abort", onAbort, { once: true });
+                    try {
+                      await Promise.race([
+                        acp.prompt(created.sessionId, [{ type: "text", text: prompt }]),
+                        cancelled,
+                      ]);
+                    } finally {
+                      signal?.removeEventListener("abort", onAbort);
+                    }
+                  } finally {
+                    acp.setSessionListener(created.sessionId, undefined);
+                  }
+                  return { text: collected.join("") };
                 } finally {
-                  acp.setSessionListener(created.sessionId, undefined);
                   void acp.deleteSession(created.sessionId).catch(() => {});
                 }
-                return { text: collected.join("") };
               },
               catch: (error) => failSession(error),
             }),
@@ -578,11 +625,17 @@ const makeRuntime = (createClient: DevinClientFactory) =>
           Effect.andThen(
             Effect.tryPromise({
               try: async () => {
-                desiredModeId = next;
+                if (!["ask", "plan", "accept-edits", "bypass"].includes(next)) {
+                  throw new Error(`Invalid devin mode: ${next}`);
+                }
+                const modeGeneration = generation;
                 if (sessionId && !pendingLoadId) {
                   await ensureClient().setMode(sessionId, next);
+                  if (generation !== modeGeneration)
+                    throw new Error("devin session was superseded.");
                   modeId = next;
                 }
+                desiredModeId = next;
               },
               catch: (error) => failSession(error),
             }),

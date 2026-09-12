@@ -24,6 +24,11 @@ export function devinBackgroundToolNote(shellId: string | undefined): string {
   return `devin detached this command to background shell ${shellId ?? "?"}; it may still be running server-side.`;
 }
 
+/** User-confirmed request from the tasks picker. */
+export function devinKillShellPrompt(shellId: string): string {
+  return `Kill background shell ${shellId} and confirm it stopped.`;
+}
+
 /** `devin acp` has no system-role input; relay Pi instructions as a labeled resource. */
 export function piSystemInstructionsPrompt(instructions: string): string {
   return [

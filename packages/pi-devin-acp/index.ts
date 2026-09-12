@@ -842,9 +842,7 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
     if (sub === "tasks") {
       await runDevinTasksPicker(ctx, {
         listOps: async () => (await runDevin(runtime, service.snapshot)).liveOps,
-        sendToSession: (text) => {
-          void pi.sendUserMessage(text, { expandPromptTemplates: false });
-        },
+        sendToSession: (text, options) => pi.sendUserMessage(text, options),
       });
       return;
     }

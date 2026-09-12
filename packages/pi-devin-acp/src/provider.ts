@@ -11,6 +11,7 @@
  * session/prompt via the runtime's turn controller.
  */
 
+import { randomUUID } from "node:crypto";
 import {
   calculateCost,
   createAssistantMessageEventStream,
@@ -22,7 +23,12 @@ import {
 } from "@earendil-works/pi-ai";
 import type { ContentBlock } from "@agentclientprotocol/sdk";
 import type { DevinRuntimeInstance, DevinRuntimeShape } from "./runtime.ts";
-import type { DevinActivity, DevinTurnController, DevinUsage } from "./turn.ts";
+import {
+  TERMINAL_TOOL_STATUSES,
+  type DevinActivity,
+  type DevinTurnController,
+  type DevinUsage,
+} from "./turn.ts";
 import type { DevinReplayStore } from "../lib/replay.ts";
 import { devinBackgroundToolNote, devinIncompleteToolError } from "../lib/prompt.ts";
 import { summarizeDevinCall, type DevinToolView } from "../lib/tool-content.ts";
@@ -138,7 +144,8 @@ export function mapUsage(u: DevinUsage | undefined): AssistantMessage["usage"] {
     reasoning: undefined,
     cacheRead: cached,
     cacheWrite: 0,
-    totalTokens: u?.contextUsed ?? (u?.inputTokens ?? 0) + (u?.outputTokens ?? 0),
+    // Context occupancy lives in the runtime snapshot, not billable usage.
+    totalTokens: (u?.inputTokens ?? 0) + (u?.outputTokens ?? 0),
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   };
 }
@@ -199,6 +206,7 @@ export function streamDevin(deps: DevinProviderDeps) {
         timestamp: Date.now(),
       };
 
+      let turnController: DevinTurnController | undefined;
       let turnCleared = false;
       const clearTurn = () => {
         if (turnCleared) return;
@@ -207,6 +215,10 @@ export function streamDevin(deps: DevinProviderDeps) {
       };
 
       const fail = (message: string) => {
+        // If the ACP turn fails between replay segments, this error message
+        // is its final accounting record too.
+        output.usage = mapUsage(turnController?.lastUsage);
+        calculateCost(model, output.usage);
         output.stopReason = options?.signal?.aborted ? "aborted" : "error";
         output.errorMessage = message;
         clearTurn();
@@ -228,7 +240,7 @@ export function streamDevin(deps: DevinProviderDeps) {
 
         const group = findDevinGroup(deps.families(), model.id);
         const concreteModelId = group
-          ? resolveDevinModelRow(group, options?.reasoning).id
+          ? resolveDevinModelRow(group, options?.reasoning ?? "off").id
           : model.id;
 
         const summaryRequest = isSummarizationRequest(prompt);
@@ -281,8 +293,10 @@ export function streamDevin(deps: DevinProviderDeps) {
             historyBootstrap: piHistoryBootstrap(context),
             signal: options?.signal,
           }),
+          options?.signal ? { signal: options.signal } : undefined,
         );
 
+        turnController = controller;
         let usage: DevinUsage | undefined = controller.lastUsage;
         let textIndex: number | null = null;
         let textBuffer = "";
@@ -290,7 +304,6 @@ export function streamDevin(deps: DevinProviderDeps) {
         let thinkingIndex: number | null = null;
         let thinkingBuffer = "";
         let thinkingMessageId: string | undefined;
-        let replayCallSeq = 0;
         const pendingTools = new Map<string, { id: string; index: number }>();
 
         const closeThinking = () => {
@@ -327,7 +340,8 @@ export function streamDevin(deps: DevinProviderDeps) {
         const endWithToolUse = () => {
           closeThinking();
           closeText();
-          attachUsage(usage);
+          // These are display-only segments of one ACP turn. Account once
+          // on its final message, not once per replay card.
           output.stopReason = "toolUse";
           stream.push({ type: "done", reason: "toolUse", message: output });
           stream.end();
@@ -337,7 +351,7 @@ export function streamDevin(deps: DevinProviderDeps) {
         const emitToolStart = (view: DevinToolView): void => {
           closeText();
           closeThinking();
-          const id = `devin-replay-${++replayCallSeq}`;
+          const id = `devin-replay-${randomUUID()}`;
           const toolCall = {
             type: "toolCall" as const,
             id,
@@ -358,7 +372,7 @@ export function streamDevin(deps: DevinProviderDeps) {
         /** Close a tool card and record its replayed result. */
         const emitToolEnd = (view: DevinToolView): void => {
           const pending = pendingTools.get(view.id);
-          const id = pending?.id ?? `devin-replay-${++replayCallSeq}`;
+          const id = pending?.id ?? `devin-replay-${randomUUID()}`;
           replay.record(id, {
             title: view.title ?? "tool call",
             kind: view.kind,
@@ -396,7 +410,7 @@ export function streamDevin(deps: DevinProviderDeps) {
           const incomplete = controller.takeIncompleteTools();
           for (const view of incomplete) {
             const pending = pendingTools.get(view.id);
-            const id = pending?.id ?? `devin-replay-${++replayCallSeq}`;
+            const id = pending?.id ?? `devin-replay-${randomUUID()}`;
             if (view.background) {
               // A detached shell outliving the turn is normal — replay it as a
               // note, not a failure.
@@ -508,14 +522,12 @@ export function streamDevin(deps: DevinProviderDeps) {
               break;
             }
             case "tool_start":
-              emitToolStart(activity.view);
-              break;
             case "tool_update": {
+              if (activity.type === "tool_start") emitToolStart(activity.view);
               // Progress-only updates keep the card pending; the controller
               // merges the view so the terminal update renders the full
               // picture without duplicate cards.
-              const terminal =
-                activity.view.status === "completed" || activity.view.status === "failed";
+              const terminal = TERMINAL_TOOL_STATUSES.has(activity.view.status ?? "");
               if (!terminal) break;
               emitToolEnd(activity.view);
               if (pendingTools.size === 0) {

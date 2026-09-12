@@ -3,7 +3,8 @@
  * detached background shells). Kept to ctx.ui.select/confirm prompts for v1.
  */
 
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { devinKillShellPrompt } from "../lib/prompt.ts";
 import type { DevinLiveOp } from "./runtime.ts";
 
 function formatElapsed(startedAt: number, now: number): string {
@@ -29,7 +30,7 @@ export function describeLiveOp(op: DevinLiveOp, now = Date.now()): string {
 export interface DevinTasksUiDeps {
   listOps: () => Promise<DevinLiveOp[]> | DevinLiveOp[];
   /** Send a plain-text instruction into the live devin session. */
-  sendToSession: (text: string) => void;
+  sendToSession: ExtensionAPI["sendUserMessage"];
 }
 
 /** Run the /devin tasks flow. */
@@ -53,6 +54,16 @@ export async function runDevinTasksPicker(
     `Ask devin to kill background shell ${op.view.shellId}? It runs in devin's process, so only devin can stop it.`,
   );
   if (!kill) return;
-  deps.sendToSession(`Kill background shell ${op.view.shellId} and confirm it stopped.`);
-  ctx.ui.notify(`devin: asked to kill shell ${op.view.shellId}.`, "info");
+  try {
+    deps.sendToSession(devinKillShellPrompt(op.view.shellId), {
+      deliverAs: "steer",
+      expandPromptTemplates: false,
+    });
+    ctx.ui.notify(`devin: queued request to kill shell ${op.view.shellId}.`, "info");
+  } catch (error) {
+    ctx.ui.notify(
+      `devin: could not request shell stop (${error instanceof Error ? error.message : error}).`,
+      "error",
+    );
+  }
 }
