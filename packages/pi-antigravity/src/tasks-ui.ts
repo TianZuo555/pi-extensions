@@ -15,7 +15,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import { stripTerminalSequences, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { stopAgyTask, type AgyTask } from "../lib/tasks.ts";
+import type { AgyTask } from "../lib/tasks.ts";
 
 export type AgyTaskStatus = "running" | "orphan" | "unclear" | "done";
 
@@ -112,8 +112,6 @@ export function reconcileAgyTasksSelection(
 export interface AgyTasksModel {
   getTasks(): ReadonlyArray<AgyTask>;
   refresh(): Promise<void>;
-  /** Kill the task's processes; resolves after the SIGTERM is sent. */
-  kill(task: AgyTask): Promise<number>;
   /** Read the task's log file; resolves to "" when unreadable. */
   readLog(task: AgyTask): Promise<string>;
 }
@@ -133,16 +131,6 @@ export async function openAgyTasksPicker(
     getTasks: () => tasks,
     refresh: async () => {
       tasks = await rescan();
-    },
-    kill: async (task) => {
-      const { signaled } = await stopAgyTask(task);
-      if (signaled === 0) {
-        ctx.ui.notify(
-          `${task.id}: no provably-owned process found — unclear matches are never signalled. Check the process manually before killing.`,
-          "warning",
-        );
-      }
-      return signaled;
     },
     readLog: (task) => fs.readFile(task.logPath, "utf8").catch(() => ""),
   };
@@ -226,7 +214,7 @@ export class AgyTasksDashboard implements Component {
     reconcileAgyTasksSelection(this.selection, tasks);
 
     if (this.detail) {
-      this.handleDetailInput(data, tasks);
+      this.handleDetailInput(data);
       return;
     }
 
@@ -259,11 +247,6 @@ export class AgyTasksDashboard implements Component {
       void this.rescan();
       return;
     }
-    if (data === "x") {
-      const task = tasks[this.selection.index];
-      if (task && agyTaskStatus(task) !== "done") void this.kill(task);
-      return;
-    }
   }
 
   private detailViewportHeight(): number {
@@ -271,7 +254,7 @@ export class AgyTasksDashboard implements Component {
     return Math.max(1, Math.max(6, rows - 5) - DETAIL_META_LINES);
   }
 
-  private handleDetailInput(data: string, tasks: ReadonlyArray<AgyTask>): void {
+  private handleDetailInput(data: string): void {
     const detail = this.detail;
     if (!detail) return;
     if (this.keybindings.matches(data, "tui.select.cancel")) {
@@ -311,11 +294,6 @@ export class AgyTasksDashboard implements Component {
     }
     if (data === "r") {
       void this.reloadDetail();
-      return;
-    }
-    if (data === "x") {
-      const task = tasks.find((entry) => entry.id === detail.taskId);
-      if (task && agyTaskStatus(task) !== "done") void this.kill(task);
       return;
     }
   }
@@ -382,20 +360,6 @@ export class AgyTasksDashboard implements Component {
     if (this.liveRefreshInFlight) return;
     this.busy = true;
     try {
-      await this.model.refresh();
-    } finally {
-      this.busy = false;
-      this.tui.requestRender();
-    }
-  }
-
-  private async kill(task: AgyTask): Promise<void> {
-    this.busy = true;
-    this.tui.requestRender();
-    try {
-      await this.model.kill(task);
-      // Give the SIGTERM a moment to take effect before rescanning.
-      await new Promise((resolve) => setTimeout(resolve, 800));
       await this.model.refresh();
     } finally {
       this.busy = false;
@@ -482,13 +446,16 @@ export class AgyTasksDashboard implements Component {
       ),
     );
 
-    // Hints
+    // Hints. There is deliberately no stop key: agy >= 1.2.0 pipes task output
+    // through itself, so no process provably owns a task log and a per-task
+    // stop could never prove what it would be killing (`/agy-tasks stop all`
+    // sweeps the recorded groups instead).
     const up = configuredKeys(this.keybindings, "tui.select.up");
     const down = configuredKeys(this.keybindings, "tui.select.down");
     const cancel = configuredKeys(this.keybindings, "tui.select.cancel");
     const hints = this.detail
-      ? `  ${up}/${down}/jk scroll · g/G top/end · x stop · r reload · ${cancel} back`
-      : `  ${up}/${down}/jk select · ${configuredKeys(this.keybindings, "tui.select.confirm")} info · x stop · r rescan · ${cancel} close`;
+      ? `  ${up}/${down}/jk scroll · g/G top/end · r reload · ${cancel} back`
+      : `  ${up}/${down}/jk select · ${configuredKeys(this.keybindings, "tui.select.confirm")} info · r rescan · ${cancel} close`;
     lines.push(truncateToWidth(theme.fg("dim", hints), width));
 
     return lines;

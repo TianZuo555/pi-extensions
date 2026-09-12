@@ -129,6 +129,31 @@ rl.on("line", async (line) => {
     console.log(activeToolStep);
     return;
   }
+  if (["abort-worker", "abort-parked-worker"].includes(event.message.content)) {
+    // A foreground command agy spawned as its own process-group leader: the
+    // shape every run_command has on agy >= 1.2.0. It records the SIGTERM and
+    // (for the parked case) survives it, so the test can tell whether the
+    // turn's teardown reached the group.
+    console.log(activeToolStep);
+    const worker = spawn(process.execPath, ["-e", [
+      'import { writeFileSync } from "node:fs";',
+      'process.on("SIGTERM", () => { writeFileSync("worker-term", "yes");',
+      event.message.content === "abort-worker" ? 'process.exit(0);' : '',
+      '});',
+      'setInterval(() => {}, 1000);'
+    ].join("\\n")], { detached: true, stdio: "ignore" });
+    // Wait until the worker leads its own process group — the reap only
+    // signals group leaders, and setsid timing varies under load. The pid is
+    // published only afterwards, so a test that sees it knows the shape is
+    // right and never races the spawn.
+    for (let i = 0; i < 200; i++) {
+      const probe = spawnSync("ps", ["-o", "pgid=", "-p", String(worker.pid)]);
+      if (probe.status === 0 && probe.stdout.toString().trim() === String(worker.pid)) break;
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+    writeFileSync("worker-pid", String(worker.pid));
+    return;
+  }
   if (event.message.content === "burst-crash") {
     // Two distinct tool starts in one burst: the first spawns a detached
     // worker, the second arrives while it is alive. A time throttle that
@@ -1349,6 +1374,211 @@ test("a turn parked on a background task ends gracefully instead of stalling", a
     assert.ok(snapshot.lifecycle.some((line) => line.includes("stall:task-parked")));
     assert.equal(snapshot.stats?.lastRecycleReason, "background-task");
   } finally {
+    await executor.close("shutdown");
+    await rm(fixture.dir, { recursive: true, force: true });
+  }
+});
+
+test("an early parked watch ends a backgrounded turn without the tool budget", async () => {
+  // agy holds the result event for as long as a background task runs, but its
+  // transcript already has the answer. Waiting out AGY_TOOL_STALL_TIMEOUT_MS
+  // (5 minutes by default) would park the turn for no reason, so the driver
+  // polls the transcript while a tool step is ACTIVE.
+  const fixture = await driverFixture();
+  const executor = new AgyDriverSession();
+  const parkedCalls: Array<{ conversationId: string | undefined; indexes: number[] }> = [];
+  executor.setTurnParkedProbe(
+    async (conversationId, indexes) => {
+      parkedCalls.push({ conversationId, indexes });
+      return { finished: true, response: "the withheld answer" };
+    },
+    { watchMs: 20, pollMs: 25, limit: 1 },
+  );
+  const start = Date.now();
+  try {
+    const outcome = await executor.run({
+      prompt: "tool-silent",
+      binary: fixture.script,
+      cwd: fixture.dir,
+      inactivityTimeoutMs: 60_000,
+      // Far beyond the assertion window: only the early watch can settle this.
+      toolInactivityTimeoutMs: 60_000,
+      timeoutMs: 60_000,
+      spawnOverride: fixtureSpawn(fixture.script),
+    });
+    assert.equal(outcome.status, "OK");
+    assert.equal(outcome.response, "the withheld answer");
+    assert.ok(Date.now() - start < 5_000, "the parked watch must pre-empt the tool stall budget");
+    assert.deepEqual(parkedCalls[0], {
+      conversationId: "driver-conversation",
+      indexes: [1],
+    });
+    const snapshot = executor.snapshot();
+    assert.ok(snapshot.lifecycle.some((line) => line.includes("stall:task-parked")));
+    assert.equal(snapshot.stats?.lastRecycleReason, "background-task");
+  } finally {
+    await executor.close("shutdown");
+    await rm(fixture.dir, { recursive: true, force: true });
+  }
+});
+
+test("parkedWatchMs 0 leaves parked detection to the tool stall budget", async () => {
+  const fixture = await driverFixture();
+  const executor = new AgyDriverSession();
+  executor.setTurnParkedProbe(async () => ({ finished: true, response: "budget answer" }), {
+    watchMs: 0,
+    pollMs: 20,
+    limit: 1,
+  });
+  const start = Date.now();
+  try {
+    const outcome = await executor.run({
+      prompt: "tool-silent",
+      binary: fixture.script,
+      cwd: fixture.dir,
+      inactivityTimeoutMs: 120,
+      toolInactivityTimeoutMs: 120,
+      timeoutMs: 10_000,
+      spawnOverride: fixtureSpawn(fixture.script),
+    });
+    assert.equal(outcome.response, "budget answer");
+    assert.ok(
+      Date.now() - start >= 100,
+      "a disabled watch must wait for the tool budget before the first check",
+    );
+  } finally {
+    await executor.close("shutdown");
+    await rm(fixture.dir, { recursive: true, force: true });
+  }
+});
+
+test("aborting a turn reaps the command process group agy spawned", {
+  skip: process.platform === "win32" ? "POSIX process groups" : false,
+}, async () => {
+  // agy >= 1.2.0 runs every run_command as its own process-group leader, so
+  // killing agy's own group leaves the user's command running. The abort path
+  // reaps it while agy is still alive to be its parent.
+  const fixture = await driverFixture();
+  const executor = new AgyDriverSession();
+  const abort = new AbortController();
+  let workerPid = 0;
+  try {
+    const outcomePromise = executor.run({
+      prompt: "abort-worker",
+      binary: fixture.script,
+      cwd: fixture.dir,
+      inactivityTimeoutMs: 30_000,
+      toolInactivityTimeoutMs: 30_000,
+      timeoutMs: 30_000,
+      spawnOverride: fixtureSpawn(fixture.script),
+      signal: abort.signal,
+    });
+    for (let i = 0; i < 400 && workerPid === 0; i += 1) {
+      const text = await readFile(path.join(fixture.dir, "worker-pid"), "utf8").catch(() => "");
+      const parsed = Number.parseInt(text.trim(), 10);
+      if (Number.isInteger(parsed) && parsed > 0) workerPid = parsed;
+      else await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    assert.ok(workerPid > 0, "the fixture must report its worker pid");
+    abort.abort();
+    const outcome = await outcomePromise;
+    assert.match(outcome.error ?? "", /aborted/);
+    // SIGTERM reached the group (the worker recorded it) and escalation
+    // finished the job for a worker that ignored it.
+    let termSeen = "";
+    for (let i = 0; i < 200 && termSeen !== "yes"; i += 1) {
+      termSeen = await readFile(path.join(fixture.dir, "worker-term"), "utf8").catch(() => "");
+      if (termSeen !== "yes") await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    assert.equal(termSeen, "yes", "the aborted command's group must receive SIGTERM");
+    let alive = true;
+    for (let i = 0; i < 200 && alive; i += 1) {
+      try {
+        process.kill(workerPid, 0);
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      } catch {
+        alive = false;
+      }
+    }
+    assert.equal(alive, false, "a command ignoring SIGTERM must be escalated to SIGKILL");
+  } finally {
+    if (workerPid > 0) {
+      // The teardown recorded this worker as a proven orphan; the registry is
+      // shared by every test in this file, so drop the record again.
+      getAgyChildrenRegistry().taskOrphans.delete(workerPid);
+      try {
+        process.kill(-workerPid, "SIGKILL");
+      } catch {
+        // Already gone.
+      }
+    }
+    await executor.close("shutdown");
+    await rm(fixture.dir, { recursive: true, force: true });
+  }
+});
+
+test("aborting a turn parked on background work leaves that work running", {
+  skip: process.platform === "win32" ? "POSIX process groups" : false,
+}, async () => {
+  // The task was already handed to the background; aborting the *turn* must
+  // not kill the dev server the user asked for.
+  const fixture = await driverFixture();
+  const executor = new AgyDriverSession();
+  // A parked verdict has to be reached while the task is still running: the
+  // watch is what tells the abort to spare it.
+  executor.setTurnParkedProbe(async () => ({ finished: true }), {
+    watchMs: 20,
+    pollMs: 25,
+    limit: 1,
+  });
+  const abort = new AbortController();
+  let workerPid = 0;
+  try {
+    const outcomePromise = executor.run({
+      prompt: "abort-parked-worker",
+      binary: fixture.script,
+      cwd: fixture.dir,
+      inactivityTimeoutMs: 30_000,
+      toolInactivityTimeoutMs: 30_000,
+      timeoutMs: 30_000,
+      spawnOverride: fixtureSpawn(fixture.script),
+      signal: abort.signal,
+    });
+    for (let i = 0; i < 400 && workerPid === 0; i += 1) {
+      const text = await readFile(path.join(fixture.dir, "worker-pid"), "utf8").catch(() => "");
+      const parsed = Number.parseInt(text.trim(), 10);
+      if (Number.isInteger(parsed) && parsed > 0) workerPid = parsed;
+      else await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    assert.ok(workerPid > 0, "the fixture must report its worker pid");
+    // The abort must land *after* the watch proved this turn is parked on the
+    // task (its lifecycle entry is that evidence), so the test never races the
+    // watch timer under load.
+    for (let i = 0; i < 400; i += 1) {
+      if (executor.snapshot().lifecycle.some((line) => line.includes("stall:task-parked"))) break;
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    assert.ok(
+      executor.snapshot().lifecycle.some((line) => line.includes("stall:task-parked")),
+      "the parked verdict must land before the abort",
+    );
+    abort.abort();
+    const outcome = await outcomePromise;
+    assert.match(outcome.error ?? "", /aborted/);
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    assert.doesNotThrow(
+      () => process.kill(workerPid, 0),
+      "a parked background task must survive the turn abort",
+    );
+  } finally {
+    if (workerPid > 0) {
+      getAgyChildrenRegistry().taskOrphans.delete(workerPid);
+      try {
+        process.kill(-workerPid, "SIGKILL");
+      } catch {
+        // Already gone.
+      }
+    }
     await executor.close("shutdown");
     await rm(fixture.dir, { recursive: true, force: true });
   }
