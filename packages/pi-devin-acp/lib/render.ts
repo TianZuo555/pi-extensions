@@ -9,12 +9,18 @@ import type { DevinToolView } from "./tool-content.ts";
 
 const MAX_FIELD = 160;
 
+/**
+ * Strip terminal escapes and control characters from text that is rendered
+ * into pi's TUI. Devin tool output is raw terminal capture: it can carry ANSI
+ * sequences and progress control codes that must never reach the renderer.
+ * Newlines and tabs are preserved; callers that need one line collapse them.
+ */
+export function sanitizeDevinText(value: string): string {
+  return stripTerminalSequences(value).replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, "");
+}
+
 function oneLine(value: string, maxLength = MAX_FIELD): string {
-  return stripTerminalSequences(value)
-    .replace(/[\x00-\x1f\x7f]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, maxLength);
+  return sanitizeDevinText(value).replace(/\s+/g, " ").trim().slice(0, maxLength);
 }
 
 /** First card line for a tool_call as it starts streaming. */
@@ -37,7 +43,7 @@ export function summarizeDevinResult(recorded: RecordedDevinTool): {
   body?: string;
 } {
   if (recorded.error) {
-    return { headline: recorded.error };
+    return { headline: oneLine(recorded.error) };
   }
   if (recorded.diff?.length) {
     const lines = recorded.diff.map((part) => {
@@ -46,7 +52,7 @@ export function summarizeDevinResult(recorded: RecordedDevinTool): {
       return `${part.path} (+${added}/-${removed})`;
     });
     const body = recorded.output;
-    return { headline: lines.join(", "), body };
+    return { headline: oneLine(lines.join(", ")), body };
   }
-  return { headline: recorded.title, body: recorded.output };
+  return { headline: oneLine(recorded.title), body: recorded.output };
 }

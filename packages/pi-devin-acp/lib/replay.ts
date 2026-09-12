@@ -22,11 +22,31 @@ export interface RecordedDevinTool {
   error?: string;
 }
 
+/**
+ * Cap on the recorded result text. Devin tool output is unbounded, and pi
+ * persists the wrapper tool's `details` into the session file, so the record —
+ * not just the model-visible content — has to be bounded.
+ */
+export const MAX_RECORDED_OUTPUT_CHARS = 16_000;
+
+/** Hard cap on retained records; unconsumed entries (aborted turns) must not accumulate. */
+export const MAX_RECORDED_TOOLS = 256;
+
 export class DevinReplayStore {
   #results = new Map<string, RecordedDevinTool>();
 
   record(toolCallId: string, result: RecordedDevinTool): void {
-    this.#results.set(toolCallId, result);
+    if (this.#results.size >= MAX_RECORDED_TOOLS && !this.#results.has(toolCallId)) {
+      const oldest = this.#results.keys().next().value;
+      if (oldest !== undefined) this.#results.delete(oldest);
+    }
+    const output = result.output;
+    this.#results.set(
+      toolCallId,
+      output !== undefined && output.length > MAX_RECORDED_OUTPUT_CHARS
+        ? { ...result, output: output.slice(0, MAX_RECORDED_OUTPUT_CHARS) }
+        : result,
+    );
   }
 
   /** Consume the recorded result for a tool call id. */

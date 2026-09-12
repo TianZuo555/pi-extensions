@@ -747,3 +747,58 @@ for (const buffered of [false, true]) {
     assert.equal(fake.prompts.length, 2);
   });
 }
+
+test("superseding a live turn waits for the cancelled prompt before re-prompting", async (t) => {
+  const { fake, runtime, service } = await makeRuntime();
+  t.after(() => runtime.dispose());
+  const first = deferred<{ stopReason: string }>();
+  fake.prompt = async (sessionId, blocks) => {
+    fake.prompts.push({ sessionId, blocks });
+    // The first ACP prompt stays in flight until the test settles it.
+    if (fake.prompts.length === 1) return first.promise;
+    return { stopReason: "end_turn" };
+  };
+
+  const c1 = await runDevin(runtime, service.beginStreamTurn(TURN()));
+  const second = runDevin(runtime, service.beginStreamTurn(TURN({ prompt: "second" })));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(fake.prompts.length, 1, "the new prompt must wait for the cancel to land");
+  assert.deepEqual(fake.cancelled, ["sess-1"], "the superseded turn is cancelled first");
+  await assert.rejects(c1.next(), /superseded/);
+
+  first.resolve({ stopReason: "cancelled" });
+  const c2 = await second;
+  assert.equal(fake.prompts.length, 2, "the new prompt is issued once the old one settles");
+  assert.equal(fake.prompts[1].sessionId, "sess-1", "the live session is reused");
+  const activities = [];
+  for (;;) {
+    const a = await c2.next();
+    if (a === null) break;
+    activities.push(a);
+  }
+  assert.deepEqual(activities.at(-1), {
+    type: "result",
+    stopReason: "end_turn",
+    usage: { inputTokens: undefined, outputTokens: undefined },
+  });
+  assert.equal((await runDevin(runtime, service.snapshot)).turns, 1);
+});
+
+test("deleteSession reports whether it dropped the bound session", async (t) => {
+  const { fake, runtime, service } = await makeRuntime();
+  t.after(() => runtime.dispose());
+  const controller = await runDevin(runtime, service.beginStreamTurn(TURN()));
+  for (;;) {
+    if ((await controller.next()) === null) break;
+  }
+  assert.equal(await runDevin(runtime, service.deleteSession("other-session")), false);
+  assert.equal(
+    (await runDevin(runtime, service.snapshot)).sessionId,
+    "sess-1",
+    "an unrelated delete keeps the branch binding",
+  );
+  assert.equal(await runDevin(runtime, service.deleteSession("sess-1")), true);
+  assert.equal((await runDevin(runtime, service.snapshot)).sessionId, undefined);
+  assert.deepEqual(fake.deleted, ["other-session", "sess-1"]);
+});

@@ -30,6 +30,13 @@ export class DevinRuntimeClosedError extends Data.TaggedError("DevinRuntimeClose
   readonly message: string;
 }> {}
 
+/**
+ * How long a superseded turn may hold up the next prompt while its
+ * `session/cancel` is acknowledged. Live devin settles in 5–10 ms; the bound
+ * only exists so a wedged agent cannot block a new turn forever.
+ */
+const SUPERSEDE_SETTLE_TIMEOUT_MS = 3_000;
+
 export class DevinSessionError extends Data.TaggedError("DevinSessionError")<{
   readonly message: string;
 }> {}
@@ -124,9 +131,10 @@ export interface DevinRuntimeShape {
     DevinListSessionInfo[],
     DevinRuntimeClosedError | DevinSessionError
   >;
+  /** Delete an ACP session; reports whether it was the bound one. */
   readonly deleteSession: (
     sessionId: string,
-  ) => Effect.Effect<void, DevinRuntimeClosedError | DevinSessionError>;
+  ) => Effect.Effect<boolean, DevinRuntimeClosedError | DevinSessionError>;
   readonly authenticate: (
     methodId: string,
   ) => Effect.Effect<void, DevinRuntimeClosedError | DevinSessionError>;
@@ -167,6 +175,8 @@ const makeRuntime = (createClient: DevinClientFactory) =>
     let active: DevinTurnController | undefined;
     let activeAbort: AbortController | undefined;
     let generation = 0;
+    /** Settles when the last started ACP prompt request finishes. */
+    let activePromptSettled: Promise<void> | undefined;
 
     const ensureClient = (): DevinAcpClient => {
       if (!client) {
@@ -206,6 +216,30 @@ const makeRuntime = (createClient: DevinClientFactory) =>
         const turn = active;
         active = undefined;
         turn.fail(new Error("devin turn was superseded."));
+      }
+    };
+
+    /**
+     * `session/cancel` is a notification: devin answers the in-flight prompt
+     * with stopReason "cancelled" a few ms later. Prompting again before that
+     * lands makes devin cancel the NEW prompt instead — the request is dropped
+     * and the caller sees an empty aborted turn. Wait (bounded) for the
+     * cancelled prompt to settle before reusing the session.
+     */
+    const settleSupersededPrompt = async (): Promise<void> => {
+      const pending = activePromptSettled;
+      if (!pending) return;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          pending,
+          new Promise<void>((resolve) => {
+            timer = setTimeout(resolve, SUPERSEDE_SETTLE_TIMEOUT_MS);
+            timer.unref?.();
+          }),
+        ]);
+      } finally {
+        if (timer) clearTimeout(timer);
       }
     };
 
@@ -434,6 +468,8 @@ const makeRuntime = (createClient: DevinClientFactory) =>
                   return active;
                 }
                 invalidateActiveTurn();
+                await settleSupersededPrompt();
+                request.signal?.throwIfAborted();
                 const turnGeneration = generation;
                 const turnAbort = new AbortController();
                 activeAbort = turnAbort;
@@ -509,6 +545,10 @@ const makeRuntime = (createClient: DevinClientFactory) =>
                   });
 
                   const promptPromise = acp.prompt(liveSessionId, blocks);
+                  activePromptSettled = promptPromise.then(
+                    () => undefined,
+                    () => undefined,
+                  );
                   void Promise.race([promptPromise, cancelled])
                     .then((result) => {
                       if (turnGeneration !== generation) {
@@ -705,7 +745,9 @@ const makeRuntime = (createClient: DevinClientFactory) =>
             Effect.tryPromise({
               try: async () => {
                 await ensureClient().deleteSession(id);
-                if (id === sessionId) dropSession(false);
+                const droppedBinding = id === sessionId;
+                if (droppedBinding) dropSession(false);
+                return droppedBinding;
               },
               catch: (error) => failSession(error),
             }),

@@ -457,11 +457,13 @@ export function streamDevin(deps: DevinProviderDeps) {
           const activity = await controller.next();
           if (activity === null) {
             if (sweepIncompleteTools() > 0) {
-              // Defer an error result so the re-entry after pi's replay
-              // toolUse terminates this turn instead of re-prompting.
+              // Defer a terminal result so the re-entry after pi's replay
+              // toolUse ends this turn instead of re-prompting. It must be a
+              // stop reason pi maps to "stop"; anything else surfaces a
+              // spurious error for a turn that already rendered its cards.
               controller.deferResult({
                 type: "result",
-                stopReason: "interrupted",
+                stopReason: "end_turn",
               });
               endWithToolUse();
               return;

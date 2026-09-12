@@ -82,6 +82,10 @@ unavailable.
 - Switching between Devin models keeps the live session — the new model is
   applied via `session/set_config_option`. Switching to or from another
   provider re-bootstraps the next turn from pi's transcript.
+- A message that arrives while a Devin turn is still running (steering text, a
+  `/devin tasks` shell stop) becomes the next prompt in the same session: the
+  ACP channel takes one prompt at a time, so the in-flight turn is cancelled
+  and the new prompt is issued once Devin acknowledges the cancel.
 - Long-running Devin operations (foreground `sleep`-style execs, shells
   detached to the background via `_meta["cognition.ai/background"]`) are
   tracked as live ops: a status-bar widget shows `devin: N running — …` while
