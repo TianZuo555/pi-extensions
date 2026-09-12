@@ -194,6 +194,13 @@ export function mapThinkingToEffort(level: ThinkingLevel | undefined): AgyEffort
 
 let replayCallSeq = 0;
 
+/** Terminal message for a turn whose controller closed without a result. */
+function turnEndedMessage(closeReason: string | undefined): string {
+  return closeReason
+    ? `agy turn ended without a result event (${closeReason}).`
+    : "agy turn ended without a result event.";
+}
+
 /**
  * True for agy `call_mcp_tool` steps that target our own bridge server.
  * Those calls surface as synthetic bridge_call activities (emitted as the
@@ -662,18 +669,19 @@ export function streamAntigravity(
         while (true) {
           const activity = await controller.next();
           if (activity === null) {
+            const ended = turnEndedMessage(controller.closeReason());
             if (emitIncompleteTools() > 0) {
               controller.deferResult({
                 type: "result",
                 status: "ERROR",
                 response: "",
-                error: "agy turn ended without a result event.",
+                error: ended,
                 usage: undefined,
               });
               endWithToolUse();
               return;
             }
-            throw new Error("agy turn ended without a result event.");
+            throw new Error(ended);
           }
 
           try {

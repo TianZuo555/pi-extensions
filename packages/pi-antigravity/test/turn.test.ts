@@ -147,3 +147,20 @@ test("remainingResponseText tolerates trailing-newline drift between deltas and 
   suffix.recordEmittedText("Started");
   assert.equal(suffix.remainingResponseText("Started at :3000."), " at :3000.");
 });
+
+test("a turn closed without a result records why for diagnostics", () => {
+  const controller = new AgyTurnController("p");
+  assert.equal(controller.closeReason(), undefined);
+  controller.close("this turn was replaced by a newer request or a driver recycle");
+  assert.equal(
+    controller.closeReason(),
+    "this turn was replaced by a newer request or a driver recycle",
+  );
+  // The first reason wins: a later close (or a failed one) cannot rewrite it.
+  controller.close("something else");
+  assert.equal(
+    controller.closeReason(),
+    "this turn was replaced by a newer request or a driver recycle",
+  );
+  assert.equal(controller.isClosed(), true);
+});

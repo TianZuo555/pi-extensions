@@ -375,6 +375,7 @@ const makeRuntime = (executor: AgyTurnExecutor) =>
                 timeoutMs,
                 inactivityTimeoutMs: envInt("AGY_STALL_TIMEOUT_MS", 120_000),
                 toolInactivityTimeoutMs: envInt("AGY_TOOL_STALL_TIMEOUT_MS", 300_000),
+                parkedWatchMs: envInt("AGY_PARKED_WATCH_MS", 5_000),
                 signal: turnAbort.signal,
                 onConversation: (id) => {
                   if (turnGeneration !== generation || turnAbort.signal.aborted) return;
@@ -523,7 +524,9 @@ const makeRuntime = (executor: AgyTurnExecutor) =>
               void Promise.race([runTurnWithStallRetries(), cancelled])
                 .then((outcome: AgyTurnOutcome) => {
                   if (turnGeneration !== generation) {
-                    controller.close();
+                    controller.close(
+                      "this turn was replaced by a newer request or a driver recycle",
+                    );
                     return;
                   }
                   turns += 1;
@@ -536,10 +539,9 @@ const makeRuntime = (executor: AgyTurnExecutor) =>
                   controller.close();
                 })
                 .catch((cause: unknown) => {
-                  if (turnGeneration !== generation) {
-                    controller.close();
-                    return;
-                  }
+                  // A superseded turn still reports its real failure: the
+                  // provider reading this controller must never be left with a
+                  // bare "ended without a result event".
                   controller.fail(cause instanceof Error ? cause : new Error(String(cause)));
                 })
                 .finally(() => {
