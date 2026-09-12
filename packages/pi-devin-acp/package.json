@@ -1,6 +1,6 @@
 {
   "name": "@tian.zuo/pi-devin-acp",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Use Devin (devin acp) models inside the pi coding agent over the Agent Client Protocol, with pi as the UI.",
   "type": "module",
   "keywords": [
