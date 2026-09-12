@@ -747,3 +747,114 @@ for (const buffered of [false, true]) {
     assert.equal(fake.prompts.length, 2);
   });
 }
+
+test("superseding a live turn waits for the cancelled prompt before re-prompting", async (t) => {
+  const { fake, runtime, service } = await makeRuntime();
+  t.after(() => runtime.dispose());
+  const first = deferred<{ stopReason: string }>();
+  fake.prompt = async (sessionId, blocks) => {
+    fake.prompts.push({ sessionId, blocks });
+    // The first ACP prompt stays in flight until the test settles it.
+    if (fake.prompts.length === 1) return first.promise;
+    return { stopReason: "end_turn" };
+  };
+
+  const c1 = await runDevin(runtime, service.beginStreamTurn(TURN()));
+  const second = runDevin(runtime, service.beginStreamTurn(TURN({ prompt: "second" })));
+  await new Promise((resolve) => setImmediate(resolve));
+
+  assert.equal(fake.prompts.length, 1, "the new prompt must wait for the cancel to land");
+  assert.deepEqual(fake.cancelled, ["sess-1"], "the superseded turn is cancelled first");
+  await assert.rejects(c1.next(), /superseded/);
+
+  first.resolve({ stopReason: "cancelled" });
+  const c2 = await second;
+  assert.equal(fake.prompts.length, 2, "the new prompt is issued once the old one settles");
+  assert.equal(fake.prompts[1].sessionId, "sess-1", "the live session is reused");
+  const activities = [];
+  for (;;) {
+    const a = await c2.next();
+    if (a === null) break;
+    activities.push(a);
+  }
+  assert.deepEqual(activities.at(-1), {
+    type: "result",
+    stopReason: "end_turn",
+    usage: { inputTokens: undefined, outputTokens: undefined },
+  });
+  assert.equal((await runDevin(runtime, service.snapshot)).turns, 1);
+});
+
+test("deleteSession reports whether it dropped the bound session", async (t) => {
+  const { fake, runtime, service } = await makeRuntime();
+  t.after(() => runtime.dispose());
+  const controller = await runDevin(runtime, service.beginStreamTurn(TURN()));
+  for (;;) {
+    if ((await controller.next()) === null) break;
+  }
+  assert.equal(await runDevin(runtime, service.deleteSession("other-session")), false);
+  assert.equal(
+    (await runDevin(runtime, service.snapshot)).sessionId,
+    "sess-1",
+    "an unrelated delete keeps the branch binding",
+  );
+  assert.equal(await runDevin(runtime, service.deleteSession("sess-1")), true);
+  assert.equal((await runDevin(runtime, service.snapshot)).sessionId, undefined);
+  assert.deepEqual(fake.deleted, ["other-session", "sess-1"]);
+});
+
+test("transformPrompt replaces the outgoing ACP prompt blocks", async (t) => {
+  const { fake, runtime, service } = await makeRuntime();
+  t.after(() => runtime.dispose());
+  const seen: { sessionId: string; prompt: unknown[] }[] = [];
+  const controller = await runDevin(
+    runtime,
+    service.beginStreamTurn(
+      TURN({
+        transformPrompt: (request) => {
+          seen.push({ sessionId: request.sessionId, prompt: request.prompt });
+          return [...request.prompt, { type: "text", text: "injected" }];
+        },
+      }),
+    ),
+  );
+  for (;;) {
+    if ((await controller.next()) === null) break;
+  }
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].sessionId, "sess-1", "the hook sees the live ACP session id");
+  assert.deepEqual(
+    fake.prompts[0].blocks.map((block) => (block.type === "text" ? block.text : block.type)),
+    ["hi", "injected"],
+  );
+});
+
+test("transformPrompt can decline by returning undefined", async (t) => {
+  const { fake, runtime, service } = await makeRuntime();
+  t.after(() => runtime.dispose());
+  const controller = await runDevin(
+    runtime,
+    service.beginStreamTurn(TURN({ transformPrompt: () => undefined })),
+  );
+  for (;;) {
+    if ((await controller.next()) === null) break;
+  }
+  assert.deepEqual(
+    fake.prompts[0].blocks.map((block) => (block.type === "text" ? block.text : block.type)),
+    ["hi"],
+  );
+});
+
+test("runSummaryTurn applies the payload hook to its disposable session", async (t) => {
+  const { fake, runtime, service } = await makeRuntime();
+  t.after(() => runtime.dispose());
+  await runDevin(
+    runtime,
+    service.runSummaryTurn("summarize this", undefined, undefined, () => [
+      { type: "text", text: "rewritten summary request" },
+    ]),
+  );
+  const sent = fake.prompts[0];
+  assert.deepEqual(sent.blocks, [{ type: "text", text: "rewritten summary request" }]);
+  assert.equal(sent.sessionId, fake.createdSessions[0], "sent to the disposable session");
+});

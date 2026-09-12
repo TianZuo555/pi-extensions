@@ -26,7 +26,7 @@ import {
 } from "./lib/models.ts";
 import { WRAPPER_TOOL_DESCRIPTION, WRAPPER_TOOL_NAME } from "./lib/prompt.ts";
 import { DevinReplayStore, type RecordedDevinTool } from "./lib/replay.ts";
-import { formatDevinCall, summarizeDevinResult } from "./lib/render.ts";
+import { formatDevinCall, sanitizeDevinText, summarizeDevinResult } from "./lib/render.ts";
 import {
   DEVIN_SESSION_STATE_ENTRY,
   restorableDevinSession,
@@ -549,7 +549,7 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
       const summary = details ? summarizeDevinResult(details) : { headline: title };
       let text = theme.fg("success", "✓ ") + theme.fg("toolTitle", oneLine(summary.headline, 140));
       if (body && body !== "(no output)") {
-        const lines = body.split("\n");
+        const lines = body.split("\n").map(sanitizeDevinText);
         const shown = expanded ? lines : lines.slice(0, 3);
         text += `\n${shown.map((line) => theme.fg("toolOutput", line)).join("\n")}`;
         if (!expanded && lines.length > 3) {
@@ -869,8 +869,10 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
             ctx.ui.notify("devin: session attached; it loads into the next turn.", "info");
           },
           deleteSession: async (acpSessionId) => {
-            await runDevin(runtime, service.deleteSession(acpSessionId));
-            appendSessionReset(ctx);
+            const droppedBinding = await runDevin(runtime, service.deleteSession(acpSessionId));
+            // Only a delete that dropped the live binding invalidates the
+            // branch's persisted session state.
+            if (droppedBinding) appendSessionReset(ctx);
           },
         });
       } catch (error) {

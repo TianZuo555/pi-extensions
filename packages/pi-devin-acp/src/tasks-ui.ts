@@ -5,6 +5,7 @@
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { devinKillShellPrompt } from "../lib/prompt.ts";
+import { sanitizeDevinText } from "../lib/render.ts";
 import type { DevinLiveOp } from "./runtime.ts";
 
 function formatElapsed(startedAt: number, now: number): string {
@@ -22,7 +23,7 @@ export function describeLiveOp(op: DevinLiveOp, now = Date.now()): string {
   if (view.tool) bits.push(view.tool);
   bits.push(formatElapsed(op.startedAt, now));
   if (view.shellId) bits.push(`bg shell ${view.shellId}`);
-  const title = view.title?.trim() || "(untitled op)";
+  const title = sanitizeDevinText(view.title?.trim() || "(untitled op)");
   const line = `${title} — ${bits.join(" · ")}`;
   return line.length > 90 ? `${line.slice(0, 87)}…` : line;
 }

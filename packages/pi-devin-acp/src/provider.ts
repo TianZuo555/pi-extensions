@@ -22,7 +22,7 @@ import {
   type SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
 import type { ContentBlock } from "@agentclientprotocol/sdk";
-import type { DevinRuntimeInstance, DevinRuntimeShape } from "./runtime.ts";
+import type { DevinPromptRequest, DevinRuntimeInstance, DevinRuntimeShape } from "./runtime.ts";
 import {
   TERMINAL_TOOL_STATUSES,
   type DevinActivity,
@@ -184,6 +184,24 @@ export interface DevinProviderDeps {
   onActivity?: (activity: DevinActivity) => void;
 }
 
+/**
+ * Adapt pi's payload hook to the ACP prompt. pi hands custom providers the
+ * same `onPayload` callback its built-in HTTP providers call, so extensions
+ * listening on `before_provider_request` see the outgoing prompt. ACP has no
+ * HTTP response, so `onResponse` stays unclaimed.
+ */
+export function promptTransformFromPayloadHook(
+  onPayload: SimpleStreamOptions["onPayload"],
+  model: Model<import("@earendil-works/pi-ai").Api>,
+): ((request: DevinPromptRequest) => Promise<ContentBlock[] | undefined>) | undefined {
+  if (!onPayload) return undefined;
+  return async (request) => {
+    const replaced = await onPayload(request, model);
+    const prompt = (replaced as { prompt?: unknown } | undefined)?.prompt;
+    return Array.isArray(prompt) ? (prompt as ContentBlock[]) : undefined;
+  };
+}
+
 export function streamDevin(deps: DevinProviderDeps) {
   const { runtime, service, replay } = deps;
 
@@ -246,7 +264,12 @@ export function streamDevin(deps: DevinProviderDeps) {
         const summaryRequest = isSummarizationRequest(prompt);
         if (summaryRequest) {
           const result = await runtime.runPromise(
-            service.runSummaryTurn(prompt, options?.signal, concreteModelId),
+            service.runSummaryTurn(
+              prompt,
+              options?.signal,
+              concreteModelId,
+              promptTransformFromPayloadHook(options?.onPayload, model),
+            ),
             options?.signal ? { signal: options.signal } : undefined,
           );
           output.content.push({ type: "text", text: result.text });
@@ -292,6 +315,7 @@ export function streamDevin(deps: DevinProviderDeps) {
             systemPrompt: context.systemPrompt ?? undefined,
             historyBootstrap: piHistoryBootstrap(context),
             signal: options?.signal,
+            transformPrompt: promptTransformFromPayloadHook(options?.onPayload, model),
           }),
           options?.signal ? { signal: options.signal } : undefined,
         );
@@ -396,6 +420,10 @@ export function streamDevin(deps: DevinProviderDeps) {
           if (!pending) {
             output.content.push(toolCall);
             stream.push({ type: "toolcall_start", contentIndex: index, partial: output });
+          } else {
+            // pi persists `output.content`, not the toolcall_end payload, so the
+            // card's stored arguments must be the terminal view.
+            output.content[index] = toolCall;
           }
           stream.push({ type: "toolcall_end", contentIndex: index, toolCall, partial: output });
           pendingTools.delete(view.id);
@@ -457,11 +485,13 @@ export function streamDevin(deps: DevinProviderDeps) {
           const activity = await controller.next();
           if (activity === null) {
             if (sweepIncompleteTools() > 0) {
-              // Defer an error result so the re-entry after pi's replay
-              // toolUse terminates this turn instead of re-prompting.
+              // Defer a terminal result so the re-entry after pi's replay
+              // toolUse ends this turn instead of re-prompting. It must be a
+              // stop reason pi maps to "stop"; anything else surfaces a
+              // spurious error for a turn that already rendered its cards.
               controller.deferResult({
                 type: "result",
-                stopReason: "interrupted",
+                stopReason: "end_turn",
               });
               endWithToolUse();
               return;
