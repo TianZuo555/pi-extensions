@@ -32,6 +32,15 @@ test("incomplete tools are tracked until terminal updates", () => {
   assert.deepEqual(c.takeIncompleteTools(), []);
 });
 
+for (const status of ["completed", "failed"]) {
+  test(`initial ${status} tool calls are not incomplete`, () => {
+    const c = new DevinTurnController("p", "s1");
+    c.push({ type: "tool_start", view: view("t1", status) });
+    c.close();
+    assert.deepEqual(c.takeIncompleteTools(), []);
+  });
+}
+
 test("deferResult keeps a result pending for re-entry after close", async () => {
   const c = new DevinTurnController("p", "s1");
   c.push({ type: "result", stopReason: "end_turn" });

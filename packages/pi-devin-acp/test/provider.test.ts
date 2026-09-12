@@ -162,6 +162,29 @@ test("streamDevin ends with toolUse after a completed tool call and replays the 
   assert.equal(recorded?.title, "Wrote /tmp/x");
 });
 
+for (const status of ["completed", "failed"]) {
+  test(`initial ${status} tool notifications produce terminal replay cards`, async () => {
+    const { service, runtime, controllers } = fakeRuntime([
+      { type: "tool_start", view: { id: "one", title: "one", status, output: "actual result" } },
+    ]);
+    const replay = new DevinReplayStore();
+    const message = await streamDevin({
+      runtime,
+      service,
+      replay,
+      families: () => FAMILIES,
+      cwd: () => "/tmp",
+    })(MODEL as never, CONTEXT).result();
+    assert.equal(message.stopReason, "toolUse");
+    const call = message.content.find((c) => c.type === "toolCall");
+    assert.ok(call);
+    const recorded = replay.take(call.id);
+    assert.equal(recorded?.output, "actual result");
+    assert.equal(recorded?.error, status === "failed" ? "actual result" : undefined);
+    assert.deepEqual(controllers[0].takeIncompleteTools(), []);
+  });
+}
+
 test("non-terminal tool updates keep the card pending; the terminal update closes it once", async () => {
   const { service, runtime } = fakeRuntime([
     {
@@ -267,7 +290,7 @@ test("usage merge never clobbers known fields and honors the prompt response", a
   assert.equal(done.message.usage.input, 9);
   assert.equal(done.message.usage.output, 6);
   assert.equal(done.message.usage.cacheRead, 3);
-  assert.equal(done.message.usage.totalTokens, 15);
+  assert.equal(done.message.usage.totalTokens, 18);
 });
 
 test("summarization requests run in a disposable session with the resolved model", async () => {
