@@ -802,3 +802,59 @@ test("deleteSession reports whether it dropped the bound session", async (t) => 
   assert.equal((await runDevin(runtime, service.snapshot)).sessionId, undefined);
   assert.deepEqual(fake.deleted, ["other-session", "sess-1"]);
 });
+
+test("transformPrompt replaces the outgoing ACP prompt blocks", async (t) => {
+  const { fake, runtime, service } = await makeRuntime();
+  t.after(() => runtime.dispose());
+  const seen: { sessionId: string; prompt: unknown[] }[] = [];
+  const controller = await runDevin(
+    runtime,
+    service.beginStreamTurn(
+      TURN({
+        transformPrompt: (request) => {
+          seen.push({ sessionId: request.sessionId, prompt: request.prompt });
+          return [...request.prompt, { type: "text", text: "injected" }];
+        },
+      }),
+    ),
+  );
+  for (;;) {
+    if ((await controller.next()) === null) break;
+  }
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].sessionId, "sess-1", "the hook sees the live ACP session id");
+  assert.deepEqual(
+    fake.prompts[0].blocks.map((block) => (block.type === "text" ? block.text : block.type)),
+    ["hi", "injected"],
+  );
+});
+
+test("transformPrompt can decline by returning undefined", async (t) => {
+  const { fake, runtime, service } = await makeRuntime();
+  t.after(() => runtime.dispose());
+  const controller = await runDevin(
+    runtime,
+    service.beginStreamTurn(TURN({ transformPrompt: () => undefined })),
+  );
+  for (;;) {
+    if ((await controller.next()) === null) break;
+  }
+  assert.deepEqual(
+    fake.prompts[0].blocks.map((block) => (block.type === "text" ? block.text : block.type)),
+    ["hi"],
+  );
+});
+
+test("runSummaryTurn applies the payload hook to its disposable session", async (t) => {
+  const { fake, runtime, service } = await makeRuntime();
+  t.after(() => runtime.dispose());
+  await runDevin(
+    runtime,
+    service.runSummaryTurn("summarize this", undefined, undefined, () => [
+      { type: "text", text: "rewritten summary request" },
+    ]),
+  );
+  const sent = fake.prompts[0];
+  assert.deepEqual(sent.blocks, [{ type: "text", text: "rewritten summary request" }]);
+  assert.equal(sent.sessionId, fake.createdSessions[0], "sent to the disposable session");
+});

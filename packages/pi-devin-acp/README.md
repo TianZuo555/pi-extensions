@@ -114,6 +114,10 @@ unavailable.
   `available_commands_update` (counted in `/devin` status); `/devin-<name>`
   is intercepted and forwards `/<name> args` to Devin, which runs it
   server-side.
+- `before_provider_request` fires for devin turns with the ACP prompt request
+  (`{ sessionId, prompt }`); returning an object with a replacement `prompt`
+  swaps the outgoing content blocks. `after_provider_response` never fires:
+  it reports an HTTP status and headers, and ACP over stdio has neither.
 
 ## Development
 

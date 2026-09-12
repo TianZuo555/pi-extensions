@@ -90,7 +90,23 @@ export interface DevinTurnRequest {
   /** Serialized pi history, sent only when the session needs bootstrapping. */
   readonly historyBootstrap?: string;
   readonly signal?: AbortSignal;
+  /** Inspect or replace the outgoing ACP prompt before it is sent. */
+  readonly transformPrompt?: DevinPromptTransform;
 }
+
+/** The outgoing ACP prompt request, as seen by pi's payload hook. */
+export interface DevinPromptRequest {
+  sessionId: string;
+  prompt: ContentBlock[];
+}
+
+/**
+ * pi's `before_provider_request` equivalent: return replacement content blocks
+ * to send instead, or undefined to keep the prompt unchanged.
+ */
+export type DevinPromptTransform = (
+  request: DevinPromptRequest,
+) => ContentBlock[] | undefined | Promise<ContentBlock[] | undefined>;
 
 export interface DevinSummaryResult {
   text: string;
@@ -116,6 +132,7 @@ export interface DevinRuntimeShape {
     prompt: string,
     signal?: AbortSignal,
     modelId?: string,
+    transformPrompt?: DevinPromptTransform,
   ) => Effect.Effect<DevinSummaryResult, DevinRuntimeClosedError | DevinSessionError>;
   /** Set the desired devin session mode (ask/plan/accept-edits/bypass). */
   readonly setMode: (
@@ -277,6 +294,17 @@ const makeRuntime = (createClient: DevinClientFactory) =>
       new DevinSessionError({
         message: error instanceof Error ? error.message : String(error),
       });
+
+    /** Apply a prompt transform, ignoring empty or non-block replacements. */
+    const applyPromptTransform = async (
+      transform: DevinPromptTransform | undefined,
+      sessionId: string,
+      prompt: ContentBlock[],
+    ): Promise<ContentBlock[]> => {
+      if (!transform) return prompt;
+      const replaced = await transform({ sessionId, prompt });
+      return Array.isArray(replaced) && replaced.length > 0 ? replaced : prompt;
+    };
 
     /**
      * Track in-flight devin operations across turns: a backgrounded shell or
@@ -533,6 +561,13 @@ const makeRuntime = (createClient: DevinClientFactory) =>
                   }
                   blocks.push(...request.blocks);
 
+                  const outgoing = await applyPromptTransform(
+                    request.transformPrompt,
+                    liveSessionId,
+                    blocks,
+                  );
+                  check();
+
                   const cancelled = new Promise<never>((_resolve, reject) => {
                     turnAbort.signal.addEventListener(
                       "abort",
@@ -544,7 +579,7 @@ const makeRuntime = (createClient: DevinClientFactory) =>
                     );
                   });
 
-                  const promptPromise = acp.prompt(liveSessionId, blocks);
+                  const promptPromise = acp.prompt(liveSessionId, outgoing);
                   activePromptSettled = promptPromise.then(
                     () => undefined,
                     () => undefined,
@@ -592,7 +627,7 @@ const makeRuntime = (createClient: DevinClientFactory) =>
         if (active?.isClosed()) active = undefined;
       }),
 
-      runSummaryTurn: (prompt, signal, modelId) =>
+      runSummaryTurn: (prompt, signal, modelId, transformPrompt) =>
         ensureOpen.pipe(
           Effect.andThen(
             Effect.tryPromise({
@@ -640,10 +675,13 @@ const makeRuntime = (createClient: DevinClientFactory) =>
                     );
                     signal?.addEventListener("abort", onAbort, { once: true });
                     try {
-                      await Promise.race([
-                        acp.prompt(created.sessionId, [{ type: "text", text: prompt }]),
-                        cancelled,
-                      ]);
+                      const outgoing = await applyPromptTransform(
+                        transformPrompt,
+                        created.sessionId,
+                        [{ type: "text", text: prompt }],
+                      );
+                      check();
+                      await Promise.race([acp.prompt(created.sessionId, outgoing), cancelled]);
                     } finally {
                       signal?.removeEventListener("abort", onAbort);
                     }

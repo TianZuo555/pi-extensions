@@ -34,12 +34,17 @@ const FAMILIES: DevinModelFamily[] = [
 /** Drive a canned activity sequence through a real controller. */
 function fakeRuntime(
   activities: DevinActivity[],
-  capture: { prompts?: number; summaryModelId?: string } = {},
+  capture: {
+    prompts?: number;
+    summaryModelId?: string;
+    turnRequest?: Record<string, unknown>;
+  } = {},
 ) {
   const controllers: DevinTurnController[] = [];
   const service = {
-    beginStreamTurn: () => {
+    beginStreamTurn: (request: Record<string, unknown>) => {
       capture.prompts = (capture.prompts ?? 0) + 1;
+      capture.turnRequest = request;
       const controller = new DevinTurnController("do it", "sess-1");
       controllers.push(controller);
       // Push on the next tick so the provider's drain loop is waiting.
@@ -335,4 +340,56 @@ test("turns without usage_update still report the prompt-response usage", async 
   assert.ok(done && done.type === "done");
   assert.equal(done.message.usage.input, 7);
   assert.equal(done.message.usage.output, 4);
+});
+
+test("persisted tool card arguments carry the terminal view, not the call start", async () => {
+  const { service, runtime } = fakeRuntime([
+    { type: "tool_start", view: { id: "read_0", title: "Read file", kind: "read" } },
+    {
+      type: "tool_update",
+      view: { id: "read_0", status: "completed", locations: ["/tmp/x.ts"], output: "body" },
+    },
+  ]);
+  const message = await streamDevin({
+    runtime,
+    service,
+    replay: new DevinReplayStore(),
+    families: () => FAMILIES,
+    cwd: () => "/tmp",
+  })(MODEL as never, CONTEXT).result();
+  const call = message.content.find((c) => c.type === "toolCall");
+  assert.ok(call && call.type === "toolCall");
+  // pi persists `output.content`, so the card must be updated in place: the
+  // start view had no locations, the terminal view does.
+  assert.equal((call.arguments as { summary?: string }).summary, "read · /tmp/x.ts");
+});
+
+test("pi's payload hook sees the ACP prompt and can replace it", async () => {
+  const capture: { turnRequest?: Record<string, unknown> } = {};
+  const { service, runtime } = fakeRuntime([], capture);
+  const seen: unknown[] = [];
+  const stream = streamDevin({
+    runtime,
+    service,
+    replay: new DevinReplayStore(),
+    families: () => FAMILIES,
+    cwd: () => "/tmp",
+  })(MODEL as never, CONTEXT, {
+    onPayload: async (payload) => {
+      seen.push(payload);
+      return { ...(payload as object), prompt: [{ type: "text", text: "rewritten" }] };
+    },
+  });
+  await stream.result();
+  // The runtime invokes the transform with the real ACP session + prompt.
+  const transform = capture.turnRequest?.transformPrompt as
+    | ((request: { sessionId: string; prompt: unknown[] }) => Promise<unknown>)
+    | undefined;
+  assert.equal(typeof transform, "function");
+  const replaced = await transform?.({
+    sessionId: "sess-1",
+    prompt: [{ type: "text", text: "hi" }],
+  });
+  assert.deepEqual(seen, [{ sessionId: "sess-1", prompt: [{ type: "text", text: "hi" }] }]);
+  assert.deepEqual(replaced, [{ type: "text", text: "rewritten" }]);
 });
