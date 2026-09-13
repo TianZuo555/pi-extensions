@@ -114,6 +114,15 @@ test("pickCompactionModel falls back when the ref is not a Responses model", () 
   assert.equal(notifications.length, 1);
 });
 
+test("pickCompactionModel rejects another endpoint on the same provider", () => {
+  const sol = codexModel("gpt-5.6-sol");
+  const luna = { ...codexModel("gpt-5.6-luna"), baseUrl: "https://other.invalid/backend-api" };
+  const { ctx, notifications } = fakeCtx([sol, luna]);
+  const picked = pickCompactionModel(ctx as never, sol as never, settings(), new Set());
+  assert.equal(picked?.id, sol.id);
+  assert.equal(notifications.length, 1);
+});
+
 test("pickCompactionModel honors an empty ref (session model)", () => {
   const sol = codexModel("gpt-5.6-sol");
   const luna = codexModel("gpt-5.6-luna");

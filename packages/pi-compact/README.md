@@ -1,17 +1,10 @@
 # pi-compact
 
-Fork of [`@narumitw/pi-codex-compact`](https://github.com/narumiruna/pi-extensions) (MIT) with one
-change: the remote compaction call runs on a **configurable model** instead of the session model.
+Fork of [`@narumitw/pi-codex-compact`](https://github.com/narumiruna/pi-extensions) (MIT)
+that runs Codex remote compaction on a **configurable model**, independently of the session model.
 
-Only applies to sessions on the **`openai-codex` provider**. Every other provider goes
-straight to Pi's native compaction — github-copilot's `/responses/compact` is a verified 404,
-and opaque checkpoints can't cross backends anyway.
-
-The Codex backend does not bind opaque `compaction` items to the producing model — verified
-empirically: a checkpoint produced by `gpt-5.6-luna` replays correctly on `gpt-5.6-sol`,
-`gpt-5.6-terra`, and `gpt-6-astra` (and `astra` items replay on `luna`). So the expensive session
-model keeps working while compaction runs at a much cheaper model's input price
-(~50x cheaper for astra → luna).
+Only `openai-codex` sessions create remote checkpoints. Other providers use Pi's native
+compaction **unless an existing opaque checkpoint would be lost**.
 
 ## Usage
 
@@ -19,9 +12,11 @@ model keeps working while compaction runs at a much cheaper model's input price
 pi -e ./packages/pi-compact
 ```
 
-or add the package path to `packages` in `~/.pi/agent/settings.json`.
+Or add the package path to `packages` in `~/.pi/agent/settings.json`.
+There are no additional commands: built-in `/compact [instructions]` and automatic compaction
+are intercepted through `session_before_compact`.
 
-Settings live in `~/.pi/agent/pi-compact.json`:
+Settings live in `~/.pi/agent/pi-compact.json` and reload at session startup or `/reload`:
 
 ```json
 {
@@ -35,31 +30,75 @@ Settings live in `~/.pi/agent/pi-compact.json`:
 }
 ```
 
-`compactionModel` is `provider/modelId` — must be an `openai-codex/*` model (same backend as the
-session), otherwise the session model is used. Set it to `""` to restore upstream behavior.
+- **`enabled`** controls creation of new remote checkpoints, not replay. Existing checkpoints
+  continue to replay while the extension is loaded, even when this is `false`.
+- **`protocol`** should be `auto` or `remote-v2` for Codex. The Codex `/responses/compact`
+  endpoint returned HTTP 404 in live tests. Selecting `responses-compact` is rejected locally:
+  without an opaque checkpoint Pi uses native compaction; with one, compaction is cancelled.
+- **`compactionModel`** is `provider/modelId`. It must use the same provider, Responses API,
+  and endpoint as the session model; otherwise the session model is used with a warning.
+  Set it to `""` to always compact on the session model.
+- **`requestTimeoutMs`** bounds the entire remote request, including retries and SSE body
+  reading, not just the wait for HTTP response headers.
+- **`maxRetries`** bounds provider retries within that deadline. Transient failures can be
+  retried on later compaction attempts; definitive missing-route errors disable that route
+  until session restart or reload.
+- **`replacementTokenBudget`** limits retained user text using a character-based estimate,
+  not exact tokenization. Opaque content and images also have separate byte limits.
+- **`notifyOnFallback`** controls ordinary native-fallback warnings. Warnings about cancelling
+  compaction to preserve an existing checkpoint are always shown when a UI is available.
 
-There are no commands: pi's built-in `/compact` (and automatic compaction) is intercepted via
-`session_before_compact` — on `openai-codex` sessions it performs remote compaction through the
-configured model; elsewhere it does nothing and Pi's native summary runs as usual.
+Custom `/compact` instructions are appended to the remote request's system instructions for
+that compaction only. They do not change future session instructions. A custom focus can change
+the prompt-cache prefix.
 
-## Differences from upstream
+## Replay and failure safety
 
-- `compactionModel` setting; no commands or TUI menu (drops the `@narumitw/pi-tui-kit`
-  dependency) — built-in `/compact` is intercepted transparently on codex sessions.
-- Checkpoint `details.modelId`/`api` record the **session** model (the replay gate is unchanged).
-- Remote compaction is skipped entirely when the session model cannot replay a checkpoint
-  (non-Responses API) — falls back to Pi native.
-- Compaction requests carry the session id as `prompt_cache_key` and the session's thinking
-  level — upstream sent `cacheRetention: "none"` and no `reasoning`, so every compaction was a
-  guaranteed cache miss. Measured: 25.7K-token compaction on sol went from $0.136 to $0.021.
-  Cache is per-model: cross-model compaction can't reuse the session's cache, but repeated
-  compactions hit the compaction model's own cache.
-- Retained user history no longer duplicates the messages Pi keeps verbatim after the cut point.
-- Non-`openai-codex` providers are hard-gated to Pi native compaction; a codex route that fails
-  is also blacklisted for the session after a definitive error (or two transient ones) instead of
-  burning `maxRetries+1` doomed requests per compaction.
-- Marker rewrite scans the request payload once per turn instead of twice.
+The Codex backend does not bind opaque `compaction` items to their producing model.
+Live tests verified a Sol checkpoint replaying on Terra without changing its encrypted content.
+The extension allows replay across models on the **same registered Codex provider, API and
+endpoint**. If the original model is no longer in the catalogue, cross-model compatibility cannot
+be checked, so only its original model ID is allowed. Endpoint changes to an existing model's
+configuration cannot be detected retroactively because v2 checkpoints do not record endpoint URLs.
 
-See the upstream README for protocol details, limits, and caveats. The opaque-checkpoint format is
-identical (`pi-codex-remote-compaction` v2), so checkpoints created by either package replay under
-the other.
+`details.modelId` records session-model provenance; it is not an exact-model replay lock.
+Changing to an incompatible provider/API/endpoint leaves only the fallback explanation and raw
+recent messages available. Keep this extension loaded and switch back to a compatible model for
+full replay.
+
+**An opaque checkpoint is not a native text summary.** If remote compaction fails, is disabled,
+or cannot replay the existing checkpoint, the extension cancels that compaction and preserves
+session state. It never hands the opaque placeholder to Pi's native summarizer. This also applies
+to malformed checkpoint details bearing this extension's checkpoint kind.
+
+After cancellation, restore a compatible model, enable remote compaction, or correct the failing
+route and `/reload` before retrying `/compact`. An already-full context may require this recovery
+before the next model turn. Original session entries remain available; no automatic conversion
+of opaque history into a portable text summary is attempted. Unloading the extension entirely
+removes these replay and failure-safety hooks.
+
+Without an existing opaque checkpoint, remote failures still fall back to Pi's native compaction.
+
+## Caching and retained history
+
+Compaction requests carry the session ID as `prompt_cache_key` and the session's thinking level.
+Cache is per-model: cross-model compaction cannot reuse the session model's cache, but repeated
+compactions can reuse the compaction model's own cache.
+
+The checkpoint represents the entire remote input, including recent messages. Replay removes
+Pi's fingerprint-matched retained tail before injecting the replacement history. Some user text
+is retained explicitly, while recently kept user text is omitted from those extra plaintext copies.
+Live recall tests verified recent user values remained available through the opaque checkpoint,
+including after two consecutive compactions and a disk resume. This does not guarantee lossless
+summarization for arbitrary conversations.
+
+## Tests
+
+```bash
+pnpm --filter @tian.zuo/pi-compact test
+pnpm --filter @tian.zuo/pi-compact run check
+```
+
+Regression tests cover complete checkpoint projection and request rewriting, cross-model/backend
+compatibility, cancellation instead of lossy fallback, disabled replay, transient recovery,
+custom instructions, and a stalled SSE body using the real Codex serializer with a fake transport.

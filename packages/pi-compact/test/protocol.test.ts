@@ -42,7 +42,10 @@ test("rewriteCheckpointMarkerIfPresent returns undefined without the marker", ()
 
 test("isPermanentRouteFailure classifies endpoint-missing errors", () => {
   assert.equal(isPermanentRouteFailure("OpenAI API error (404): 404 page not found"), true);
-  assert.equal(isPermanentRouteFailure("Unsupported service_tier: flex"), true);
+  assert.equal(isPermanentRouteFailure("Unsupported service_tier: flex"), false);
+  assert.equal(isPermanentRouteFailure("OpenAI API error (429): Too Many Requests"), false);
+  assert.equal(isPermanentRouteFailure("OpenAI API error (408): Request Timeout"), false);
+  assert.equal(isPermanentRouteFailure("OpenAI API error (401): Unauthorized"), false);
   assert.equal(isPermanentRouteFailure("fetch failed"), false);
   assert.equal(isPermanentRouteFailure("request timed out after 300000ms"), false);
 });

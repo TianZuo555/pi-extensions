@@ -385,7 +385,7 @@ export function hasCheckpointMarker(payload: unknown, marker: string): boolean {
   );
 }
 
-/** Single-pass variant for before_provider_request: undefined when the marker is absent. */
+/** Optional rewrite for before_provider_request: undefined when the marker is absent. */
 export function rewriteCheckpointMarkerIfPresent(
   payload: unknown,
   marker: string,
