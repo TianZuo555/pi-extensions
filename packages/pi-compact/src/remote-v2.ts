@@ -8,8 +8,10 @@ import { collectProviderUsage } from "./remote-shared.ts";
 import {
   abortError,
   assertPreparedInput,
+  createRouteStatusRecorder,
   type RemoteCompactionRequest,
   type RemoteCompactionResponse,
+  withRouteStatus,
 } from "./remote-types.ts";
 
 export async function requestRemoteCompactionV2(
@@ -17,6 +19,7 @@ export async function requestRemoteCompactionV2(
 ): Promise<RemoteCompactionResponse> {
   if (request.signal.aborted) throw abortError();
   let sentInput: ReturnType<typeof assertPreparedInput> | undefined;
+  const routeStatus = createRouteStatusRecorder();
   const inspections: Promise<
     { ok: true; value: CollectedCompaction } | { ok: false; error: unknown }
   >[] = [];
@@ -48,6 +51,7 @@ export async function requestRemoteCompactionV2(
     timeoutMs: request.requestTimeoutMs ?? 5 * 60 * 1000,
     maxRetries: request.maxRetries ?? 2,
     fetch: inspectedFetch,
+    onResponse: routeStatus.onResponse,
     onPayload: (payload) => {
       const prepared = prepareRemoteCompactionPayload(payload, request.priorCheckpoint);
       sentInput = assertPreparedInput(prepared).slice(0, -1);
@@ -55,17 +59,21 @@ export async function requestRemoteCompactionV2(
     },
   });
 
-  const usage = await collectProviderUsage(stream, request.signal);
-  if (!sentInput) {
-    throw new RemoteCompactionProtocolError("Provider did not expose a request payload");
+  try {
+    const usage = await collectProviderUsage(stream, request.signal);
+    if (!sentInput) {
+      throw new RemoteCompactionProtocolError("Provider did not expose a request payload");
+    }
+    if (inspections.length !== 1) {
+      throw new RemoteCompactionProtocolError(
+        `Provider exposed ${inspections.length} successful SSE responses; expected exactly one`,
+      );
+    }
+    const inspection = await inspections[0];
+    if (request.signal.aborted) throw abortError();
+    if (!inspection.ok) throw inspection.error;
+    return { item: inspection.value.item, promptInput: sentInput, usage };
+  } catch (error) {
+    throw withRouteStatus(error, routeStatus.status());
   }
-  if (inspections.length !== 1) {
-    throw new RemoteCompactionProtocolError(
-      `Provider exposed ${inspections.length} successful SSE responses; expected exactly one`,
-    );
-  }
-  const inspection = await inspections[0];
-  if (request.signal.aborted) throw abortError();
-  if (!inspection.ok) throw inspection.error;
-  return { item: inspection.value.item, promptInput: sentInput, usage };
 }

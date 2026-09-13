@@ -38,6 +38,15 @@ test("normalizeCompactSettings defaults compactionModel to luna", () => {
   assert.equal(normalizeCompactSettings({ compactionModel: 42 }), undefined);
 });
 
+test("normalizeCompactSettings keeps the lossy fallback opt-in", () => {
+  assert.equal(normalizeCompactSettings({})?.allowLossyNativeFallback, false);
+  assert.equal(
+    normalizeCompactSettings({ allowLossyNativeFallback: true })?.allowLossyNativeFallback,
+    true,
+  );
+  assert.equal(normalizeCompactSettings({ allowLossyNativeFallback: "yes" }), undefined);
+});
+
 const codexModel = (id: string) => ({
   id,
   name: id,

@@ -26,7 +26,8 @@ Settings live in `~/.pi/agent/pi-compact.json` and reload at session startup or 
   "requestTimeoutMs": 300000,
   "maxRetries": 2,
   "replacementTokenBudget": 64000,
-  "notifyOnFallback": true
+  "notifyOnFallback": true,
+  "allowLossyNativeFallback": false
 }
 ```
 
@@ -40,15 +41,18 @@ Settings live in `~/.pi/agent/pi-compact.json` and reload at session startup or 
   Set it to `""` to always compact on the session model.
 - **`requestTimeoutMs`** bounds the entire remote request, including retries and SSE body
   reading, not just the wait for HTTP response headers.
-- **`maxRetries`** bounds provider retries within that deadline. Transient failures can be
-  retried on later compaction attempts; recognized invalid/missing-route errors disable that route
-  until session restart or reload. Classification uses HTTP/status cues or explicit route/URL error
-  wording, not arbitrary numbers in messages, but remains a heuristic. When falling back without a
-  checkpoint, the first skipped attempt adds one reminder per disabled route (unless warnings are off).
+- **`maxRetries`** bounds provider retries within that deadline. Route failures are classified from
+  the HTTP status the provider reported, with anchored message forms as a fallback; auth, timeout and
+  rate-limit errors stay retryable. A route that fails three times in a row is abandoned until
+  session restart or `/reload`. When falling back without a checkpoint, a disabled route adds one
+  reminder (unless warnings are off), and repeated identical warnings are shown once per session.
 - **`replacementTokenBudget`** limits retained user text using a character-based estimate,
   not exact tokenization. Opaque content and images also have separate byte limits.
 - **`notifyOnFallback`** controls ordinary native-fallback warnings. Warnings about cancelling
   compaction to preserve an existing checkpoint are always shown when a UI is available.
+- **`allowLossyNativeFallback`** is the escape hatch for the protection above. When `true`, a
+  compaction that would be cancelled instead runs Pi's native summary and warns that the opaque
+  history will no longer be readable. The default (`false`) keeps the checkpoint.
 
 Custom `/compact` instructions are appended to the remote request's system instructions for
 that compaction only. They do not change future session instructions. A custom focus can change
@@ -79,7 +83,12 @@ After cancellation, restore a compatible model, enable remote compaction, or cor
 route and `/reload` before retrying `/compact`. An already-full context may require this recovery
 before the next model turn. Original session entries remain available; no automatic conversion
 of opaque history into a portable text summary is attempted. Unloading the extension entirely
-removes these replay and failure-safety hooks.
+removes these replay and failure-safety hooks, and `allowLossyNativeFallback: true` opts into
+replacing the checkpoint with Pi's native summary when a compaction would otherwise be cancelled.
+
+A checkpoint only replays while it is the newest compaction entry in the branch: any later
+compaction, including a native summary created while the extension was unloaded, supersedes it
+and its older history stops being injected.
 
 Without an existing opaque checkpoint, remote failures still fall back to Pi's native compaction.
 

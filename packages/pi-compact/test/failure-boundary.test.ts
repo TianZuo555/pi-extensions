@@ -96,6 +96,15 @@ test("unexpected exceptions without an opaque checkpoint remain visible to Pi's 
   await assert.rejects(h.compact(), /unexpected service failure/);
 });
 
+test("the outer boundary reports why it cancelled and clears the status once", async () => {
+  const h = harness({ prior: true });
+  h.runtime.get = fail;
+  assert.deepEqual(await h.compact(), { cancel: true });
+  assert.deepEqual(await h.compact(), { cancel: true });
+  assert.equal(h.notifications.length, 1);
+  assert.match(h.notifications[0], /unexpected failure/);
+});
+
 test("the provider hook quietly leaves an ambiguous marker payload unchanged", async () => {
   const h = harness({ prior: true });
   const checkpoint = latestCheckpoint(h.sm.getBranch());

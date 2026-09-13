@@ -93,6 +93,23 @@ test("isPermanentRouteFailure recognizes HTTP context and invalid routes", () =>
     assert.equal(isPermanentRouteFailure(message), true, message);
 });
 
+test("isPermanentRouteFailure accepts the bare shapes a provider reports", () => {
+  // pi-ai throws the raw error body or the HTTP status text, without a status prefix.
+  for (const message of [
+    '{"detail":"Not Found"}',
+    "Not Found",
+    "404",
+    "404 Not Found",
+    "Request failed (404)",
+    "Failed to POST https://chatgpt.com/backend-api/codex/responses/compact: 404",
+    '{"detail":"not found","status":404}',
+  ])
+    assert.equal(isPermanentRouteFailure(message), true, message);
+  assert.equal(isPermanentRouteFailure('{"detail":"Not Found"}', 404), true);
+  assert.equal(isPermanentRouteFailure("unrecognizable body", 404), true);
+  assert.equal(isPermanentRouteFailure("unrecognizable body", 429), false);
+});
+
 test("isPermanentRouteFailure does not treat incidental numeric values as HTTP statuses", () => {
   for (const message of [
     "failed at byte offset 404",
@@ -102,6 +119,7 @@ test("isPermanentRouteFailure does not treat incidental numeric values as HTTP s
     "model test-404 is overloaded",
     "HTTP 429: retry after 404 seconds",
     "HTTP status 408: request timed out",
+    "session not found in cache",
   ])
     assert.equal(isPermanentRouteFailure(message), false, message);
 });

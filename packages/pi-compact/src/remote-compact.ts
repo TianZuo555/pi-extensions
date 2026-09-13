@@ -11,9 +11,11 @@ import { collectProviderUsage } from "./remote-shared.ts";
 import {
   abortError,
   assertPreparedInput,
+  createRouteStatusRecorder,
   isJsonObject,
   type RemoteCompactionRequest,
   type RemoteCompactionResponse,
+  withRouteStatus,
 } from "./remote-types.ts";
 
 const OFFICIAL_COMPACT_FIELDS = [
@@ -194,6 +196,7 @@ export async function requestResponsesCompact(
   let bridgeError: unknown;
   let dispatchInFlight = false;
   let successfulResponses = 0;
+  const routeStatus = createRouteStatusRecorder();
   const baseFetch = request.fetch ?? globalThis.fetch;
   const bridgeFetch: typeof globalThis.fetch = async (input, init) => {
     if (request.signal.aborted) throw abortError();
@@ -263,6 +266,7 @@ export async function requestResponsesCompact(
     timeoutMs: request.requestTimeoutMs ?? 5 * 60 * 1000,
     maxRetries: request.maxRetries ?? 2,
     fetch: bridgeFetch,
+    onResponse: routeStatus.onResponse,
     onPayload: (payload) => {
       if (preparedPayload) {
         throw new RemoteCompactionProtocolError(
@@ -280,11 +284,11 @@ export async function requestResponsesCompact(
   try {
     usage = await collectProviderUsage(stream, request.signal);
   } catch (error) {
-    if (bridgeError) throw bridgeError;
-    throw error;
+    if (bridgeError) throw withRouteStatus(bridgeError, routeStatus.status());
+    throw withRouteStatus(error, routeStatus.status());
   }
   if (request.signal.aborted) throw abortError();
-  if (bridgeError) throw bridgeError;
+  if (bridgeError) throw withRouteStatus(bridgeError, routeStatus.status());
   if (!preparedPayload || !sentInput || !compactResult || successfulResponses !== 1) {
     throw new RemoteCompactionProtocolError(
       "Provider did not complete exactly one Responses Compact request",

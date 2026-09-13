@@ -147,6 +147,68 @@ test("definitive route failure is not retried, and still cannot trigger lossy na
   assert.equal(h.payloads.length, 1);
 });
 
+test("the reported HTTP status classifies a route even when the error body is unrecognizable", async () => {
+  const h = harness({
+    prior: true,
+    fetch: async () => new Response('{"detail":"Not Found"}', { status: 404 }),
+  });
+  assert.deepEqual(await h.compact(), { cancel: true });
+  assert.deepEqual(await h.compact(), { cancel: true });
+  assert.equal(h.payloads.length, 1);
+  assert.match(h.notifications.at(-1)!, /preserving the existing opaque checkpoint/);
+});
+
+test("a route that keeps failing transiently is abandoned after three attempts", async () => {
+  const h = harness({
+    prior: true,
+    fetch: async () => {
+      throw new Error("network unavailable");
+    },
+  });
+  for (let attempt = 0; attempt < 3; attempt++) {
+    assert.deepEqual(await h.compact(), { cancel: true });
+  }
+  assert.equal(h.payloads.length, 3);
+  assert.deepEqual(await h.compact(), { cancel: true });
+  assert.deepEqual(await h.compact(), { cancel: true });
+  assert.equal(h.payloads.length, 3);
+  assert.equal(new Set(h.notifications).size, h.notifications.length);
+  assert.equal(h.notifications.length, 3);
+});
+
+test("allowLossyNativeFallback lets a failed remote attempt fall back to a native summary", async () => {
+  const h = harness({
+    prior: true,
+    settings: { allowLossyNativeFallback: true },
+    fetch: async () => {
+      throw new Error("network unavailable");
+    },
+  });
+  assert.equal(await h.compact(), undefined);
+  assert.equal(h.notifications.length, 1);
+  assert.match(h.notifications[0], /Opaque checkpoint history will be dropped/);
+  assert.match(h.notifications[0], /network unavailable/);
+});
+
+test("allowLossyNativeFallback explains the drop once when the route is rejected locally", async () => {
+  const h = harness({
+    prior: true,
+    settings: { protocol: "responses-compact", allowLossyNativeFallback: true },
+  });
+  assert.equal(await h.compact(), undefined);
+  assert.equal(h.payloads.length, 0);
+  assert.equal(h.notifications.length, 1);
+  assert.match(h.notifications[0], /Opaque checkpoint history will be dropped/);
+  assert.match(h.notifications[0], /Set protocol to auto or remote-v2/);
+});
+
+test("allowLossyNativeFallback applies to a disabled extension as well", async () => {
+  const h = harness({ prior: true, settings: { enabled: false, allowLossyNativeFallback: true } });
+  assert.equal(await h.compact(), undefined);
+  assert.equal(h.payloads.length, 0);
+  assert.match(h.notifications.at(-1)!, /Opaque checkpoint history will be dropped/);
+});
+
 test("malformed opaque details are preserved rather than replaced by native compaction", async () => {
   const h = harness({ prior: true });
   const checkpoint = h.sm

@@ -40,6 +40,45 @@ export interface RemoteCompactionResponse {
   usage: Usage;
 }
 
+/** HTTP status attached to a provider failure so route classification does not guess from text. */
+export class RemoteRouteFailure extends Error {
+  readonly status: number;
+
+  constructor(message: string, status: number, cause?: unknown) {
+    super(message, { cause });
+    this.name = "RemoteRouteFailure";
+    this.status = status;
+  }
+}
+
+/** Decorate a provider failure with the last non-2xx status the provider reported. */
+export function withRouteStatus(error: unknown, status: number | undefined): unknown {
+  if (status === undefined || error instanceof RemoteRouteFailure) return error;
+  return new RemoteRouteFailure(
+    error instanceof Error ? error.message : String(error),
+    status,
+    error,
+  );
+}
+
+export function routeFailureStatus(error: unknown): number | undefined {
+  return error instanceof RemoteRouteFailure ? error.status : undefined;
+}
+
+/** Records the last non-2xx response status seen through a provider stream. */
+export function createRouteStatusRecorder(): {
+  onResponse: (response: { status: number }) => void;
+  status: () => number | undefined;
+} {
+  let status: number | undefined;
+  return {
+    onResponse: (response) => {
+      status = response.status >= 400 ? response.status : undefined;
+    },
+    status: () => status,
+  };
+}
+
 export function isJsonObject(value: unknown): value is JsonObject {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
