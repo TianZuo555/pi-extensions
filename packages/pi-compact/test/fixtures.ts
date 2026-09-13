@@ -170,5 +170,17 @@ export function harness(
       "session_before_compact",
       input,
     );
-  return { sm, ctx, kept, keptId, settings, payloads, notifications, event, call, compact };
+  return {
+    sm,
+    ctx,
+    kept,
+    keptId,
+    settings,
+    runtime,
+    payloads,
+    notifications,
+    event,
+    call,
+    compact,
+  };
 }

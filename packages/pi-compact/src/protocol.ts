@@ -318,6 +318,22 @@ function markerTextFromItem(item: unknown): string | undefined {
   return content.text;
 }
 
+function injectCheckpointHistory(
+  payload: JsonObject,
+  input: readonly unknown[],
+  index: number,
+  replacementHistory: readonly unknown[],
+): JsonObject {
+  return {
+    ...payload,
+    input: [
+      ...input.slice(0, index),
+      ...structuredClone(replacementHistory),
+      ...input.slice(index + 1),
+    ],
+  };
+}
+
 export function rewriteCheckpointMarker(
   payload: unknown,
   marker: string,
@@ -334,15 +350,7 @@ export function rewriteCheckpointMarker(
       `Provider payload contained ${matches.length} checkpoint markers; expected exactly one`,
     );
   }
-  const index = matches[0];
-  return {
-    ...payload,
-    input: [
-      ...payload.input.slice(0, index),
-      ...structuredClone(replacementHistory),
-      ...payload.input.slice(index + 1),
-    ],
-  };
+  return injectCheckpointHistory(payload, payload.input, matches[0], replacementHistory);
 }
 
 export function appendCompactionTrigger(payload: unknown): JsonObject {
@@ -385,13 +393,20 @@ export function hasCheckpointMarker(payload: unknown, marker: string): boolean {
   );
 }
 
-/** Optional rewrite for before_provider_request: undefined when the marker is absent. */
+/** Optional turn-time rewrite: only inject when exactly one marker identifies an unambiguous position. */
 export function rewriteCheckpointMarkerIfPresent(
   payload: unknown,
   marker: string,
   replacementHistory: readonly unknown[],
 ): JsonObject | undefined {
   if (!isObject(payload) || !Array.isArray(payload.input)) return undefined;
-  if (!payload.input.some((item) => markerTextFromItem(item) === marker)) return undefined;
-  return rewriteCheckpointMarker(payload, marker, replacementHistory);
+  let index = -1;
+  for (let current = 0; current < payload.input.length; current++) {
+    if (markerTextFromItem(payload.input[current]) !== marker) continue;
+    if (index !== -1) return undefined;
+    index = current;
+  }
+  return index === -1
+    ? undefined
+    : injectCheckpointHistory(payload, payload.input, index, replacementHistory);
 }

@@ -36,6 +36,8 @@ import { terminalText } from "./terminal.ts";
 
 const STATUS_KEY = "remote-compact";
 
+type FailedRoute = { reminderShown: boolean };
+
 function activeCheckpoint(ctx: ExtensionContext) {
   return latestCheckpoint(ctx.sessionManager.getBranch());
 }
@@ -163,11 +165,16 @@ function sessionStillOwned(ctx: ExtensionContext, sessionId: string, signal: Abo
   return !signal.aborted && ctx.sessionManager.getSessionId() === sessionId;
 }
 
-/** Only definitive missing-route failures disable a route; auth, timeouts and rate limits can recover. */
+/** Heuristic for invalid/missing routes; auth, timeouts and rate limits can recover. */
 export function isPermanentRouteFailure(message: string): boolean {
-  return /\b(?:404|405|410|501)\b|(?:endpoint|route) (?:is )?(?:not found|unsupported|does not exist)/i.test(
-    message,
-  );
+  // Require HTTP/status context, not a bare number embedded in an arbitrary error message.
+  const explicitStatus =
+    /\b(?:HTTP(?:\/[\d.]+)?(?:\s+status(?:\s+code)?)?|(?:HTTP|API)\s+error|status(?:\s+code)?)\s*[:=(]?\s*(?:404|405|410|501)\b/i;
+  const statusLine =
+    /^\s*(?:404\s+(?:page\s+)?not found|405\s+method not allowed|410\s+gone|501\s+not implemented)\b/i;
+  const invalidRoute =
+    /\binvalid URL\b|\b(?:unknown|unsupported) (?:endpoint|route)\b|\b(?:endpoint|route) (?:is )?(?:not found|unsupported|does not exist)\b/i;
+  return explicitStatus.test(message) || statusLine.test(message) || invalidRoute.test(message);
 }
 
 /**
@@ -210,7 +217,7 @@ async function compactRemotely(
   ownerSignal: AbortSignal,
   fetch: typeof globalThis.fetch | undefined,
   modelWarnings: Set<string>,
-  failedRoutes: Set<string>,
+  failedRoutes: Map<string, FailedRoute>,
 ) {
   const sessionModel = ctx.model;
   // Remote compaction is hard-gated to the OpenAI Codex provider; every other
@@ -239,12 +246,18 @@ async function compactRemotely(
     return cancelled;
   }
   const routeKey = `${model.provider}/${model.baseUrl}/${model.id}/${route.protocol}`;
-  if (failedRoutes.has(routeKey)) {
-    return nativeFallbackOrCancel(
-      event,
-      ctx,
-      "This remote route is unavailable; reload after correcting its configuration.",
-    );
+  const failedRoute = failedRoutes.get(routeKey);
+  if (failedRoute) {
+    const reason = "This remote route is unavailable; reload after correcting its configuration.";
+    const cancelled = nativeFallbackOrCancel(event, ctx, reason);
+    if (!cancelled && ctx.hasUI && settings.notifyOnFallback && !failedRoute.reminderShown) {
+      ctx.ui.notify(
+        `Remote compaction remains disabled for this route; using Pi compaction. ${reason}`,
+        "warning",
+      );
+      failedRoute.reminderShown = true;
+    }
+    return cancelled;
   }
   if (!usesResponsesCompactionApi(sessionModel)) {
     return nativeFallbackOrCancel(
@@ -331,7 +344,7 @@ async function compactRemotely(
       return { cancel: true };
     }
     const message = error instanceof Error ? error.message : String(error);
-    if (isPermanentRouteFailure(message)) failedRoutes.add(routeKey);
+    if (isPermanentRouteFailure(message)) failedRoutes.set(routeKey, { reminderShown: false });
     const cancelled = nativeFallbackOrCancel(event, ctx, message);
     if (!cancelled) notifyFailure(ctx, error, settings);
     return cancelled;
@@ -345,7 +358,7 @@ export function createCompactExtension(
 ): (pi: ExtensionAPI) => void {
   return (pi) => {
     const providerWarnings = new Set<string>();
-    const failedRoutes = new Set<string>();
+    const failedRoutes = new Map<string, FailedRoute>();
     const settingsRuntime = options.settingsRuntime ?? createCompactSettingsRuntime();
     let sessionController = new AbortController();
     let generation = 0;
@@ -386,18 +399,26 @@ export function createCompactExtension(
       }
     });
 
-    pi.on("session_before_compact", (event, ctx) =>
-      compactRemotely(
-        pi,
-        event,
-        ctx,
-        settingsRuntime.get().settings,
-        sessionController.signal,
-        options.fetch,
-        providerWarnings,
-        failedRoutes,
-      ),
-    );
+    pi.on("session_before_compact", async (event, ctx) => {
+      try {
+        return await compactRemotely(
+          pi,
+          event,
+          ctx,
+          settingsRuntime.get().settings,
+          sessionController.signal,
+          options.fetch,
+          providerWarnings,
+          failedRoutes,
+        );
+      } catch (error) {
+        // Pi's runner turns a thrown handler error into undefined, enabling native compaction.
+        // Cover settings/model selection, UI callbacks and finally blocks too. Do not call UI
+        // or other fallible services from this last-resort guard.
+        if (hasOpaqueCheckpoint(event)) return { cancel: true };
+        throw error;
+      }
+    });
 
     pi.on("context", (event, ctx) => {
       const checkpoint = activeCheckpoint(ctx);

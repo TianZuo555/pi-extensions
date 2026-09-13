@@ -41,8 +41,10 @@ Settings live in `~/.pi/agent/pi-compact.json` and reload at session startup or 
 - **`requestTimeoutMs`** bounds the entire remote request, including retries and SSE body
   reading, not just the wait for HTTP response headers.
 - **`maxRetries`** bounds provider retries within that deadline. Transient failures can be
-  retried on later compaction attempts; definitive missing-route errors disable that route
-  until session restart or reload.
+  retried on later compaction attempts; recognized invalid/missing-route errors disable that route
+  until session restart or reload. Classification uses HTTP/status cues or explicit route/URL error
+  wording, not arbitrary numbers in messages, but remains a heuristic. When falling back without a
+  checkpoint, the first skipped attempt adds one reminder per disabled route (unless warnings are off).
 - **`replacementTokenBudget`** limits retained user text using a character-based estimate,
   not exact tokenization. Opaque content and images also have separate byte limits.
 - **`notifyOnFallback`** controls ordinary native-fallback warnings. Warnings about cancelling
@@ -69,7 +71,9 @@ full replay.
 **An opaque checkpoint is not a native text summary.** If remote compaction fails, is disabled,
 or cannot replay the existing checkpoint, the extension cancels that compaction and preserves
 session state. It never hands the opaque placeholder to Pi's native summarizer. This also applies
-to malformed checkpoint details bearing this extension's checkpoint kind.
+to malformed checkpoint details bearing this extension's checkpoint kind. A final handler boundary
+also returns cancellation if settings, model selection, UI notifications or status cleanup throw;
+these exceptions must not escape to Pi's runner and implicitly authorize native compaction.
 
 After cancellation, restore a compatible model, enable remote compaction, or correct the failing
 route and `/reload` before retrying `/compact`. An already-full context may require this recovery
@@ -91,6 +95,11 @@ is retained explicitly, while recently kept user text is omitted from those extr
 Live recall tests verified recent user values remained available through the opaque checkpoint,
 including after two consecutive compactions and a disk resume. This does not guarantee lossless
 summarization for arbitrary conversations.
+
+Turn-time marker injection requires exactly one matching marker. Missing or duplicate markers leave
+the payload unchanged without an extension error; the model sees the fallback marker rather than
+opaque history. This is a quiet fallback, not guaranteed replay. Remote recompaction remains strict:
+an absent or ambiguous prior marker is an error and cannot produce a replacement checkpoint.
 
 ## Tests
 
