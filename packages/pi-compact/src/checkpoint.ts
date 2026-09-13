@@ -276,7 +276,7 @@ export function buildReplacementHistory(
     }
     retainedNewestFirst.push(structuredClone(retained));
     remainingBytes -= serializedBytes(retained);
-    remainingChars -= Math.min(remainingChars, rawText(retained).length);
+    remainingChars = Math.max(0, remainingChars - rawText(retained).length);
     if (remainingBytes <= 128 || remainingChars <= 32) break;
   }
   return [...retainedNewestFirst.reverse(), opaque];

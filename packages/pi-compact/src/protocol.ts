@@ -385,14 +385,6 @@ export function prepareRemoteCompactionPayload(
   return appendCompactionTrigger(expandRemoteCompactionPayload(payload, checkpoint));
 }
 
-export function hasCheckpointMarker(payload: unknown, marker: string): boolean {
-  return (
-    isObject(payload) &&
-    Array.isArray(payload.input) &&
-    payload.input.some((item) => markerTextFromItem(item) === marker)
-  );
-}
-
 /** Optional turn-time rewrite: only inject when exactly one marker identifies an unambiguous position. */
 export function rewriteCheckpointMarkerIfPresent(
   payload: unknown,

@@ -50,7 +50,7 @@ function isCheckpointCompatible(
   if (
     !usesResponsesCompactionApi(model) ||
     model.provider !== "openai-codex" ||
-    model.provider !== details.provider ||
+    details.provider !== "openai-codex" ||
     model.api !== details.api
   )
     return false;
@@ -240,7 +240,7 @@ async function compactRemotely(
     const reason =
       route.kind === "native" ? route.reason : "No compatible Responses model is available.";
     const cancelled = nativeFallbackOrCancel(event, ctx, reason);
-    if (!cancelled && settings.enabled && settings.protocol === "responses-compact") {
+    if (!cancelled && settings.protocol === "responses-compact") {
       notifyFailure(ctx, new Error(reason), settings);
     }
     return cancelled;
