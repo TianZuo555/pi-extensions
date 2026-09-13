@@ -21,6 +21,15 @@ export function usesResponsesCompactionApi(
   return model !== undefined && RESPONSES_COMPACTION_APIS.some((api) => hasApi(model, api));
 }
 
+/** Models on one registered provider must also resolve to the same API and endpoint. */
+export function sameResponsesBackend(left: Model<Api>, right: Model<Api>): boolean {
+  return (
+    left.provider === right.provider &&
+    left.api === right.api &&
+    left.baseUrl.replace(/\/+$/, "") === right.baseUrl.replace(/\/+$/, "")
+  );
+}
+
 export function resolveCompactionRouteForApi(
   api: Api | undefined,
   options: { enabled: boolean; protocol: RemoteCompactionProtocolSetting },
@@ -29,6 +38,13 @@ export function resolveCompactionRouteForApi(
   if (!api) return { kind: "native", reason: "no active model" };
   if (!RESPONSES_COMPACTION_APIS.includes(api as ResponsesCompactionApi)) {
     return { kind: "native", reason: `API ${api} does not support Responses compaction` };
+  }
+  if (api === "openai-codex-responses" && options.protocol === "responses-compact") {
+    return {
+      kind: "native",
+      reason:
+        "The Codex /responses/compact endpoint is unavailable. Set protocol to auto or remote-v2.",
+    };
   }
   const supportedApi = api as ResponsesCompactionApi;
   const protocol =

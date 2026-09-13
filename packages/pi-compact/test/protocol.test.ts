@@ -2,7 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { buildReplacementHistory } from "../src/checkpoint.ts";
 import { isPermanentRouteFailure } from "../src/compact.ts";
-import { rewriteCheckpointMarkerIfPresent } from "../src/protocol.ts";
+import {
+  prepareRemoteCompactionPayload,
+  rewriteCheckpointMarker,
+  rewriteCheckpointMarkerIfPresent,
+} from "../src/protocol.ts";
 
 const userItem = (text: string) => ({
   type: "message",
@@ -40,9 +44,74 @@ test("rewriteCheckpointMarkerIfPresent returns undefined without the marker", ()
   assert.equal(input[1].content[0].text, "retained");
 });
 
+test("optional turn rewrite leaves duplicate markers untouched without throwing", () => {
+  const marker = "checkpoint-marker";
+  const payload = {
+    model: "test",
+    input: [userItem(marker), userItem("middle"), userItem(marker)],
+  };
+  const before = structuredClone(payload);
+  assert.equal(rewriteCheckpointMarkerIfPresent(payload, marker, [compactionItem]), undefined);
+  assert.deepEqual(payload, before);
+});
+
+test("remote recompaction still rejects missing or duplicate checkpoint markers", () => {
+  const marker = "checkpoint-marker";
+  for (const input of [[], [userItem(marker), userItem(marker)]]) {
+    const payload = { input };
+    assert.throws(
+      () => rewriteCheckpointMarker(payload, marker, [compactionItem]),
+      /expected exactly one/,
+    );
+    assert.throws(
+      () =>
+        prepareRemoteCompactionPayload(payload, {
+          marker,
+          replacementHistory: [compactionItem],
+        }),
+      /expected exactly one/,
+    );
+  }
+});
+
+test("isPermanentRouteFailure recognizes HTTP context and invalid routes", () => {
+  for (const message of [
+    "HTTP 404: Not Found",
+    "HTTP/1.1 405 Method Not Allowed",
+    "HTTP status code 410: Gone",
+    "status=501",
+    "405 Method Not Allowed",
+    "410 Gone",
+    "501 Not Implemented",
+    "Invalid URL",
+    "TypeError: Invalid URL",
+    "unknown endpoint",
+    "Unsupported route",
+    "endpoint is not found",
+    "route does not exist",
+  ])
+    assert.equal(isPermanentRouteFailure(message), true, message);
+});
+
+test("isPermanentRouteFailure does not treat incidental numeric values as HTTP statuses", () => {
+  for (const message of [
+    "failed at byte offset 404",
+    "request id 405 was interrupted",
+    "retry after 410 seconds",
+    "processed 501 items before disconnect",
+    "model test-404 is overloaded",
+    "HTTP 429: retry after 404 seconds",
+    "HTTP status 408: request timed out",
+  ])
+    assert.equal(isPermanentRouteFailure(message), false, message);
+});
+
 test("isPermanentRouteFailure classifies endpoint-missing errors", () => {
   assert.equal(isPermanentRouteFailure("OpenAI API error (404): 404 page not found"), true);
-  assert.equal(isPermanentRouteFailure("Unsupported service_tier: flex"), true);
+  assert.equal(isPermanentRouteFailure("Unsupported service_tier: flex"), false);
+  assert.equal(isPermanentRouteFailure("OpenAI API error (429): Too Many Requests"), false);
+  assert.equal(isPermanentRouteFailure("OpenAI API error (408): Request Timeout"), false);
+  assert.equal(isPermanentRouteFailure("OpenAI API error (401): Unauthorized"), false);
   assert.equal(isPermanentRouteFailure("fetch failed"), false);
   assert.equal(isPermanentRouteFailure("request timed out after 300000ms"), false);
 });

@@ -3,6 +3,7 @@ import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { CompactionEntry, SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { RemoteCompactionProtocol, ResponsesCompactionApi } from "./model-api.ts";
 import { RESPONSES_COMPACTION_APIS } from "./model-api.ts";
+import { checkpointMarker } from "./prompt.ts";
 import { type JsonObject, validateCompactionItem } from "./protocol.ts";
 
 export const CHECKPOINT_KIND = "pi-codex-remote-compaction";
@@ -51,22 +52,6 @@ export function fingerprintMessage(message: AgentMessage): string {
   return createHash("sha256")
     .update(JSON.stringify(stableValue(message)))
     .digest("hex");
-}
-
-export function checkpointMarker(checkpointId: string): string {
-  return [
-    `[PI_CODEX_REMOTE_CHECKPOINT:${checkpointId}]`,
-    "Opaque checkpoint injection failed. Do not infer missing history; tell the user to re-enable",
-    "@tian.zuo/pi-compact with the same model and Responses API.",
-  ].join(" ");
-}
-
-export function fallbackSummary(checkpointId: string): string {
-  return [
-    `Responses compaction checkpoint ${checkpointId} stores the older history opaquely.`,
-    "Full replay requires @tian.zuo/pi-compact and the same model through a compatible Responses provider.",
-    "Without them, only Pi's retained recent messages remain available.",
-  ].join(" ");
 }
 
 function markerMessage(checkpointId: string, timestamp: number): AgentMessage {
@@ -251,7 +236,7 @@ export function buildReplacementHistory(
   options: {
     tokenBudget?: number;
     byteBudget?: number;
-    /** Texts of messages Pi keeps verbatim after the cut point; matching user items are skipped to avoid replaying them twice. */
+    /** Optional user texts to omit from plaintext retention; their content is represented by the opaque checkpoint. */
     excludeTexts?: ReadonlySet<string>;
   } = {},
 ): JsonObject[] {
