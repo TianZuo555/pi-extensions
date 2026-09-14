@@ -140,6 +140,11 @@ rl.on("line", async (line) => {
       'process.on("SIGTERM", () => { writeFileSync("worker-term", "yes");',
       event.message.content === "abort-worker" ? 'process.exit(0);' : '',
       '});',
+      // The group-leader probe below proves the shape, not that this handler
+      // is installed: setsid lands at exec, node only runs this line ~25ms
+      // later. A test that aborts in between kills the worker by default
+      // disposition and never sees the sentinel, so publish readiness too.
+      'writeFileSync("worker-ready", "yes");',
       'setInterval(() => {}, 1000);'
     ].join("\\n")], { detached: true, stdio: "ignore" });
     // Wait until the worker leads its own process group — the reap only
@@ -1430,20 +1435,26 @@ test("parkedWatchMs 0 leaves parked detection to the tool stall budget", async (
     pollMs: 20,
     limit: 1,
   });
+  // The stall watchdog is armed when the turn starts and only re-arms on
+  // stream output, so the budget has to outlast the fixture's node boot on the
+  // slowest runner: at 120ms the base inactivity budget expired on Windows CI
+  // before the fixture's first event, leaving the turn with no ACTIVE tool —
+  // the parked probe is only consulted for a tool turn, so it stalled instead.
+  const budgetMs = 2_000;
   const start = Date.now();
   try {
     const outcome = await executor.run({
       prompt: "tool-silent",
       binary: fixture.script,
       cwd: fixture.dir,
-      inactivityTimeoutMs: 120,
-      toolInactivityTimeoutMs: 120,
+      inactivityTimeoutMs: budgetMs,
+      toolInactivityTimeoutMs: budgetMs,
       timeoutMs: 10_000,
       spawnOverride: fixtureSpawn(fixture.script),
     });
     assert.equal(outcome.response, "budget answer");
     assert.ok(
-      Date.now() - start >= 100,
+      Date.now() - start >= budgetMs,
       "a disabled watch must wait for the tool budget before the first check",
     );
   } finally {
@@ -1480,6 +1491,20 @@ test("aborting a turn reaps the command process group agy spawned", {
       else await new Promise((resolve) => setTimeout(resolve, 25));
     }
     assert.ok(workerPid > 0, "the fixture must report its worker pid");
+    // The pid only proves the worker leads its group; the handler that records
+    // the SIGTERM is installed a node boot later. Aborting before that window
+    // closes kills the worker by default disposition, so the reap looks like a
+    // no-op even though it signalled the group correctly.
+    let ready = "";
+    for (let i = 0; i < 400 && ready !== "yes"; i += 1) {
+      ready = await readFile(path.join(fixture.dir, "worker-ready"), "utf8").catch(() => "");
+      if (ready !== "yes") await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    assert.equal(
+      ready,
+      "yes",
+      "the fixture worker must install its SIGTERM handler before the abort",
+    );
     abort.abort();
     const outcome = await outcomePromise;
     assert.match(outcome.error ?? "", /aborted/);
