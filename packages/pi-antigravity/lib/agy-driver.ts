@@ -6,11 +6,19 @@ import {
   runAgyTurn,
   type AgyTurnRequest,
 } from "./agy-client.ts";
-import { killAgyTree, signalAgyTree, trackAgyChild, untrackAgyChild } from "./agy-children.ts";
+import {
+  killAgyTree,
+  signalAgyDetachedGroup,
+  signalAgyTree,
+  trackAgyChild,
+  untrackAgyChild,
+} from "./agy-children.ts";
 import { AgyCompatibilityError, checkAgyBinary } from "./agy-diagnostics.ts";
 import { parseAgyLine } from "./events.ts";
 import { AGY_PARKED_TURN_ERROR } from "./prompt.ts";
 import {
+  agyGroupLeadingDescendants,
+  agyGroupSurvivors,
   agyHasRunningToolProcess,
   agyTurnTranscriptVerdict,
   recordAgyTaskOrphans,
@@ -89,6 +97,19 @@ interface ActiveTurn {
   stallGraces: number;
   /** Parked-turn checks already consumed (see #onStallExpired). */
   parkedChecks: number;
+  /**
+   * Positive evidence that agy finished this turn's work and is only waiting
+   * on background tasks: the transcript's newest step is a final answer while a
+   * tool step is still ACTIVE (see #onParkedWatch). Tasks keep running when
+   * this turn ends — including when the user aborts it. agy's own
+   * "waiting for background task(s)" notice would be a faster signal but is
+   * print-mode only: the persistent stream-json process never prints it.
+   */
+  parkedOnBackgroundWork: boolean;
+  /** Early parked-answer watch, armed only while a tool step is ACTIVE. */
+  parkedWatchTimer?: NodeJS.Timeout;
+  /** Watch interval for this turn (0 disables the early watch). */
+  parkedWatchMs: number;
   /** Total silence across every expired budget — the honest stall duration. */
   silenceMs: number;
   /** Bumped on every rearm so an in-flight liveness probe can be discarded. */
@@ -114,8 +135,15 @@ const TERM_CLOSE_MS = 500;
  * withheld result only flows when the background work exits, so these brief
  * renewals give a nearly-finished task a chance to complete normally.
  */
-const STALL_PARKED_POLL_MS = 30_000;
+const STALL_PARKED_POLL_MS = 10_000;
 const STALL_PARKED_LIMIT = 2;
+/**
+ * While a tool step is ACTIVE, poll the off-stream transcript this often for a
+ * final answer agy is withholding. agy emits nothing on stdout for the whole
+ * duration of a background task, so waiting for the stall budget to expire
+ * would park the turn for minutes after the answer was already written.
+ */
+const PARKED_WATCH_MS = 5_000;
 
 function processConfig(
   request: AgyTurnRequest,
@@ -222,6 +250,8 @@ export class AgyDriverSession implements AgyTurnExecutor {
   ) => Promise<AgyTranscriptVerdict | undefined> = agyTurnTranscriptVerdict;
   #parkedPollMs = STALL_PARKED_POLL_MS;
   #parkedLimit = STALL_PARKED_LIMIT;
+  /** Early parked-answer watch interval; 0 disables it (stall budget only). */
+  #parkedWatchMs = PARKED_WATCH_MS;
   /**
    * Async orphan-scan queue for tool-start activity. A `ps` snapshot is a
    * subprocess spawn, so the line handler must not run it synchronously;
@@ -248,11 +278,12 @@ export class AgyDriverSession implements AgyTurnExecutor {
       conversationId: string | undefined,
       activeStepIndexes: number[],
     ) => Promise<AgyTranscriptVerdict | undefined>,
-    options: { pollMs?: number; limit?: number } = {},
+    options: { pollMs?: number; limit?: number; watchMs?: number } = {},
   ): void {
     this.#probeTurnParked = probe;
     this.#parkedPollMs = options.pollMs ?? STALL_PARKED_POLL_MS;
     this.#parkedLimit = options.limit ?? STALL_PARKED_LIMIT;
+    this.#parkedWatchMs = options.watchMs ?? PARKED_WATCH_MS;
   }
 
   snapshot(): AgyExecutorSnapshot {
@@ -449,6 +480,8 @@ export class AgyDriverSession implements AgyTurnExecutor {
       deadlineAt: performance.now() + (request.timeoutMs ?? 600_000),
       stallGraces: 0,
       parkedChecks: 0,
+      parkedOnBackgroundWork: false,
+      parkedWatchMs: request.parkedWatchMs ?? this.#parkedWatchMs,
       silenceMs: 0,
       stallEpoch: 0,
       resolve: () => {},
@@ -513,11 +546,8 @@ export class AgyDriverSession implements AgyTurnExecutor {
   #armTurnTimers(turn: ActiveTurn): void {
     const overallMs = turn.request.timeoutMs ?? 600_000;
     turn.overallTimer = setTimeout(() => {
-      const child = this.#child;
-      if (this.#active !== turn || !child) return;
-      this.#detachChild(child, "dead");
-      killAgyTree(child);
-      this.#settleTurn(turn, {
+      if (this.#active !== turn || !this.#child) return;
+      void this.#terminateTurn(turn, {
         error: new AgySpawnError(
           `agy turn timed out after ${Math.round(overallMs / 1000)}s`,
           this.#stderrTail,
@@ -526,18 +556,57 @@ export class AgyDriverSession implements AgyTurnExecutor {
     }, overallMs);
 
     const onAbort = () => {
-      const child = this.#child;
       if (this.#active !== turn) return;
-      if (child) {
-        this.#detachChild(child, "dead");
-        killAgyTree(child);
-      }
-      this.#settleTurn(turn, { outcome: abortOutcome() });
+      void this.#terminateTurn(turn);
     };
     turn.abortHandler = onAbort;
     turn.request.signal?.addEventListener("abort", onAbort, { once: true });
     if (turn.request.signal?.aborted) onAbort();
     this.#rearmStall(turn);
+  }
+
+  /**
+   * End the turn because its owner gave up on it (abort, overall deadline,
+   * stall, protocol failure): reap the command process groups agy spawned for
+   * this turn, then agy itself. A turn that was parked on background work is
+   * the exception — that work was already handed to the background, so the
+   * user aborting the *turn* must not kill the dev server they asked for.
+   * agy is still alive here, which is the only moment ancestry can attribute
+   * its group-leading children.
+   */
+  async #terminateTurn(
+    turn: ActiveTurn,
+    result: { outcome: AgyTurnOutcome } | { error: unknown } = { outcome: abortOutcome() },
+    child: DriverChild | undefined = this.#child,
+  ): Promise<void> {
+    if (child) {
+      this.#detachChild(child, "dead");
+      if (!turn.parkedOnBackgroundWork) await this.#reapTurnTaskGroups(child);
+      killAgyTree(child);
+    }
+    this.#settleTurn(turn, result);
+  }
+
+  /**
+   * SIGTERM every process group agy spawned for this turn's commands, then
+   * SIGKILL the groups still holding members after a short grace. agy >= 1.2.0
+   * runs each `run_command` as its own group leader, so killing agy's own
+   * group (`killAgyTree`) leaves them running as orphans. Group-addressed
+   * only: a bare pid could name a reused process once the leader is gone.
+   */
+  async #reapTurnTaskGroups(child: DriverChild): Promise<void> {
+    if (child.pid === undefined || process.platform === "win32") return;
+    const leaders = await agyGroupLeadingDescendants([child.pid]).catch(() => []);
+    if (leaders.length === 0) return;
+    for (const pid of leaders) {
+      this.#log(`turn-command:SIGTERM:${pid}`);
+      signalAgyDetachedGroup(pid, "SIGTERM");
+    }
+    await new Promise<void>((resolve) => setTimeout(resolve, TERM_CLOSE_MS));
+    for (const pgid of await agyGroupSurvivors(leaders).catch(() => [])) {
+      this.#log(`turn-command:SIGKILL:${pgid}`);
+      signalAgyDetachedGroup(pgid, "SIGKILL");
+    }
   }
 
   #stallBudgetMs(turn: ActiveTurn): number {
@@ -555,16 +624,92 @@ export class AgyDriverSession implements AgyTurnExecutor {
     // a window that new stream activity has already superseded.
     turn.stallEpoch += 1;
     const budgetMs = this.#stallBudgetMs(turn);
-    if (budgetMs <= 0) return;
+    if (budgetMs <= 0) {
+      this.#armParkedWatch(turn, 0);
+      return;
+    }
     const epoch = turn.stallEpoch;
     turn.stallTimer = setTimeout(() => {
       void this.#onStallExpired(turn, budgetMs, epoch);
     }, budgetMs);
+    // Stream activity superseded any parked verdict, so the early watch starts
+    // its silence window over.
+    this.#armParkedWatch(turn, turn.parkedWatchMs);
+  }
+
+  /**
+   * Arm (or disarm) the early parked-answer watch. It only runs while a tool
+   * step is ACTIVE — the only state where agy can hold a finished answer off
+   * the stream — and `delayMs <= 0` disables it.
+   */
+  #armParkedWatch(turn: ActiveTurn, delayMs: number): void {
+    if (turn.parkedWatchTimer) clearTimeout(turn.parkedWatchTimer);
+    turn.parkedWatchTimer = undefined;
+    if (this.#active !== turn || delayMs <= 0) return;
+    if (turn.activeTools.size === 0 || this.#child === undefined) return;
+    const epoch = turn.stallEpoch;
+    turn.parkedWatchTimer = setTimeout(() => void this.#onParkedWatch(turn, epoch), delayMs);
+  }
+
+  /**
+   * Check the off-stream transcript while a tool step is still ACTIVE: agy
+   * withholds the result event until every background task exits (~25-day print
+   * timeout), but it keeps appending the agent's final answer to the
+   * transcript. A final answer here means the remaining silence is task
+   * bookkeeping, not work — so the turn can end instead of stalling for the
+   * whole tool budget. Cheap enough to poll: one tail read of the newest step.
+   */
+  async #onParkedWatch(turn: ActiveTurn, epoch: number): Promise<void> {
+    const child = this.#child;
+    if (this.#active !== turn || !child || turn.stallEpoch !== epoch) return;
+    if (turn.activeTools.size === 0 || child.pid === undefined) return;
+    const verdict = await this.#probeTurnParked(
+      turn.outcome.conversationId ?? this.#boundConversationId,
+      activeStepIndexes(turn.activeTools),
+    ).catch(() => undefined);
+    // A settled turn, or a watch rearmed by new stream activity, invalidates
+    // this verdict.
+    if (this.#active !== turn || turn.stallEpoch !== epoch) return;
+    if (!verdict?.finished) {
+      this.#armParkedWatch(turn, turn.parkedWatchMs);
+      return;
+    }
+    turn.parkedOnBackgroundWork = true;
+    this.#enterParkedGrace(turn, verdict, epoch);
+  }
+
+  /**
+   * The transcript already holds a final answer: renew briefly so a
+   * nearly-finished task can still deliver the real result event, then end the
+   * turn with the answer the transcript kept.
+   */
+  #enterParkedGrace(turn: ActiveTurn, verdict: AgyTranscriptVerdict, epoch: number): void {
+    // The early watch can reach here while the tool stall budget is still
+    // pending: dropping that handle would leak a timer that keeps the process
+    // alive (and pi's print mode from exiting) until it finally fires.
+    if (turn.parkedWatchTimer) clearTimeout(turn.parkedWatchTimer);
+    turn.parkedWatchTimer = undefined;
+    if (turn.stallTimer) clearTimeout(turn.stallTimer);
+    turn.stallTimer = undefined;
+    if (
+      turn.parkedChecks < this.#parkedLimit &&
+      performance.now() + this.#parkedPollMs < turn.deadlineAt
+    ) {
+      turn.parkedChecks += 1;
+      this.#log(`stall:task-parked:${turn.parkedChecks}`);
+      turn.stallTimer = setTimeout(
+        () => void this.#onStallExpired(turn, this.#parkedPollMs, epoch),
+        this.#parkedPollMs,
+      );
+      return;
+    }
+    this.#finishParkedTurn(turn, verdict);
   }
 
   /** Poll finality during a forgiven budget without consuming extra liveness graces. */
   #scheduleGraceCheck(turn: ActiveTurn, remainingMs: number, epoch: number): void {
     const delayMs = Math.min(this.#parkedPollMs, remainingMs);
+    if (turn.stallTimer) clearTimeout(turn.stallTimer);
     turn.stallTimer = setTimeout(
       () => void this.#onStallExpired(turn, delayMs, epoch, remainingMs - delayMs),
       delayMs,
@@ -606,19 +751,8 @@ export class AgyDriverSession implements AgyTurnExecutor {
       ).catch(() => undefined);
       if (stale()) return;
       if (verdict?.finished) {
-        if (
-          turn.parkedChecks < this.#parkedLimit &&
-          performance.now() + this.#parkedPollMs < turn.deadlineAt
-        ) {
-          turn.parkedChecks += 1;
-          this.#log(`stall:task-parked:${turn.parkedChecks}`);
-          turn.stallTimer = setTimeout(
-            () => void this.#onStallExpired(turn, this.#parkedPollMs, epoch),
-            this.#parkedPollMs,
-          );
-          return;
-        }
-        this.#finishParkedTurn(turn, verdict);
+        turn.parkedOnBackgroundWork = true;
+        this.#enterParkedGrace(turn, verdict, epoch);
         return;
       }
       turn.parkedChecks = 0;
@@ -640,9 +774,11 @@ export class AgyDriverSession implements AgyTurnExecutor {
       }
     }
 
-    this.#detachChild(child, "dead");
-    killAgyTree(child);
-    this.#settleTurn(turn, { error: new AgyStallError(turn.silenceMs, toolActive) });
+    await this.#terminateTurn(
+      turn,
+      { error: new AgyStallError(turn.silenceMs, toolActive) },
+      child,
+    );
   }
 
   /**
@@ -693,10 +829,8 @@ export class AgyDriverSession implements AgyTurnExecutor {
         this.#stdoutBuffer = this.#stdoutBuffer.slice(-STDOUT_LINE_LIMIT);
         return;
       }
-      this.#detachChild(child, "dead");
-      killAgyTree(child);
       this.#stdoutBuffer = "";
-      this.#settleTurn(turn, {
+      void this.#terminateTurn(turn, {
         error: new AgySpawnError(
           `agy driver emitted an unterminated stdout line larger than ${STDOUT_LINE_LIMIT} bytes.`,
           this.#stderrTail,
@@ -844,6 +978,8 @@ export class AgyDriverSession implements AgyTurnExecutor {
     if (this.#active !== turn) return;
     if (turn.overallTimer) clearTimeout(turn.overallTimer);
     if (turn.stallTimer) clearTimeout(turn.stallTimer);
+    if (turn.parkedWatchTimer) clearTimeout(turn.parkedWatchTimer);
+    turn.parkedWatchTimer = undefined;
     if (turn.abortHandler) turn.request.signal?.removeEventListener("abort", turn.abortHandler);
     this.#active = undefined;
     const child = this.#child;
@@ -890,6 +1026,8 @@ export class AgyDriverSession implements AgyTurnExecutor {
 
   #detachChild(child: DriverChild, nextState: AgyDriverState): void {
     if (this.#child !== child) return;
+    if (this.#active?.parkedWatchTimer) clearTimeout(this.#active.parkedWatchTimer);
+    if (this.#active) this.#active.parkedWatchTimer = undefined;
     // The child is about to be killed or has died: snapshot its task-shaped
     // descendants as proven orphans of this conversation — the last moment
     // ancestry can attribute them (afterwards they re-parent to launchd).

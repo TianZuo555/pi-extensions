@@ -1,10 +1,14 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
+import { getAgentDir } from "@earendil-works/pi-coding-agent";
 
-/** Absolute path to a machine-local pi config directory: ~/.pi/<name>. */
+/**
+ * Absolute path to a machine-local pi config directory, under pi's own agent
+ * dir (`~/.pi/agent`, or `PI_CODING_AGENT_DIR` when customized) so an isolated
+ * pi profile never shares — or clobbers — the main profile's caches.
+ */
 export function piConfigDir(name: string): string {
-  return path.join(os.homedir(), ".pi", name);
+  return path.join(getAgentDir(), name);
 }
 
 /** Read and parse a JSON file, returning fallback if it is missing or invalid. */

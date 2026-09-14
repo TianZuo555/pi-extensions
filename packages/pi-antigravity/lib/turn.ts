@@ -19,6 +19,8 @@ export class AgyTurnController {
   #waiters: Waiter[] = [];
   #closed = false;
   #failure: Error | undefined;
+  /** Why the turn ended without a result; diagnostics only, never an outcome. */
+  #closeReason: string | undefined;
   #incompleteTools = new Map<string, Extract<AgyActivity, { type: "tool_start" }>>();
   #reportedUsage: AgyUsage;
   #thoughtReported = false;
@@ -132,9 +134,19 @@ export class AgyTurnController {
     return { ...usage };
   }
 
-  close(): void {
+  /**
+   * Why the turn closed without producing a result — set when the runtime ends
+   * a turn it replaced (recycle, reset, shutdown, newer request). Providers
+   * report it instead of a bare "ended without a result event".
+   */
+  closeReason(): string | undefined {
+    return this.#closeReason;
+  }
+
+  close(reason?: string): void {
     if (this.#closed) return;
     this.#closed = true;
+    this.#closeReason ??= reason;
     for (const waiter of this.#waiters.splice(0)) waiter(null, undefined);
   }
 

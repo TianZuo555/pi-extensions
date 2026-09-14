@@ -42,6 +42,12 @@ export interface AgyTurnRequest {
    * between steps. Defaults to max(inactivityTimeoutMs, 300_000).
    */
   toolInactivityTimeoutMs?: number;
+  /**
+   * How often to poll the off-stream transcript for a final answer agy is
+   * withholding while a tool step is ACTIVE. 0 disables the early watch, so a
+   * parked turn is only detected when the tool stall budget expires.
+   */
+  parkedWatchMs?: number;
   signal?: AbortSignal;
   /** Optional custom agy agent selected for this process. */
   agent?: string;

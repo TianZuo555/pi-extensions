@@ -1,0 +1,13 @@
+---
+"@tian.zuo/pi-antigravity": patch
+---
+
+End a turn agy parked on background work as soon as its answer exists, and reap the command an aborted turn still owns.
+
+agy holds a turn's `result` event until every background task exits (bounded by the ~25-day `--print-timeout`) while saying nothing on stdout, so starting a dev server parked pi on the "Working" spinner for the whole `AGY_TOOL_STALL_TIMEOUT_MS` budget plus the parked grace — about six minutes — even though the transcript already had the final answer two seconds in. The driver now polls the off-stream transcript while a tool step is ACTIVE (`AGY_PARKED_WATCH_MS`, default 5s, `0` disables), so the turn ends after a short parked grace (2×10s, down from 2×30s) and the still-ACTIVE step replays as an incomplete-tool card pointing at `/agy-tasks`. A verdict that clears or crosses the turn deadline behaves exactly as before. agy's own "waiting for background task(s)" notice would have been a faster signal, but it is print-mode only — the persistent stream-json process never prints it — so the watch is the mechanism.
+
+Aborting a turn (Esc) now SIGTERMs the process groups agy spawned for its commands and escalates to SIGKILL, instead of leaving them running: agy ≥ 1.2.0 runs every `run_command` as its own group leader, so killing agy's own group never reached them, contradicting the incomplete-tool message shown to the model. A turn agy already parked on background work is exempt — aborting the *turn* must not kill the dev server the user asked for — which is exactly what the parked watch now proves before the abort lands.
+
+Two smaller defects found while verifying the above: the parked grace overwrote a pending stall timer without clearing it, leaking a handle that kept pi's event loop alive (print mode would not exit) until the tool budget expired; and a turn that ended without a result because it was superseded reported a bare "agy turn ended without a result event" instead of naming the cause, because the runtime's generation fences closed the controller silently.
+
+The model cache now lives under pi's own agent dir (`getAgentDir()`, honoring `PI_CODING_AGENT_DIR`) instead of a hard-coded `~/.pi/antigravity`, so an isolated pi profile can no longer share or clobber the main profile's cache. `/agy-tasks` no longer offers a per-task stop key: on agy >= 1.2.0 no process holds a task's log open, so the keystroke could only ever answer "no provably-owned process found" — the dashboard now shows the task, its status, pids and log, and `stop all` remains the sweep that actually reaps recorded process groups.
