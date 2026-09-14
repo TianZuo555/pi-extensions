@@ -1526,10 +1526,13 @@ test("aborting a turn parked on background work leaves that work running", {
   const executor = new AgyDriverSession();
   // A parked verdict has to be reached while the task is still running: the
   // watch is what tells the abort to spare it.
+  // A longer parked grace keeps the finish out of the abort window: the abort
+  // must land after the verdict but before the turn settles, and a 25ms poll
+  // cannot beat a one-cycle grace under load.
   executor.setTurnParkedProbe(async () => ({ finished: true }), {
     watchMs: 20,
     pollMs: 25,
-    limit: 1,
+    limit: 6,
   });
   const abort = new AbortController();
   let workerPid = 0;
