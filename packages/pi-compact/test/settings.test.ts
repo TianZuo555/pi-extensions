@@ -38,6 +38,15 @@ test("normalizeCompactSettings defaults compactionModel to luna", () => {
   assert.equal(normalizeCompactSettings({ compactionModel: 42 }), undefined);
 });
 
+test("normalizeCompactSettings keeps the lossy fallback opt-in", () => {
+  assert.equal(normalizeCompactSettings({})?.allowLossyNativeFallback, false);
+  assert.equal(
+    normalizeCompactSettings({ allowLossyNativeFallback: true })?.allowLossyNativeFallback,
+    true,
+  );
+  assert.equal(normalizeCompactSettings({ allowLossyNativeFallback: "yes" }), undefined);
+});
+
 const codexModel = (id: string) => ({
   id,
   name: id,
@@ -111,6 +120,15 @@ test("pickCompactionModel falls back when the ref is not a Responses model", () 
     new Set(),
   );
   assert.equal(picked?.id, "gpt-5.6-sol");
+  assert.equal(notifications.length, 1);
+});
+
+test("pickCompactionModel rejects another endpoint on the same provider", () => {
+  const sol = codexModel("gpt-5.6-sol");
+  const luna = { ...codexModel("gpt-5.6-luna"), baseUrl: "https://other.invalid/backend-api" };
+  const { ctx, notifications } = fakeCtx([sol, luna]);
+  const picked = pickCompactionModel(ctx as never, sol as never, settings(), new Set());
+  assert.equal(picked?.id, sol.id);
   assert.equal(notifications.length, 1);
 });
 

@@ -17,6 +17,8 @@ export interface CompactSettings {
   maxRetries: number;
   replacementTokenBudget: number;
   notifyOnFallback: boolean;
+  /** Allow Pi's native summary to replace an existing opaque checkpoint, dropping its history. */
+  allowLossyNativeFallback: boolean;
 }
 
 export const DEFAULT_COMPACTION_MODEL = "openai-codex/gpt-5.6-luna";
@@ -29,6 +31,7 @@ export const DEFAULT_CODEX_COMPACT_SETTINGS: Readonly<CompactSettings> = Object.
   maxRetries: 2,
   replacementTokenBudget: 64_000,
   notifyOnFallback: true,
+  allowLossyNativeFallback: false,
 });
 
 const MAX_MODEL_REF_LENGTH = 768;
@@ -91,6 +94,12 @@ export function normalizeCompactSettings(value: unknown): CompactSettings | unde
     return undefined;
   }
   if (
+    Object.hasOwn(value, "allowLossyNativeFallback") &&
+    typeof value.allowLossyNativeFallback !== "boolean"
+  ) {
+    return undefined;
+  }
+  if (
     Object.hasOwn(value, "compactionModel") &&
     (typeof value.compactionModel !== "string" ||
       value.compactionModel.length > MAX_MODEL_REF_LENGTH ||
@@ -132,6 +141,10 @@ export function normalizeCompactSettings(value: unknown): CompactSettings | unde
       typeof value.notifyOnFallback === "boolean"
         ? value.notifyOnFallback
         : DEFAULT_CODEX_COMPACT_SETTINGS.notifyOnFallback,
+    allowLossyNativeFallback:
+      typeof value.allowLossyNativeFallback === "boolean"
+        ? value.allowLossyNativeFallback
+        : DEFAULT_CODEX_COMPACT_SETTINGS.allowLossyNativeFallback,
     compactionModel:
       typeof value.compactionModel === "string"
         ? value.compactionModel

@@ -11,16 +11,21 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import {
   buildReplacementHistory,
+  CHECKPOINT_KIND,
   type CodexCheckpointDetails,
-  checkpointMarker,
   createCheckpointDetails,
-  fallbackSummary,
   latestCheckpoint,
   projectCheckpointContext,
 } from "./checkpoint.ts";
-import { resolveCompactionRoute, usesResponsesCompactionApi } from "./model-api.ts";
+import {
+  resolveCompactionRoute,
+  sameResponsesBackend,
+  usesResponsesCompactionApi,
+} from "./model-api.ts";
+import { checkpointMarker, compactionSystemPrompt, fallbackSummary } from "./prompt.ts";
 import { rewriteCheckpointMarkerIfPresent } from "./protocol.ts";
 import { requestRemoteCompaction } from "./remote.ts";
+import { routeFailureStatus } from "./remote-types.ts";
 import {
   type CompactSettings,
   type CompactSettingsRuntime,
@@ -31,6 +36,29 @@ import {
 import { terminalText } from "./terminal.ts";
 
 const STATUS_KEY = "remote-compact";
+/** Give up on a route for the session after this many consecutive failures of any kind. */
+const MAX_ROUTE_FAILURES = 3;
+const PERMANENT_ROUTE_STATUSES = [404, 405, 410, 501];
+
+type FailedRoute = {
+  /** Consecutive failures on this route since its last success. */
+  failures: number;
+  /** Set once the route is abandoned for this session. */
+  disabled: boolean;
+  /** One native-fallback reminder per disabled route. */
+  reminderShown: boolean;
+};
+
+type SessionState = {
+  modelWarnings: Set<string>;
+  failedRoutes: Map<string, FailedRoute>;
+  /** Notification texts already shown; repeating the same warning every turn is noise. */
+  notices: Set<string>;
+};
+
+function createSessionState(): SessionState {
+  return { modelWarnings: new Set(), failedRoutes: new Map(), notices: new Set() };
+}
 
 function activeCheckpoint(ctx: ExtensionContext) {
   return latestCheckpoint(ctx.sessionManager.getBranch());
@@ -39,10 +67,71 @@ function activeCheckpoint(ctx: ExtensionContext) {
 function isCheckpointCompatible(
   details: CodexCheckpointDetails,
   model: Model<Api> | undefined,
+  ctx: ExtensionContext,
 ): boolean {
-  return (
-    usesResponsesCompactionApi(model) && model.api === details.api && model.id === details.modelId
+  if (
+    !usesResponsesCompactionApi(model) ||
+    model.provider !== "openai-codex" ||
+    details.provider !== "openai-codex" ||
+    model.api !== details.api
+  )
+    return false;
+  const originalModel = ctx.modelRegistry.find(details.provider, details.modelId);
+  // Do not infer backend compatibility when the original model has left the catalogue.
+  return originalModel ? sameResponsesBackend(originalModel, model) : model.id === details.modelId;
+}
+
+/** A malformed opaque checkpoint must not silently become an ordinary native summary either. */
+function hasOpaqueCheckpoint(event: SessionBeforeCompactEvent): boolean {
+  for (let index = event.branchEntries.length - 1; index >= 0; index--) {
+    const entry = event.branchEntries[index];
+    if (entry.type !== "compaction") continue;
+    const details: unknown = entry.details;
+    return (
+      typeof details === "object" &&
+      details !== null &&
+      "kind" in details &&
+      details.kind === CHECKPOINT_KIND
+    );
+  }
+  return false;
+}
+
+function notifyOnce(state: SessionState, ctx: ExtensionContext, message: string): void {
+  if (!ctx.hasUI || state.notices.has(message)) return;
+  ctx.ui.notify(message, "warning");
+  // Only a delivered notification counts; a throwing UI must be retried next time.
+  state.notices.add(message);
+}
+
+function nativeFallbackOrCancel(
+  event: SessionBeforeCompactEvent,
+  ctx: ExtensionContext,
+  settings: CompactSettings,
+  state: SessionState,
+  reason: string,
+): { cancel: true } | undefined {
+  if (!hasOpaqueCheckpoint(event)) return undefined;
+  const detail = terminalText(reason);
+  if (settings.allowLossyNativeFallback) {
+    notifyOnce(
+      state,
+      ctx,
+      `Opaque checkpoint history will be dropped. ${detail} Pi's native summary cannot read the older history stored in the checkpoint.`,
+    );
+    return undefined;
+  }
+  notifyOnce(
+    state,
+    ctx,
+    `Compaction cancelled; preserving the existing opaque checkpoint. ${detail} Native compaction cannot read its older history.`,
   );
+  return { cancel: true };
+}
+
+/** True when a native fallback is allowed only because the user opted into dropping the checkpoint. */
+function allowsLossyFallback(event: SessionBeforeCompactEvent, settings: CompactSettings): boolean {
+  return settings.allowLossyNativeFallback && hasOpaqueCheckpoint(event);
 }
 
 function keptMessages(event: SessionBeforeCompactEvent): AgentMessage[] {
@@ -57,7 +146,7 @@ function keptMessages(event: SessionBeforeCompactEvent): AgentMessage[] {
   return contextEntries.slice(keptIndex).flatMap(sessionEntryToContextMessages);
 }
 
-/** Texts of user messages Pi keeps verbatim — excluding them from retained history avoids replaying them twice per turn. */
+/** These user messages are covered by the opaque checkpoint; omit their extra plaintext copies. */
 function keptUserTexts(kept: readonly AgentMessage[]): Set<string> {
   const texts = new Set<string>();
   for (const message of kept) {
@@ -95,13 +184,14 @@ function activeTools(pi: ExtensionAPI): Tool[] {
 function projectedCurrentMessages(
   event: SessionBeforeCompactEvent,
   model: Model<Api>,
+  ctx: ExtensionContext,
 ): { messages: AgentMessage[]; prior?: CodexCheckpointDetails } {
   const leafId = event.branchEntries.at(-1)?.id ?? null;
   const session = buildSessionContext(event.branchEntries, leafId);
   const prior = latestCheckpoint(event.branchEntries);
   if (!prior) return { messages: session.messages };
-  if (prior.details.api !== model.api || prior.details.modelId !== model.id) {
-    throw new Error("The active opaque checkpoint belongs to a different Responses model");
+  if (!isCheckpointCompatible(prior.details, model, ctx)) {
+    throw new Error("The active opaque checkpoint belongs to a different Responses backend");
   }
   const projected = projectCheckpointContext(session.messages, prior.details, prior.entry.summary);
   if (!projected) {
@@ -110,19 +200,45 @@ function projectedCurrentMessages(
   return { messages: projected, prior: prior.details };
 }
 
-function notifyFailure(ctx: ExtensionContext, error: unknown, settings: CompactSettings): void {
-  if (!ctx.hasUI || !settings.notifyOnFallback) return;
+function notifyFailure(
+  ctx: ExtensionContext,
+  settings: CompactSettings,
+  state: SessionState,
+  error: unknown,
+): void {
+  if (!settings.notifyOnFallback) return;
   const message = terminalText(error instanceof Error ? error.message : String(error));
-  ctx.ui.notify(`Responses compaction failed; using Pi compaction. ${message}`, "warning");
+  notifyOnce(state, ctx, `Responses compaction failed; using Pi compaction. ${message}`);
 }
 
 function sessionStillOwned(ctx: ExtensionContext, sessionId: string, signal: AbortSignal): boolean {
   return !signal.aborted && ctx.sessionManager.getSessionId() === sessionId;
 }
 
-/** 4xx-style "endpoint does not exist" failures will never succeed on retry. */
-export function isPermanentRouteFailure(message: string): boolean {
-  return /\(4\d\d\)|\b404\b|not found|does not exist|unsupported/i.test(message);
+/** Heuristic for invalid/missing routes; auth, timeouts and rate limits can recover. */
+export function isPermanentRouteFailure(message: string, status?: number): boolean {
+  // The provider reports the status directly whenever it reached an endpoint.
+  if (status !== undefined && PERMANENT_ROUTE_STATUSES.includes(status)) return true;
+  // Otherwise require HTTP/status context, not a bare number embedded in an arbitrary message.
+  const explicitStatus =
+    /\b(?:HTTP(?:\/[\d.]+)?(?:\s+status(?:\s+code)?)?|(?:HTTP|API)\s+error|status(?:\s+code)?)\s*[:=(]?\s*(?:404|405|410|501)\b/i;
+  const statusLine =
+    /^\s*(?:404\s+(?:page\s+)?not found|405\s+method not allowed|410\s+gone|501\s+not implemented)\b/i;
+  const invalidRoute =
+    /\binvalid URL\b|\b(?:unknown|unsupported) (?:endpoint|route)\b|\b(?:endpoint|route) (?:is )?(?:not found|unsupported|does not exist)\b/i;
+  // Providers surface the raw error body or status text, so accept unambiguous whole-message forms.
+  const bareStatus =
+    /^\s*(?:404|405|410|501)(?:\s+(?:page\s+)?not found| method not allowed| gone| not implemented)?\s*$/i;
+  const bareNotFound = /^\s*(?:\{\s*"detail"\s*:\s*)?"?not found"?\s*\}?\s*$/i;
+  const trailingStatus = /[(:]\s*(?:404|405|410|501)\s*[)\]}]?\s*$/;
+  return (
+    explicitStatus.test(message) ||
+    statusLine.test(message) ||
+    invalidRoute.test(message) ||
+    bareStatus.test(message) ||
+    bareNotFound.test(message) ||
+    trailingStatus.test(message)
+  );
 }
 
 /**
@@ -143,7 +259,7 @@ export function pickCompactionModel(
   if (!ref || !sessionModel) return sessionModel;
   const parsed = parseCompactionModelRef(ref);
   const found = parsed ? ctx.modelRegistry.find(parsed.provider, parsed.modelId) : undefined;
-  if (found && found.provider === sessionModel.provider && usesResponsesCompactionApi(found)) {
+  if (found && usesResponsesCompactionApi(found) && sameResponsesBackend(found, sessionModel)) {
     return found;
   }
   const key = `${sessionModel.provider}/${sessionModel.id}->${ref}`;
@@ -164,24 +280,69 @@ async function compactRemotely(
   settings: CompactSettings,
   ownerSignal: AbortSignal,
   fetch: typeof globalThis.fetch | undefined,
-  modelWarnings: Set<string>,
-  failedRoutes: Map<string, number>,
+  state: SessionState,
 ) {
   const sessionModel = ctx.model;
   // Remote compaction is hard-gated to the OpenAI Codex provider; every other
   // provider (github-copilot's /responses/compact is a verified 404, azure,
   // generic openai-responses backends) goes straight to Pi native compaction.
-  if (sessionModel?.provider !== "openai-codex") return undefined;
-  const model = pickCompactionModel(ctx, sessionModel, settings, modelWarnings);
+  if (event.signal.aborted || ownerSignal.aborted) return { cancel: true };
+  if (!settings.enabled) {
+    return nativeFallbackOrCancel(
+      event,
+      ctx,
+      settings,
+      state,
+      "Enable remote compaction before retrying /compact.",
+    );
+  }
+  if (sessionModel?.provider !== "openai-codex") {
+    return nativeFallbackOrCancel(
+      event,
+      ctx,
+      settings,
+      state,
+      "Switch back to the original Codex provider to compact.",
+    );
+  }
+  const model = pickCompactionModel(ctx, sessionModel, settings, state.modelWarnings);
   const route = resolveCompactionRoute(model, settings);
-  if (route.kind === "native" || !usesResponsesCompactionApi(model)) return undefined;
-  // Definitive failures blacklist the route for this session immediately;
-  // transient errors get one more chance next time.
-  const routeKey = `${model.provider}/${model.id}/${route.protocol}`;
-  if ((failedRoutes.get(routeKey) ?? 0) >= 2) return undefined;
-  // The checkpoint can only replay on a Responses model; when the session model
-  // cannot replay it, remote compaction is strictly worse than Pi's summary.
-  if (!usesResponsesCompactionApi(sessionModel)) return undefined;
+  if (route.kind === "native" || !usesResponsesCompactionApi(model)) {
+    const reason =
+      route.kind === "native" ? route.reason : "No compatible Responses model is available.";
+    const cancelled = nativeFallbackOrCancel(event, ctx, settings, state, reason);
+    if (
+      !cancelled &&
+      !allowsLossyFallback(event, settings) &&
+      settings.protocol === "responses-compact"
+    ) {
+      notifyFailure(ctx, settings, state, new Error(reason));
+    }
+    return cancelled;
+  }
+  const routeKey = `${model.provider}/${model.baseUrl}/${model.id}/${route.protocol}`;
+  const failedRoute = state.failedRoutes.get(routeKey);
+  if (failedRoute?.disabled) {
+    const reason = "This remote route is unavailable; reload after correcting its configuration.";
+    const cancelled = nativeFallbackOrCancel(event, ctx, settings, state, reason);
+    if (!cancelled && ctx.hasUI && settings.notifyOnFallback && !failedRoute.reminderShown) {
+      ctx.ui.notify(
+        `Remote compaction remains disabled for this route; using Pi compaction. ${reason}`,
+        "warning",
+      );
+      failedRoute.reminderShown = true;
+    }
+    return cancelled;
+  }
+  if (!usesResponsesCompactionApi(sessionModel)) {
+    return nativeFallbackOrCancel(
+      event,
+      ctx,
+      settings,
+      state,
+      "The session model cannot replay Responses checkpoints.",
+    );
+  }
   const signal = AbortSignal.any([event.signal, ownerSignal]);
   if (signal.aborted) return { cancel: true };
   const sessionId = ctx.sessionManager.getSessionId();
@@ -196,9 +357,12 @@ async function compactRemotely(
     if (!auth.ok) throw new Error(auth.error);
     const provider = ctx.modelRegistry.getProvider(model.provider);
     if (!provider) throw new Error("The active Responses provider is unavailable");
-    const current = projectedCurrentMessages(event, sessionModel);
+    if (hasOpaqueCheckpoint(event) && !latestCheckpoint(event.branchEntries)) {
+      throw new Error("The existing opaque checkpoint is invalid and cannot be replayed safely");
+    }
+    const current = projectedCurrentMessages(event, sessionModel, ctx);
     const context: Context = {
-      systemPrompt: ctx.getSystemPrompt(),
+      systemPrompt: compactionSystemPrompt(ctx.getSystemPrompt(), event.customInstructions),
       messages: convertToLlm(current.messages),
       tools: activeTools(pi),
     };
@@ -233,8 +397,7 @@ async function compactRemotely(
         excludeTexts: keptUserTexts(kept),
       },
     );
-    // The checkpoint records the session model, not the compaction model:
-    // replay compatibility is gated on the model that will consume it.
+    // Keep the session model as provenance; replay is gated by backend, not model identity.
     const details = createCheckpointDetails({
       provider: sessionModel.provider,
       api: sessionModel.api,
@@ -243,6 +406,7 @@ async function compactRemotely(
       replacementHistory,
       keptMessages: kept,
     });
+    state.failedRoutes.delete(routeKey);
     return {
       compaction: {
         summary: fallbackSummary(details.checkpointId),
@@ -257,12 +421,23 @@ async function compactRemotely(
       return { cancel: true };
     }
     const message = error instanceof Error ? error.message : String(error);
-    failedRoutes.set(
-      routeKey,
-      (failedRoutes.get(routeKey) ?? 0) + (isPermanentRouteFailure(message) ? 2 : 1),
-    );
-    notifyFailure(ctx, error, settings);
-    return undefined;
+    const permanent = isPermanentRouteFailure(message, routeFailureStatus(error));
+    const failure = state.failedRoutes.get(routeKey) ?? {
+      failures: 0,
+      disabled: false,
+      reminderShown: false,
+    };
+    failure.failures += 1;
+    failure.disabled = permanent || failure.failures >= MAX_ROUTE_FAILURES;
+    state.failedRoutes.set(routeKey, failure);
+    const reason = failure.disabled
+      ? `${message} This route is disabled for the session; /reload to retry.`
+      : message;
+    const cancelled = nativeFallbackOrCancel(event, ctx, settings, state, reason);
+    if (!cancelled && !allowsLossyFallback(event, settings)) {
+      notifyFailure(ctx, settings, state, error);
+    }
+    return cancelled;
   } finally {
     if (ctx.sessionManager.getSessionId() === sessionId) ctx.ui.setStatus(STATUS_KEY, undefined);
   }
@@ -272,8 +447,7 @@ export function createCompactExtension(
   options: { fetch?: typeof globalThis.fetch; settingsRuntime?: CompactSettingsRuntime } = {},
 ): (pi: ExtensionAPI) => void {
   return (pi) => {
-    const providerWarnings = new Set<string>();
-    const failedRoutes = new Map<string, number>();
+    const state = createSessionState();
     const settingsRuntime = options.settingsRuntime ?? createCompactSettingsRuntime();
     let sessionController = new AbortController();
     let generation = 0;
@@ -284,11 +458,12 @@ export function createCompactExtension(
       generation += 1;
       const ownerGeneration = generation;
       const sessionId = ctx.sessionManager.getSessionId();
-      providerWarnings.clear();
-      failedRoutes.clear();
-      let state: Readonly<CompactSettingsState>;
+      state.modelWarnings.clear();
+      state.failedRoutes.clear();
+      state.notices.clear();
+      let loaded: Readonly<CompactSettingsState>;
       try {
-        state = await settingsRuntime.reload(sessionController.signal);
+        loaded = await settingsRuntime.reload(sessionController.signal);
       } catch (error) {
         if (sessionController.signal.aborted || ownerGeneration !== generation) return;
         if (ctx.hasUI) {
@@ -306,31 +481,52 @@ export function createCompactExtension(
       ) {
         return;
       }
-      if (ctx.hasUI && state.kind === "invalid") {
+      if (ctx.hasUI && loaded.kind === "invalid") {
         ctx.ui.notify(
-          `Invalid pi-compact.json; using defaults without overwriting it. ${terminalText(state.issue ?? "unknown validation error")}`,
+          `Invalid pi-compact.json; using defaults without overwriting it. ${terminalText(loaded.issue ?? "unknown validation error")}`,
           "warning",
         );
       }
     });
 
-    pi.on("session_before_compact", (event, ctx) =>
-      compactRemotely(
-        pi,
-        event,
-        ctx,
-        settingsRuntime.get().settings,
-        sessionController.signal,
-        options.fetch,
-        providerWarnings,
-        failedRoutes,
-      ),
-    );
+    pi.on("session_before_compact", async (event, ctx) => {
+      try {
+        return await compactRemotely(
+          pi,
+          event,
+          ctx,
+          settingsRuntime.get().settings,
+          sessionController.signal,
+          options.fetch,
+          state,
+        );
+      } catch (error) {
+        // Pi's runner turns a thrown handler error into undefined, enabling native compaction.
+        // Cover settings/model selection, UI callbacks and finally blocks too. Reporting is best
+        // effort and must never replace the cancellation itself.
+        if (!hasOpaqueCheckpoint(event)) throw error;
+        try {
+          notifyOnce(
+            state,
+            ctx,
+            `Compaction cancelled after an unexpected failure; preserving the existing opaque checkpoint. ${terminalText(error instanceof Error ? error.message : String(error))}`,
+          );
+        } catch {
+          // A broken notification must not turn cancellation into a thrown error.
+        }
+        try {
+          ctx.ui.setStatus(STATUS_KEY, undefined);
+        } catch {
+          // A broken status update must not turn cancellation into a thrown error.
+        }
+        return { cancel: true };
+      }
+    });
 
     pi.on("context", (event, ctx) => {
-      if (!settingsRuntime.get().settings.enabled) return undefined;
       const checkpoint = activeCheckpoint(ctx);
-      if (!checkpoint || !isCheckpointCompatible(checkpoint.details, ctx.model)) return undefined;
+      if (!checkpoint || !isCheckpointCompatible(checkpoint.details, ctx.model, ctx))
+        return undefined;
       const messages = projectCheckpointContext(
         event.messages,
         checkpoint.details,
@@ -340,9 +536,9 @@ export function createCompactExtension(
     });
 
     pi.on("before_provider_request", (event, ctx) => {
-      if (!settingsRuntime.get().settings.enabled) return undefined;
       const checkpoint = activeCheckpoint(ctx);
-      if (!checkpoint || !isCheckpointCompatible(checkpoint.details, ctx.model)) return undefined;
+      if (!checkpoint || !isCheckpointCompatible(checkpoint.details, ctx.model, ctx))
+        return undefined;
       return rewriteCheckpointMarkerIfPresent(
         event.payload,
         checkpointMarker(checkpoint.details.checkpointId),
@@ -351,12 +547,11 @@ export function createCompactExtension(
     });
 
     pi.on("model_select", (event, ctx) => {
-      if (!settingsRuntime.get().settings.enabled) return;
       const checkpoint = activeCheckpoint(ctx);
-      if (!checkpoint || isCheckpointCompatible(checkpoint.details, event.model)) return;
+      if (!checkpoint || isCheckpointCompatible(checkpoint.details, event.model, ctx)) return;
       const key = `${ctx.sessionManager.getSessionId()}:${event.model.provider}:${event.model.id}`;
-      if (providerWarnings.has(key)) return;
-      providerWarnings.add(key);
+      if (state.modelWarnings.has(key)) return;
+      state.modelWarnings.add(key);
       if (ctx.hasUI) {
         ctx.ui.notify(
           "The active Responses checkpoint cannot replay on this model; Pi will expose only its fallback marker and retained recent messages.",
@@ -368,8 +563,9 @@ export function createCompactExtension(
     pi.on("session_shutdown", async (_event, ctx) => {
       generation += 1;
       sessionController.abort();
-      providerWarnings.clear();
-      failedRoutes.clear();
+      state.modelWarnings.clear();
+      state.failedRoutes.clear();
+      state.notices.clear();
       ctx.ui.setStatus(STATUS_KEY, undefined);
       await settingsRuntime.flush();
     });
