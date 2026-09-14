@@ -1,5 +1,15 @@
 # @tian.zuo/pi-devin-acp
 
+## 0.1.1
+
+### Patch Changes
+
+- [#57](https://github.com/TianZuo555/pi-extensions/pull/57) [`b632c43`](https://github.com/TianZuo555/pi-extensions/commit/b632c4349333b8bdb50db739490c8f13b5de6fe2) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Fix cancellation and session replacement races during ACP startup, isolate restored session state, and preserve the accepted mode after invalid or rejected changes. Use unique replay tool IDs across Pi provider calls, honor thinking off, account for turn usage only once, and handle tools whose initial notification is already terminal. Queue task-stop requests as steering messages while Pi is running.
+
+- [#58](https://github.com/TianZuo555/pi-extensions/pull/58) [`b3b64c3`](https://github.com/TianZuo555/pi-extensions/commit/b3b64c3e35fff8226dd5dd8c4c73c1f0cf074536) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Stop dropping user messages that arrive while devin is working. Superseding a live ACP turn (`session/cancel` followed by a new `session/prompt` on the same session — a steering/follow-up message, `/devin tasks` shell stop, or any prompt typed mid-turn) sent the new prompt before devin acknowledged the cancel, so devin cancelled the *new* prompt instead: the user saw an empty "Operation aborted" turn and the request never reached the agent. The runtime now waits (bounded, ~3 s) for the cancelled prompt to settle before reusing the session; live devin acks in 5–10 ms. Also: deleting a devin session that is not the bound one no longer appends a session-state reset marker (the branch binding survives), recorded replay results are capped at 16k characters and evicted oldest-first so pi's session file cannot grow with full devin tool output, tool-card bodies and live-op labels strip terminal escapes/control characters, and the incomplete-tool sweep defers a `stop` result instead of an unmapped one. Tool cards are written back into the persisted assistant message at their terminal view (pi stores the content array, not the `toolcall_end` payload), and `before_provider_request` now fires for devin turns with the ACP prompt request so extensions can inspect or replace the outgoing content blocks.
+
+- [#55](https://github.com/TianZuo555/pi-extensions/pull/55) [`12c1b31`](https://github.com/TianZuo555/pi-extensions/commit/12c1b31f0ebbc043d6ec8b3bc98e7ccf05ada44f) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Renamed the package from `@tian.zuo/pi-devin` to `@tian.zuo/pi-devin-acp` before its first npm publish — the directory, legacy stub (`extensions/pi-devin-acp.ts`), session-state entry key (`pi-devin-acp-session-state`), and state dir (`~/.pi/devin-acp/`) moved with it; existing `pi-devin-session-state` bindings are not migrated. Provider name (`devin`), models (`devin/*`), and commands (`/devin …`) are unchanged.
+
 ## 0.1.0
 
 ### Minor Changes
