@@ -32,12 +32,13 @@ async function fixture(
 test("slash globs are root-relative and do not override ignores", { skip: !hasBoth }, async () => {
   await fixture(async (cwd, runtime) => {
     const service = runtime.runSync(SearchRuntime);
-    for (const [path, pattern, expected] of [
+    for (const [path, pattern, expected, grepExpected = expected] of [
       [undefined, "src/*.ts", ["src/a.ts"]],
       [undefined, "src/**/*.ts", ["src/a.ts", "src/deep/b.ts"]],
       ["src", "deep/*.ts", ["src/deep/b.ts"]],
       [undefined, "*.ts", ["src/a.ts", "src/deep/b.ts"]],
-      [undefined, "*.TS", []],
+      // find is case-insensitive; grep's glob stays case-sensitive.
+      [undefined, "*.TS", ["src/a.ts", "src/deep/b.ts"], []],
       [undefined, "{src/a.ts,src/deep/b.ts}", ["src/a.ts", "src/deep/b.ts"]],
     ] as const) {
       const found = await runSearch(runtime, service.find({ cwd, path, pattern }));
@@ -46,7 +47,7 @@ test("slash globs are root-relative and do not override ignores", { skip: !hasBo
         service.grep({ cwd, path, pattern: "needle", glob: pattern }),
       );
       assert.deepEqual([...found.files].sort(), expected);
-      assert.deepEqual(grepped.matches.map((match) => match.path).sort(), expected);
+      assert.deepEqual(grepped.matches.map((match) => match.path).sort(), grepExpected);
     }
   });
 });

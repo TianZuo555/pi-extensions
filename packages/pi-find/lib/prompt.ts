@@ -17,11 +17,11 @@ export const GREP_PARAMETER_DESCRIPTIONS = {
 };
 
 export const FIND_TOOL_DESCRIPTION =
-  "Find files with a case-sensitive glob; respects .gitignore; skips hidden paths by default.";
+  "Find files with a case-insensitive glob; respects .gitignore; skips hidden paths by default.";
 export const FIND_PROMPT_SNIPPET = "Find files with a glob";
 
 export const FIND_PARAMETER_DESCRIPTIONS = {
-  pattern: "Case-sensitive glob: basename ('*.ts') or path ('src/*.ts'); prefix ! to exclude.",
+  pattern: "Case-insensitive glob: basename ('*.ts') or path ('src/*.ts'); prefix ! to exclude.",
   path: "Search directory; defaults to cwd.",
 };
 
