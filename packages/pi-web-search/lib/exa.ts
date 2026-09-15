@@ -143,14 +143,16 @@ export async function fetchExa(url: string, options: FetchOptions = {}): Promise
 
   const data = (await res.json()) as ExaContentsApiResponse;
   const item = data.results?.[0];
-  if (!item || (!item.text && !item.title)) {
+  // A title-only stub is not readable content — e.g. a document Exa could
+  // reach but could not parse. Count it as a failure so the chain moves on.
+  if (!item?.text) {
     throw new Error(`Exa returned no readable content for ${url}`);
   }
 
   return {
     url,
     title: item.title,
-    text: item.text || "",
+    text: item.text,
     provider: "exa",
     contentType: "text/plain",
   };

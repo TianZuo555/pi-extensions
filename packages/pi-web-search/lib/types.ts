@@ -32,6 +32,8 @@ export interface FetchOptions {
   signal?: AbortSignal;
   raw?: boolean;
   timeoutMs?: number;
+  /** PDF only: extract at most this many pages from the start. */
+  maxPages?: number;
 }
 
 export interface FetchResponse {
@@ -40,6 +42,11 @@ export interface FetchResponse {
   text: string;
   provider: FetchProviderName;
   contentType?: string;
+  /** Total page count when the fetched document is a PDF. */
+  pages?: number;
+  /** Set when the extracted text exceeded the inline limit and was written
+   * to a local file; `text` then holds a short summary + preview. */
+  savedTo?: string;
   /** Providers that were tried before this response and failed */
   fallbacks?: ProviderFallback[];
 }

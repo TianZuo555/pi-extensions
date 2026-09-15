@@ -23,18 +23,19 @@ test("WebSearchParams schema contains only query and numResults", () => {
   assert.equal(numResults.maximum, 20);
 });
 
-test("WebFetchParams schema contains only url and raw", () => {
+test("WebFetchParams schema contains url, raw, and maxPages", () => {
   const properties = WebFetchParams.properties;
   const propNames = Object.keys(properties);
-  assert.deepEqual(propNames.sort(), ["raw", "url"]);
+  assert.deepEqual(propNames.sort(), ["maxPages", "raw", "url"]);
   assert.equal(properties.url.type, "string");
   assert.equal(properties.raw.type, "boolean");
+  assert.equal(properties.maxPages.type, "integer");
 });
 
 test("every web tool parameter has a description", () => {
   for (const schema of [WebSearchParams, WebFetchParams]) {
     for (const [name, property] of Object.entries(schema.properties)) {
-      assert.ok(property.description, `${name} has no description`);
+      assert.ok((property as { description?: string }).description, `${name} has no description`);
     }
   }
 });
@@ -53,7 +54,7 @@ test("model-facing web tool metadata stays concise", () => {
       schema: WebFetchParams,
       description: WEB_FETCH_TOOL_DESCRIPTION,
       snippet: WEB_FETCH_PROMPT_SNIPPET,
-      schemaBudget: 200,
+      schemaBudget: 340,
     },
   ];
 

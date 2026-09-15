@@ -187,6 +187,9 @@ export async function fetchFirecrawl(
       formats: ["markdown"],
       // v2: deterministic HTML-level filter that drops navs, headers, footers.
       onlyMainContent: true,
+      // PDFs parse by default (auto: text layer, OCR fallback); a maxPages
+      // request caps the per-page credit cost.
+      ...(options.maxPages ? { parsers: [{ type: "pdf", maxPages: options.maxPages }] } : {}),
     },
     config,
     combinedSignal,
