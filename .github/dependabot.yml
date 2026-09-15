@@ -9,10 +9,12 @@ updates:
       day: "monday"
     open-pull-requests-limit: 5
     cooldown:
-      # Must stay >= minimumReleaseAge in pnpm-workspace.yaml (2 days),
-      # otherwise pnpm refuses the versions Dependabot proposes
-      # (dependabot-core#13165). Security updates bypass cooldown and
-      # still open immediately.
+      # Version updates only: security updates ignore cooldown and open
+      # immediately. Keep this >= minimumReleaseAge in pnpm-workspace.yaml
+      # (2 days) so a version-update PR never proposes a version pnpm
+      # would refuse at resolution in strict mode (dependabot-core#13165).
+      # A security PR that lands a younger version still needs a matching
+      # minimumReleaseAgeExclude entry — see AGENTS.md.
       default-days: 3
       semver-major-days: 7
     groups:
