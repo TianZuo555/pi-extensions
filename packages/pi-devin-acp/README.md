@@ -49,19 +49,25 @@ unavailable.
   background shells), with elapsed time; background shells offer a kill
   shortcut that asks Devin to stop them
 - `/devin mode [ask|plan|accept-edits|bypass]` — get/set Devin's permission mode
+- `/devin yolo [on|off]` — persistently pin Devin to `bypass` mode
+  (`~/.pi/devin-acp/settings.json`); while on, `/devin mode` stays bypass and
+  any permission request that still arrives is auto-approved
 - `/devin models` — re-discover models and re-register the picker
 - `/devin login` — trigger Devin's browser authentication
 - `/devin doctor` — binary, auth, catalog, and runtime diagnostics
 - `/devin-<sub>` — the hyphenated aliases (`/devin-tasks`, `/devin-sessions`,
-  `/devin-reset`, `/devin-models`, `/devin-mode`, `/devin-login`,
-  `/devin-doctor`) run the matching `/devin <sub>` command inline
+  `/devin-reset`, `/devin-models`, `/devin-mode`, `/devin-yolo`,
+  `/devin-login`, `/devin-doctor`) run the matching `/devin <sub>` command
+  inline
 - `/devin-<name>` — run Devin's own slash commands and skills-as-commands
   (e.g. `/devin-compact`). Only exists while a Devin model is selected;
   forwards `/<name> args` into the ACP session
-- `/compact` under a Devin model runs *Devin's* compaction instead — pi's
-  pass is vetoed (`session_before_compact`) and `/compact` is forwarded into
-  the ACP session. `/skill:<name>` under a Devin model runs Devin's
-  same-named skill-command; pi's own skill never expands.
+- `/compact` under a Devin model runs *Devin's* compaction instead — every pi
+  trigger (manual `/compact [instructions]`, the context threshold, overflow
+  recovery) is vetoed (`session_before_compact`) and forwarded into the ACP
+  session; auto-triggered forwards are rate-limited. `/skill:<name>` under a
+  Devin model runs Devin's same-named skill-command; pi's own skill never
+  expands.
 
 ## How it works
 
@@ -73,12 +79,16 @@ unavailable.
   tool-card placeholders, and usage.
 - Devin tool calls appear as display-only `devin` tool calls; pi "executes"
   them by replaying the recorded Devin result, then re-enters the provider.
-- `session/request_permission` prompts through pi's select UI. Headless runs
-  deny by default; set `PI_DEVIN_HEADLESS_PERMISSION=allow` to auto-allow.
-- Pi-side compaction is skipped for Devin models (`session_before_compact`
-  veto) — Devin compacts its context server-side. Branch-summary prompts
-  still run in disposable ACP sessions, synced to the selected model, so
-  they never pollute the real Devin session's history.
+- `session/request_permission` prompts through pi's select UI and reports
+  `agent:input_required` (plus the legacy `herdr:blocked` alias) on pi's event
+  bus while it waits, so integrations such as Herdr can flag the session as
+  blocked. Headless runs deny by default; set
+  `PI_DEVIN_HEADLESS_PERMISSION=allow` to auto-allow.
+- Pi-side compaction is vetoed for Devin models (`session_before_compact`)
+  and routed to Devin's own `/compact` — Devin compacts its context
+  server-side. Branch-summary prompts still run in disposable ACP sessions,
+  synced to the selected model, so they never pollute the real Devin
+  session's history.
 - Switching between Devin models keeps the live session — the new model is
   applied via `session/set_config_option`. Switching to or from another
   provider re-bootstraps the next turn from pi's transcript.

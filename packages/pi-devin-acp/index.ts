@@ -24,6 +24,7 @@ import {
   type DevinModelFamily,
   modelCacheTtlMs,
 } from "./lib/models.ts";
+import { createDevinPermissionHandler } from "./lib/permission.ts";
 import { WRAPPER_TOOL_DESCRIPTION, WRAPPER_TOOL_NAME } from "./lib/prompt.ts";
 import { DevinReplayStore, type RecordedDevinTool } from "./lib/replay.ts";
 import { formatDevinCall, sanitizeDevinText, summarizeDevinResult } from "./lib/render.ts";
@@ -46,16 +47,28 @@ const LOCAL_DEVIN_SUBCOMMANDS = new Set([
   "sessions",
   "tasks",
   "mode",
+  "yolo",
   "login",
   "doctor",
 ]);
 const MODEL_CACHE_FILE = `${piConfigDir("devin-acp")}/models.json`;
+const SETTINGS_FILE = `${piConfigDir("devin-acp")}/settings.json`;
 const DEFAULT_MODE = "accept-edits";
+/** Devin's yolo mode: auto-approves every tool call server-side. */
+const YOLO_MODE = "bypass";
+/** Minimum gap before another auto-triggered compaction is forwarded. */
+const AUTO_COMPACT_FORWARD_COOLDOWN_MS = 60_000;
 
 interface DevinModelCache {
   fetchedAt: number;
   source: "live" | "fallback";
   families: DevinModelFamily[];
+}
+
+/** Machine-local extension settings at ~/.pi/devin-acp/settings.json. */
+interface DevinAcpSettings {
+  /** Always run devin's yolo (bypass) mode: no permission prompts. */
+  yolo?: boolean;
 }
 
 /** Bundled snapshot of `devin models list` (devin 3000.10.x, 2026-09). */
@@ -381,6 +394,13 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
   let selectedModelKey: string | undefined;
   let persistedSessionKey: string | undefined;
   let piSessionId = "";
+  let yoloEnabled = readJson<DevinAcpSettings>(SETTINGS_FILE, {}).yolo === true;
+  let lastAutoCompactForwardAt = 0;
+
+  const setYolo = (on: boolean) => {
+    writeJson(SETTINGS_FILE, { yolo: on } satisfies DevinAcpSettings);
+    yoloEnabled = on;
+  };
 
   // --- Status-bar hint for in-flight devin operations -----------------------
 
@@ -437,32 +457,20 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
         }
       },
     });
-    client.setPermissionHandler(async (params) => {
-      const options = params.options ?? [];
-      const ui = sessionCtx?.hasUI ? sessionCtx.ui : undefined;
-      if (!ui) {
-        // Headless: deny by default; PI_DEVIN_HEADLESS_PERMISSION=allow opts in.
-        if (process.env.PI_DEVIN_HEADLESS_PERMISSION === "allow") {
-          const allow = options.find((o) => o.kind === "allow_once" || /allow/i.test(o.optionId));
-          if (allow) {
-            return { outcome: { outcome: "selected" as const, optionId: allow.optionId } };
+    client.setPermissionHandler(
+      createDevinPermissionHandler({
+        ui: () => (sessionCtx?.hasUI ? sessionCtx.ui : undefined),
+        yolo: () => yoloEnabled,
+        headlessAllow: () => process.env.PI_DEVIN_HEADLESS_PERMISSION === "allow",
+        emit: (event, payload) => {
+          try {
+            pi.events.emit(event, { ...payload });
+          } catch {
+            // Best-effort signalling must never break the permission reply.
           }
-        }
-        return { outcome: { outcome: "cancelled" as const } };
-      }
-      const title = params.toolCall?.title ?? "tool call";
-      const names = options.map((o) => o.name ?? o.optionId);
-      const duplicated = new Set(names.filter((name, i) => names.indexOf(name) !== i));
-      const labels = options.map((o, i) =>
-        duplicated.has(names[i]) ? `${names[i]} (${o.kind ?? o.optionId})` : names[i],
-      );
-      const picked = await ui.select(`devin requests permission: ${oneLine(title, 80)}`, labels);
-      if (!picked) return { outcome: { outcome: "cancelled" as const } };
-      const index = labels.indexOf(picked);
-      return index >= 0
-        ? { outcome: { outcome: "selected" as const, optionId: options[index].optionId } }
-        : { outcome: { outcome: "cancelled" as const } };
-    });
+        },
+      }),
+    );
     return client;
   });
   const service = runtime.runSync(DevinRuntime);
@@ -678,6 +686,11 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
     } else {
       persistedSessionKey = undefined;
     }
+    if (yoloEnabled) {
+      // desiredModeId persists across session drops, so this pins every
+      // devin session this process creates to yolo (bypass) mode.
+      await runDevin(runtime, service.setMode(YOLO_MODE));
+    }
     if (ctx.model?.provider === DEVIN_PROVIDER) {
       await refreshModelsWhenSelected();
     }
@@ -770,17 +783,34 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
 
   pi.on("session_before_compact", (event, ctx) => {
     if (ctx.model?.provider !== DEVIN_PROVIDER) return;
-    if (event.reason === "manual" && ctx.hasUI) {
-      // Route pi's /compact to devin's own compaction: cancel pi's pass and
-      // send the bare command through a normal turn. Deferred one tick so the
-      // cancelled command finishes before the new prompt is submitted.
-      ctx.ui.notify("devin owns context — running devin's /compact instead.", "info");
-      setTimeout(() => {
-        void pi.sendUserMessage("/compact", { expandPromptTemplates: false });
-      }, 0);
+    // Devin owns context server-side; truncating pi's transcript cannot
+    // shrink the ACP session. Every pi compaction trigger — /compact,
+    // threshold, and overflow recovery — is cancelled here and routed to
+    // devin's own /compact, sent through a normal turn (deferred one tick so
+    // the cancelled pass finishes first).
+    const isManual = event.reason === "manual";
+    if (!isManual) {
+      // Auto triggers re-check every turn; devin's compact does not shrink
+      // pi's transcript, so without a cooldown each check would re-queue.
+      if (Date.now() - lastAutoCompactForwardAt < AUTO_COMPACT_FORWARD_COOLDOWN_MS) {
+        return { cancel: true };
+      }
+      lastAutoCompactForwardAt = Date.now();
     }
-    // Devin compacts its context server-side; truncating pi's transcript
-    // cannot shrink the ACP session, so pi-side compaction is skipped.
+    if (ctx.hasUI) {
+      ctx.ui.notify(
+        isManual
+          ? "devin owns context — running devin's /compact instead."
+          : `devin owns context — forwarding ${event.reason} compaction to devin's /compact.`,
+        "info",
+      );
+    }
+    const instructions = event.customInstructions?.trim();
+    setTimeout(() => {
+      void pi.sendUserMessage(instructions ? `/compact ${instructions}` : "/compact", {
+        expandPromptTemplates: false,
+      });
+    }, 0);
     return { cancel: true };
   });
 
@@ -817,6 +847,7 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
 
     if (sub === "reset") {
       await runDevin(runtime, service.reset);
+      if (yoloEnabled) await runDevin(runtime, service.setMode(YOLO_MODE));
       appendSessionReset(ctx);
       ctx.ui.notify("devin: session binding reset; next turn starts fresh.", "info");
       return;
@@ -896,9 +927,47 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
         );
         return;
       }
+      if (yoloEnabled && requested !== YOLO_MODE) {
+        ctx.ui.notify(
+          "devin yolo is on — mode stays bypass. /devin yolo off to change modes.",
+          "error",
+        );
+        return;
+      }
       try {
         await runDevin(runtime, service.setMode(requested));
         ctx.ui.notify(`devin mode: ${requested}`, "info");
+      } catch (error) {
+        ctx.ui.notify(
+          `devin: set mode failed (${error instanceof Error ? error.message : error}).`,
+          "error",
+        );
+      }
+      return;
+    }
+
+    const yoloMatch = sub.match(/^yolo(?:\s+(on|off))?$/);
+    if (yoloMatch) {
+      const requested = yoloMatch[1];
+      if (!requested) {
+        ctx.ui.notify(
+          `devin yolo: ${yoloEnabled ? "on" : "off"} — bypass mode auto-approves every tool call. Toggle: /devin yolo on|off`,
+          "info",
+        );
+        return;
+      }
+      const on = requested === "on";
+      try {
+        setYolo(on);
+        // Switching yolo off returns to the default mode rather than
+        // staying in bypass, which would keep auto-approving silently.
+        await runDevin(runtime, service.setMode(on ? YOLO_MODE : DEFAULT_MODE));
+        ctx.ui.notify(
+          on
+            ? "devin yolo: on — bypass mode; every tool call is auto-approved."
+            : `devin yolo: off — mode back to ${DEFAULT_MODE}.`,
+          "info",
+        );
       } catch (error) {
         ctx.ui.notify(
           `devin: set mode failed (${error instanceof Error ? error.message : error}).`,
@@ -962,7 +1031,7 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
 
     if (sub) {
       ctx.ui.notify(
-        `devin: unknown argument "${sub}". Use reset | models | sessions | tasks | mode | login | doctor.`,
+        `devin: unknown argument "${sub}". Use reset | models | sessions | tasks | mode | yolo | login | doctor.`,
         "error",
       );
       return;
@@ -971,7 +1040,7 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
     const snapshot = await runDevin(runtime, service.snapshot);
     const details = [
       `model: ${snapshot.concreteModel ?? snapshot.model ?? "unselected"}`,
-      `mode: ${snapshot.modeId ?? "default"}`,
+      `mode: ${snapshot.modeId ?? "default"}${yoloEnabled ? " (yolo)" : ""}`,
       `turns: ${snapshot.turns}`,
       snapshot.contextTokens === undefined
         ? undefined
@@ -992,7 +1061,7 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
 
   pi.registerCommand("devin", {
     description:
-      "Manage the devin backend: status | reset | models | sessions | tasks | mode | login | doctor — devin's own slash commands run as /devin-<name>",
+      "Manage the devin backend: status | reset | models | sessions | tasks | mode | yolo | login | doctor — devin's own slash commands run as /devin-<name>",
     handler: devinCommandHandler,
   });
 }
