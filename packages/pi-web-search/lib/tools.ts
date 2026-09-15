@@ -63,6 +63,13 @@ export const WebFetchParams = Type.Object({
       description: WEB_FETCH_PARAMETER_DESCRIPTIONS.raw,
     }),
   ),
+  maxPages: Type.Optional(
+    Type.Integer({
+      minimum: 1,
+      maximum: 10000,
+      description: WEB_FETCH_PARAMETER_DESCRIPTIONS.maxPages,
+    }),
+  ),
 });
 
 export type WebFetchInput = Static<typeof WebFetchParams>;
@@ -72,6 +79,10 @@ export interface WebFetchDetails {
   provider: FetchProviderName;
   title?: string;
   bytes: number;
+  /** Total page count when the fetched document is a PDF. */
+  pages?: number;
+  /** Local file path when an oversized PDF extraction was written to disk. */
+  savedTo?: string;
   fallbackFrom?: string[];
 }
 
@@ -143,7 +154,11 @@ export async function executeFetch(
 
   const response: FetchResponse = await runWebSearch(
     searchRuntime,
-    searchService.fetch(params.url, { signal, raw: params.raw }, undefined),
+    searchService.fetch(
+      params.url,
+      { signal, raw: params.raw, maxPages: params.maxPages },
+      undefined,
+    ),
     { signal },
   );
 
@@ -159,6 +174,8 @@ export async function executeFetch(
     provider: response.provider,
     title: response.title,
     bytes: Buffer.byteLength(text, "utf-8"),
+    pages: response.pages,
+    savedTo: response.savedTo,
     fallbackFrom: response.fallbacks?.length
       ? response.fallbacks.map((f) => f.provider)
       : undefined,
@@ -254,13 +271,14 @@ export function registerTools(
       }
 
       const kb = (details.bytes / 1024).toFixed(1);
+      const pdfStr = details.pages ? `, ${details.pages}p PDF` : "";
       const titleStr = details.title ? ` (${details.title})` : "";
       const fallbackStr = details.fallbackFrom?.length
         ? theme.fg("warning", ` (fallback from ${details.fallbackFrom.join(" → ")})`)
         : "";
       const summary =
         theme.fg("success", "✓ ") +
-        theme.fg("muted", `${kb} KB via ${details.provider}${titleStr}`) +
+        theme.fg("muted", `${kb} KB via ${details.provider}${pdfStr}${titleStr}`) +
         fallbackStr;
 
       if (!expanded) {
@@ -268,6 +286,9 @@ export function registerTools(
       }
 
       const lines = [summary, `  ${theme.fg("accent", "URL:")} ${theme.fg("dim", details.url)}`];
+      if (details.savedTo) {
+        lines.push(`  ${theme.fg("accent", "Saved to:")} ${theme.fg("dim", details.savedTo)}`);
+      }
       return new Text(lines.join("\n"), 0, 0);
     },
   });

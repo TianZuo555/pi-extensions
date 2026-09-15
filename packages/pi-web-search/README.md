@@ -142,8 +142,9 @@ as `## Summary`).
 
 ### `web_fetch`
 
-Reads web pages as clean Markdown. To customize its fallback priority, open
-`/websearch-order` and press `tab` to switch from Search to Fetch.
+Reads web pages and PDFs as clean Markdown/text. To customize its fallback
+priority, open `/websearch-order` and press `tab` to switch from Search to
+Fetch.
 
 - **Firecrawl** (`/v2/scrape`, `onlyMainContent` on): keyed or
   [keyless](https://www.firecrawl.dev/blog/firecrawl-keyless-launch) — a real
@@ -157,6 +158,16 @@ Reads web pages as clean Markdown. To customize its fallback priority, open
   removed before Markdown conversion. If Defuddle finds no usable main content
   (SPAs, tiny fragments), it falls back to a built-in regex-based converter.
   Pass `raw: true` to get the untouched response body instead.
+- **PDFs**: `.pdf` URLs start at `direct`, which extracts the embedded text
+  layer locally with [unpdf](https://github.com/unjs/unpdf) (free, no credits;
+  up to 20MB / 100 pages — override with `maxPages`). Pages are delimited by
+  `<!-- Page N -->` markers. When `maxPages` cuts a document short, the
+  complete extraction is written to `~/.pi/web-search/fetches/` and the
+  inline answer points at the file; extractions over ~200K chars are always
+  persisted that way with a short preview inline.
+  Scanned PDFs without a text layer fall through the chain to Firecrawl,
+  whose `auto` parser mode applies OCR. Explicit `fetchProvider`/`fetchOrder`
+  settings disable the direct-first reordering.
 
 ## License
 

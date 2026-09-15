@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import test from "node:test";
-import { hidePiAuthFile } from "./helpers.ts";
+import { hidePiAuthFile, hideStoredConfig } from "./helpers.ts";
 import type { FetchProviderName, SearchProviderName, WebSearchConfig } from "../lib/types.ts";
 import {
   classifyProviderFailure,
@@ -13,6 +14,7 @@ import {
   availableFetchProviders,
   availableSearchProviders,
   resolveFetchChain,
+  resolveFetchChainForUrl,
   resolveSearchChain,
 } from "../lib/config.ts";
 
@@ -551,6 +553,202 @@ test("fallback chain follows searchOrder/fetchOrder sequence including monid", (
       "direct",
     ]);
   } finally {
+    restoreFs();
+    restoreEnv(env);
+  }
+});
+
+test("resolveFetchChainForUrl leads with direct for .pdf URLs unless configured", () => {
+  const env = snapshotEnv();
+  const restoreFs = hidePiAuthFile();
+  try {
+    delete process.env.OPENAI_API_KEY;
+    delete process.env.TAVILY_API_KEY;
+    delete process.env.MONID_API_KEY;
+    delete process.env.DEEPSEEK_API_KEY;
+    delete process.env.OLLAMA_HOST;
+    process.env.FIRECRAWL_API_KEY = "fc-key";
+    process.env.EXA_API_KEY = "exa-key";
+    const cfg = {};
+
+    // Baseline: canonical order, direct last.
+    assert.deepEqual(resolveFetchChain(undefined, cfg), ["firecrawl", "exa", "direct"]);
+
+    // .pdf URL: direct (free local extraction) jumps to the head; the rest of
+    // the chain still covers scanned PDFs via Firecrawl's OCR.
+    assert.deepEqual(resolveFetchChainForUrl("https://a.com/paper.pdf", undefined, cfg), [
+      "direct",
+      "firecrawl",
+      "exa",
+    ]);
+    assert.deepEqual(resolveFetchChainForUrl("https://a.com/Paper.PDF?dl=1", undefined, cfg), [
+      "direct",
+      "firecrawl",
+      "exa",
+    ]);
+
+    // Non-PDF URLs and extension-less PDF paths keep the canonical order.
+    assert.deepEqual(resolveFetchChainForUrl("https://a.com/page", undefined, cfg), [
+      "firecrawl",
+      "exa",
+      "direct",
+    ]);
+    assert.deepEqual(resolveFetchChainForUrl("https://arxiv.org/pdf/2307.06435", undefined, cfg), [
+      "firecrawl",
+      "exa",
+      "direct",
+    ]);
+
+    // Explicit provider choices are honored as-is.
+    assert.deepEqual(resolveFetchChainForUrl("https://a.com/paper.pdf", "exa", cfg), [
+      "exa",
+      "firecrawl",
+      "direct",
+    ]);
+    assert.deepEqual(
+      resolveFetchChainForUrl("https://a.com/paper.pdf", undefined, {
+        fetchProvider: "firecrawl",
+      }),
+      ["firecrawl", "exa", "direct"],
+    );
+    assert.deepEqual(
+      resolveFetchChainForUrl("https://a.com/paper.pdf", undefined, {
+        fetchOrder: ["exa"] as FetchProviderName[],
+      }),
+      ["exa", "firecrawl", "direct"],
+    );
+  } finally {
+    restoreFs();
+    restoreEnv(env);
+  }
+});
+
+const PDF_FIXTURE = new Uint8Array(
+  fs.readFileSync(new URL("./fixtures/hello.pdf", import.meta.url)),
+);
+
+test("fetch: providers that cannot handle a PDF fall back to direct extraction", async () => {
+  const originalFetch = globalThis.fetch;
+  const restoreFs = hidePiAuthFile();
+  const restoreConfig = hideStoredConfig();
+  const env = snapshotEnv();
+
+  // No .pdf suffix: the chain keeps its default order and every remote
+  // provider declines in its own way, so direct has to sniff + parse it.
+  const pdfUrl = "https://files.example.com/download?id=42";
+  globalThis.fetch = (async (input: unknown) => {
+    const u = typeof input === "string" ? input : (input as Request).url;
+    if (u.includes("api.firecrawl.dev")) {
+      return new Response(JSON.stringify({ success: false, error: "unsupported content type" }), {
+        status: 422,
+      });
+    }
+    if (u.includes("api.exa.ai")) {
+      return new Response(JSON.stringify({ results: [{ url: pdfUrl, title: "download" }] }), {
+        status: 200,
+      });
+    }
+    if (u.includes("api.tavily.com")) {
+      return new Response(
+        JSON.stringify({
+          results: [],
+          failed_results: [{ url: pdfUrl, error: "unsupported file type" }],
+        }),
+        { status: 200 },
+      );
+    }
+    if (u === pdfUrl) {
+      return new Response(Buffer.from(PDF_FIXTURE), {
+        status: 200,
+        headers: { "Content-Type": "application/pdf" },
+      });
+    }
+    return new Response("not found", { status: 404 });
+  }) as typeof fetch;
+
+  try {
+    delete process.env.OPENAI_API_KEY;
+    delete process.env.MONID_API_KEY;
+    delete process.env.DEEPSEEK_API_KEY;
+    delete process.env.OLLAMA_HOST;
+    process.env.FIRECRAWL_API_KEY = "fc-key";
+    process.env.EXA_API_KEY = "exa-key";
+    process.env.TAVILY_API_KEY = "tv-key";
+
+    const runtime = createWebSearchRuntime();
+    const service = runtime.runSync(WebSearchRuntime);
+
+    const res = await runWebSearch(runtime, service.fetch(pdfUrl));
+    assert.equal(res.provider, "direct");
+    assert.deepEqual(
+      res.fallbacks?.map((f) => f.provider),
+      ["firecrawl", "exa", "tavily"],
+    );
+    assert.equal(res.pages, 2);
+    assert.match(res.text, /Hello PDF world from the extraction fixture/);
+    assert.match(res.text, /Second page carries different marker text/);
+
+    await runtime.dispose();
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreConfig();
+    restoreFs();
+    restoreEnv(env);
+  }
+});
+
+test("fetch: a provider returning unparsed PDF bytes counts as a failure", async () => {
+  const originalFetch = globalThis.fetch;
+  const restoreFs = hidePiAuthFile();
+  const restoreConfig = hideStoredConfig();
+  const env = snapshotEnv();
+
+  // No .pdf suffix: keeps the default chain order so ollama is tried first.
+  const pdfUrl = "https://files.example.com/paper";
+  globalThis.fetch = (async (input: unknown) => {
+    const u = typeof input === "string" ? input : (input as Request).url;
+    if (u.includes("/api/web_fetch")) {
+      // Simulates a scraper that proxies the body without parsing it —
+      // the result "succeeded" but the text is the raw PDF binary.
+      return new Response(
+        JSON.stringify({ content: "%PDF-1.4\n%\u00e2\u00e3\u00cf\u00d3 1 0 obj\nbinaryjunk" }),
+        { status: 200 },
+      );
+    }
+    if (u === pdfUrl) {
+      return new Response(Buffer.from(PDF_FIXTURE), {
+        status: 200,
+        headers: { "Content-Type": "application/pdf" },
+      });
+    }
+    return new Response("not found", { status: 404 });
+  }) as typeof fetch;
+
+  try {
+    delete process.env.OPENAI_API_KEY;
+    delete process.env.EXA_API_KEY;
+    delete process.env.FIRECRAWL_API_KEY;
+    delete process.env.TAVILY_API_KEY;
+    delete process.env.MONID_API_KEY;
+    delete process.env.DEEPSEEK_API_KEY;
+    process.env.FIRECRAWL_KEYLESS = "0";
+    process.env.OLLAMA_HOST = "http://localhost:11434";
+
+    const runtime = createWebSearchRuntime();
+    const service = runtime.runSync(WebSearchRuntime);
+
+    const res = await runWebSearch(runtime, service.fetch(pdfUrl));
+    assert.equal(res.provider, "direct");
+    assert.deepEqual(
+      res.fallbacks?.map((f) => f.provider),
+      ["ollama"],
+    );
+    assert.match(res.text, /Hello PDF world from the extraction fixture/);
+
+    await runtime.dispose();
+  } finally {
+    globalThis.fetch = originalFetch;
+    restoreConfig();
     restoreFs();
     restoreEnv(env);
   }
