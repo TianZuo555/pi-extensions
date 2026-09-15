@@ -6,6 +6,7 @@ settings:
 
 overrides:
   brace-expansion: ^5.0.8
+  '@xmldom/xmldom': ^0.9.12
   '@earendil-works/pi-ai': ^0.84.2
   '@earendil-works/pi-coding-agent': ^0.84.2
   '@earendil-works/pi-tui': ^0.84.2
@@ -1219,10 +1220,9 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@xmldom/xmldom@0.9.11':
-    resolution: {integrity: sha512-tW8bcK3hsG0/uqSnNz6TK4BkcuZSezoU7DlnYssILmZDktPnSHHuDJJFM0AJv+13gz2r0iGdrj6qqKeUnxXEDg==}
+  '@xmldom/xmldom@0.9.12':
+    resolution: {integrity: sha512-5AXjrcMClTryPe9LgZrygpB1lj7s0S9E0+W+AHaVKAVyHanafK86iPSvG5xHVSp/jC+VH1UXu0TAEmY279xH7A==}
     engines: {node: '>=14.6'}
-    deprecated: this version has critical issues, please update to the latest version
 
   agent-base@7.1.4:
     resolution: {integrity: sha512-MnA+YT8fwfJPgBx3m60MNqakm30XOkyIoH1y6huTQvC0PwZG7ki8NacLBcrPbNoo8vEZy7Jpuk7+jMO+CUovTQ==}
@@ -2588,7 +2588,7 @@ snapshots:
   '@typescript/typescript-win32-x64@7.0.2':
     optional: true
 
-  '@xmldom/xmldom@0.9.11':
+  '@xmldom/xmldom@0.9.12':
     optional: true
 
   agent-base@7.1.4: {}
@@ -2941,7 +2941,7 @@ snapshots:
 
   mathml-to-latex@1.8.0:
     dependencies:
-      '@xmldom/xmldom': 0.9.11
+      '@xmldom/xmldom': 0.9.12
     optional: true
 
   minimatch@10.2.5:
