@@ -15,6 +15,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { DevinAcpClient } from "./lib/acp-client.ts";
+import { createCompactForwarder, createCompactSend } from "./lib/compaction.ts";
 import { piConfigDir, readJson, writeJson } from "./lib/config.ts";
 import { checkDevinBinary, MIN_DEVIN_VERSION, runDevinCommand } from "./lib/diagnostics.ts";
 import {
@@ -395,12 +396,16 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
   let persistedSessionKey: string | undefined;
   let piSessionId = "";
   let yoloEnabled = readJson<DevinAcpSettings>(SETTINGS_FILE, {}).yolo === true;
-  let lastAutoCompactForwardAt = 0;
 
   const setYolo = (on: boolean) => {
     writeJson(SETTINGS_FILE, { yolo: on } satisfies DevinAcpSettings);
     yoloEnabled = on;
   };
+
+  const forwardCompact = createCompactForwarder({
+    cooldownMs: AUTO_COMPACT_FORWARD_COOLDOWN_MS,
+    send: createCompactSend((text, options) => pi.sendUserMessage(text, options)),
+  });
 
   // --- Status-bar hint for in-flight devin operations -----------------------
 
@@ -784,33 +789,9 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
   pi.on("session_before_compact", (event, ctx) => {
     if (ctx.model?.provider !== DEVIN_PROVIDER) return;
     // Devin owns context server-side; truncating pi's transcript cannot
-    // shrink the ACP session. Every pi compaction trigger — /compact,
-    // threshold, and overflow recovery — is cancelled here and routed to
-    // devin's own /compact, sent through a normal turn (deferred one tick so
-    // the cancelled pass finishes first).
-    const isManual = event.reason === "manual";
-    if (!isManual) {
-      // Auto triggers re-check every turn; devin's compact does not shrink
-      // pi's transcript, so without a cooldown each check would re-queue.
-      if (Date.now() - lastAutoCompactForwardAt < AUTO_COMPACT_FORWARD_COOLDOWN_MS) {
-        return { cancel: true };
-      }
-      lastAutoCompactForwardAt = Date.now();
-    }
-    if (ctx.hasUI) {
-      ctx.ui.notify(
-        isManual
-          ? "devin owns context — running devin's /compact instead."
-          : `devin owns context — forwarding ${event.reason} compaction to devin's /compact.`,
-        "info",
-      );
-    }
-    const instructions = event.customInstructions?.trim();
-    setTimeout(() => {
-      void pi.sendUserMessage(instructions ? `/compact ${instructions}` : "/compact", {
-        expandPromptTemplates: false,
-      });
-    }, 0);
+    // shrink the ACP session, so pi's pass is always vetoed here and the
+    // trigger is routed to devin's own /compact instead.
+    forwardCompact(event.reason, event.customInstructions, ctx.hasUI ? ctx.ui : undefined);
     return { cancel: true };
   });
 
