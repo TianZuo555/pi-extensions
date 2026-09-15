@@ -65,7 +65,7 @@ const AskUserParams = Type.Object({
 export type AskUserInput = Static<typeof AskUserParams>;
 
 export const AGENT_INPUT_REQUIRED_EVENT = "agent:input_required";
-const LEGACY_HERDR_BLOCKED_EVENT = "herdr:blocked";
+const HERDR_BLOCKED_EVENT = "herdr:blocked";
 
 /** Lifecycle event emitted while this tool is waiting for human input. */
 export interface AgentInputRequiredEvent {
@@ -274,8 +274,14 @@ export default function askUser(pi: ExtensionAPI): void {
         signal?.aborted ? { kind: "cancelled" } : { kind: "dismissed" };
 
       // Report the cause (waiting for input), not a client-specific final agent
-      // state. Consumers own state aggregation and transport. `herdr:blocked`
-      // remains temporarily for compatibility with Herdr's version 6 bridge.
+      // state. Consumers own state aggregation and transport.
+      //
+      // `herdr:blocked` is what Herdr's shipped pi integration actually reads
+      // (v8 in Herdr 0.9.0, v9 on master): it maps `active`/`label` onto the
+      // pane's blocked state, which drives Herdr's needs-attention
+      // notification. `agent:input_required` mirrors the same payload under a
+      // client-agnostic name; nothing subscribes to it yet, so neither channel
+      // deprecates the other.
       const firstQuestion = questions[0].question.replace(/\s+/g, " ").trim();
       const blockedLabel =
         (questions.length === 1
@@ -291,7 +297,7 @@ export default function askUser(pi: ExtensionAPI): void {
           label: blockedLabel,
         };
 
-        for (const eventName of [AGENT_INPUT_REQUIRED_EVENT, LEGACY_HERDR_BLOCKED_EVENT]) {
+        for (const eventName of [AGENT_INPUT_REQUIRED_EVENT, HERDR_BLOCKED_EVENT]) {
           try {
             pi.events.emit(eventName, { ...payload });
           } catch {
