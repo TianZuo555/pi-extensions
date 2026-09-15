@@ -33,7 +33,7 @@ grep(pattern, path?, glob?)
 find(pattern, path?)
 ```
 
-- `pattern` is a case-sensitive file glob, for example `*.ts` or `**/*.test.ts`.
+- `pattern` is a case-insensitive file glob, for example `*.ts` or `**/*.test.ts`.
 - `path` is one directory and defaults to the current directory.
 
 ```jsonc
