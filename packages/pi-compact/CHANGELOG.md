@@ -1,5 +1,15 @@
 # @tian.zuo/pi-compact
 
+## 0.2.1
+
+### Patch Changes
+
+- [#61](https://github.com/TianZuo555/pi-extensions/pull/61) [`950ce0c`](https://github.com/TianZuo555/pi-extensions/commit/950ce0c92691e6dee58f5877355ab7fa9dfc74db) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Preserve existing opaque checkpoints when remote compaction fails, is disabled, or cannot replay them instead of falling back to a lossy native summary. Keep checkpoint replay enabled independently of new compaction, allow cross-model replay on the same Codex backend, and reject the unavailable Codex compact-API route locally.
+  
+  Forward custom compaction instructions, bound the entire remote request including SSE body reading, and classify route failures from the HTTP status the provider reported instead of guessing from message text. A route is abandoned for the session after three consecutive failures of any kind, repeated warnings are shown once, and unexpected handler failures cancel with a visible reason instead of failing silently.
+  
+  Add `allowLossyNativeFallback` to opt into Pi's native summary when a compaction would otherwise be cancelled. Add checkpoint lifecycle, exception-boundary, route-classification, and transport regression tests.
+
 ## 0.2.0
 
 ### Minor Changes
