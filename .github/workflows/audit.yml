@@ -1,0 +1,93 @@
+name: Security Audit
+
+on:
+  # Weekly catch for advisories disclosed after a dependency was merged —
+  # Dependabot security updates are the primary fix path; this is the
+  # backstop so nothing lingers unnoticed in the lockfile.
+  schedule:
+    - cron: "17 9 * * 1" # Monday 09:17 UTC
+  workflow_dispatch:
+  # Post-merge signal when dependencies change, and PR-time blocking when
+  # a PR itself introduces a vulnerable resolution.
+  push:
+    branches: [main]
+    paths:
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/audit.yml"
+  pull_request:
+    paths:
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    name: pnpm audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run pnpm audit
+        id: audit
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          pnpm audit | tee audit-report.txt
+
+      # One open issue per advisory wave: create if absent, refresh the
+      # body if one already exists — no comment spam.
+      - name: File or update tracking issue
+        if: always() && steps.audit.outcome == 'failure' && github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          title="Security audit: dependency vulnerabilities found"
+          {
+            echo "\`pnpm audit\` found vulnerabilities in the lockfile."
+            echo ""
+            echo "Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            echo ""
+            echo "<details><summary>audit output</summary>"
+            echo ""
+            echo '```'
+            cat audit-report.txt
+            echo '```'
+            echo ""
+            echo "</details>"
+          } > issue-body.md
+
+          existing="$(gh issue list --state open --search "in:title \"${title}\"" --json number --jq '.[0].number' --limit 5)"
+          if [ -n "${existing}" ]; then
+            gh issue edit "${existing}" --body-file issue-body.md
+            echo "Updated existing issue #${existing}"
+          else
+            gh issue create --title "${title}" --body-file issue-body.md
+            echo "Filed new issue"
+          fi
+
+      - name: Fail when vulnerabilities were found
+        if: steps.audit.outcome == 'failure'
+        run: exit 1

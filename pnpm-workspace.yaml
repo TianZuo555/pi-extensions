@@ -13,6 +13,15 @@ overrides:
   "@earendil-works/pi-tui": ^0.84.2
   "@earendil-works/pi-agent-core": ^0.84.2
 
+# Don't install package versions published less than 2 days ago (the
+# built-in default is 1 day). Applies to all deps including transitive
+# ones. Keep dependabot.yml's cooldown at or above this value, or its
+# lockfile updates fail resolution (dependabot-core#13165).
+minimumReleaseAge: 2880
+# Non-strict: fall back to a too-new version rather than fail when no
+# aged version satisfies a range, so fresh security fixes can still land.
+minimumReleaseAgeStrict: false
+
 # Dependencies of the pi runtime whose install scripts npm ran automatically;
 # pnpm 11 denies dependency build scripts unless explicitly allowed here.
 allowBuilds:
