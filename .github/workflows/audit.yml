@@ -1,0 +1,124 @@
+name: Security Audit
+
+on:
+  # Weekly catch for advisories disclosed after a dependency was merged —
+  # Dependabot security updates are the primary fix path; this is the
+  # backstop so nothing lingers unnoticed in the lockfile.
+  schedule:
+    - cron: "17 9 * * 1" # Monday 09:17 UTC
+  workflow_dispatch:
+  # Post-merge signal when dependencies change, and a PR-time check when a
+  # PR itself introduces a vulnerable resolution. The PR-time check is
+  # advisory: `main` has no required status checks configured.
+  push:
+    branches: [main]
+    paths:
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/audit.yml"
+  pull_request:
+    paths:
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/audit.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  audit:
+    name: pnpm audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      report: ${{ steps.report.outputs.body }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: pnpm
+
+      # ci.yml already gates the minimumReleaseAge policy on the same PRs
+      # and pushes; this job only reports advisories, so a fresh pin must
+      # not surface here as a second, unrelated failure.
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile --config.minimumReleaseAge=0
+
+      - name: Run pnpm audit
+        id: audit
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          pnpm audit | tee audit-report.txt
+
+      # Hand the report to the reporting job: job outputs survive the
+      # failure below. The body degrades to the run link if it is empty.
+      - name: Read audit report
+        id: report
+        if: always() && steps.audit.outcome == 'failure'
+        run: |
+          {
+            echo "body<<AUDIT_REPORT_EOF"
+            cat audit-report.txt
+            echo "AUDIT_REPORT_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Fail when vulnerabilities were found
+        if: steps.audit.outcome == 'failure'
+        run: exit 1
+
+  # Split from the job above so `issues: write` is never held while
+  # PR-controlled install scripts run.
+  report:
+    name: File tracking issue
+    needs: audit
+    if: always() && needs.audit.result == 'failure' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      # One open issue per advisory wave: create if absent, refresh the
+      # body if one already exists — no comment spam.
+      - name: File or update tracking issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPORT: ${{ needs.audit.outputs.report }}
+        run: |
+          set -euo pipefail
+          [ -n "${REPORT}" ] || REPORT="(report unavailable — see the run log)"
+          title="Security audit: dependency vulnerabilities found"
+          {
+            echo "\`pnpm audit\` found vulnerabilities in the lockfile."
+            echo ""
+            echo "Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            echo ""
+            echo "<details><summary>audit output</summary>"
+            echo ""
+            echo '```'
+            printf '%s\n' "${REPORT}"
+            echo '```'
+            echo ""
+            echo "</details>"
+          } > issue-body.md
+
+          existing="$(gh issue list --state open --search "in:title \"${title}\"" --json number --jq '.[0].number' --limit 5)"
+          if [ -n "${existing}" ]; then
+            gh issue edit "${existing}" --body-file issue-body.md
+            echo "Updated existing issue #${existing}"
+          else
+            gh issue create --title "${title}" --body-file issue-body.md
+            echo "Filed new issue"
+          fi

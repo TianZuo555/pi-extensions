@@ -1,0 +1,38 @@
+version: 2
+updates:
+  # pnpm workspaces are covered by the npm ecosystem; the shared lockfile
+  # lives at the repo root, so one entry covers every package.
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 5
+    cooldown:
+      # Version updates only: security updates ignore cooldown and open
+      # immediately. Keep this >= minimumReleaseAge in pnpm-workspace.yaml
+      # (2 days) so a version-update PR never proposes a version pnpm
+      # would refuse at resolution in strict mode (dependabot-core#13165).
+      # A security PR that lands a younger version still needs a matching
+      # minimumReleaseAgeExclude entry — see AGENTS.md.
+      default-days: 3
+      semver-major-days: 7
+    groups:
+      # The pi runtime packages release in lockstep; keep them in one PR.
+      pi-runtime:
+        patterns:
+          - "@earendil-works/*"
+          - "typebox"
+      dev-tools:
+        patterns:
+          - "@biomejs/*"
+          - "@changesets/*"
+          - "@types/*"
+          - "typescript"
+          - "lefthook"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
