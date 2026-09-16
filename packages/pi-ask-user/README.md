@@ -33,8 +33,14 @@ integration communication: an integration subscribes with `pi.events.on(...)`,
 aggregates active requests into its own agent state, and bridges that state to
 its client.
 
-The canonical event is `agent:input_required`. Its versioned payload has a
-stable `id` so consumers can handle duplicate and concurrent requests safely:
+The same versioned payload goes out on two channels. `herdr:blocked` is the one
+with a live consumer: [Herdr](https://herdr.dev)'s shipped pi integration (v8 in
+Herdr 0.9.0, still v9 upstream) subscribes to it, maps `active`/`label` onto the
+pane's blocked state, and owns the resulting status and needs-attention
+notification. `agent:input_required` mirrors that payload under a
+client-agnostic name for consumers that prefer one; nothing subscribes to it
+yet, so the two channels coexist rather than one deprecating the other. The
+stable `id` lets consumers correlate duplicate and concurrent requests:
 
 ```ts
 {
@@ -46,17 +52,13 @@ stable `id` so consumers can handle duplicate and concurrent requests safely:
 }
 ```
 
-The same payload is temporarily also emitted as `herdr:blocked` for compatibility
-with version 6 of [Herdr](https://herdr.dev)'s shipped pi integration. New
-consumers should subscribe to `agent:input_required`; the producer reports why
-it is waiting, while clients such as Herdr own final status precedence and
-notification behavior.
-
 Pi core has no native "blocked" status (only *working* while a tool call is in
 flight vs *idle*), and can't distinguish an autonomous long-running tool from
-one waiting on a human. Emitting is best-effort, balanced active→inactive via
-`try/finally`, and a harmless no-op when nothing listens. No event is emitted in
-non-UI modes.
+one waiting on a human. Pi 0.84.4+ emits its own `ui_prompt_start` /
+`ui_prompt_end` around `ctx.ui` prompts, but those carry no question label for
+`custom` forms — the shape this tool renders. Emitting is best-effort, balanced
+active→inactive via `try/finally`, and a harmless no-op when nothing listens. No
+event is emitted in non-UI modes.
 
 See the [collection repository](https://github.com/TianZuo555/pi-extensions) for more extensions.
 
