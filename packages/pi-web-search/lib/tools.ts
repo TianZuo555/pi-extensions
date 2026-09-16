@@ -74,6 +74,27 @@ export const WebFetchParams = Type.Object({
 
 export type WebFetchInput = Static<typeof WebFetchParams>;
 
+/**
+ * Shared error renderer: failed tool calls carry the error text in content
+ * (often with an empty/partial details object), so render the first
+ * non-empty error line instead of the success summary.
+ */
+function renderToolError(
+  result: AgentToolResult<unknown>,
+  expanded: boolean,
+  verb: string,
+  theme: Theme,
+): Text {
+  const output = result.content
+    .filter((block): block is { type: "text"; text: string } => block.type === "text")
+    .map((block) => block.text)
+    .join("\n");
+  const firstLine = output.split("\n").find((line) => line.trim().length > 0) ?? `${verb} failed`;
+  const summary = theme.fg("error", `✗ ${firstLine}`);
+  if (!expanded || output === firstLine) return new Text(summary, 0, 0);
+  return new Text(`${summary}\n${theme.fg("toolOutput", output)}`, 0, 0);
+}
+
 export interface WebFetchDetails {
   url: string;
   provider: FetchProviderName;
@@ -210,7 +231,10 @@ export function registerTools(
       return new Text(line, 0, 0);
     },
 
-    renderResult(result: AgentToolResult<unknown>, { expanded }, theme: Theme) {
+    renderResult(result: AgentToolResult<unknown>, { expanded }, theme: Theme, context) {
+      if (context.isError) {
+        return renderToolError(result, expanded, "Search", theme);
+      }
       const details = result.details as WebSearchDetails | undefined;
       if (!details) {
         return new Text(theme.fg("success", "✓ Search completed"), 0, 0);
@@ -264,7 +288,10 @@ export function registerTools(
       return new Text(line, 0, 0);
     },
 
-    renderResult(result: AgentToolResult<unknown>, { expanded }, theme: Theme) {
+    renderResult(result: AgentToolResult<unknown>, { expanded }, theme: Theme, context) {
+      if (context.isError) {
+        return renderToolError(result, expanded, "Fetch", theme);
+      }
       const details = result.details as WebFetchDetails | undefined;
       if (!details) {
         return new Text(theme.fg("success", "✓ Fetch completed"), 0, 0);
