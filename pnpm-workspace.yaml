@@ -7,10 +7,28 @@ shellEmulator: true
 
 overrides:
   brace-expansion: ^5.0.8
+  "@xmldom/xmldom": ^0.9.12
   "@earendil-works/pi-ai": ^0.84.2
   "@earendil-works/pi-coding-agent": ^0.84.2
   "@earendil-works/pi-tui": ^0.84.2
   "@earendil-works/pi-agent-core": ^0.84.2
+
+# Don't install package versions published less than 2 days ago (the
+# built-in default is 1 day). Applies to all deps including transitive
+# ones. Keep dependabot.yml's cooldown at or above this value so version
+# updates never propose a version pnpm would refuse in strict mode
+# (dependabot-core#13165).
+minimumReleaseAge: 2880
+# Non-strict relaxes resolution only: when no aged version satisfies a
+# range, pnpm falls back to a too-new one instead of failing, so a fresh
+# security fix can still land. The lockfile policy check is *not* relaxed
+# — every install, `--frozen-lockfile` included, re-applies
+# minimumReleaseAge to lockfile entries and fails with
+# ERR_PNPM_MINIMUM_RELEASE_AGE_VIOLATION unless the entry is listed in
+# minimumReleaseAgeExclude. Interactive `pnpm add`/`pnpm update` writes
+# that entry for you; `pnpm update --no-save` (what Dependabot runs)
+# cannot, so security-update PRs need it added by hand. See AGENTS.md.
+minimumReleaseAgeStrict: false
 
 # Dependencies of the pi runtime whose install scripts npm ran automatically;
 # pnpm 11 denies dependency build scripts unless explicitly allowed here.
