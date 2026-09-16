@@ -81,7 +81,12 @@ class FakeClient {
     this.deleted.push(id);
   }
   async authenticate() {}
-  async close() {}
+  closeCount = 0;
+  async close() {
+    this.closeCount += 1;
+    // The real client fires onClose when its connection closes.
+    this.onClose?.();
+  }
 }
 
 const TURN = (over: Partial<Parameters<DevinRuntimeShape["beginStreamTurn"]>[0]> = {}) => ({
@@ -130,6 +135,38 @@ test("re-attach returns the same controller for the same prompt", async () => {
   const again = await runDevin(runtime, service.beginStreamTurn(TURN()));
   assert.equal(first, again);
   assert.equal(fake.prompts.length, 1);
+  await runtime.dispose();
+});
+
+test("suspend kills the client, drops the binding, and stays usable", async () => {
+  const { fake, runtime, service } = await makeRuntime();
+  const controller = await runDevin(runtime, service.beginStreamTurn(TURN()));
+  for (;;) {
+    if ((await controller.next()) === null) break;
+  }
+  assert.equal(fake.createdSessions.length, 1);
+  await runDevin(runtime, service.suspend);
+  assert.equal(fake.closeCount, 1, "the ACP child is killed");
+  const snapshot = await runDevin(runtime, service.snapshot);
+  assert.equal(snapshot.sessionId, undefined);
+  // The child-exit callback must not resurrect the dropped session: the
+  // next turn opens a fresh one instead of lazily loading the old binding.
+  const second = await runDevin(runtime, service.beginStreamTurn(TURN()));
+  assert.equal(fake.createdSessions.length, 2);
+  assert.equal(fake.loaded.length, 0);
+  for (;;) {
+    if ((await second.next()) === null) break;
+  }
+  await runtime.dispose();
+});
+
+test("closed runtime rejects further use while suspend does not", async () => {
+  const { runtime, service } = await makeRuntime();
+  await runDevin(runtime, service.suspend);
+  const snapshot = await runDevin(runtime, service.snapshot);
+  assert.equal(snapshot.sessionId, undefined);
+  await runDevin(runtime, service.close);
+  await assert.rejects(() => runDevin(runtime, service.snapshot), /shut down/);
   await runtime.dispose();
 });
 
