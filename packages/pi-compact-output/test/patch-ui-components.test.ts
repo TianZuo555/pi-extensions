@@ -596,9 +596,9 @@ test("restoration restores the exact saved methods", () => {
 test("unsupported Pi versions leave original rendering active", () => {
   assert.equal(
     isSupportedPiVersion(VERSION),
-    VERSION.startsWith("0.83.") || VERSION.startsWith("0.84."),
+    VERSION.startsWith("0.83.") || VERSION.startsWith("0.84.") || VERSION.startsWith("0.85."),
   );
-  if (VERSION.startsWith("0.83.") || VERSION.startsWith("0.84.")) {
+  if (VERSION.startsWith("0.83.") || VERSION.startsWith("0.84.") || VERSION.startsWith("0.85.")) {
     return;
   }
 
@@ -627,6 +627,7 @@ test("extension leaves pi's default working message untouched", () => {
       setWorkingMessage() {
         setWorkingMessageCalls++;
       },
+      notify() {},
     },
   } as unknown as ExtensionContext;
 

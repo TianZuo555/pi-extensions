@@ -8,10 +8,10 @@ shellEmulator: true
 overrides:
   brace-expansion: ^5.0.8
   "@xmldom/xmldom": ^0.9.12
-  "@earendil-works/pi-ai": ^0.84.2
-  "@earendil-works/pi-coding-agent": ^0.84.2
-  "@earendil-works/pi-tui": ^0.84.2
-  "@earendil-works/pi-agent-core": ^0.84.2
+  "@earendil-works/pi-ai": ^0.85.1
+  "@earendil-works/pi-coding-agent": ^0.85.1
+  "@earendil-works/pi-tui": ^0.85.1
+  "@earendil-works/pi-agent-core": ^0.85.1
 
 # Don't install package versions published less than 2 days ago (the
 # built-in default is 1 day). Applies to all deps including transitive
@@ -34,6 +34,7 @@ minimumReleaseAgeStrict: false
 # pnpm 11 denies dependency build scripts unless explicitly allowed here.
 allowBuilds:
   "@google/genai": true
+  esbuild: true
   koffi: true
   lefthook: true
   msgpackr-extract: true
