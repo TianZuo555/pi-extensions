@@ -672,7 +672,12 @@ class DevinOpDetail implements Component {
     lines.push(border);
     const header =
       `${glyph} ` +
-      theme.fg("accent", theme.bold(`${view.tool ?? view.kind ?? "op"} · ${oneLine(view.title || "(untitled op)", 100)}`)) +
+      theme.fg(
+        "accent",
+        theme.bold(
+          `${view.tool ?? view.kind ?? "op"} · ${oneLine(view.title || "(untitled op)", 100)}`,
+        ),
+      ) +
       theme.fg(
         "muted",
         ` · ${view.status ?? "running"} · ${formatElapsed(this.op.startedAt, now)} · ${view.shellId ? `bg shell ${view.shellId}` : "in-turn"}`,

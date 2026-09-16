@@ -73,7 +73,8 @@ export function descendantRows(rows: readonly PsRow[], rootPid: number): PsRow[]
   const seen = new Set<number>([rootPid]);
   const queue = [rootPid];
   while (queue.length > 0) {
-    const pid = queue.shift()!;
+    const pid = queue.shift();
+    if (pid === undefined) continue;
     for (const childPid of childrenOf.get(pid) ?? []) {
       if (seen.has(childPid)) continue;
       seen.add(childPid);

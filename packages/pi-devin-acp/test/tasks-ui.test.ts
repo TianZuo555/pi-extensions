@@ -414,7 +414,7 @@ test("detail view freezes once the op settles and stops offering kill", async ()
       detail.handleInput("x"); // settled: no kill action
       detail.handleInput("\x1b"); // back out to the dashboard
     },
-    async (dashboard) => {
+    async (_dashboard) => {
       await flush();
       await flush();
     },
@@ -464,7 +464,7 @@ test("buildDevinOpInfo includes invocation metadata and sanitized input", () => 
   assert.match(info, /elapsed: 9s/);
   assert.match(info, /scope: background shell 7/);
   assert.match(info, /locations: \/a\.ts, \/b\.ts/);
-  assert.match(info, /input:\n\{\n  "command": "npm test"\n\}/);
+  assert.match(info, /input:\n\{\n {2}"command": "npm test"\n\}/);
   assert.doesNotMatch(info, /\u001b\[/);
 });
 
