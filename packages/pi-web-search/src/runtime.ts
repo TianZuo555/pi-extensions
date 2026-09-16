@@ -22,7 +22,7 @@ import {
   Result,
   SynchronizedRef,
 } from "effect";
-import { resolveFetchChain, resolveSearchChain } from "../lib/config.ts";
+import { resolveFetchChainForUrl, resolveSearchChain } from "../lib/config.ts";
 import { searchDeepseek } from "../lib/deepseek.ts";
 import { fetchDirect } from "../lib/direct-fetch.ts";
 import { fetchExa, searchExa } from "../lib/exa.ts";
@@ -346,36 +346,49 @@ const makeWebSearchRuntime = Effect.gen(function* () {
     options: FetchOptions = {},
     requestedProvider?: FetchProviderName,
   ): Effect.Effect<FetchResponse, WebSearchError> =>
-    runProviderChain("fetch", resolveFetchChain(requestedProvider), (provider: FetchProviderName) =>
-      Effect.tryPromise({
-        try: async (signal) => {
-          const fetchOpts: FetchOptions = {
-            ...options,
-            signal: combineSignals(options.signal, signal),
-          };
-          switch (provider) {
-            case "firecrawl":
-              return await fetchFirecrawl(url, fetchOpts);
-            case "exa":
-              return await fetchExa(url, fetchOpts);
-            case "tavily":
-              return await fetchTavily(url, fetchOpts);
-            case "monid":
-              return await fetchMonid(url, fetchOpts);
-            case "ollama":
-              return await fetchOllama(url, fetchOpts);
-            case "direct":
-              return await fetchDirect(url, fetchOpts);
-            default:
-              throw new Error(`Unsupported fetch provider: ${provider as string}`);
-          }
-        },
-        catch: (err): ProviderAttemptFailure => ({
-          provider,
-          message: err instanceof Error ? err.message : String(err),
-          userAborted: isUserAbort(err, options.signal),
+    runProviderChain(
+      "fetch",
+      resolveFetchChainForUrl(url, requestedProvider),
+      (provider: FetchProviderName) =>
+        Effect.tryPromise({
+          try: async (signal) => {
+            const fetchOpts: FetchOptions = {
+              ...options,
+              signal: combineSignals(options.signal, signal),
+            };
+            const response = await (async (): Promise<FetchResponse> => {
+              switch (provider) {
+                case "firecrawl":
+                  return fetchFirecrawl(url, fetchOpts);
+                case "exa":
+                  return fetchExa(url, fetchOpts);
+                case "tavily":
+                  return fetchTavily(url, fetchOpts);
+                case "monid":
+                  return fetchMonid(url, fetchOpts);
+                case "ollama":
+                  return fetchOllama(url, fetchOpts);
+                case "direct":
+                  return fetchDirect(url, fetchOpts);
+                default:
+                  throw new Error(`Unsupported fetch provider: ${provider as string}`);
+              }
+            })();
+            // A scraper that hands back raw PDF bytes as "text" produced no
+            // readable content — count it as a failure so the chain reaches a
+            // provider (usually direct) that actually parses the document.
+            const head = response.text.slice(0, 1024);
+            if (/^%PDF-/.test(head) || head.includes("\0")) {
+              throw new Error(`${provider} returned unparsed binary content`);
+            }
+            return response;
+          },
+          catch: (err): ProviderAttemptFailure => ({
+            provider,
+            message: err instanceof Error ? err.message : String(err),
+            userAborted: isUserAbort(err, options.signal),
+          }),
         }),
-      }),
     );
 
   return WebSearchRuntime.of({

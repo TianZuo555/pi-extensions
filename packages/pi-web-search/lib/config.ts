@@ -642,3 +642,29 @@ export function resolveFetchChain(
   );
   return dedupe([...(head ? [head] : []), ...order, ...available]);
 }
+
+const PDF_URL_RE = /\.pdf$/i;
+
+/**
+ * Fetch chain for a specific URL. `direct` moves to the head for .pdf URLs so
+ * free local extraction (unpdf) runs before credit-billed providers; scanned
+ * or unparseable PDFs still fall through to Firecrawl's OCR-capable pipeline.
+ * Explicit provider choices — a requested provider, `fetchProvider`, or
+ * `fetchOrder` — are honored as-is.
+ */
+export function resolveFetchChainForUrl(
+  url: string,
+  requested?: FetchProviderName,
+  config = loadStoredConfig(),
+): FetchProviderName[] {
+  const chain = resolveFetchChain(requested, config);
+  if (requested || config.fetchProvider || config.fetchOrder?.length) return chain;
+  let pathname: string;
+  try {
+    pathname = new URL(url).pathname;
+  } catch {
+    return chain;
+  }
+  if (!PDF_URL_RE.test(pathname) || !chain.includes("direct")) return chain;
+  return ["direct", ...chain.filter((p) => p !== "direct")];
+}
