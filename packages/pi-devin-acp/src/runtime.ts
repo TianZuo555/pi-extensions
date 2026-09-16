@@ -139,6 +139,14 @@ export interface DevinRuntimeShape {
     modeId: string,
   ) => Effect.Effect<void, DevinRuntimeClosedError | DevinSessionError>;
   readonly reset: Effect.Effect<void, DevinRuntimeClosedError>;
+  /**
+   * Kill the ACP child process and drop all session state while keeping the
+   * runtime usable: the extension instance survives pi /new, /resume, and
+   * /fork (extensions are cached across session replacement), so only quit
+   * and reload may close it for good. Unlike a crashed child, no lazy
+   * session/load retry is queued — the dropped binding stays dropped.
+   */
+  readonly suspend: Effect.Effect<void, DevinRuntimeClosedError>;
   /** Subscribe to session activities (for UI surfaces like live-op widgets). */
   readonly onActivity: (
     fn: (activity: DevinActivity) => void,
@@ -725,6 +733,20 @@ const makeRuntime = (createClient: DevinClientFactory) =>
           Effect.sync(() => {
             desiredModeId = undefined;
             dropSession(false);
+          }),
+        ),
+      ),
+
+      suspend: ensureOpen.pipe(
+        Effect.andThen(
+          Effect.promise(async () => {
+            invalidateActiveTurn();
+            // Detach before close so the child-exit listener (which queues a
+            // lazy session/load retry) sees a stale client and no-ops.
+            const current = client;
+            client = undefined;
+            dropSession(true);
+            if (current) await current.close();
           }),
         ),
       ),

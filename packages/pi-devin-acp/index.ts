@@ -800,7 +800,7 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
     await persistSessionState(ctx, true);
   });
 
-  pi.on("session_shutdown", async () => {
+  pi.on("session_shutdown", async (event) => {
     if (opsTicker) {
       clearInterval(opsTicker);
       opsTicker = undefined;
@@ -810,15 +810,22 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
     } catch {
       // UI already gone.
     }
+    // Extensions are cached and reused across /new, /resume, and /fork — only
+    // quit and /reload replace the instance — so session replacement must
+    // suspend the runtime (kill the devin child, drop the binding) instead of
+    // closing it, or the reused instance dies with "ManagedRuntime disposed".
+    const final = event.reason === "quit" || event.reason === "reload";
     try {
-      await runDevin(runtime, service.close);
+      await runDevin(runtime, final ? service.close : service.suspend);
     } catch {
       // Already closed.
     }
-    try {
-      await runtime.dispose();
-    } catch {
-      // Disposed gracefully.
+    if (final) {
+      try {
+        await runtime.dispose();
+      } catch {
+        // Disposed gracefully.
+      }
     }
   });
 
