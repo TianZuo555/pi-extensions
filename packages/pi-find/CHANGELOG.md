@@ -1,5 +1,11 @@
 # @tian.zuo/pi-find
 
+## 0.5.0
+
+### Minor Changes
+
+- [#68](https://github.com/TianZuo555/pi-extensions/pull/68) [`4cfbbc6`](https://github.com/TianZuo555/pi-extensions/commit/4cfbbc603e1499803e897d6e44db21f6e13883c4) Thanks [@TianZuo555](https://github.com/TianZuo555)! - `find` now matches file names case-insensitively (`*.TS` finds `main.ts`, and `!*.TS` excludes it too). `grep` and its `glob` filter stay case-sensitive.
+
 ## 0.4.3
 
 ### Patch Changes

@@ -1,5 +1,13 @@
 # @tian.zuo/pi-devin-acp
 
+## 0.2.0
+
+### Minor Changes
+
+- [#65](https://github.com/TianZuo555/pi-extensions/pull/65) [`5fb65bd`](https://github.com/TianZuo555/pi-extensions/commit/5fb65bd86b38fb558bab53ba12bce050dd73979e) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Emit `agent:input_required` (and legacy `herdr:blocked`) on the shared event bus while a devin permission prompt waits on the user, so integrations such as Herdr can surface the blocked state and notification sound. Route every pi compaction trigger — manual `/compact`, threshold, and overflow recovery — to devin's own `/compact` instead of silently skipping non-manual ones, forwarding custom instructions and rate-limiting auto forwards. Add a persisted `yolo` setting (`/devin yolo on|off`, stored at `~/.pi/devin-acp/settings.json`) that pins devin to bypass mode and auto-approves any permission request that still arrives.
+
+- [#65](https://github.com/TianZuo555/pi-extensions/pull/65) [`5fb65bd`](https://github.com/TianZuo555/pi-extensions/commit/5fb65bd86b38fb558bab53ba12bce050dd73979e) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Rebuild `/devin tasks` as a `/ps`-style fullscreen overlay (mirroring the background-terminals dashboard): bordered op list with j/k selection, live 1 Hz refresh, elapsed times, background-shell markers, and enter/x to ask devin to kill a background shell; non-TUI modes keep the select/confirm flow. Fix the devin runtime dying with "ManagedRuntime disposed" after pi `/new`, `/resume`, or `/fork`: extensions are cached and reused across session replacement, so those now suspend the runtime (kill the `devin acp` child, drop the session binding) and only quit/`/reload` close it for good — `/new` now really starts a fresh devin session on the next turn.
+
 ## 0.1.1
 
 ### Patch Changes
