@@ -205,6 +205,9 @@ export class DevinAcpClient {
       clientCapabilities: {
         fs: { readTextFile: false, writeTextFile: false },
         terminal: false,
+        // Replays cumulative usage + turn stats on session/load, so resumed
+        // sessions keep /devin-usage populated.
+        _meta: { "cognition.ai/loadStats": true },
       },
       clientInfo: this.#options.clientInfo ?? { name: "pi-devin-acp", version: "0.0.0" },
     });

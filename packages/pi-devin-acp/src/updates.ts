@@ -6,13 +6,98 @@
 import type { SessionUpdate } from "@agentclientprotocol/sdk";
 import type { DevinConfigOption } from "../lib/acp-client.ts";
 import { mergeDevinTool } from "../lib/tool-content.ts";
-import type { DevinActivity, DevinUsage } from "./turn.ts";
+import type { DevinActivity, DevinResponseDimension, DevinUsage } from "./turn.ts";
 
 function metaNumber(update: { _meta?: unknown }, key: string): number | undefined {
   const meta = update._meta;
   if (typeof meta !== "object" || meta === null) return undefined;
   const value = (meta as Record<string, unknown>)[key];
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+}
+
+/**
+ * `responseDimensions` arrive in two serializations: agent_stopped/turn_stats
+ * use `{groupTitle, label, kind: {type, value, …}}` while usage_update's
+ * _meta uses `{group_title, kind: {CumulativeMetric: {label, value, …}}}`
+ * (internally tagged, snake_case fields). Normalize both to the former.
+ */
+function normalizeDimension(raw: unknown): DevinResponseDimension | undefined {
+  if (typeof raw !== "object" || raw === null) return undefined;
+  const record = raw as Record<string, unknown>;
+  const groupTitle =
+    typeof record.groupTitle === "string"
+      ? record.groupTitle
+      : typeof record.group_title === "string"
+        ? record.group_title
+        : undefined;
+  const uid = typeof record.uid === "string" ? record.uid : undefined;
+  const kind = record.kind;
+  if (typeof kind !== "object" || kind === null) return undefined;
+  const k = kind as Record<string, unknown>;
+
+  const str = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
+
+  if ("type" in k || "value" in k) {
+    return {
+      uid,
+      groupTitle,
+      label: str(record.label),
+      kind: {
+        type: str(k.type),
+        value: k.value,
+        prefix: str(k.prefix),
+        tail: str(k.tail),
+        pluralTail: str(k.pluralTail) ?? str(k.plural_tail),
+      },
+    };
+  }
+  // Internally tagged variant: {CumulativeMetric: {…}} — first entry wins.
+  const entry = Object.entries(k)[0];
+  if (!entry) return undefined;
+  const [variant, payload] = entry;
+  if (typeof payload !== "object" || payload === null) return undefined;
+  const inner = payload as Record<string, unknown>;
+  return {
+    uid,
+    groupTitle,
+    label: str(inner.label) ?? str(record.label),
+    kind: {
+      type: variant.charAt(0).toLowerCase() + variant.slice(1),
+      value: inner.value ?? inner.code,
+      prefix: str(inner.prefix),
+      tail: str(inner.tail),
+      pluralTail: str(inner.plural_tail) ?? str(inner.pluralTail),
+    },
+  };
+}
+
+function toDimensions(value: unknown): DevinResponseDimension[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const dims = value
+    .map(normalizeDimension)
+    .filter((d): d is DevinResponseDimension => d !== undefined);
+  return dims.length ? dims : undefined;
+}
+
+function metaDimensions(
+  update: { _meta?: unknown },
+  key: string,
+): DevinResponseDimension[] | undefined {
+  const meta = update._meta;
+  if (typeof meta !== "object" || meta === null) return undefined;
+  return toDimensions((meta as Record<string, unknown>)[key]);
+}
+
+function metaCost(update: {
+  _meta?: unknown;
+  cost?: unknown;
+}): { amount: number; currency: string } | undefined {
+  const cost = update.cost;
+  if (typeof cost !== "object" || cost === null) return undefined;
+  const amount = (cost as { amount?: unknown }).amount;
+  if (typeof amount !== "number" || !Number.isFinite(amount)) return undefined;
+  const currency = (cost as { currency?: unknown }).currency;
+  return { amount, currency: typeof currency === "string" ? currency : "USD" };
 }
 
 function textOf(update: { content?: unknown }): string | undefined {
@@ -62,10 +147,16 @@ export function acpUpdateToActivities(update: SessionUpdate): DevinActivity[] {
     case "usage_update": {
       const usage: DevinUsage = {
         contextUsed: typeof update.used === "number" ? update.used : undefined,
-        contextSize: typeof update.size === "number" ? update.size : undefined,
+        // The loadStats replay reports size: 0 until the model's window syncs.
+        contextSize: typeof update.size === "number" && update.size > 0 ? update.size : undefined,
         inputTokens: metaNumber(update, "cognition.ai/inputTokens"),
         outputTokens: metaNumber(update, "cognition.ai/outputTokens"),
         cachedReadTokens: metaNumber(update, "cognition.ai/cachedReadTokens"),
+        cachedWriteTokens: metaNumber(update, "cognition.ai/cachedWriteTokens"),
+        totalCreditCost: metaNumber(update, "cognition.ai/totalCreditCost"),
+        totalAcuCost: metaNumber(update, "cognition.ai/totalAcuCost"),
+        cost: metaCost(update),
+        dimensions: metaDimensions(update, "cognition.ai/responseDimensions"),
       };
       return [{ type: "usage", usage }];
     }
@@ -119,6 +210,15 @@ export function agentStoppedToActivity(params: unknown): DevinActivity | undefin
       tokensPerSec: num("tokensPerSec"),
       totalTimeMs: num("totalTimeMs"),
       modelLabel: typeof stats.modelLabel === "string" ? stats.modelLabel : undefined,
+      creditCost: num("creditCost"),
+      acuCost: num("acuCost"),
+      dimensions: toDimensions(stats.responseDimensions),
     },
   };
+}
+
+/** `_cognition.ai/turn_stats` params → last turn's response dimensions. */
+export function turnStatsToDimensions(params: unknown): DevinResponseDimension[] | undefined {
+  if (typeof params !== "object" || params === null) return undefined;
+  return toDimensions((params as Record<string, unknown>).responseDimensions);
 }

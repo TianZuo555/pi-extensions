@@ -17,12 +17,14 @@ import {
   piSystemInstructionsPrompt,
   restoredPiContextPrompt,
 } from "../lib/prompt.ts";
-import { acpUpdateToActivities, agentStoppedToActivity } from "./updates.ts";
+import { acpUpdateToActivities, agentStoppedToActivity, turnStatsToDimensions } from "./updates.ts";
 import {
   DevinTurnController,
+  mergeDevinUsage,
   TERMINAL_TOOL_STATUSES,
   type DevinActivity,
   type DevinTurnStats,
+  type DevinUsage,
 } from "./turn.ts";
 import type { DevinToolView } from "../lib/tool-content.ts";
 
@@ -62,6 +64,8 @@ export interface DevinStateSnapshot {
   turns: number;
   contextTokens: number | undefined;
   contextSize: number | undefined;
+  /** Latest cumulative usage_update snapshot (tokens, cost, dimensions). */
+  usage: DevinUsage | undefined;
   configOptions: DevinConfigOption[] | undefined;
   availableCommands: { name: string; description?: string; hint?: string }[] | undefined;
   lastTurnStats: DevinTurnStats | undefined;
@@ -184,6 +188,7 @@ const makeRuntime = (createClient: DevinClientFactory) =>
     let turns = 0;
     let contextTokens: number | undefined;
     let contextSize: number | undefined;
+    let usage: DevinUsage | undefined;
     let configOptions: DevinConfigOption[] | undefined;
     let availableCommands: DevinStateSnapshot["availableCommands"];
     let lastTurnStats: DevinTurnStats | undefined;
@@ -223,11 +228,18 @@ const makeRuntime = (createClient: DevinClientFactory) =>
           client = undefined;
         });
         created.setCustomNotificationHandler((method, params) => {
-          if (client !== created || method !== "_cognition.ai/agent_stopped") return;
-          const activity = agentStoppedToActivity(params);
-          if (activity?.type !== "stopped") return;
-          lastTurnStats = activity.stats;
-          active?.push(activity);
+          if (client !== created) return;
+          if (method === "_cognition.ai/agent_stopped") {
+            const activity = agentStoppedToActivity(params);
+            if (activity?.type !== "stopped") return;
+            lastTurnStats = activity.stats;
+            active?.push(activity);
+          } else if (method === "_cognition.ai/turn_stats") {
+            // Carries only response dimensions (also replayed on load) —
+            // merge them into the existing stats instead of replacing.
+            const dimensions = turnStatsToDimensions(params);
+            if (dimensions) lastTurnStats = { ...(lastTurnStats ?? {}), dimensions };
+          }
         });
       }
       return client;
@@ -281,6 +293,7 @@ const makeRuntime = (createClient: DevinClientFactory) =>
       turns = 0;
       contextTokens = undefined;
       contextSize = undefined;
+      usage = undefined;
       title = undefined;
       model = undefined;
       modeId = undefined;
@@ -352,8 +365,9 @@ const makeRuntime = (createClient: DevinClientFactory) =>
         else if (activity.type === "title") title = activity.title;
         else if (activity.type === "commands") availableCommands = activity.commands;
         else if (activity.type === "usage") {
-          contextTokens = activity.usage.contextUsed ?? contextTokens;
-          contextSize = activity.usage.contextSize ?? contextSize;
+          usage = mergeDevinUsage(usage, activity.usage);
+          contextTokens = usage.contextUsed;
+          contextSize = usage.contextSize;
         }
       }
     };
@@ -418,6 +432,7 @@ const makeRuntime = (createClient: DevinClientFactory) =>
           turns = 0;
           contextTokens = undefined;
           contextSize = undefined;
+          usage = undefined;
           title = undefined;
         }
       }
@@ -773,6 +788,7 @@ const makeRuntime = (createClient: DevinClientFactory) =>
             turns,
             contextTokens,
             contextSize,
+            usage,
             configOptions,
             availableCommands,
             lastTurnStats,

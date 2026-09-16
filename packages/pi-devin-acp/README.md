@@ -49,6 +49,9 @@ unavailable.
   detached background shells) in a /ps-style overlay: `enter` opens a
   read-only detail view (invocation info + live streamed output with tabs and
   scrolling), `x` asks Devin to stop a background shell
+- `/devin-usage` — session usage reported over ACP: context-window bar,
+  cumulative tokens/cost (credits/ACUs when billed), and last-turn stats —
+  rendered `/usage`-style with Devin's own response-dimension grouping
 - `/devin mode [ask|plan|accept-edits|bypass]` — get/set Devin's permission mode
 - `/devin yolo [on|off]` — persistently pin Devin to `bypass` mode
   (`~/.pi/devin-acp/settings.json`); while on, `/devin mode` stays bypass and

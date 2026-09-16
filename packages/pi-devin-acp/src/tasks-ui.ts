@@ -21,6 +21,7 @@ import type { Component, TUI } from "@earendil-works/pi-tui";
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
 import { devinKillShellPrompt } from "../lib/prompt.ts";
 import { sanitizeDevinText } from "../lib/render.ts";
+import { summarizeDevinCall, type DevinToolView } from "../lib/tool-content.ts";
 import type { DevinLiveOp } from "./runtime.ts";
 
 function formatElapsed(startedAt: number, now: number): string {
@@ -31,15 +32,22 @@ function formatElapsed(startedAt: number, now: number): string {
   return s === 0 ? `${m}m` : `${m}m${s}s`;
 }
 
+/** Best human label for a live op: devin's title, else a summary synthesized
+ * from kind/locations/rawInput (e.g. "execute · sleep 60"), else the tool. */
+export function opLabel(view: DevinToolView): string {
+  return view.title?.trim() || summarizeDevinCall(view) || view.tool || "unnamed op";
+}
+
 export function describeLiveOp(op: DevinLiveOp, now = Date.now()): string {
   const view = op.view;
   const bits: string[] = [];
-  if (view.kind) bits.push(view.kind);
-  if (view.tool) bits.push(view.tool);
+  const label = opLabel(view);
+  // A synthesized label already leads with kind; don't repeat it.
+  if (view.kind && !label.startsWith(view.kind)) bits.push(view.kind);
+  if (view.tool && view.tool !== label) bits.push(view.tool);
   bits.push(formatElapsed(op.startedAt, now));
   if (view.shellId) bits.push(`bg shell ${view.shellId}`);
-  const title = sanitizeDevinText(view.title?.trim() || "(untitled op)");
-  const line = `${title} — ${bits.join(" · ")}`;
+  const line = `${oneLine(label, 90)} — ${bits.join(" · ")}`;
   return line.length > 90 ? `${line.slice(0, 87)}…` : line;
 }
 
@@ -74,7 +82,7 @@ async function requestKill(
 ): Promise<void> {
   if (!op.view.shellId) {
     ctx.ui.notify(
-      `devin: "${oneLine(op.view.title ?? op.view.id, 60)}" runs inside devin's turn — only devin can stop it.`,
+      `devin: "${oneLine(opLabel(op.view), 60)}" runs inside devin's turn — only devin can stop it.`,
       "info",
     );
     return;
@@ -397,14 +405,14 @@ class DevinOpsDashboard implements Component {
       const marker = isSelected ? theme.fg("accent", "❯") : " ";
       const glyph = theme.fg(view.background || view.shellId ? "accent" : "warning", "■");
       const title = isSelected
-        ? theme.fg("accent", oneLine(view.title || "(untitled op)"))
-        : theme.fg("text", oneLine(view.title || "(untitled op)"));
+        ? theme.fg("accent", oneLine(opLabel(view)))
+        : theme.fg("text", oneLine(opLabel(view)));
       const left = ` ${marker} ${glyph} ${title} ${theme.fg("dim", compactId(view.id))}`;
 
       // Right: kind · elapsed · shell/turn
       const dot = theme.fg("dim", " · ");
       const rightParts = [
-        theme.fg("muted", view.kind ?? view.tool ?? "op"),
+        theme.fg("muted", view.tool ?? view.kind ?? "op"),
         theme.fg("muted", formatElapsed(op.startedAt, now)),
         view.shellId ? theme.fg("muted", `bg shell ${view.shellId}`) : theme.fg("muted", "in-turn"),
       ];
@@ -464,7 +472,7 @@ export function buildDevinOpInfo(op: DevinLiveOp, now = Date.now()): string {
   const view = op.view;
   const lines = [
     `id: ${view.id}`,
-    `title: ${view.title ? oneLine(view.title, 200) : "(untitled op)"}`,
+    `title: ${oneLine(opLabel(view), 200)}`,
     `kind: ${view.kind ?? "?"}`,
     `tool: ${view.tool ?? "?"}`,
     `status: ${view.status ?? "running"}`,
@@ -674,9 +682,7 @@ class DevinOpDetail implements Component {
       `${glyph} ` +
       theme.fg(
         "accent",
-        theme.bold(
-          `${view.tool ?? view.kind ?? "op"} · ${oneLine(view.title || "(untitled op)", 100)}`,
-        ),
+        theme.bold(`${view.tool ?? view.kind ?? "op"} · ${oneLine(opLabel(view), 100)}`),
       ) +
       theme.fg(
         "muted",

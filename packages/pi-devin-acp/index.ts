@@ -38,6 +38,7 @@ import { streamDevin } from "./src/provider.ts";
 import { createDevinRuntime, DevinRuntime, runDevin } from "./src/runtime.ts";
 import { runDevinSessionsPicker } from "./src/sessions-ui.ts";
 import { describeLiveOp, runDevinTasksPicker } from "./src/tasks-ui.ts";
+import { runDevinUsagePicker } from "./src/usage-ui.ts";
 
 const DEVIN_PROVIDER = "devin";
 const DEVIN_COMMAND_PREFIX = "/devin-";
@@ -857,6 +858,13 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
       return;
     }
 
+    if (sub === "usage") {
+      await runDevinUsagePicker(ctx, {
+        snapshot: () => runDevin(runtime, service.snapshot),
+      });
+      return;
+    }
+
     if (sub === "sessions") {
       try {
         await runDevinSessionsPicker(ctx, {
@@ -1010,7 +1018,7 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
 
     if (sub) {
       ctx.ui.notify(
-        `devin: unknown argument "${sub}". Use reset | models | sessions | tasks | mode | yolo | login | doctor.`,
+        `devin: unknown argument "${sub}". Use reset | models | sessions | tasks | usage | mode | yolo | login | doctor.`,
         "error",
       );
       return;
@@ -1040,7 +1048,7 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
 
   pi.registerCommand("devin", {
     description:
-      "Manage the devin backend: status | reset | models | sessions | mode | yolo | login | doctor — devin's own slash commands run as /devin-<name>",
+      "Manage the devin backend: status | reset | models | sessions | usage | mode | yolo | login | doctor — devin's own slash commands run as /devin-<name>",
     handler: devinCommandHandler,
   });
 
@@ -1052,6 +1060,17 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
       await runDevinTasksPicker(ctx, {
         listOps: async () => (await runDevin(runtime, service.snapshot)).liveOps,
         sendToSession: (text, options) => pi.sendUserMessage(text, options),
+      });
+    },
+  });
+
+  pi.registerCommand("devin-usage", {
+    description:
+      "Show this devin session's usage (context window, tokens, credits/ACUs, last-turn stats) reported over ACP",
+    handler: async (_args: string, ctx: ExtensionContext) => {
+      sessionCtx = ctx;
+      await runDevinUsagePicker(ctx, {
+        snapshot: () => runDevin(runtime, service.snapshot),
       });
     },
   });
