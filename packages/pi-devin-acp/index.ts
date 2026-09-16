@@ -46,7 +46,6 @@ const LOCAL_DEVIN_SUBCOMMANDS = new Set([
   "reset",
   "models",
   "sessions",
-  "tasks",
   "mode",
   "yolo",
   "login",
@@ -441,7 +440,7 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
           theme.fg("warning", "■ ") +
           theme.fg("text", `devin: ${ops.length} running — ${describeLiveOp(ops[0], Date.now())}`) +
           theme.fg("dim", " • ") +
-          theme.fg("accent", "/devin tasks") +
+          theme.fg("accent", "/devin-tasks") +
           theme.fg("dim", " to view");
         return {
           render: (width: number) => [truncateToWidth(line, width, "")],
@@ -732,7 +731,7 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
 
   /**
    * `/devin-<name> args` — two surfaces share the hyphenated form:
-   * - pi-side subcommands (`/devin-tasks`, `/devin-sessions`, …) run the
+   * - pi-side subcommands (`/devin-reset`, `/devin-sessions`, …) run the
    *   `/devin` handler inline (transformed text would go to the model, not
    *   back through pi's command dispatch);
    * - anything else forwards `/<name> args` to devin — ACP agents receive
@@ -855,14 +854,6 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
           "error",
         );
       }
-      return;
-    }
-
-    if (sub === "tasks") {
-      await runDevinTasksPicker(ctx, {
-        listOps: async () => (await runDevin(runtime, service.snapshot)).liveOps,
-        sendToSession: (text, options) => pi.sendUserMessage(text, options),
-      });
       return;
     }
 
@@ -1039,7 +1030,7 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
       snapshot.availableCommands?.length
         ? `commands: ${snapshot.availableCommands.length} (via /devin-<name>)`
         : undefined,
-      snapshot.liveOps.length ? `ops: ${snapshot.liveOps.length} (/devin tasks)` : undefined,
+      snapshot.liveOps.length ? `ops: ${snapshot.liveOps.length} (/devin-tasks)` : undefined,
     ].filter((part): part is string => part !== undefined);
     ctx.ui.notify(
       `devin: ${snapshot.title ?? snapshot.sessionId ?? "no session yet"}\nsession: ${snapshot.sessionId ?? "none"}\n${details.join(" · ")}`,
@@ -1049,7 +1040,19 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
 
   pi.registerCommand("devin", {
     description:
-      "Manage the devin backend: status | reset | models | sessions | tasks | mode | yolo | login | doctor — devin's own slash commands run as /devin-<name>",
+      "Manage the devin backend: status | reset | models | sessions | mode | yolo | login | doctor — devin's own slash commands run as /devin-<name>",
     handler: devinCommandHandler,
+  });
+
+  pi.registerCommand("devin-tasks", {
+    description:
+      "Inspect Devin operations still in flight (slow execs, detached background shells): enter details, x kill",
+    handler: async (_args: string, ctx: ExtensionContext) => {
+      sessionCtx = ctx;
+      await runDevinTasksPicker(ctx, {
+        listOps: async () => (await runDevin(runtime, service.snapshot)).liveOps,
+        sendToSession: (text, options) => pi.sendUserMessage(text, options),
+      });
+    },
   });
 }

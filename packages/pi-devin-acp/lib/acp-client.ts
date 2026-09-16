@@ -12,6 +12,7 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { Readable, Writable } from "node:stream";
 import * as acp from "@agentclientprotocol/sdk";
+import { killDetachedDescendantGroups } from "./process-tree.ts";
 
 export type DevinSessionUpdate = acp.SessionUpdate;
 export type DevinContentBlock = acp.ContentBlock;
@@ -342,6 +343,16 @@ export class DevinAcpClient {
     const child = this.#child;
     this.#child = undefined;
     if (child && child.exitCode === null) {
+      // Kill process groups devin detached into the background before the
+      // child dies: they would otherwise survive as orphans that no session
+      // ever reconnects to (pi only knows devin shell ids, never OS pids).
+      if (child.pid !== undefined) {
+        try {
+          await killDetachedDescendantGroups(child.pid);
+        } catch {
+          // Cleanup must never block shutdown.
+        }
+      }
       try {
         child.kill("SIGTERM");
       } catch {

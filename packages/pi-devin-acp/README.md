@@ -45,9 +45,10 @@ unavailable.
 - `/devin` — current session, model, mode, and turn stats
 - `/devin reset` — drop the Devin session binding (next turn starts fresh)
 - `/devin sessions` — list Devin sessions; attach or delete one
-- `/devin tasks` — list Devin operations still in flight (slow execs, detached
-  background shells), with elapsed time; background shells offer a kill
-  shortcut that asks Devin to stop them
+- `/devin-tasks` — list Devin operations still in flight (slow execs,
+  detached background shells) in a /ps-style overlay: `enter` opens a
+  read-only detail view (invocation info + live streamed output with tabs and
+  scrolling), `x` asks Devin to stop a background shell
 - `/devin mode [ask|plan|accept-edits|bypass]` — get/set Devin's permission mode
 - `/devin yolo [on|off]` — persistently pin Devin to `bypass` mode
   (`~/.pi/devin-acp/settings.json`); while on, `/devin mode` stays bypass and
@@ -55,8 +56,8 @@ unavailable.
 - `/devin models` — re-discover models and re-register the picker
 - `/devin login` — trigger Devin's browser authentication
 - `/devin doctor` — binary, auth, catalog, and runtime diagnostics
-- `/devin-<sub>` — the hyphenated aliases (`/devin-tasks`, `/devin-sessions`,
-  `/devin-reset`, `/devin-models`, `/devin-mode`, `/devin-yolo`,
+- `/devin-<sub>` — the hyphenated aliases (`/devin-sessions`, `/devin-reset`,
+  `/devin-models`, `/devin-mode`, `/devin-yolo`,
   `/devin-login`, `/devin-doctor`) run the matching `/devin <sub>` command
   inline
 - `/devin-<name>` — run Devin's own slash commands and skills-as-commands
@@ -93,15 +94,18 @@ unavailable.
   applied via `session/set_config_option`. Switching to or from another
   provider re-bootstraps the next turn from pi's transcript.
 - A message that arrives while a Devin turn is still running (steering text, a
-  `/devin tasks` shell stop) becomes the next prompt in the same session: the
+  `/devin-tasks` shell stop) becomes the next prompt in the same session: the
   ACP channel takes one prompt at a time, so the in-flight turn is cancelled
   and the new prompt is issued once Devin acknowledges the cancel.
 - Long-running Devin operations (foreground `sleep`-style execs, shells
   detached to the background via `_meta["cognition.ai/background"]`) are
   tracked as live ops: a status-bar widget shows `devin: N running — …` while
-  any are in flight, and `/devin tasks` lists them. A backgrounded shell that
+  any are in flight, and `/devin-tasks` lists them. A backgrounded shell that
   outlives its turn replays as a neutral note (with its shell id) instead of
   a failure card; it drops off the list when its `terminal_exit` arrives.
+  Closing the runtime (`/new`, `/quit`, `/reload`) kills detached background
+  shells together with the `devin acp` child — their process groups are
+  signalled before the child dies, so nothing is orphaned.
 
 ## Environment variables
 
