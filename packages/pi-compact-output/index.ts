@@ -1,6 +1,6 @@
 // compact-output — grouped collapsed tool calls and compact reasoning summaries.
 //
-// Presentation-only TUI extension for Pi 0.83.x:
+// Presentation-only TUI extension for Pi 0.83.x–0.85.x:
 // - Consecutive collapsed tool calls share one bordered status block with up to three lines.
 // - Reasoning appears in-sequence as wrapped compact blocks; provider bold wrappers and
 //   finished sections show a success check mark instead of a stale spinner.
