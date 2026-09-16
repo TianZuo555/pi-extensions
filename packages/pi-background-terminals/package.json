@@ -41,7 +41,7 @@
     "test": "node --test --test-concurrency=1 --experimental-strip-types index.test.ts manager.test.ts lifecycle.test.ts output.test.ts prompt.test.ts command-shape.test.ts completion-batcher.test.ts result-delivery.test.ts ps.test.ts spill-source.test.ts"
   },
   "dependencies": {
-    "effect": "4.0.0-beta.101",
+    "effect": "4.0.0-rc.115",
     "koffi": "^3.2.1"
   },
   "peerDependencies": {

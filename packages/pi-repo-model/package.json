@@ -37,7 +37,7 @@
     "test": "node --test --experimental-strip-types test/*.test.ts"
   },
   "dependencies": {
-    "effect": "4.0.0-beta.101"
+    "effect": "4.0.0-rc.115"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
