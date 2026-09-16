@@ -1,7 +1,15 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { reconcileOpsSelection, runDevinTasksPicker, type OpsSelection } from "../src/tasks-ui.ts";
+import {
+  buildDevinOpInfo,
+  buildDevinOpOutputLines,
+  cycleDevinDetailTab,
+  DEFAULT_DEVIN_DETAIL_TAB,
+  reconcileOpsSelection,
+  runDevinTasksPicker,
+  type OpsSelection,
+} from "../src/tasks-ui.ts";
 
 for (const busy of [false, true]) {
   test(`tasks kill uses steer delivery (${busy ? "busy" : "idle"})`, async () => {
@@ -60,18 +68,30 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 
 const themeStub = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
 const keybindingsStub = { matches: () => false, getKeys: () => [] };
+/** Staged keybinding stubs: raw byte → action, like a real terminal. */
+const stagedKeys = {
+  matches: (data: string, binding: string) =>
+    ({
+      "\r": "tui.select.confirm",
+      "\x1b": "tui.select.cancel",
+      "\x03": "app.interrupt",
+    })[data] === binding,
+  getKeys: () => [],
+};
 const tuiStub = { terminal: { rows: 12 }, requestRender: () => {} };
+/** Taller terminal so detail-view assertions see a full viewport. */
+const tuiStub30 = { terminal: { rows: 30 }, requestRender: () => {} };
 
 const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
 
-type DashboardComponent = Component & {
+type OverlayComponent = Component & {
   handleInput(data: string): void;
   render(width: number): string[];
   dispose(): void;
 };
 
 function overlayCtx(
-  drive: (component: DashboardComponent, done: (value: unknown) => void) => void | Promise<void>,
+  drive: (component: OverlayComponent, done: (value: unknown) => void) => void | Promise<void>,
   confirmResult: boolean | undefined = undefined,
 ) {
   const notifications: { message: string; level: string }[] = [];
@@ -79,7 +99,7 @@ function overlayCtx(
   const ctx = {
     mode: "tui",
     ui: {
-      custom: async (factory: (...args: unknown[]) => DashboardComponent) => {
+      custom: async (factory: (...args: unknown[]) => OverlayComponent) => {
         let result: { value: unknown } | undefined;
         const done = (value: unknown) => {
           result = { value };
@@ -100,6 +120,48 @@ function overlayCtx(
     },
   };
   return { ctx: ctx as unknown as ExtensionContext, notifications, confirms };
+}
+
+/** ctx.ui.custom that runs one drive stage per call; getCalls() reports
+ * invocations (a getter, because a destructured number would not update). */
+function stagedOverlayCtx(
+  stages: Array<(component: OverlayComponent) => void | Promise<void>>,
+  confirmResult: boolean | undefined = undefined,
+) {
+  const notifications: { message: string; level: string }[] = [];
+  const confirms: string[] = [];
+  let customCalls = 0;
+  const ctx = {
+    mode: "tui",
+    ui: {
+      custom: async (factory: (...args: unknown[]) => OverlayComponent) => {
+        customCalls += 1;
+        let result: { value: unknown } | undefined;
+        const done = (value: unknown) => {
+          result = { value };
+        };
+        const component = factory(tuiStub30, themeStub, stagedKeys, done);
+        try {
+          const stage = stages[customCalls - 1];
+          if (stage) await stage(component);
+          return result?.value ?? null;
+        } finally {
+          component.dispose();
+        }
+      },
+      confirm: async (_title: string, message: string) => {
+        confirms.push(message);
+        return confirmResult ?? false;
+      },
+      notify: (message: string, level: string) => notifications.push({ message, level }),
+    },
+  };
+  return {
+    ctx: ctx as unknown as ExtensionContext,
+    getCalls: () => customCalls,
+    notifications,
+    confirms,
+  };
 }
 
 const OPS = [
@@ -123,6 +185,7 @@ test("tasks overlay renders ops /ps-style with borders, hints, and live metadata
     assert.match(joined, /in-turn/);
     assert.match(joined, /1m5s/);
     assert.match(joined, /jk select/);
+    assert.match(joined, /inspect/);
     // Bordered rows span the full width exactly.
     assert.equal(visibleWidth(lines[1]), 80);
     for (const line of lines) {
@@ -141,7 +204,7 @@ test("tasks overlay renders ops /ps-style with borders, hints, and live metadata
   });
 });
 
-test("tasks overlay navigates with j/k and confirm kills the selected shell", async () => {
+test("tasks overlay navigates with j/k and x kills the selected shell", async () => {
   const sent: string[] = [];
   const { ctx, confirms } = overlayCtx(async (component) => {
     await flush();
@@ -185,7 +248,7 @@ test("tasks overlay closes itself when every op settles", async () => {
   const ctx = {
     mode: "tui",
     ui: {
-      custom: async (factory: (...args: unknown[]) => DashboardComponent) => {
+      custom: async (factory: (...args: unknown[]) => OverlayComponent) => {
         const component = factory(tuiStub, themeStub, keybindingsStub, (value: unknown) =>
           dones.push(value),
         );
@@ -217,4 +280,205 @@ test("reconcileOpsSelection anchors by id and clamps to the list", () => {
   assert.deepEqual(selection, { id: "a", index: 1 });
   reconcileOpsSelection(selection, []);
   assert.deepEqual(selection, { id: undefined, index: 0 });
+});
+
+// --- Detail view (/ps parity: enter inspects) --------------------------------------
+
+test("enter opens the detail view; cancel returns to the dashboard", async () => {
+  const { ctx, getCalls, confirms } = stagedOverlayCtx([
+    async (dashboard) => {
+      await flush();
+      dashboard.handleInput("\r"); // enter → inspect the selected op
+    },
+    async (detail) => {
+      await flush();
+      const joined = detail.render(80).join("\n");
+      assert.match(joined, /Info/);
+      assert.match(joined, /id: op-1/);
+      assert.match(joined, /title: Running tests/);
+      assert.match(joined, /scope: background shell 3/);
+      assert.match(joined, /t\/←\/→ to switch/);
+      assert.match(joined, /x kill/);
+      // Narrow terminals stay width-safe too.
+      for (const line of detail.render(24)) {
+        assert.ok(visibleWidth(line) <= 24, `narrow line exceeds width: ${line}`);
+      }
+      detail.handleInput("\x1b"); // back to the dashboard
+    },
+    async (dashboard) => {
+      await flush();
+      assert.match(dashboard.render(80).join("\n"), /Devin operations/);
+    },
+  ]);
+  await runDevinTasksPicker(ctx, {
+    listOps: () => OPS,
+    sendToSession: () => {
+      throw new Error("inspecting must not send anything");
+    },
+  });
+  assert.equal(getCalls(), 3, "dashboard → detail → dashboard");
+  assert.equal(confirms.length, 0);
+});
+
+test("detail view tabs between metadata and streamed output with scrolling", async () => {
+  const streamed = Array.from({ length: 80 }, (_, i) => `out-${i}`).join("\n");
+  const ops = () => [
+    {
+      view: {
+        id: "op-1",
+        title: "Running tests",
+        kind: "execute",
+        shellId: "3",
+        output: streamed,
+        rawInput: { command: "npm test" },
+      },
+      startedAt: Date.now() - 65_000,
+    },
+    OPS[1],
+  ];
+  const { ctx } = stagedOverlayCtx([
+    async (dashboard) => {
+      await flush();
+      dashboard.handleInput("\r");
+    },
+    async (detail) => {
+      await flush();
+      assert.match(detail.render(80).join("\n"), /id: op-1/);
+      detail.handleInput("t"); // → output tab, pinned to the live tail
+      assert.match(detail.render(80).join("\n"), /out-79/);
+      assert.doesNotMatch(detail.render(80).join("\n"), /out-0/);
+      detail.handleInput("k"); // scroll up freezes the reading position
+      const scrolled = detail.render(80).join("\n");
+      assert.match(scrolled, /lines below/);
+      assert.doesNotMatch(scrolled, /out-79/);
+      detail.handleInput("G"); // back to the tail
+      assert.match(detail.render(80).join("\n"), /out-79/);
+      detail.handleInput("g"); // top
+      assert.match(detail.render(80).join("\n"), /out-0/);
+      detail.handleInput("h"); // ← back to info
+      assert.match(detail.render(80).join("\n"), /id: op-1/);
+    },
+  ]);
+  await runDevinTasksPicker(ctx, {
+    listOps: ops,
+    sendToSession: () => {},
+  });
+});
+
+test("x from the detail view kills the inspected shell", async () => {
+  const sent: string[] = [];
+  const { ctx, getCalls, confirms } = stagedOverlayCtx(
+    [
+      async (dashboard) => {
+        await flush();
+        dashboard.handleInput("\r");
+      },
+      async (detail) => {
+        await flush();
+        detail.handleInput("x");
+      },
+    ],
+    true,
+  );
+  await runDevinTasksPicker(ctx, {
+    listOps: () => OPS,
+    sendToSession: (text: string, options?: { deliverAs?: string }) => {
+      sent.push(`${options?.deliverAs}:${text}`);
+    },
+  });
+  assert.equal(getCalls(), 2, "the kill leaves the overlay flow");
+  assert.equal(confirms.length, 1);
+  assert.deepEqual(sent, ["steer:Kill background shell 3 and confirm it stopped."]);
+});
+
+test("detail view freezes once the op settles and stops offering kill", async () => {
+  let calls = 0;
+  const ops = () => {
+    calls += 1;
+    // picker fetch + dashboard refresh see the op; later polls see it gone.
+    return calls <= 2 ? [OPS[0]] : [];
+  };
+  const sent: string[] = [];
+  const { ctx, getCalls, confirms } = stagedOverlayCtx([
+    async (dashboard) => {
+      await flush();
+      dashboard.handleInput("\r");
+    },
+    async (detail) => {
+      await flush();
+      assert.match(detail.render(80).join("\n"), /Running tests/);
+      // The 1 Hz ticker is the next poll after the seeded snapshot.
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+      const settled = detail.render(80).join("\n");
+      assert.match(settled, /settled/);
+      detail.handleInput("x"); // settled: no kill action
+      detail.handleInput("\x1b"); // back out to the dashboard
+    },
+    async (_dashboard) => {
+      await flush();
+      await flush();
+    },
+  ]);
+  await runDevinTasksPicker(ctx, {
+    listOps: ops,
+    sendToSession: (text: string) => sent.push(text),
+  });
+  assert.deepEqual(sent, [], "a settled op can no longer be killed");
+  assert.equal(confirms.length, 0);
+  // Backing out reopens the dashboard, whose refresh finds no ops and closes.
+  assert.equal(getCalls(), 3, "the emptied dashboard closes itself");
+});
+
+// --- Detail view helpers -----------------------------------------------------------
+
+test("detail tabs start on Info and cycle with Output", () => {
+  assert.equal(DEFAULT_DEVIN_DETAIL_TAB, "info");
+  assert.equal(cycleDevinDetailTab("info"), "output");
+  assert.equal(cycleDevinDetailTab("output"), "info");
+  assert.equal(cycleDevinDetailTab("info", -1), "output");
+  assert.equal(cycleDevinDetailTab("output", -1), "info");
+});
+
+test("buildDevinOpInfo includes invocation metadata and sanitized input", () => {
+  const info = buildDevinOpInfo(
+    {
+      view: {
+        id: "call_abc123",
+        title: "Wrote \u001b[31m/tmp/x.txt\u001b[0m",
+        kind: "execute",
+        tool: "shell",
+        status: "pending",
+        shellId: "7",
+        rawInput: { command: "npm test" },
+        locations: ["/a.ts", "/b.ts"],
+      },
+      startedAt: Date.parse("2026-01-01T00:00:00.000Z"),
+    },
+    Date.parse("2026-01-01T00:00:09.000Z"),
+  );
+  assert.match(info, /id: call_abc123/);
+  assert.match(info, /title: Wrote \/tmp\/x\.txt/);
+  assert.match(info, /tool: shell/);
+  assert.match(info, /status: pending/);
+  assert.match(info, /started: 2026-01-01T00:00:00\.000Z/);
+  assert.match(info, /elapsed: 9s/);
+  assert.match(info, /scope: background shell 7/);
+  assert.match(info, /locations: \/a\.ts, \/b\.ts/);
+  assert.match(info, /input:\n\{\n {2}"command": "npm test"\n\}/);
+  assert.doesNotMatch(info, /\u001b\[/);
+});
+
+test("buildDevinOpOutputLines collapses CR progress, strips ANSI, expands tabs, wraps", () => {
+  assert.deepEqual(buildDevinOpOutputLines("progress 1\rprogress 2\rdone\nnext", 80), [
+    "done",
+    "next",
+  ]);
+  assert.deepEqual(buildDevinOpOutputLines("progress 1\rprogress 2\r", 80), ["progress 2"]);
+  assert.equal(buildDevinOpOutputLines("a\tb", 80).join(""), "a  b");
+  assert.equal(buildDevinOpOutputLines("\u001b[31mred\u001b[0m", 80).join(""), "red");
+  const wrapped = buildDevinOpOutputLines("x".repeat(25), 10);
+  assert.ok(wrapped.length > 1);
+  assert.equal(wrapped.join(""), "x".repeat(25));
+  assert.deepEqual(buildDevinOpOutputLines("a\nb\n", 80), ["a", "b"]);
+  assert.deepEqual(buildDevinOpOutputLines("", 80), []);
 });
