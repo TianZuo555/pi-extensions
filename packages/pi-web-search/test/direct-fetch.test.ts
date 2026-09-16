@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import test from "node:test";
 import {
   classifyBody,
@@ -60,6 +62,16 @@ function mockPdfResponse(body: Uint8Array, headers: Record<string, string> = {})
       status: 200,
       headers: { "Content-Type": "application/pdf", ...headers },
     })) as typeof fetch;
+}
+
+/** Observe real PDF.js lifecycle methods without replacing the parser. */
+async function pdfPrototypes() {
+  const { getDocumentProxy } = await import("unpdf");
+  const doc = await getDocumentProxy(new Uint8Array(PDF_FIXTURE));
+  const document = Object.getPrototypeOf(doc) as typeof doc;
+  const loadingTask = Object.getPrototypeOf(doc.loadingTask) as typeof doc.loadingTask;
+  await doc.loadingTask.destroy();
+  return { document, loadingTask };
 }
 
 test("classifyBody trusts Content-Type for text files", () => {
@@ -280,7 +292,68 @@ test("fetchDirect enforces its response byte limit", async () => {
   }
 });
 
-test("fetchDirect extracts text from PDF responses", async () => {
+for (const contentType of ["text/plain", "text/html"]) {
+  test(`fetchDirect keeps the text cap for .pdf URLs returning ${contentType}`, async (t) => {
+    let chunksRead = 0;
+    let cancelled = false;
+    const response = new Response(
+      new ReadableStream(
+        {
+          pull(controller) {
+            chunksRead++;
+            assert.ok(chunksRead <= 2, "do not read past the text cap");
+            controller.enqueue(Buffer.alloc(50_000, "x"));
+          },
+          cancel() {
+            cancelled = true;
+          },
+        },
+        { highWaterMark: 0 },
+      ),
+      { headers: { "Content-Type": contentType } },
+    );
+    t.mock.method(globalThis, "fetch", async () => response);
+
+    const result = await fetchDirect("https://example.com/error.pdf", { raw: true });
+    assert.equal(result.text, "x".repeat(100_000));
+    assert.equal(chunksRead, 2, "do not download up to 20MB based on the URL alone");
+    assert.equal(cancelled, true);
+  });
+}
+
+test("fetchDirect bounds UTF-8 output without repeatedly measuring large strings", async (t) => {
+  const byteLength = Buffer.byteLength;
+  let oversizedMeasurements = 0;
+  t.mock.method(Buffer, "byteLength", (...args: Parameters<typeof Buffer.byteLength>) => {
+    const length = byteLength(...args);
+    if (typeof args[0] === "string" && length > 100_000) {
+      // Fail the old quadratic loop promptly without a wall-clock assertion.
+      assert.ok(++oversizedMeasurements < 10, "repeatedly rescanning an oversized string");
+    }
+    return length;
+  });
+  const bodies = [
+    { bytes: Buffer.from(`a${"😀".repeat(50_000)}`), expected: `a${"😀".repeat(24_999)}` },
+    { bytes: Buffer.alloc(110_000, 0xff), expected: "\ufffd".repeat(33_333) },
+  ];
+  for (const { bytes, expected } of bodies) {
+    t.mock.method(
+      globalThis,
+      "fetch",
+      async () =>
+        new Response(bytes, {
+          headers: { "Content-Type": "text/plain" },
+        }),
+    );
+    const result = await fetchDirect("https://example.com/error.pdf", { raw: true });
+    assert.equal(result.text, expected);
+    assert.ok(byteLength(result.text, "utf8") <= 100_000);
+  }
+});
+
+test("fetchDirect extracts text from PDF responses and releases the document", async (t) => {
+  const { loadingTask } = await pdfPrototypes();
+  const destroy = t.mock.method(loadingTask, "destroy");
   const originalFetch = globalThis.fetch;
   mockPdfResponse(PDF_FIXTURE);
   try {
@@ -290,6 +363,7 @@ test("fetchDirect extracts text from PDF responses", async () => {
     assert.equal(response.title, "Fixture Title");
     assert.match(response.text, /<!-- Page 1 -->\n\nHello PDF world from the extraction fixture/);
     assert.match(response.text, /<!-- Page 2 -->\n\nSecond page carries different marker text/);
+    assert.equal(destroy.mock.callCount(), 1);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -307,6 +381,136 @@ test("fetchDirect detects PDFs served as application/octet-stream", async () => 
     globalThis.fetch = originalFetch;
   }
 });
+
+for (const firstChunkBytes of [0, 3, 65_536]) {
+  test(`fetchDirect sniffs a PDF before clipping a large chunk (prefix ${firstChunkBytes})`, async (t) => {
+    const body = Buffer.concat([PDF_FIXTURE, Buffer.alloc(200_000, " ")]);
+    let offset = 0;
+    t.mock.method(
+      globalThis,
+      "fetch",
+      async () =>
+        new Response(
+          new ReadableStream({
+            pull(controller) {
+              if (offset === body.length) {
+                controller.close();
+                return;
+              }
+              const end = offset === 0 && firstChunkBytes > 0 ? firstChunkBytes : body.length;
+              controller.enqueue(body.subarray(offset, end));
+              offset = end;
+            },
+          }),
+          { headers: { "Content-Type": "application/octet-stream" } },
+        ),
+    );
+
+    const response = await fetchDirect("https://example.com/download?id=42");
+    assert.equal(response.pages, 2);
+    assert.match(response.text, /Second page carries different marker text/);
+  });
+}
+
+for (const extraBytes of [0, 1]) {
+  test(`fetchDirect accepts the exact PDF byte cap, rejects cap + 1 (${extraBytes})`, async (t) => {
+    const body = Buffer.concat([
+      PDF_FIXTURE,
+      Buffer.alloc(20 * 1024 * 1024 - PDF_FIXTURE.length + extraBytes, " "),
+    ]);
+    let cancelled = false;
+    let sent = false;
+    t.mock.method(
+      globalThis,
+      "fetch",
+      async () =>
+        new Response(
+          new ReadableStream(
+            {
+              pull(controller) {
+                if (sent) {
+                  controller.close();
+                  return;
+                }
+                sent = true;
+                controller.enqueue(body);
+              },
+              cancel() {
+                cancelled = true;
+              },
+            },
+            { highWaterMark: 0 },
+          ),
+          { headers: { "Content-Type": "application/octet-stream" } },
+        ),
+    );
+
+    const result = fetchDirect("https://example.com/download");
+    if (extraBytes === 0) {
+      assert.equal((await result).pages, 2);
+      assert.equal(cancelled, false);
+    } else {
+      await assert.rejects(result, /exceeds the 20MB/);
+      assert.equal(cancelled, true);
+    }
+  });
+}
+
+for (const mode of ["inline", "remaining", "between-pages", "timeout"] as const) {
+  test(`fetchDirect cancels PDF extraction and releases resources (${mode})`, async (t) => {
+    const { document, loadingTask } = await pdfPrototypes();
+    const destroy = t.mock.method(loadingTask, "destroy");
+    const write = t.mock.method(fs, "writeFileSync", () => {});
+    const controller = new AbortController();
+    const reason = new DOMException(
+      "PDF extraction stopped",
+      mode === "timeout" ? "TimeoutError" : "AbortError",
+    );
+    if (mode === "timeout") t.mock.method(AbortSignal, "timeout", () => controller.signal);
+    const abortPage = mode === "remaining" ? 2 : 1;
+    const originalGetPage = document.getPage;
+    const getPage = t.mock.method(
+      document,
+      "getPage",
+      async function (this: typeof document, n: number) {
+        const page = await originalGetPage.call(this, n);
+        if (n === abortPage) {
+          const getText = page.getTextContent.bind(page);
+          t.mock.method(page, "getTextContent", async () => {
+            const content = await getText();
+            if (mode === "between-pages") {
+              const handle = setImmediate(() => controller.abort(reason));
+              t.after(() => clearImmediate(handle));
+            } else {
+              controller.abort(reason);
+            }
+            return content;
+          });
+        }
+        return page;
+      },
+    );
+    t.mock.method(
+      globalThis,
+      "fetch",
+      async () =>
+        new Response(Buffer.from(buildPdf(["first", "second", "third"])), {
+          headers: { "Content-Type": "application/pdf" },
+        }),
+    );
+
+    await assert.rejects(
+      fetchDirect("https://example.com/cancel.pdf", {
+        maxPages: 1,
+        signal: mode === "timeout" ? new AbortController().signal : controller.signal,
+      }),
+      (error) => error === reason,
+    );
+    assert.equal(getPage.mock.callCount(), abortPage, "do not start another page after abort");
+    assert.equal(destroy.mock.callCount(), 1);
+    assert.equal(write.mock.callCount(), 0, "do not persist cancelled extractions");
+  });
+}
 
 test("fetchDirect honors maxPages and saves the rest to a file", async () => {
   const originalFetch = globalThis.fetch;
@@ -339,7 +543,9 @@ test("fetchDirect rejects corrupt PDFs with a parse error", async () => {
   }
 });
 
-test("fetchDirect rejects PDFs with no text layer (scanned documents)", async () => {
+test("fetchDirect rejects scanned PDFs and releases the document", async (t) => {
+  const { loadingTask } = await pdfPrototypes();
+  const destroy = t.mock.method(loadingTask, "destroy");
   const originalFetch = globalThis.fetch;
   mockPdfResponse(buildPdf(["", ""]));
   try {
@@ -347,6 +553,7 @@ test("fetchDirect rejects PDFs with no text layer (scanned documents)", async ()
       fetchDirect("https://example.com/scanned.pdf"),
       /no extractable text layer/,
     );
+    assert.equal(destroy.mock.callCount(), 1);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -372,7 +579,11 @@ test("fetchDirect spills oversized extractions to a file under ~/.pi", async () 
   try {
     const response = await fetchDirect("https://example.com/big-report.pdf");
     assert.ok(response.savedTo);
-    assert.match(response.savedTo, /web-search\/fetches\/big-report-[0-9a-f]{8}\.md$/);
+    assert.equal(
+      path.dirname(response.savedTo),
+      path.join(os.homedir(), ".pi", "web-search", "fetches"),
+    );
+    assert.match(path.basename(response.savedTo), /^big-report-[0-9a-f]{8}\.md$/);
     assert.match(response.text, /saved to: .+/);
     assert.match(response.text, /Characters: 2\d{5}/);
     assert.match(response.text, /--- Preview ---/);

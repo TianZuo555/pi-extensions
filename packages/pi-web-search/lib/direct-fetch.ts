@@ -2,12 +2,14 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { StringDecoder } from "node:string_decoder";
+import { setImmediate } from "node:timers/promises";
 import type { FetchOptions, FetchResponse } from "./types.ts";
 
 const DEFAULT_FETCH_TIMEOUT_MS = 30_000;
 const MAX_DIRECT_FETCH_BYTES = 100_000; // 100KB
 const MAX_PDF_FETCH_BYTES = 20 * 1024 * 1024; // 20MB
-const PDF_SNIFF_BYTES = 4_096;
+const PDF_SNIFF_BYTES = 1_024;
 const DEFAULT_MAX_PDF_PAGES = 100;
 /** Absolute ceiling for pages persisted to the on-disk copy. */
 const MAX_PDF_FILE_PAGES = 10_000;
@@ -33,37 +35,46 @@ interface DirectBody {
  * grow to MAX_PDF_FETCH_BYTES while everything else stays at the small text
  * cap.
  */
-async function readBody(response: Response, pdfHint: boolean): Promise<DirectBody> {
+async function readBody(response: Response): Promise<DirectBody> {
   const reader = response.body?.getReader();
   if (!reader) return { bytes: Buffer.alloc(0), truncated: false };
 
+  const contentType = response.headers.get("content-type") || "";
   const chunks: Uint8Array[] = [];
+  const head = Buffer.alloc(PDF_SNIFF_BYTES);
+  let headBytes = 0;
   let total = 0;
-  let cap = pdfHint ? MAX_PDF_FETCH_BYTES : MAX_DIRECT_FETCH_BYTES;
-  let sniffed = pdfHint;
+  let sniffed = classifyBody(contentType, "") === "pdf";
+  let cap = sniffed ? MAX_PDF_FETCH_BYTES : MAX_DIRECT_FETCH_BYTES;
   let streamDone = false;
   try {
-    while (total < cap) {
+    while (true) {
       const { done, value } = await reader.read();
       if (done) {
         streamDone = true;
         break;
+      }
+      // Classify BEFORE clipping this chunk. A single read can exceed the
+      // text cap, and the PDF header can straddle earlier, smaller chunks.
+      if (!sniffed) {
+        const prefix = value.subarray(0, PDF_SNIFF_BYTES - headBytes);
+        head.set(prefix, headBytes);
+        headBytes += prefix.byteLength;
+        if (headBytes === PDF_SNIFF_BYTES) {
+          sniffed = true;
+          if (classifyBody(contentType, head.toString("utf8")) === "pdf") {
+            cap = MAX_PDF_FETCH_BYTES;
+          }
+        }
       }
       const remaining = cap - total;
       const chunk = value.subarray(0, remaining);
       chunks.push(chunk);
       total += chunk.byteLength;
       if (value.byteLength > remaining) break;
-      if (!sniffed && total >= PDF_SNIFF_BYTES) {
-        sniffed = true;
-        const head = Buffer.concat(
-          chunks.map((c) => Buffer.from(c)),
-          total,
-        )
-          .subarray(0, 1024)
-          .toString("utf8");
-        if (PDF_MAGIC_RE.test(head)) cap = MAX_PDF_FETCH_BYTES;
-      }
+      // PDFs need one more read at the cap to distinguish an exact-size
+      // document from an oversized one. Text can stop immediately.
+      if (total === cap && cap === MAX_DIRECT_FETCH_BYTES) break;
     }
   } finally {
     if (!streamDone) await reader.cancel().catch(() => undefined);
@@ -71,10 +82,7 @@ async function readBody(response: Response, pdfHint: boolean): Promise<DirectBod
   }
 
   return {
-    bytes: Buffer.concat(
-      chunks.map((c) => Buffer.from(c)),
-      total,
-    ),
+    bytes: Buffer.concat(chunks, total),
     truncated: !streamDone,
   };
 }
@@ -298,8 +306,14 @@ interface PdfExtraction {
  * strands content the model cannot reach. Scanned documents have no text
  * layer and throw, letting the fallback chain reach an OCR-capable provider.
  */
-async function extractPdfText(bytes: Buffer, maxPages?: number): Promise<PdfExtraction> {
+async function extractPdfText(
+  bytes: Buffer,
+  maxPages: number | undefined,
+  signal: AbortSignal,
+): Promise<PdfExtraction> {
+  signal.throwIfAborted();
   const { getDocumentProxy, getMeta } = await import("unpdf");
+  signal.throwIfAborted();
   const limit = Math.min(Math.max(Math.floor(maxPages ?? DEFAULT_MAX_PDF_PAGES), 1), 10_000);
 
   let doc: Awaited<ReturnType<typeof getDocumentProxy>>;
@@ -307,67 +321,93 @@ async function extractPdfText(bytes: Buffer, maxPages?: number): Promise<PdfExtr
     // unpdf requires a real Uint8Array (not a Buffer subclass view).
     doc = await getDocumentProxy(new Uint8Array(bytes));
   } catch (err) {
+    signal.throwIfAborted();
     throw new Error(
       `Failed to parse PDF: ${err instanceof Error ? err.message : String(err)}`.slice(0, 300),
     );
   }
 
-  const totalPages = doc.numPages ?? 0;
-  const extractedPages = Math.min(totalPages, limit);
-  // The on-disk copy is allowed to run past maxPages (it is the "rest" the
-  // inline answer points at) but still bounded so pathological documents
-  // cannot spin the extractor forever.
-  const filePages = Math.min(totalPages, MAX_PDF_FILE_PAGES);
-
-  const extractPage = async (i: number): Promise<string> => {
-    const page = await doc.getPage(i);
-    const content = await page.getTextContent();
-    let text = "";
-    for (const item of content.items) {
-      if (!("str" in item)) continue;
-      text += item.str;
-      if (item.hasEOL) text += "\n";
-    }
-    return `<!-- Page ${i} -->\n\n${text.trim()}`;
+  // Destroy pending PDF.js work on abort as well as on normal/error exits.
+  // Reuse the cleanup promise so the abort handler and finally cannot race.
+  let cleanup: Promise<void> | undefined;
+  const destroy = () => (cleanup ??= doc.loadingTask.destroy().catch(() => undefined));
+  const onAbort = () => {
+    void destroy();
   };
-
-  const pageTexts: string[] = [];
-  for (let i = 1; i <= extractedPages; i++) {
-    pageTexts.push(await extractPage(i));
-  }
-
-  let remaining: string | undefined;
-  if (filePages > extractedPages) {
-    const rest: string[] = [];
-    for (let i = extractedPages + 1; i <= filePages; i++) {
-      rest.push(await extractPage(i));
-    }
-    remaining = rest.join("\n\n");
-  }
-
-  let title: string | undefined;
+  signal.addEventListener("abort", onAbort, { once: true });
   try {
-    const meta = await getMeta(doc);
-    const t = meta?.info?.Title;
-    if (typeof t === "string" && t.trim()) title = t.trim();
-  } catch {
-    // Metadata is best-effort.
-  }
+    signal.throwIfAborted();
+    const totalPages = doc.numPages ?? 0;
+    const extractedPages = Math.min(totalPages, limit);
+    // The on-disk copy is allowed to run past maxPages (it is the "rest" the
+    // inline answer points at) but remains bounded and cancellable.
+    const filePages = Math.min(totalPages, MAX_PDF_FILE_PAGES);
 
-  const joined = pageTexts.join("\n\n");
-  const fullText = remaining === undefined ? joined : `${joined}\n\n${remaining}`;
-  if (!fullText.replace(/<!-- Page \d+ -->/g, "").trim()) {
-    throw new Error("PDF has no extractable text layer (likely a scanned document)");
-  }
+    const extractPage = async (i: number): Promise<string> => {
+      // PDF.js can resolve pages through microtasks only. Yield to the event
+      // loop so user cancellation and timeout timers can run between pages.
+      await setImmediate();
+      signal.throwIfAborted();
+      const page = await doc.getPage(i);
+      signal.throwIfAborted();
+      const content = await page.getTextContent();
+      signal.throwIfAborted();
+      let text = "";
+      for (const item of content.items) {
+        if (!("str" in item)) continue;
+        text += item.str;
+        if (item.hasEOL) text += "\n";
+      }
+      return `<!-- Page ${i} -->\n\n${text.trim()}`;
+    };
 
-  return {
-    text: joined,
-    remaining,
-    fileTruncated: filePages < totalPages,
-    title,
-    totalPages,
-    extractedPages,
-  };
+    const pageTexts: string[] = [];
+    for (let i = 1; i <= extractedPages; i++) {
+      pageTexts.push(await extractPage(i));
+    }
+
+    let remaining: string | undefined;
+    if (filePages > extractedPages) {
+      const rest: string[] = [];
+      for (let i = extractedPages + 1; i <= filePages; i++) {
+        rest.push(await extractPage(i));
+      }
+      remaining = rest.join("\n\n");
+    }
+
+    let title: string | undefined;
+    try {
+      const meta = await getMeta(doc);
+      const t = meta?.info?.Title;
+      if (typeof t === "string" && t.trim()) title = t.trim();
+    } catch {
+      // Metadata is best-effort, but cancellation must not be swallowed.
+    }
+    signal.throwIfAborted();
+
+    const joined = pageTexts.join("\n\n");
+    const fullText = remaining === undefined ? joined : `${joined}\n\n${remaining}`;
+    if (!fullText.replace(/<!-- Page \d+ -->/g, "").trim()) {
+      throw new Error("PDF has no extractable text layer (likely a scanned document)");
+    }
+
+    return {
+      text: joined,
+      remaining,
+      fileTruncated: filePages < totalPages,
+      title,
+      totalPages,
+      extractedPages,
+    };
+  } catch (err) {
+    // Destroying a document may reject pending PDF.js promises with its own
+    // error. Preserve AbortError/TimeoutError for the provider fallback chain.
+    signal.throwIfAborted();
+    throw err;
+  } finally {
+    signal.removeEventListener("abort", onAbort);
+    await destroy();
+  }
 }
 
 /** Persist an oversized extraction under ~/.pi so the model can read it on
@@ -390,8 +430,10 @@ async function pdfFetchResponse(
   bytes: Buffer,
   contentType: string,
   options: FetchOptions,
+  signal: AbortSignal,
 ): Promise<FetchResponse> {
-  const pdf = await extractPdfText(bytes, options.maxPages);
+  const pdf = await extractPdfText(bytes, options.maxPages, signal);
+  signal.throwIfAborted();
   const truncatedByPages = pdf.extractedPages < pdf.totalPages;
   const overChars = pdf.text.length > MAX_PDF_TEXT_CHARS;
 
@@ -480,12 +522,13 @@ export async function fetchDirect(url: string, options: FetchOptions = {}): Prom
   // Fail fast on oversized PDFs before downloading the body.
   const declaredLength = Number(res.headers.get("content-length") ?? "");
   if (pdfHint && Number.isFinite(declaredLength) && declaredLength > MAX_PDF_FETCH_BYTES) {
+    await res.body?.cancel().catch(() => undefined);
     throw new Error(
       `PDF is ${(declaredLength / 1024 / 1024).toFixed(1)}MB — exceeds the 20MB direct-fetch limit: ${url}`,
     );
   }
 
-  const { bytes, truncated } = await readBody(res, pdfHint);
+  const { bytes, truncated } = await readBody(res);
   const head = bytes.subarray(0, 2048).toString("utf8");
 
   const kind = classifyBody(contentType, head);
@@ -498,12 +541,17 @@ export async function fetchDirect(url: string, options: FetchOptions = {}): Prom
     if (truncated) {
       throw new Error(`PDF exceeds the 20MB direct-fetch limit: ${url}`);
     }
-    return pdfFetchResponse(url, bytes, contentType, options);
+    return pdfFetchResponse(url, bytes, contentType, options, combinedSignal);
   }
 
-  let rawBody = bytes.toString("utf8");
-  while (Buffer.byteLength(rawBody, "utf8") > MAX_DIRECT_FETCH_BYTES)
-    rawBody = rawBody.slice(0, -1);
+  // Bound bytes before decoding, dropping any partial trailing UTF-8 code
+  // point. Invalid input can expand into replacement characters; cap that
+  // output in one more linear pass rather than trimming one character at a time.
+  let rawBody = new StringDecoder("utf8").write(bytes.subarray(0, MAX_DIRECT_FETCH_BYTES));
+  const encodedBody = Buffer.from(rawBody, "utf8");
+  if (encodedBody.byteLength > MAX_DIRECT_FETCH_BYTES) {
+    rawBody = new StringDecoder("utf8").write(encodedBody.subarray(0, MAX_DIRECT_FETCH_BYTES));
+  }
 
   const isHtml = kind === "html";
   let title = isHtml ? extractHtmlTitle(rawBody) : undefined;
