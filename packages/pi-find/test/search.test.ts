@@ -267,6 +267,17 @@ test("find uses one glob under one directory", { skip: !hasFd }, async () => {
   await assert.rejects(() => find({ pattern: "!" }), /cannot be empty/);
 });
 
+test("find matches file names case-insensitively", { skip: !hasFd }, async () => {
+  const upper = await find({ pattern: "*.TS", path: "src" });
+  assert.deepEqual([...upper.files].sort(), ["src/deep/test.ts", "src/main.ts"]);
+
+  const name = await find({ pattern: "MAIN.TS" });
+  assert.deepEqual(name.files, ["src/main.ts"]);
+
+  const excluded = await find({ pattern: "!*.TS", path: "src" });
+  assert.deepEqual(excluded.files, ["src/other.js"]);
+});
+
 test("find skips hidden and ignored files unless a hidden directory is explicit", {
   skip: !hasFd,
 }, async () => {
@@ -339,6 +350,8 @@ test("engine arguments contain only the fixed simple behavior", () => {
   assert.ok(fd.includes("--glob"));
   assert.ok(fd.includes("*.ts"));
   assert.ok(fd.includes("--print0"));
+  assert.ok(fd.includes("--ignore-case"));
+  assert.ok(!fd.includes("--case-sensitive"));
   assert.ok(rg.includes("--no-config"));
   assert.ok(rg.includes("--case-sensitive"));
   assert.ok(!fd.includes("--hidden"));

@@ -177,7 +177,7 @@ export function buildFdArgs(request: FindRequest, searchRoot: string): string[] 
     "f",
     "--print0",
     "--color=never",
-    "--case-sensitive",
+    "--ignore-case",
     "--glob",
     "--exclude",
     ".git",
@@ -195,7 +195,7 @@ export function buildFdArgs(request: FindRequest, searchRoot: string): string[] 
  * `path` as the scope and write globs from either place, and both spellings
  * can only ever match results inside that scope.
  */
-function pathMatcher(pattern: string | undefined, root: string, cwd: string) {
+function pathMatcher(pattern: string | undefined, root: string, cwd: string, nocase: boolean) {
   const negated = pattern?.startsWith("!") === true;
   const body = pattern === undefined ? undefined : globBody(pattern);
   const matcher =
@@ -206,7 +206,7 @@ function pathMatcher(pattern: string | undefined, root: string, cwd: string) {
           matchBase: !body.includes("/"),
           nonegate: true,
           nocomment: true,
-          nocase: false,
+          nocase,
         });
   return (file: string): boolean => {
     if (matcher === undefined) return true;
@@ -230,7 +230,7 @@ const makeSearchRuntime = Effect.gen(function* () {
       const target = searchTarget(request.cwd, request.path, false);
       if (target instanceof SearchInputError) return Effect.fail(target);
 
-      const accepts = pathMatcher(request.glob, target.root, request.cwd);
+      const accepts = pathMatcher(request.glob, target.root, request.cwd, false);
       const matches: GrepMatch[] = [];
       let sawOverflow = false;
       let skippedRecords = 0;
@@ -279,7 +279,7 @@ const makeSearchRuntime = Effect.gen(function* () {
       const target = searchTarget(request.cwd, request.path, true);
       if (target instanceof SearchInputError) return Effect.fail(target);
 
-      const accepts = pathMatcher(request.pattern, target.root, request.cwd);
+      const accepts = pathMatcher(request.pattern, target.root, request.cwd, true);
       const files: string[] = [];
       let sawOverflow = false;
       let skippedRecords = 0;
