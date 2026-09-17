@@ -5,9 +5,9 @@
  * (invocation info + live streamed output, /ps-style tabs and scrolling),
  * x requests a stop. Killing only works for detached background shells —
  * they run in devin's process, so pi can only ask devin to stop them; the
- * confirm dialog runs after the overlay closes because pi's dialogs cannot
- * stack on a custom overlay. Headless modes fall back to ctx.ui.select/
- * confirm prompts.
+ * confirm dialog runs between overlays because pi's dialogs cannot stack on
+ * a custom overlay, then the dashboard reopens. Headless modes fall back to
+ * ctx.ui.select/confirm prompts.
  */
 
 import { formatSize } from "@earendil-works/pi-coding-agent";
@@ -140,31 +140,31 @@ export async function runDevinTasksPicker(
         overlayOptions: { anchor: "center", width: "100%", maxHeight: "100%" },
       },
     );
-    if (!picked || picked.kind === "kill") {
-      if (picked) await requestKill(ctx, deps, picked.op);
-      return;
-    }
-    // Inspect: after leaving the detail view, fall back to the dashboard.
-    const action = await ctx.ui.custom<DevinTasksAction | null>(
-      (tui, theme, keybindings, done) =>
-        new DevinOpDetail(
-          tui,
-          theme,
-          keybindings,
-          picked.op.view.id,
-          deps.listOps,
-          picked.op,
-          done,
-        ),
-      {
-        overlay: true,
-        overlayOptions: { anchor: "center", width: "100%", maxHeight: "100%" },
-      },
-    );
-    if (action?.kind === "kill") {
-      await requestKill(ctx, deps, action.op);
-      return;
-    }
+    if (!picked) return;
+    const action =
+      picked.kind === "kill"
+        ? picked
+        : // Inspect: after leaving the detail view, fall back to the dashboard.
+          await ctx.ui.custom<DevinTasksAction | null>(
+            (tui, theme, keybindings, done) =>
+              new DevinOpDetail(
+                tui,
+                theme,
+                keybindings,
+                picked.op.view.id,
+                deps.listOps,
+                picked.op,
+                done,
+              ),
+            {
+              overlay: true,
+              overlayOptions: { anchor: "center", width: "100%", maxHeight: "100%" },
+            },
+          );
+    // The kill confirm runs between overlays (pi's dialogs cannot stack on a
+    // custom overlay); afterwards the loop reopens the dashboard so several
+    // ops can be stopped per visit.
+    if (action?.kind === "kill") await requestKill(ctx, deps, action.op);
   }
 }
 

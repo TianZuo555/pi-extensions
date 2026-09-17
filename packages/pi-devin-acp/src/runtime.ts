@@ -10,7 +10,12 @@
 
 import { Context, Data, Effect, Layer, ManagedRuntime, Exit, Cause, Result } from "effect";
 import type { ContentBlock } from "@agentclientprotocol/sdk";
-import type { DevinAcpClient, DevinConfigOption, DevinListSessionInfo } from "../lib/acp-client.ts";
+import type {
+  DevinAcpClient,
+  DevinConfigOption,
+  DevinListSessionInfo,
+  DevinPromptResult,
+} from "../lib/acp-client.ts";
 import {
   HISTORY_RESOURCE_URI,
   INSTRUCTIONS_RESOURCE_URI,
@@ -114,6 +119,8 @@ export type DevinPromptTransform = (
 
 export interface DevinSummaryResult {
   text: string;
+  /** Per-turn usage of the throwaway summary session, when it completed. */
+  usage?: DevinUsage;
 }
 
 export interface DevinRuntimeShape {
@@ -201,10 +208,16 @@ const makeRuntime = (createClient: DevinClientFactory) =>
     const liveOps = new Map<string, DevinLiveOp>();
     const activitySubscribers = new Set<(activity: DevinActivity) => void>();
     let lastSentSystemPrompt: string | undefined;
+    /** Monotonic sequence of committed instruction snapshots on this binding.
+     * Late completions of older requests must not overwrite newer commits.
+     */
+    let instructionSeq = 0;
     let closed = false;
     let active: DevinTurnController | undefined;
     let activeAbort: AbortController | undefined;
     let generation = 0;
+    // Unlike turn generation, this survives supersession within one binding.
+    let bindingGeneration = 0;
     /** Settles when the last started ACP prompt request finishes. */
     let activePromptSettled: Promise<void> | undefined;
 
@@ -281,6 +294,7 @@ const makeRuntime = (createClient: DevinClientFactory) =>
     };
 
     const dropSession = (bootstrap: boolean) => {
+      bindingGeneration += 1;
       invalidateActiveTurn();
       if (sessionId && client) {
         const id = sessionId;
@@ -555,6 +569,7 @@ const makeRuntime = (createClient: DevinClientFactory) =>
                   // for the next real turn.
                   const isCommandPrompt = /^\/\S/.test(request.prompt);
                   const blocks: ContentBlock[] = [];
+                  let attachedSystemPrompt: string | undefined;
                   if (!isCommandPrompt) {
                     if (needsBootstrap && request.historyBootstrap) {
                       blocks.push({
@@ -578,9 +593,8 @@ const makeRuntime = (createClient: DevinClientFactory) =>
                           text: piSystemInstructionsPrompt(request.systemPrompt),
                         },
                       });
-                      lastSentSystemPrompt = request.systemPrompt;
+                      attachedSystemPrompt = request.systemPrompt;
                     }
-                    needsBootstrap = false;
                   }
                   blocks.push(...request.blocks);
 
@@ -602,7 +616,38 @@ const makeRuntime = (createClient: DevinClientFactory) =>
                     );
                   });
 
+                  const promptBindingGeneration = bindingGeneration;
+                  const promptInstructionSeq = ++instructionSeq;
                   const promptPromise = acp.prompt(liveSessionId, outgoing);
+                  // Commit context state only once devin answers the prompt
+                  // request — a transform-hook or transport failure leaves it
+                  // pending so the next turn re-attaches the resources.
+                  // Attached before activePromptSettled so a superseding turn
+                  // (which waits on it) observes the committed state.
+                  if (!isCommandPrompt) {
+                    void promptPromise.then(
+                      () => {
+                        if (
+                          closed ||
+                          bindingGeneration !== promptBindingGeneration ||
+                          client !== acp ||
+                          sessionId !== liveSessionId
+                        )
+                          return;
+                        needsBootstrap = false;
+                        // Out-of-order commits are the only unsound case: an
+                        // equal-or-newer snapshot is always current, and an
+                        // older one must not overwrite a newer commit.
+                        if (
+                          attachedSystemPrompt !== undefined &&
+                          promptInstructionSeq >= instructionSeq
+                        ) {
+                          lastSentSystemPrompt = attachedSystemPrompt;
+                        }
+                      },
+                      () => {},
+                    );
+                  }
                   activePromptSettled = promptPromise.then(
                     () => undefined,
                     () => undefined,
@@ -620,6 +665,8 @@ const makeRuntime = (createClient: DevinClientFactory) =>
                         usage: {
                           inputTokens: result.usage?.inputTokens,
                           outputTokens: result.usage?.outputTokens,
+                          cachedReadTokens: result.usage?.cachedReadTokens,
+                          cachedWriteTokens: result.usage?.cachedWriteTokens,
                         },
                       });
                       controller.close();
@@ -678,9 +725,12 @@ const makeRuntime = (createClient: DevinClientFactory) =>
                     check();
                   }
                   const collected: string[] = [];
+                  let summaryUsage: DevinUsage | undefined;
                   acp.setSessionListener(created.sessionId, (update) => {
                     for (const activity of acpUpdateToActivities(update)) {
                       if (activity.type === "text") collected.push(activity.delta);
+                      if (activity.type === "usage")
+                        summaryUsage = mergeDevinUsage(summaryUsage, activity.usage);
                     }
                   });
                   try {
@@ -697,6 +747,7 @@ const makeRuntime = (createClient: DevinClientFactory) =>
                       ),
                     );
                     signal?.addEventListener("abort", onAbort, { once: true });
+                    let summaryResult: DevinPromptResult | undefined;
                     try {
                       const outgoing = await applyPromptTransform(
                         transformPrompt,
@@ -704,14 +755,20 @@ const makeRuntime = (createClient: DevinClientFactory) =>
                         [{ type: "text", text: prompt }],
                       );
                       check();
-                      await Promise.race([acp.prompt(created.sessionId, outgoing), cancelled]);
+                      summaryResult = await Promise.race([
+                        acp.prompt(created.sessionId, outgoing),
+                        cancelled,
+                      ]);
                     } finally {
                       signal?.removeEventListener("abort", onAbort);
                     }
+                    return {
+                      text: collected.join(""),
+                      usage: mergeDevinUsage(summaryUsage, summaryResult?.usage),
+                    };
                   } finally {
                     acp.setSessionListener(created.sessionId, undefined);
                   }
-                  return { text: collected.join("") };
                 } finally {
                   void acp.deleteSession(created.sessionId).catch(() => {});
                 }

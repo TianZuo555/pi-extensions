@@ -80,7 +80,11 @@ unavailable.
   pi's session file (`pi-devin-acp-session-state` entries) so reloading pi resumes
   the same Devin session via `session/load`.
 - Streamed `session/update` notifications become pi thinking/text blocks,
-  tool-card placeholders, and usage.
+  tool-card placeholders, and usage. Billable tokens and estimated cost are
+  recorded once on the terminal assistant message, not on replay-only tool
+  segments, so late cache-read/cache-write metadata cannot corrupt accounting.
+  `/devin-usage` shows live usage; failed or aborted streams record their latest
+  observed turn usage, and successful summaries record their own usage.
 - Devin tool calls appear as display-only `devin` tool calls; pi "executes"
   them by replaying the recorded Devin result, then re-enters the provider.
 - `session/request_permission` prompts through pi's select UI and reports

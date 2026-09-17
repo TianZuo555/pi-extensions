@@ -141,8 +141,8 @@ export async function killDetachedDescendantGroups(rootPid: number): Promise<num
     const rows = await listProcesses();
     const root = rows.find((row) => row.pid === rootPid);
     if (!root) return [];
-    const getpgrp = (process as NodeJS.Process & { getpgrp?: () => number }).getpgrp;
-    const ownPgid = typeof getpgrp === "function" ? getpgrp.call(process) : 0;
+    // Node exposes no getpgrp; our own group id comes from the same snapshot.
+    const ownPgid = rows.find((row) => row.pid === process.pid)?.pgid ?? 0;
     const groups = targetGroups(descendantRows(rows, rootPid), root.pgid, ownPgid);
     if (groups.length === 0) return [];
     signalGroups(groups, "SIGTERM");
