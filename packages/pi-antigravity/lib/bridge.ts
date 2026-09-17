@@ -20,6 +20,7 @@
 
 import { createHash, randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import { WRAPPER_TOOL_NAME } from "./prompt.ts";
 
 export const BRIDGE_SERVER_NAME = "pi-bridge";
@@ -75,7 +76,8 @@ export function selectBridgedTools(
 }
 
 export interface BridgeCallResult {
-  content: string;
+  /** Strings are convenient for local diagnostics and dynamic skill tools. */
+  content: string | Array<TextContent | ImageContent>;
   isError: boolean;
 }
 
@@ -386,7 +388,10 @@ export class AgyPiBridge {
         return {
           ...base,
           result: {
-            content: [{ type: "text", text: result.content }],
+            content:
+              typeof result.content === "string"
+                ? [{ type: "text", text: result.content }]
+                : result.content,
             isError: result.isError,
           },
         };
@@ -461,15 +466,14 @@ export function resolveBridgeResultsFromContext(
       role?: string;
       toolCallId?: string;
       isError?: boolean;
-      content?: Array<{ type?: string; text?: string }>;
+      content?: Array<TextContent | ImageContent>;
     };
     if (message?.role !== "toolResult" || !message.toolCallId) continue;
     if (!bridge.isAwaiting(message.toolCallId)) continue;
-    const text = (message.content ?? [])
-      .filter((part) => part?.type === "text")
-      .map((part) => part.text ?? "")
-      .join("\n");
-    bridge.resolveCall(message.toolCallId, { content: text, isError: message.isError === true });
+    bridge.resolveCall(message.toolCallId, {
+      content: message.content ?? [],
+      isError: message.isError === true,
+    });
     resolved += 1;
   }
   return resolved;
