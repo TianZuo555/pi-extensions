@@ -48,7 +48,9 @@ unavailable.
 - `/devin-tasks` — list Devin operations still in flight (slow execs,
   detached background shells) in a /ps-style overlay: `enter` opens a
   read-only detail view (invocation info + live streamed output with tabs and
-  scrolling), `x` asks Devin to stop a background shell
+  scrolling), `x` asks Devin to stop a background shell, `d` drops a stale
+  entry (it reappears on the op's next update if it is genuinely still
+  running)
 - `/devin-usage` — session usage reported over ACP: context-window bar,
   cumulative tokens/cost (credits/ACUs when billed), and last-turn stats —
   rendered `/usage`-style with Devin's own response-dimension grouping
@@ -110,9 +112,18 @@ unavailable.
   any are in flight, and `/devin-tasks` lists them. A backgrounded shell that
   outlives its turn replays as a neutral note (with its shell id) instead of
   a failure card; it drops off the list when its `terminal_exit` arrives.
-  Closing the runtime (`/new`, `/quit`, `/reload`) kills detached background
-  shells together with the `devin acp` child — their process groups are
-  signalled before the child dies, so nothing is orphaned.
+  In the picker, `x` asks Devin to stop a background shell and `d` drops an
+  entry that was stranded without a terminal update (a genuinely running op
+  re-adds itself on its next update). Closing the runtime (`/new`, `/quit`,
+  `/reload`) kills detached background shells together with the `devin acp`
+  child — their process groups are signalled before the child dies, so
+  nothing is orphaned.
+- Backend reconnects surface in the same status-bar widget: devin reports
+  `_cognition.ai/connection_retry` (`attempt`, `maxAttempts`, `isStreamRetry`)
+  per attempt while a prompt waits on the stream, and pi shows
+  `devin: connection failed (attempt N/M), retrying…` — or
+  `connection lost` for mid-stream drops — until updates resume, the turn
+  settles, or the state goes stale.
 
 ## Environment variables
 

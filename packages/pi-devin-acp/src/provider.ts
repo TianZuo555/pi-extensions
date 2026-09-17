@@ -610,6 +610,7 @@ export function streamDevin(deps: DevinProviderDeps) {
               controller.lastUsage = usage;
               break;
             case "stopped":
+            case "retry":
             case "mode":
             case "config":
             case "title":

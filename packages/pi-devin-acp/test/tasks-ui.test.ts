@@ -26,6 +26,7 @@ for (const busy of [false, true]) {
     let sent = false;
     await runDevinTasksPicker(ctx, {
       listOps: () => [{ view: { id: "exec", shellId: "shell-1" }, startedAt: 0 }],
+      dismissOp: () => false,
       sendToSession: (text, options) => {
         if (busy && !options?.deliverAs) throw new Error("Agent is busy; specify deliverAs");
         assert.equal(text, "Kill background shell shell-1 and confirm it stopped.");
@@ -52,6 +53,7 @@ test("tasks kill reports send failures instead of acknowledging success", async 
     } as unknown as ExtensionContext,
     {
       listOps: () => [{ view: { id: "exec", shellId: "shell-1" }, startedAt: 0 }],
+      dismissOp: () => false,
       sendToSession: () => {
         throw new Error("session closed");
       },
@@ -199,6 +201,7 @@ test("tasks overlay renders ops /ps-style with borders, hints, and live metadata
   });
   await runDevinTasksPicker(ctx, {
     listOps: () => OPS,
+    dismissOp: () => false,
     sendToSession: () => {
       throw new Error("must not send without a kill confirmation");
     },
@@ -232,6 +235,7 @@ test("tasks overlay navigates with j/k; x kills the selected shell and reopens",
   );
   await runDevinTasksPicker(ctx, {
     listOps: () => (killed ? [OPS[1]] : OPS),
+    dismissOp: () => false,
     sendToSession: (text: string, options?: { deliverAs?: string }) => {
       killed = true;
       sent.push(`${options?.deliverAs}:${text}`);
@@ -259,6 +263,7 @@ test("tasks overlay declines to kill ops that are not background shells", async 
   ]);
   await runDevinTasksPicker(ctx, {
     listOps: () => OPS,
+    dismissOp: () => false,
     sendToSession: () => {
       throw new Error("in-turn ops cannot be killed from pi");
     },
@@ -292,6 +297,7 @@ test("tasks overlay closes itself when every op settles", async () => {
   } as unknown as ExtensionContext;
   await runDevinTasksPicker(ctx, {
     listOps: () => (++calls === 1 ? OPS : []),
+    dismissOp: () => false,
     sendToSession: () => {},
   });
   assert.ok(calls >= 2, "the dashboard must poll for updates");
@@ -338,6 +344,7 @@ test("enter opens the detail view; cancel returns to the dashboard", async () =>
   ]);
   await runDevinTasksPicker(ctx, {
     listOps: () => OPS,
+    dismissOp: () => false,
     sendToSession: () => {
       throw new Error("inspecting must not send anything");
     },
@@ -387,6 +394,7 @@ test("detail view tabs between metadata and streamed output with scrolling", asy
   ]);
   await runDevinTasksPicker(ctx, {
     listOps: ops,
+    dismissOp: () => false,
     sendToSession: () => {},
   });
 });
@@ -414,6 +422,7 @@ test("x from the detail view kills the inspected shell and returns to the dashbo
   );
   await runDevinTasksPicker(ctx, {
     listOps: () => OPS,
+    dismissOp: () => false,
     sendToSession: (text: string, options?: { deliverAs?: string }) => {
       sent.push(`${options?.deliverAs}:${text}`);
     },
@@ -453,6 +462,7 @@ test("detail view freezes once the op settles and stops offering kill", async ()
   ]);
   await runDevinTasksPicker(ctx, {
     listOps: ops,
+    dismissOp: () => false,
     sendToSession: (text: string) => sent.push(text),
   });
   assert.deepEqual(sent, [], "a settled op can no longer be killed");
@@ -543,4 +553,34 @@ test("buildDevinOpOutputLines collapses CR progress, strips ANSI, expands tabs, 
   assert.equal(wrapped.join(""), "x".repeat(25));
   assert.deepEqual(buildDevinOpOutputLines("a\nb\n", 80), ["a", "b"]);
   assert.deepEqual(buildDevinOpOutputLines("", 80), []);
+});
+
+test("tasks overlay dismisses a stale in-turn op with d and reopens", async () => {
+  const dismissed: string[] = [];
+  const { ctx, getCalls } = stagedOverlayCtx([
+    async (dashboard) => {
+      await flush();
+      dashboard.handleInput("j"); // op-2 has no shellId
+      dashboard.handleInput("d");
+    },
+    async (reopened) => {
+      await flush();
+      const joined = reopened.render(80).join("\n");
+      assert.match(joined, /Running tests/);
+      assert.doesNotMatch(joined, /Slow refactor/);
+      reopened.handleInput("\x1b");
+    },
+  ]);
+  await runDevinTasksPicker(ctx, {
+    listOps: () => OPS.filter((op) => !dismissed.includes(op.view.id)),
+    dismissOp: (id: string) => {
+      dismissed.push(id);
+      return true;
+    },
+    sendToSession: () => {
+      throw new Error("dismiss must not message devin");
+    },
+  });
+  assert.deepEqual(dismissed, ["op-2"]);
+  assert.equal(getCalls(), 2, "dismiss → dashboard reopens");
 });

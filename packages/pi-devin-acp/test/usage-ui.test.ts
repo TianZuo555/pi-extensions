@@ -20,6 +20,7 @@ function snapshot(partial: Partial<DevinStateSnapshot>): DevinStateSnapshot {
     availableCommands: undefined,
     lastTurnStats: undefined,
     liveOps: [],
+    retry: undefined,
     client: { spawned: 1, requestsSent: 1, notificationsReceived: 5 },
     ...partial,
   };

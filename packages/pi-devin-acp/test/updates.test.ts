@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { SessionUpdate } from "@agentclientprotocol/sdk";
-import { acpUpdateToActivities, agentStoppedToActivity } from "../src/updates.ts";
+import {
+  acpUpdateToActivities,
+  agentStoppedToActivity,
+  connectionRetryToActivity,
+} from "../src/updates.ts";
 
 test("agent_message_chunk maps to text delta with messageId", () => {
   const update = {
@@ -214,4 +218,29 @@ test("agentStoppedToActivity parses _cognition.ai/agent_stopped stats", () => {
   assert.equal(activity.stats.acuCost, 0.02);
   assert.equal(activity.stats.dimensions?.[0].label, "Model");
   assert.equal(agentStoppedToActivity("junk"), undefined);
+});
+
+test("connectionRetryToActivity parses _cognition.ai/connection_retry", () => {
+  assert.deepEqual(
+    connectionRetryToActivity({
+      sessionId: "s1",
+      attempt: 4,
+      maxAttempts: 5,
+      isStreamRetry: false,
+    }),
+    { type: "retry", attempt: 4, maxAttempts: 5, isStreamRetry: false },
+  );
+  assert.deepEqual(connectionRetryToActivity({ attempt: 2, isStreamRetry: true }), {
+    type: "retry",
+    attempt: 2,
+    maxAttempts: undefined,
+    isStreamRetry: true,
+  });
+});
+
+test("connectionRetryToActivity ignores payloads without a numeric attempt", () => {
+  assert.equal(connectionRetryToActivity({ sessionId: "s1" }), undefined);
+  assert.equal(connectionRetryToActivity({ attempt: "4" }), undefined);
+  assert.equal(connectionRetryToActivity(null), undefined);
+  assert.equal(connectionRetryToActivity("retry"), undefined);
 });

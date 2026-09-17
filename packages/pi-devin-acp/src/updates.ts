@@ -217,6 +217,22 @@ export function agentStoppedToActivity(params: unknown): DevinActivity | undefin
   };
 }
 
+/** `_cognition.ai/connection_retry` params → retry activity. */
+export function connectionRetryToActivity(params: unknown): DevinActivity | undefined {
+  if (typeof params !== "object" || params === null) return undefined;
+  const record = params as Record<string, unknown>;
+  const attempt = record.attempt;
+  if (typeof attempt !== "number" || !Number.isFinite(attempt)) return undefined;
+  const maxAttempts = record.maxAttempts;
+  return {
+    type: "retry",
+    attempt,
+    maxAttempts:
+      typeof maxAttempts === "number" && Number.isFinite(maxAttempts) ? maxAttempts : undefined,
+    isStreamRetry: typeof record.isStreamRetry === "boolean" ? record.isStreamRetry : undefined,
+  };
+}
+
 /** `_cognition.ai/turn_stats` params → last turn's response dimensions. */
 export function turnStatsToDimensions(params: unknown): DevinResponseDimension[] | undefined {
   if (typeof params !== "object" || params === null) return undefined;
