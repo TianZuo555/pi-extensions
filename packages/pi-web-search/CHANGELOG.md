@@ -1,5 +1,11 @@
 # @tian.zuo/pi-web-search
 
+## 0.8.1
+
+### Patch Changes
+
+- [#75](https://github.com/TianZuo555/pi-extensions/pull/75) [`50e035c`](https://github.com/TianZuo555/pi-extensions/commit/50e035cf03a6cc16ef2d5e6881c9ed4b654b2435) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Fix web_search and web_fetch result rendering for failed tool calls: an error result used to fall through to the success summary and print "✓ NaN KB via undefined". Failed calls now render a ✗ line with the first error message line (e.g. "All fetch providers failed:") and, when expanded, the full per-provider failure list.
+
 ## 0.8.0
 
 ### Minor Changes

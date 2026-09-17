@@ -1,5 +1,17 @@
 # @tian.zuo/pi-devin-acp
 
+## 0.3.0
+
+### Minor Changes
+
+- [#78](https://github.com/TianZuo555/pi-extensions/pull/78) [`6beeb93`](https://github.com/TianZuo555/pi-extensions/commit/6beeb934918b9be78e5cb6e788fd8683b7837e4c) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Add `/devin-usage` (also `/devin usage`): a report of the usage devin reports over ACP — context-window occupancy bar, cumulative session tokens/cost (`usage_update` counters, `cost`, `totalCreditCost`/`totalAcuCost`), and last-turn stats — rendered in /usage's padded-label style with the server's own `responseDimensions` grouping, so new usage dimensions surface without a client update. The runtime snapshot now carries the merged `usage` object, and `cachedWriteTokens`, `creditCost`, `acuCost`, and `responseDimensions` are captured from `usage_update`/`agent_stopped` payloads.
+  
+  Live-op labels no longer fall back to "(untitled op)" when devin omits the tool-call title — the status widget and `/devin-tasks` views now synthesize a label from the call summary (e.g. `execute · sleep 60`, from kind/locations/rawInput) or the devin tool name, so running operations are identifiable at a glance.
+
+- [#77](https://github.com/TianZuo555/pi-extensions/pull/77) [`4ca04fa`](https://github.com/TianZuo555/pi-extensions/commit/4ca04fac40e0ae531cba76e0999d10e60a1c379c) Thanks [@TianZuo555](https://github.com/TianZuo555)! - `/devin tasks` is now the standalone command `/devin-tasks` with /ps-style overlay interaction: `enter` opens a read-only detail view for the selected devin operation (invocation info tab with id/title/kind/tool/status/elapsed/scope/locations/input, plus a live `output` tab that tails devin's streamed tool output with j/k scrolling, page keys, and g/G), and `x` requests a stop. Previously both keys jumped straight to the kill confirmation. When an operation settles while being inspected, the view freezes on its last snapshot and stops offering kill; killing still only applies to detached background shells, which pi can only ask devin to stop.
+  
+  Also fixes a process leak: devin background shells are detached into their own process groups and used to survive `/new`, `/quit`, and `/reload` as orphaned processes after the `devin acp` child was killed — still running, but invisible to `/devin-tasks` and unreachable by the fresh session. The runtime now kills those detached descendant groups (SIGTERM, then SIGKILL) before the acp child dies; the child's own process group, shared with pi, is never signalled. POSIX only — Windows falls back to a best-effort `taskkill /T` tree kill.
+
 ## 0.2.0
 
 ### Minor Changes
