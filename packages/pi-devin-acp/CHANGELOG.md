@@ -1,5 +1,15 @@
 # @tian.zuo/pi-devin-acp
 
+## 0.3.1
+
+### Patch Changes
+
+- [#80](https://github.com/TianZuo555/pi-extensions/pull/80) [`6008953`](https://github.com/TianZuo555/pi-extensions/commit/60089534307bbd3306c80cae06e1a9e5a7c6baa9) Thanks [@TianZuo555](https://github.com/TianZuo555)! - `/devin-tasks` now returns to the operations dashboard after a kill request (confirmed, declined, or refused for in-turn ops) instead of exiting the picker, matching `/ps` — several background shells can be stopped per visit. `/devin tasks` (the removed space form) now prints a pointer to `/devin-tasks` instead of an unknown-argument error that still listed `tasks` as valid. Detached-shell cleanup on shutdown also fixes a dead guard: Node has no `process.getpgrp`, so pi's own process group is now read from the same `ps` snapshot used to find devin's descendants.
+  
+  Two failure-path fixes: bootstrap history and system-instruction resources are now committed only once devin answers the prompt request — a throwing `transformPrompt` hook or a failed prompt no longer makes the retry lose that context (the resources are re-attached instead). Completion callbacks are guarded by binding generation, client, and session identity so late results cannot clear a new binding's bootstrap state, and an out-of-order completion within one binding can no longer overwrite a newer instruction commit. And `/devin yolo off` applies the remote mode change before persisting the setting, so a failed `setMode` can no longer leave devin in bypass while pi reports yolo off, and a failed preference write is reported without desynchronizing the applied mode from the in-memory policy.
+
+- [#80](https://github.com/TianZuo555/pi-extensions/pull/80) [`6008953`](https://github.com/TianZuo555/pi-extensions/commit/60089534307bbd3306c80cae06e1a9e5a7c6baa9) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Record ACP usage once on the terminal assistant message, preserving cache-read/cache-write classification and cost even when cache metadata arrives after tool replay segments. Failed and aborted streams retain their latest observed usage; summary sessions merge streamed usage with canonical prompt-response totals. Normalize nullable ACP cache counters and include cache writes without double counting input. Live usage remains available through /devin-usage; replay-only messages intentionally carry zero billable usage.
+
 ## 0.3.0
 
 ### Minor Changes

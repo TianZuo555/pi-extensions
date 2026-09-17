@@ -1,5 +1,11 @@
 # @tian.zuo/pi-antigravity
 
+## 0.11.2
+
+### Patch Changes
+
+- [#79](https://github.com/TianZuo555/pi-extensions/pull/79) [`dcd6e2b`](https://github.com/TianZuo555/pi-extensions/commit/dcd6e2ba36b978a3a7d4482ebbef469d32c61f14) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Fix summaries interrupted by native tool events, prevent completed turns from being reused while executor cleanup is pending, and preserve image content in bridged MCP tool results.
+
 ## 0.11.1
 
 ### Patch Changes
