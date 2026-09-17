@@ -539,68 +539,101 @@ test("streamAntigravity refreshes bridge state and passes effort, profile, and r
   assert.equal(captured?.bridgeRevision, "2:1");
 });
 
-test("streamAntigravity isolates pi summarization from the resumed agy conversation", async () => {
-  const summaryPrompt =
-    "<conversation>\nuser: real request\nassistant: result\n</conversation>\n\nSummarize the conversation above.";
-  const isolatedController = new AgyTurnController(summaryPrompt);
-  const isolatedPrompts: string[] = [];
-  let isolatedSystemPrompt: string | undefined;
-  let isolatedBeginCount = 0;
-  let disposed = false;
-  const isolatedService = {
-    beginStreamTurn: (request: { prompt: string; systemPrompt?: string }) =>
-      Effect.sync(() => {
-        isolatedSystemPrompt = request.systemPrompt;
-        isolatedBeginCount += 1;
-        isolatedPrompts.push(request.prompt);
-        return isolatedController;
-      }),
-    finishTurn: Effect.void,
-    setSession: () => Effect.void,
-    snapshot: Effect.succeed({}),
-    reset: Effect.void,
-    close: Effect.void,
-  };
-  const isolatedRuntime = {
-    runSync: () => isolatedService,
-    runPromise: (effect: Effect.Effect<any, any>) => Effect.runPromise(effect),
-    dispose: async () => {
-      disposed = true;
-    },
-  };
-  const harness = makeStreamHarness({
-    prompt: summaryPrompt,
-    context: {
-      ...contextWith([{ role: "user", content: summaryPrompt }]),
-      systemPrompt: "Pi summary instructions",
-    },
-    createIsolatedRuntime: () => isolatedRuntime as any,
-    // A live relay getter must not override the summary's own instructions.
-    getSystemPromptRelay: () => "DOCS-ONLY-RELAY",
-  });
-  const eventsPromise = harness.collect();
+for (const tools of ["none", "done", "error", "incomplete"] as const) {
+  test(`streamAntigravity isolates pi summarization with ${tools} tools`, async () => {
+    const summaryPrompt =
+      "<conversation>\nuser: real request\nassistant: result\n</conversation>\n\nSummarize the conversation above.";
+    const isolatedController = new AgyTurnController(summaryPrompt);
+    const isolatedPrompts: string[] = [];
+    let isolatedSystemPrompt: string | undefined;
+    let isolatedBeginCount = 0;
+    let disposed = false;
+    const isolatedService = {
+      beginStreamTurn: (request: { prompt: string; systemPrompt?: string }) =>
+        Effect.sync(() => {
+          isolatedSystemPrompt = request.systemPrompt;
+          isolatedBeginCount += 1;
+          isolatedPrompts.push(request.prompt);
+          return isolatedController;
+        }),
+      finishTurn: Effect.void,
+      setSession: () => Effect.void,
+      snapshot: Effect.succeed({}),
+      reset: Effect.void,
+      close: Effect.void,
+    };
+    const isolatedRuntime = {
+      runSync: () => isolatedService,
+      runPromise: (effect: Effect.Effect<any, any>) => Effect.runPromise(effect),
+      dispose: async () => {
+        disposed = true;
+      },
+    };
+    const harness = makeStreamHarness({
+      prompt: summaryPrompt,
+      context: {
+        ...contextWith([{ role: "user", content: summaryPrompt }]),
+        systemPrompt: "Pi summary instructions",
+      },
+      createIsolatedRuntime: () => isolatedRuntime as any,
+      // A live relay getter must not override the summary's own instructions.
+      getSystemPromptRelay: () => "DOCS-ONLY-RELAY",
+    });
+    const eventsPromise = harness.collect();
 
-  isolatedController.push({
-    type: "result",
-    status: "OK",
-    response: "Compact summary",
-    error: undefined,
-    usage: { input_tokens: 20_000, output_tokens: 200, total_tokens: 20_200 },
-  });
+    if (tools !== "none") {
+      for (const name of ["view_file", "run_command"]) {
+        isolatedController.push({
+          type: "tool_start",
+          stepId: name === "view_file" ? 1 : 2,
+          name,
+          args: { AbsolutePath: "/mock/notes.txt" },
+        });
+        if (tools === "done")
+          isolatedController.push({
+            type: "tool_done",
+            stepId: name === "view_file" ? 1 : 2,
+            name,
+            args: {},
+            output: "mock output",
+          });
+        if (tools === "error")
+          isolatedController.push({
+            type: "tool_error",
+            stepId: name === "view_file" ? 1 : 2,
+            name,
+            args: {},
+            message: "mock failure",
+          });
+      }
+    }
+    isolatedController.push({
+      type: "result",
+      status: "OK",
+      response: "Compact summary",
+      error: undefined,
+      usage: { input_tokens: 20_000, output_tokens: 200, total_tokens: 20_200 },
+    });
 
-  const events = await eventsPromise;
-  assert.equal(harness.getSharedBeginCount(), 0);
-  assert.equal(isolatedBeginCount, 1);
-  assert.deepEqual(isolatedPrompts, [summaryPrompt]);
-  // The summary keeps its own caller instructions — the docs-only relay is
-  // for user turns only.
-  assert.equal(isolatedSystemPrompt, "Pi summary instructions");
-  const done = events.find((event) => event.type === "done");
-  assert.equal(done?.message.content[0]?.text, "Compact summary");
-  assert.equal(done?.message.usage.totalTokens, 0);
-  await new Promise<void>((resolve) => setImmediate(resolve));
-  assert.equal(disposed, true);
-});
+    const events = await eventsPromise;
+    assert.equal(harness.getSharedBeginCount(), 0);
+    assert.equal(isolatedBeginCount, 1);
+    assert.deepEqual(isolatedPrompts, [summaryPrompt]);
+    // The summary keeps its own caller instructions — the docs-only relay is
+    // for user turns only.
+    assert.equal(isolatedSystemPrompt, "Pi summary instructions");
+    const done = events.find((event) => event.type === "done");
+    assert.equal(done?.reason, "stop");
+    assert.deepEqual(done?.message.content, [{ type: "text", text: "Compact summary" }]);
+    assert.equal(
+      events.some((event) => event.type.startsWith("toolcall_")),
+      false,
+    );
+    assert.equal(done?.message.usage.totalTokens, 0);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(disposed, true);
+  });
+}
 
 test("streamAntigravity relays the docs-only block on user turns", async () => {
   const harness = makeStreamHarness({
