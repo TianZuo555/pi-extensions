@@ -12,13 +12,38 @@
 import type { DevinConfigOption } from "../lib/acp-client.ts";
 import type { DevinToolView } from "../lib/tool-content.ts";
 
+/**
+ * One server-rendered usage row (`responseDimensions`): self-describing
+ * label/value grouped under `groupTitle` — the same payload devin's own
+ * /session-stats lists, so new dimensions show up without a client update.
+ */
+export interface DevinResponseDimension {
+  uid?: string;
+  groupTitle?: string;
+  label?: string;
+  kind?: {
+    type?: string;
+    value?: unknown;
+    prefix?: string;
+    tail?: string;
+    pluralTail?: string;
+  };
+}
+
 export interface DevinUsage {
   inputTokens?: number;
   outputTokens?: number;
   cachedReadTokens?: number;
+  cachedWriteTokens?: number;
   /** Context occupancy: `used` of `size` tokens. */
   contextUsed?: number;
   contextSize?: number;
+  /** Cumulative session cost (`usage_update.cost`). */
+  cost?: { amount: number; currency: string };
+  /** Cumulative billed totals from `usage_update` _meta. */
+  totalCreditCost?: number;
+  totalAcuCost?: number;
+  dimensions?: DevinResponseDimension[];
 }
 
 export interface DevinTurnStats {
@@ -31,6 +56,25 @@ export interface DevinTurnStats {
   tokensPerSec?: number;
   totalTimeMs?: number;
   modelLabel?: string;
+  /** Billed cost of the stopped turn (agent_stopped stats). */
+  creditCost?: number;
+  acuCost?: number;
+  dimensions?: DevinResponseDimension[];
+}
+
+/**
+ * Merge usage snapshots. Update payloads omit fields they do not carry, and
+ * those omissions must not clobber values an earlier update established.
+ */
+export function mergeDevinUsage(
+  base: DevinUsage | undefined,
+  next: DevinUsage | undefined,
+): DevinUsage {
+  const merged: DevinUsage = { ...(base ?? {}) };
+  for (const [key, value] of Object.entries(next ?? {})) {
+    if (value !== undefined) merged[key as keyof DevinUsage] = value;
+  }
+  return merged;
 }
 
 export type DevinActivity =

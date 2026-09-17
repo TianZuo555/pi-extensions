@@ -24,6 +24,7 @@ import {
 import type { ContentBlock } from "@agentclientprotocol/sdk";
 import type { DevinPromptRequest, DevinRuntimeInstance, DevinRuntimeShape } from "./runtime.ts";
 import {
+  mergeDevinUsage,
   TERMINAL_TOOL_STATUSES,
   type DevinActivity,
   type DevinTurnController,
@@ -159,20 +160,7 @@ const STOP_REASON_MAP: Record<string, "stop" | "length" | "aborted" | "error"> =
   max_turn_requests: "error",
 };
 
-/**
- * Merge usage snapshots. Update payloads omit fields they do not carry, and
- * those omissions must not clobber values an earlier update established.
- */
-export function mergeDevinUsage(
-  base: DevinUsage | undefined,
-  next: DevinUsage | undefined,
-): DevinUsage {
-  const merged: DevinUsage = { ...(base ?? {}) };
-  for (const [key, value] of Object.entries(next ?? {})) {
-    if (value !== undefined) merged[key as keyof DevinUsage] = value;
-  }
-  return merged;
-}
+export { mergeDevinUsage };
 
 export interface DevinProviderDeps {
   runtime: DevinRuntimeInstance;

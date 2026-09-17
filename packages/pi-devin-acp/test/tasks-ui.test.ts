@@ -6,6 +6,7 @@ import {
   buildDevinOpOutputLines,
   cycleDevinDetailTab,
   DEFAULT_DEVIN_DETAIL_TAB,
+  describeLiveOp,
   reconcileOpsSelection,
   runDevinTasksPicker,
   type OpsSelection,
@@ -437,6 +438,36 @@ test("detail tabs start on Info and cycle with Output", () => {
   assert.equal(cycleDevinDetailTab("output"), "info");
   assert.equal(cycleDevinDetailTab("info", -1), "output");
   assert.equal(cycleDevinDetailTab("output", -1), "info");
+});
+
+test("describeLiveOp synthesizes a label when devin omits the title", () => {
+  const at = Date.parse("2026-01-01T00:00:00.000Z");
+  const untitled = describeLiveOp(
+    {
+      view: {
+        id: "call_1",
+        kind: "execute",
+        tool: "exec",
+        rawInput: { command: "sleep 60" },
+      },
+      startedAt: at,
+    },
+    at + 61_000,
+  );
+  // Synthesized "execute · sleep 60" leads with kind, so it isn't repeated.
+  assert.match(untitled, /execute · sleep 60 — exec · 1m1s/);
+
+  const bare = describeLiveOp({ view: { id: "call_2" }, startedAt: at }, at);
+  assert.match(bare, /unnamed op — 0s/);
+
+  const titled = describeLiveOp(
+    {
+      view: { id: "call_3", title: "Running tests", kind: "execute", tool: "exec" },
+      startedAt: at,
+    },
+    at + 5_000,
+  );
+  assert.match(titled, /Running tests — execute · exec · 5s/);
 });
 
 test("buildDevinOpInfo includes invocation metadata and sanitized input", () => {

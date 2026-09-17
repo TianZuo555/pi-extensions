@@ -32,6 +32,7 @@ class FakeClient {
   cancelled: string[] = [];
   configSets: { configId: string; value: string }[] = [];
   onClose: (() => void) | undefined;
+  customHandler: ((method: string, params: unknown) => void) | undefined;
 
   async ensureStarted() {
     this.started = true;
@@ -40,7 +41,9 @@ class FakeClient {
     if (fn) this.sessions.set(id, fn);
     else this.sessions.delete(id);
   }
-  setCustomNotificationHandler() {}
+  setCustomNotificationHandler(fn?: (method: string, params: unknown) => void) {
+    this.customHandler = fn;
+  }
   setPermissionHandler() {}
   setOnClose(fn: (() => void) | undefined) {
     this.onClose = fn;
@@ -894,4 +897,61 @@ test("runSummaryTurn applies the payload hook to its disposable session", async 
   const sent = fake.prompts[0];
   assert.deepEqual(sent.blocks, [{ type: "text", text: "rewritten summary request" }]);
   assert.equal(sent.sessionId, fake.createdSessions[0], "sent to the disposable session");
+});
+
+test("snapshot.usage merges usage_update totals and turn_stats dims", async (t) => {
+  const { fake, runtime, service } = await makeRuntime();
+  t.after(() => runtime.dispose());
+  const controller = await runDevin(runtime, service.beginStreamTurn(TURN()));
+  for (;;) {
+    if ((await controller.next()) === null) break;
+  }
+
+  fake.sessions.get("sess-1")?.({
+    sessionUpdate: "usage_update",
+    used: 9000,
+    size: 262000,
+    _meta: {
+      "cognition.ai/inputTokens": 100,
+      "cognition.ai/outputTokens": 10,
+      "cognition.ai/totalAcuCost": 0.02,
+    },
+  } as never);
+  const snap = await runDevin(runtime, service.snapshot);
+  assert.equal(snap.usage?.inputTokens, 100);
+  assert.equal(snap.usage?.totalAcuCost, 0.02);
+  assert.equal(snap.contextTokens, 9000);
+
+  // A later usage_update without counters keeps the earlier totals.
+  fake.sessions.get("sess-1")?.({
+    sessionUpdate: "usage_update",
+    used: 9500,
+    size: 262000,
+  } as never);
+  const snap2 = await runDevin(runtime, service.snapshot);
+  assert.equal(snap2.usage?.inputTokens, 100);
+  assert.equal(snap2.contextTokens, 9500);
+
+  fake.customHandler?.("_cognition.ai/turn_stats", {
+    sessionId: "sess-1",
+    responseDimensions: [
+      {
+        uid: "model",
+        groupTitle: "Response Statistics",
+        label: "Model",
+        kind: { type: "metric", value: "SWE-2 Max" },
+      },
+    ],
+  });
+  const snap3 = await runDevin(runtime, service.snapshot);
+  assert.equal(snap3.lastTurnStats?.dimensions?.[0].label, "Model");
+
+  // agent_stopped still wins the whole stats object.
+  fake.customHandler?.("_cognition.ai/agent_stopped", {
+    cause: "end_turn",
+    stats: { inputTokens: 100, outputTokens: 10, tokensPerSec: 5 },
+  });
+  const snap4 = await runDevin(runtime, service.snapshot);
+  assert.equal(snap4.lastTurnStats?.tokensPerSec, 5);
+  assert.equal(snap4.lastTurnStats?.dimensions, undefined);
 });

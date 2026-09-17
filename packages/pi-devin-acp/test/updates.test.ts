@@ -81,9 +81,70 @@ test("usage_update maps _meta token counters and context occupancy", () => {
         inputTokens: 13336,
         outputTokens: 13,
         cachedReadTokens: 13322,
+        cachedWriteTokens: undefined,
+        totalCreditCost: undefined,
+        totalAcuCost: undefined,
+        cost: undefined,
+        dimensions: undefined,
       },
     },
   ]);
+});
+
+test("usage_update maps billed totals, spec cost, and response dimensions", () => {
+  const update = {
+    sessionUpdate: "usage_update",
+    used: 13460,
+    size: 262000,
+    cost: { amount: 0.0312, currency: "USD" },
+    _meta: {
+      "cognition.ai/inputTokens": 13336,
+      "cognition.ai/outputTokens": 13,
+      "cognition.ai/cachedReadTokens": 13322,
+      "cognition.ai/cachedWriteTokens": 950,
+      "cognition.ai/totalCreditCost": 0.05,
+      "cognition.ai/totalAcuCost": 0.02,
+      "cognition.ai/responseDimensions": [
+        // usage_update _meta serializes dims with internally-tagged kinds.
+        {
+          uid: "input_tokens",
+          group_title: "Token Usage",
+          kind: {
+            CumulativeMetric: {
+              label: "Input tokens",
+              value: 13336,
+              prefix: "",
+              tail: " token",
+              plural_tail: " tokens",
+            },
+          },
+        },
+        {
+          uid: "model",
+          group_title: "Response Statistics",
+          kind: { Metric: { label: "Model", value: "SWE-2 Max" } },
+        },
+        "junk",
+      ],
+    },
+  } as unknown as SessionUpdate;
+  const [activity] = acpUpdateToActivities(update);
+  assert.equal(activity.type, "usage");
+  if (activity.type !== "usage") return;
+  assert.equal(activity.usage.cachedWriteTokens, 950);
+  assert.equal(activity.usage.totalCreditCost, 0.05);
+  assert.equal(activity.usage.totalAcuCost, 0.02);
+  assert.deepEqual(activity.usage.cost, { amount: 0.0312, currency: "USD" });
+  assert.equal(activity.usage.dimensions?.length, 2, "non-object dims are dropped");
+  const [tokens, model] = activity.usage.dimensions ?? [];
+  assert.equal(tokens?.label, "Input tokens");
+  assert.equal(tokens?.groupTitle, "Token Usage");
+  assert.equal(tokens?.kind?.type, "cumulativeMetric");
+  assert.equal(tokens?.kind?.value, 13336);
+  assert.equal(tokens?.kind?.pluralTail, " tokens");
+  assert.equal(model?.label, "Model");
+  assert.equal(model?.kind?.type, "metric");
+  assert.equal(model?.kind?.value, "SWE-2 Max");
 });
 
 test("session_info_update and mode updates map to state activities", () => {
@@ -133,11 +194,24 @@ test("agentStoppedToActivity parses _cognition.ai/agent_stopped stats", () => {
       ttftMs: 299,
       tokensPerSec: 22.5,
       modelLabel: "Claude Opus 5 Max",
+      creditCost: 0.05,
+      acuCost: 0.02,
+      responseDimensions: [
+        {
+          uid: "model",
+          groupTitle: "Response Statistics",
+          label: "Model",
+          kind: { type: "metric", value: "Claude Opus 5 Max" },
+        },
+      ],
     },
   });
   assert.equal(activity?.type, "stopped");
   if (activity?.type !== "stopped") return;
   assert.equal(activity.stats.tokensPerSec, 22.5);
   assert.equal(activity.stats.inputTokens, 14023);
+  assert.equal(activity.stats.creditCost, 0.05);
+  assert.equal(activity.stats.acuCost, 0.02);
+  assert.equal(activity.stats.dimensions?.[0].label, "Model");
   assert.equal(agentStoppedToActivity("junk"), undefined);
 });
