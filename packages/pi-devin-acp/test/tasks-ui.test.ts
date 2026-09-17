@@ -205,34 +205,58 @@ test("tasks overlay renders ops /ps-style with borders, hints, and live metadata
   });
 });
 
-test("tasks overlay navigates with j/k and x kills the selected shell", async () => {
+test("tasks overlay navigates with j/k; x kills the selected shell and reopens", async () => {
   const sent: string[] = [];
-  const { ctx, confirms } = overlayCtx(async (component) => {
-    await flush();
-    assert.match(component.render(80).join("\n"), /❯ ■ Running tests/);
-    component.handleInput("j");
-    assert.match(component.render(80).join("\n"), /❯ ■ Slow refactor/);
-    component.handleInput("k");
-    assert.match(component.render(80).join("\n"), /❯ ■ Running tests/);
-    component.handleInput("x");
-  }, true);
+  let killed = false;
+  const { ctx, getCalls, confirms } = stagedOverlayCtx(
+    [
+      async (dashboard) => {
+        await flush();
+        assert.match(dashboard.render(80).join("\n"), /❯ ■ Running tests/);
+        dashboard.handleInput("j");
+        assert.match(dashboard.render(80).join("\n"), /❯ ■ Slow refactor/);
+        dashboard.handleInput("k");
+        assert.match(dashboard.render(80).join("\n"), /❯ ■ Running tests/);
+        dashboard.handleInput("x");
+      },
+      async (reopened) => {
+        // The dashboard reopens after the kill; the dead op is gone.
+        await flush();
+        const joined = reopened.render(80).join("\n");
+        assert.doesNotMatch(joined, /Running tests/);
+        assert.match(joined, /Slow refactor/);
+        reopened.handleInput("\x1b");
+      },
+    ],
+    true,
+  );
   await runDevinTasksPicker(ctx, {
-    listOps: () => OPS,
+    listOps: () => (killed ? [OPS[1]] : OPS),
     sendToSession: (text: string, options?: { deliverAs?: string }) => {
+      killed = true;
       sent.push(`${options?.deliverAs}:${text}`);
     },
   });
+  assert.equal(getCalls(), 2, "kill → confirm → dashboard reopens");
   assert.equal(confirms.length, 1);
   assert.match(confirms[0], /kill background shell 3/);
   assert.deepEqual(sent, ["steer:Kill background shell 3 and confirm it stopped."]);
 });
 
 test("tasks overlay declines to kill ops that are not background shells", async () => {
-  const { ctx, notifications } = overlayCtx(async (component) => {
-    await flush();
-    component.handleInput("j"); // op-2 has no shellId
-    component.handleInput("x");
-  }, true);
+  const { ctx, notifications, getCalls } = stagedOverlayCtx([
+    async (dashboard) => {
+      await flush();
+      dashboard.handleInput("j"); // op-2 has no shellId
+      dashboard.handleInput("x");
+    },
+    async (reopened) => {
+      // Even a declined kill returns to the dashboard, not out of the flow.
+      await flush();
+      assert.match(reopened.render(80).join("\n"), /Devin operations/);
+      reopened.handleInput("\x1b");
+    },
+  ]);
   await runDevinTasksPicker(ctx, {
     listOps: () => OPS,
     sendToSession: () => {
@@ -241,6 +265,7 @@ test("tasks overlay declines to kill ops that are not background shells", async 
   });
   assert.equal(notifications.length, 1);
   assert.match(notifications[0].message, /only devin can stop it/);
+  assert.equal(getCalls(), 2);
 });
 
 test("tasks overlay closes itself when every op settles", async () => {
@@ -366,7 +391,7 @@ test("detail view tabs between metadata and streamed output with scrolling", asy
   });
 });
 
-test("x from the detail view kills the inspected shell", async () => {
+test("x from the detail view kills the inspected shell and returns to the dashboard", async () => {
   const sent: string[] = [];
   const { ctx, getCalls, confirms } = stagedOverlayCtx(
     [
@@ -378,6 +403,12 @@ test("x from the detail view kills the inspected shell", async () => {
         await flush();
         detail.handleInput("x");
       },
+      async (reopened) => {
+        // The op lingers until devin processes the steer — that's normal.
+        await flush();
+        assert.match(reopened.render(80).join("\n"), /Devin operations/);
+        reopened.handleInput("\x1b");
+      },
     ],
     true,
   );
@@ -387,7 +418,7 @@ test("x from the detail view kills the inspected shell", async () => {
       sent.push(`${options?.deliverAs}:${text}`);
     },
   });
-  assert.equal(getCalls(), 2, "the kill leaves the overlay flow");
+  assert.equal(getCalls(), 3, "dashboard → detail → kill → dashboard");
   assert.equal(confirms.length, 1);
   assert.deepEqual(sent, ["steer:Kill background shell 3 and confirm it stopped."]);
 });

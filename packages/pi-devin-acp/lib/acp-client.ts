@@ -20,7 +20,13 @@ export type DevinSessionListener = (update: DevinSessionUpdate) => void;
 
 export interface DevinPromptResult {
   stopReason?: string;
-  usage?: { totalTokens?: number; inputTokens?: number; outputTokens?: number };
+  usage?: {
+    totalTokens?: number;
+    inputTokens?: number;
+    outputTokens?: number;
+    cachedReadTokens?: number;
+    cachedWriteTokens?: number;
+  };
   meta?: Record<string, unknown>;
 }
 
@@ -270,7 +276,15 @@ export class DevinAcpClient {
     })) as acp.PromptResponse;
     return {
       stopReason: result.stopReason,
-      usage: result.usage as DevinPromptResult["usage"],
+      usage: result.usage
+        ? {
+            totalTokens: result.usage.totalTokens,
+            inputTokens: result.usage.inputTokens,
+            outputTokens: result.usage.outputTokens,
+            cachedReadTokens: result.usage.cachedReadTokens ?? undefined,
+            cachedWriteTokens: result.usage.cachedWriteTokens ?? undefined,
+          }
+        : undefined,
       meta: result._meta ?? undefined,
     };
   }

@@ -263,6 +263,158 @@ test("rebootstrap turn sends the history resource to the fresh session", async (
   await runtime.dispose();
 });
 
+test("a failed prompt leaves bootstrap and instruction state pending for the retry", async (t) => {
+  const { fake, runtime, service } = await makeRuntime();
+  t.after(() => runtime.dispose());
+  const first = await runDevin(runtime, service.beginStreamTurn(TURN()));
+  for (;;) {
+    if ((await first.next()) === null) break;
+  }
+  // Rebootstrap so the next turn owes history + instruction resources.
+  await runDevin(runtime, service.setSession("/tmp/proj", { rebootstrap: true }));
+
+  let calls = 0;
+  const flaky = () => {
+    calls += 1;
+    if (calls === 1) throw new Error("hook exploded");
+    return undefined;
+  };
+  const retryRequest = () =>
+    TURN({
+      historyBootstrap: "user:\nprevious question",
+      systemPrompt: "be terse",
+      transformPrompt: flaky,
+    });
+  await assert.rejects(runDevin(runtime, service.beginStreamTurn(retryRequest())), /hook exploded/);
+  assert.equal(fake.prompts.length, 1, "the failed turn never reached devin");
+
+  const retry = await runDevin(runtime, service.beginStreamTurn(retryRequest()));
+  for (;;) {
+    if ((await retry.next()) === null) break;
+  }
+  assert.equal(
+    fake.prompts.at(-1)?.blocks.filter((b) => b.type === "resource").length,
+    2,
+    "the retry re-attaches history + instructions",
+  );
+
+  // …and only once: a follow-up turn with the same prompt attaches nothing.
+  const followUp = await runDevin(
+    runtime,
+    service.beginStreamTurn(TURN({ systemPrompt: "be terse" })),
+  );
+  for (;;) {
+    if ((await followUp.next()) === null) break;
+  }
+  assert.equal(fake.prompts.at(-1)?.blocks.filter((b) => b.type === "resource").length, 0);
+});
+
+for (const transition of ["rebootstrap", "restore", "suspend", "same-session"] as const) {
+  test(`late prompt completion respects binding ownership after ${transition}`, async (t) => {
+    const { fake, runtime, service } = await makeRuntime();
+    t.after(() => runtime.dispose());
+    const pending = deferred<{ stopReason: string }>();
+    fake.prompt = async (sessionId, blocks) => {
+      fake.prompts.push({ sessionId, blocks });
+      return fake.prompts.length === 1 ? pending.promise : { stopReason: "end_turn" };
+    };
+    const request = TURN({ systemPrompt: "instructions", historyBootstrap: "prior history" });
+    await runDevin(runtime, service.setSession(request.cwd, { rebootstrap: true }));
+    await runDevin(runtime, service.beginStreamTurn(request));
+    if (transition === "rebootstrap") {
+      await runDevin(runtime, service.setSession(request.cwd, { rebootstrap: true }));
+    } else if (transition === "restore") {
+      // Even restoring the same ACP id creates a new binding generation.
+      await runDevin(
+        runtime,
+        service.restoreSession({
+          acpSessionId: "sess-1",
+          cwd: request.cwd,
+          modelId: request.modelId,
+          turns: 0,
+        }),
+      );
+    } else if (transition === "suspend") {
+      await runDevin(runtime, service.suspend);
+    }
+    const next = runDevin(
+      runtime,
+      service.beginStreamTurn({
+        ...request,
+        prompt: "next",
+        blocks: [{ type: "text", text: "next" }],
+      }),
+    );
+    pending.resolve({ stopReason: "cancelled" });
+    const controller = await next;
+    while (await controller.next()) {}
+    const resources = fake.prompts[1].blocks.filter((b) => b.type === "resource");
+    assert.equal(
+      resources.length,
+      transition === "same-session" ? 0 : transition === "restore" ? 1 : 2,
+    );
+  });
+}
+
+test("transport rejection preserves bootstrap resources for retry", async (t) => {
+  const { fake, runtime, service } = await makeRuntime();
+  t.after(() => runtime.dispose());
+  await runDevin(runtime, service.setSession("/tmp/proj", { rebootstrap: true }));
+  fake.prompt = async (sessionId, blocks) => {
+    fake.prompts.push({ sessionId, blocks });
+    if (fake.prompts.length === 1) throw new Error("transport failed");
+    return { stopReason: "end_turn" };
+  };
+  const request = TURN({ systemPrompt: "instructions", historyBootstrap: "history" });
+  const first = await runDevin(runtime, service.beginStreamTurn(request));
+  await assert.rejects(first.next(), /transport failed/);
+  const retry = await runDevin(runtime, service.beginStreamTurn(request));
+  while (await retry.next()) {}
+  assert.equal(fake.prompts[1].blocks.filter((b) => b.type === "resource").length, 2);
+});
+
+test("a late same-binding completion never overwrites a newer instruction commit", async (t) => {
+  const { fake, runtime, service } = await makeRuntime();
+  t.after(() => runtime.dispose());
+  // A's prompt stays in flight past the 3s supersede-settle bound, so B is
+  // issued and completes while A's prompt request is still unresolved.
+  const pendingA = deferred<{ stopReason: string }>();
+  let committed: string | undefined;
+  fake.prompt = async (sessionId, blocks) => {
+    fake.prompts.push({ sessionId, blocks });
+    return fake.prompts.length === 1 ? pendingA.promise : { stopReason: "end_turn" };
+  };
+  const requestFor = (text: string, prompt: string) =>
+    TURN({ prompt, systemPrompt: text, historyBootstrap: undefined });
+  await runDevin(runtime, service.beginStreamTurn(requestFor("A instructions", "A")));
+  const second = await runDevin(
+    runtime,
+    service.beginStreamTurn(requestFor("B instructions", "B")),
+  );
+  while (await second.next()) {}
+  // A finally answers — after B's newer commit already landed.
+  pendingA.resolve({ stopReason: "cancelled" });
+  await new Promise((resolve) => setImmediate(resolve));
+  // Switching back to A's exact instructions must re-attach them: the latest
+  // commit is B's, so lastSentSystemPrompt must never rewind to A.
+  const third = await runDevin(runtime, service.beginStreamTurn(requestFor("A instructions", "C")));
+  while (await third.next()) {}
+  assert.equal(
+    fake.prompts[2].blocks.filter((b) => b.type === "resource").length,
+    1,
+    "B's commit wins; a late A completion must not mark A's snapshot as sent",
+  );
+  assert.ok(
+    !fake.prompts[1].blocks.some(
+      (b) =>
+        b.type === "resource" &&
+        b.resource.mimeType === "text/plain" &&
+        "text" in b.resource &&
+        String(b.resource.text).includes("A instructions"),
+    ),
+  );
+});
+
 test("liveOps tracks in-flight tools across turns until terminal or exit", async () => {
   const { fake, runtime, service } = await makeRuntime();
   const controller = await runDevin(runtime, service.beginStreamTurn(TURN()));
@@ -389,10 +541,12 @@ test("devin acp process exit falls back to a bootstrapped fresh session", async 
 // no sleeps, real processes, or live Devin credentials are needed.
 function deferred<T>() {
   let resolve!: (value: T | PromiseLike<T>) => void;
-  const promise = new Promise<T>((done) => {
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((done, fail) => {
     resolve = done;
+    reject = fail;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 function gate() {
@@ -762,6 +916,7 @@ for (const buffered of [false, true]) {
     assert.deepEqual(
       messages.map((m) => m.usage.input),
       [0, 0, 70],
+      "only the terminal message bills the canonical turn usage",
     );
     assert.equal(
       messages.reduce((sum, m) => sum + m.usage.cacheRead, 0),
@@ -787,6 +942,109 @@ for (const buffered of [false, true]) {
     assert.equal(fake.prompts.length, 2);
   });
 }
+
+for (const outcome of ["error", "aborted", "stop"] as const) {
+  test(`usage survives replay segments and terminal ${outcome}`, async (t) => {
+    const { fake, runtime, service } = await makeRuntime();
+    t.after(async () => {
+      await runDevin(runtime, service.close);
+      await runtime.dispose();
+    });
+    const pending = deferred<{
+      stopReason: string;
+      usage?: {
+        inputTokens: number;
+        outputTokens: number;
+        cachedReadTokens: number;
+        cachedWriteTokens: number;
+      };
+    }>();
+    const abort = new AbortController();
+    fake.prompt = async (sessionId, blocks) => {
+      fake.prompts.push({ sessionId, blocks });
+      const emit = fake.sessions.get(sessionId)!;
+      emit({
+        sessionUpdate: "usage_update",
+        used: 120,
+        size: 262000,
+        _meta: { "cognition.ai/inputTokens": 100, "cognition.ai/outputTokens": 20 },
+      } as never);
+      emit({
+        sessionUpdate: "tool_call",
+        toolCallId: "t",
+        title: "read",
+        status: "completed",
+      } as never);
+      return pending.promise;
+    };
+    const provider = streamDevin({
+      runtime,
+      service,
+      replay: new DevinReplayStore(),
+      families: () => LIFECYCLE_FAMILIES,
+      cwd: () => "/tmp/proj",
+    });
+    const model = {
+      ...LIFECYCLE_MODEL,
+      cost: { input: 2, output: 4, cacheRead: 1, cacheWrite: 3 },
+    };
+    const context: Context = { messages: [{ role: "user", content: "hi", timestamp: 0 }] };
+    const first = await provider(model, context, { signal: abort.signal }).result();
+    assert.equal(first.stopReason, "toolUse");
+    assert.equal(first.usage.totalTokens, 0);
+    const last = provider(model, context, { signal: abort.signal }).result();
+    fake.sessions.get("sess-1")!({
+      sessionUpdate: "usage_update",
+      used: 250,
+      size: 262000,
+      _meta: {
+        "cognition.ai/inputTokens": 200,
+        "cognition.ai/outputTokens": 50,
+        "cognition.ai/cachedReadTokens": 90,
+        "cognition.ai/cachedWriteTokens": 30,
+      },
+    } as never);
+    // Let the provider drain the latest snapshot before interruption.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    if (outcome === "error") pending.reject(new Error("transport failed"));
+    else if (outcome === "aborted") {
+      abort.abort();
+      pending.resolve({ stopReason: "cancelled" });
+    } else
+      pending.resolve({
+        stopReason: "end_turn",
+        usage: { inputTokens: 180, outputTokens: 40, cachedReadTokens: 80, cachedWriteTokens: 20 },
+      });
+    const final = await last;
+    assert.equal(final.stopReason, outcome);
+    // A canonical response can correct provisional counts downward.
+    assert.equal(final.usage.input, 80);
+    assert.equal(final.usage.cacheRead, outcome === "stop" ? 80 : 90);
+    assert.equal(final.usage.cacheWrite, outcome === "stop" ? 20 : 30);
+    assert.equal(final.usage.output, outcome === "stop" ? 40 : 50);
+    assert.equal(final.usage.totalTokens, outcome === "stop" ? 220 : 250);
+    assert.ok(Math.abs(final.usage.cost.total - (outcome === "stop" ? 0.00046 : 0.00054)) < 1e-12);
+  });
+}
+
+test("summary usage merges streamed cache metadata with prompt-response totals", async (t) => {
+  const { fake, runtime, service } = await makeRuntime();
+  t.after(() => runtime.dispose());
+  fake.prompt = async (id) => {
+    fake.sessions.get(id)!({
+      sessionUpdate: "usage_update",
+      used: 100,
+      size: 262000,
+      _meta: { "cognition.ai/cachedReadTokens": 30, "cognition.ai/cachedWriteTokens": 10 },
+    } as never);
+    return { stopReason: "end_turn", usage: { inputTokens: 80, outputTokens: 20 } };
+  };
+  const result = await runDevin(runtime, service.runSummaryTurn("summarize"));
+  assert.equal(result.usage?.inputTokens, 80);
+  assert.equal(result.usage?.outputTokens, 20);
+  assert.equal(result.usage?.cachedReadTokens, 30);
+  assert.equal(result.usage?.cachedWriteTokens, 10);
+});
 
 test("superseding a live turn waits for the cancelled prompt before re-prompting", async (t) => {
   const { fake, runtime, service } = await makeRuntime();
@@ -820,7 +1078,12 @@ test("superseding a live turn waits for the cancelled prompt before re-prompting
   assert.deepEqual(activities.at(-1), {
     type: "result",
     stopReason: "end_turn",
-    usage: { inputTokens: undefined, outputTokens: undefined },
+    usage: {
+      inputTokens: undefined,
+      outputTokens: undefined,
+      cachedReadTokens: undefined,
+      cachedWriteTokens: undefined,
+    },
   });
   assert.equal((await runDevin(runtime, service.snapshot)).turns, 1);
 });

@@ -17,6 +17,7 @@ import { Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { DevinAcpClient } from "./lib/acp-client.ts";
 import { createCompactForwarder, createCompactSend } from "./lib/compaction.ts";
 import { piConfigDir, readJson, writeJson } from "./lib/config.ts";
+import { applyYoloMode } from "./lib/yolo.ts";
 import { checkDevinBinary, MIN_DEVIN_VERSION, runDevinCommand } from "./lib/diagnostics.ts";
 import {
   devinGroups,
@@ -396,11 +397,6 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
   let persistedSessionKey: string | undefined;
   let piSessionId = "";
   let yoloEnabled = readJson<DevinAcpSettings>(SETTINGS_FILE, {}).yolo === true;
-
-  const setYolo = (on: boolean) => {
-    writeJson(SETTINGS_FILE, { yolo: on } satisfies DevinAcpSettings);
-    yoloEnabled = on;
-  };
 
   const forwardCompact = createCompactForwarder({
     cooldownMs: AUTO_COMPACT_FORWARD_COOLDOWN_MS,
@@ -945,10 +941,22 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
       }
       const on = requested === "on";
       try {
-        setYolo(on);
-        // Switching yolo off returns to the default mode rather than
-        // staying in bypass, which would keep auto-approving silently.
-        await runDevin(runtime, service.setMode(on ? YOLO_MODE : DEFAULT_MODE));
+        const result = await applyYoloMode(on, {
+          setMode: (enabled) =>
+            runDevin(runtime, service.setMode(enabled ? YOLO_MODE : DEFAULT_MODE)),
+          setEnabled: (enabled) => {
+            yoloEnabled = enabled;
+          },
+          persist: (enabled) =>
+            writeJson(SETTINGS_FILE, { yolo: enabled } satisfies DevinAcpSettings),
+        });
+        if (!result.persisted) {
+          ctx.ui.notify(
+            `devin yolo is ${on ? "on (bypass; auto-approving)" : `off (${DEFAULT_MODE})`} for this runtime, but saving the preference failed (${result.error instanceof Error ? result.error.message : result.error}). The saved setting is unchanged; check it before restarting or reloading.`,
+            "warning",
+          );
+          return;
+        }
         ctx.ui.notify(
           on
             ? "devin yolo: on — bypass mode; every tool call is auto-approved."
@@ -957,7 +965,7 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
         );
       } catch (error) {
         ctx.ui.notify(
-          `devin: set mode failed (${error instanceof Error ? error.message : error}).`,
+          `devin: yolo toggle failed (${error instanceof Error ? error.message : error}).`,
           "error",
         );
       }
@@ -1016,9 +1024,14 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
       return;
     }
 
+    if (sub === "tasks") {
+      ctx.ui.notify("devin: /devin tasks moved — use /devin-tasks.", "info");
+      return;
+    }
+
     if (sub) {
       ctx.ui.notify(
-        `devin: unknown argument "${sub}". Use reset | models | sessions | tasks | usage | mode | yolo | login | doctor.`,
+        `devin: unknown argument "${sub}". Use reset | models | sessions | usage | mode | yolo | login | doctor.`,
         "error",
       );
       return;

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { AssistantMessageEvent } from "@earendil-works/pi-ai";
 import { DevinReplayStore } from "../lib/replay.ts";
-import { streamDevin } from "../src/provider.ts";
+import { mapUsage, streamDevin } from "../src/provider.ts";
 import { DevinTurnController, type DevinActivity } from "../src/turn.ts";
 import type { DevinRuntimeInstance, DevinRuntimeShape } from "../src/runtime.ts";
 import type { DevinModelFamily } from "../lib/models.ts";
@@ -58,7 +58,7 @@ function fakeRuntime(
     finishTurn: { pipe: () => ({}) },
     runSummaryTurn: (_prompt: string, _signal: unknown, modelId?: string) => {
       capture.summaryModelId = modelId;
-      return Promise.resolve({ text: "summary" });
+      return Promise.resolve({ text: "summary", usage: { inputTokens: 5, outputTokens: 2 } });
     },
   } as unknown as DevinRuntimeShape;
   const runtime = {
@@ -320,6 +320,9 @@ test("summarization requests run in a disposable session with the resolved model
   assert.ok(done && done.type === "done");
   assert.equal(done.message.stopReason, "stop");
   assert.equal(done.message.content[0]?.type, "text");
+  // The throwaway summary session's usage is recorded on the message.
+  assert.equal(done.message.usage.input, 5);
+  assert.equal(done.message.usage.output, 2);
   // The family's default row (medium) is forwarded to the disposable session.
   assert.equal(capture.summaryModelId, "swe-2-medium");
 });
@@ -340,6 +343,97 @@ test("turns without usage_update still report the prompt-response usage", async 
   assert.ok(done && done.type === "done");
   assert.equal(done.message.usage.input, 7);
   assert.equal(done.message.usage.output, 4);
+});
+
+test("late cache classification is billed once with exact categories and cost", async () => {
+  // Never persist provisional categories on replay segments: late cache
+  // materialization can reclassify input that was previously all fresh.
+  const controller = new DevinTurnController("do it", "sess-1");
+  const waves: DevinActivity[][] = [
+    [
+      { type: "usage", usage: { inputTokens: 100, outputTokens: 20 } },
+      {
+        type: "tool_start",
+        view: { id: "cmd_0", title: "Ran build", kind: "execute", tool: "shell" },
+      },
+      { type: "tool_update", view: { id: "cmd_0", status: "completed", output: "ok" } },
+    ],
+    [
+      {
+        type: "usage",
+        usage: { inputTokens: 150, outputTokens: 35, cachedReadTokens: 90 },
+      },
+      {
+        type: "tool_start",
+        view: { id: "cmd_1", title: "Ran tests", kind: "execute", tool: "shell" },
+      },
+      { type: "tool_update", view: { id: "cmd_1", status: "completed", output: "pass" } },
+    ],
+    [{ type: "result", stopReason: "end_turn", usage: { inputTokens: 200, outputTokens: 50 } }],
+  ];
+  let wave = 0;
+  const service = {
+    beginStreamTurn: () => {
+      queueMicrotask(() => {
+        for (const activity of waves[wave] ?? []) controller.push(activity);
+        wave += 1;
+        if (wave >= waves.length) controller.close();
+      });
+      return controller;
+    },
+    finishTurn: { pipe: () => ({}) },
+    runSummaryTurn: () => Promise.resolve({ text: "summary" }),
+  } as unknown as DevinRuntimeShape;
+  const runtime = {
+    runPromise: (effect: unknown) => Promise.resolve(effect),
+    runPromiseExit: async () => ({ _tag: "Success", value: undefined }),
+    dispose: async () => {},
+  } as unknown as DevinRuntimeInstance;
+  const run = () =>
+    streamDevin({
+      runtime,
+      service,
+      replay: new DevinReplayStore(),
+      families: () => FAMILIES,
+      cwd: () => "/tmp",
+    })(
+      { ...MODEL, cost: { input: 2, output: 4, cacheRead: 1, cacheWrite: 3 } } as never,
+      CONTEXT,
+    ).result();
+
+  const segment1 = await run();
+  assert.equal(segment1.stopReason, "toolUse");
+  assert.equal(segment1.usage.totalTokens, 0);
+  assert.equal(segment1.usage.cost.total, 0);
+
+  const segment2 = await run();
+  assert.equal(segment2.stopReason, "toolUse");
+  assert.equal(segment2.usage.totalTokens, 0);
+  assert.equal(segment2.usage.cost.total, 0);
+
+  const final = await run();
+  assert.equal(final.stopReason, "stop");
+  assert.equal(final.usage.input, 110);
+  assert.equal(final.usage.cacheRead, 90);
+  assert.equal(final.usage.output, 50);
+  assert.equal(final.usage.totalTokens, 250);
+  assert.ok(Math.abs(final.usage.cost.total - 0.00051) < 1e-12);
+
+  const sum = segment1.usage.totalTokens + segment2.usage.totalTokens + final.usage.totalTokens;
+  assert.equal(sum, 250, "segments sum to the canonical turn total (200 in + 50 out)");
+});
+
+test("cache writes are classified separately without double counting", () => {
+  const usage = mapUsage({
+    inputTokens: 200,
+    outputTokens: 50,
+    cachedReadTokens: 90,
+    cachedWriteTokens: 30,
+  });
+  assert.equal(usage.input, 80);
+  assert.equal(usage.cacheRead, 90);
+  assert.equal(usage.cacheWrite, 30);
+  assert.equal(usage.totalTokens, usage.input + usage.cacheRead + usage.cacheWrite + usage.output);
 });
 
 test("persisted tool card arguments carry the terminal view, not the call start", async () => {

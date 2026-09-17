@@ -135,16 +135,17 @@ export function isSummarizationRequest(prompt: string): boolean {
 /** Map devin usage fields to pi usage fields. */
 export function mapUsage(u: DevinUsage | undefined): AssistantMessage["usage"] {
   // Devin's inputTokens is the TOTAL prompt size and already includes
-  // cachedReadTokens; pi's usage.input is the non-cached portion (Anthropic
+  // cache reads/writes; pi's usage.input is the non-cached portion (Anthropic
   // convention). Passing the total through double-counts cache reads and
   // trips pi's per-turn "Cache miss" detector.
   const cached = u?.cachedReadTokens ?? 0;
+  const written = u?.cachedWriteTokens ?? 0;
   return {
-    input: Math.max(0, (u?.inputTokens ?? 0) - cached),
+    input: Math.max(0, (u?.inputTokens ?? 0) - cached - written),
     output: u?.outputTokens ?? 0,
     reasoning: undefined,
     cacheRead: cached,
-    cacheWrite: 0,
+    cacheWrite: written,
     // Context occupancy lives in the runtime snapshot, not billable usage.
     totalTokens: (u?.inputTokens ?? 0) + (u?.outputTokens ?? 0),
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
@@ -221,8 +222,8 @@ export function streamDevin(deps: DevinProviderDeps) {
       };
 
       const fail = (message: string) => {
-        // If the ACP turn fails between replay segments, this error message
-        // is its final accounting record too.
+        // Replay segments carry no billable usage. On failure, account for
+        // the last observed turn snapshot once on this terminal message.
         output.usage = mapUsage(turnController?.lastUsage);
         calculateCost(model, output.usage);
         output.stopReason = options?.signal?.aborted ? "aborted" : "error";
@@ -274,6 +275,9 @@ export function streamDevin(deps: DevinProviderDeps) {
             content: result.text,
             partial: output,
           });
+          // Compaction/summary turns consume tokens too; record their usage.
+          output.usage = mapUsage(result.usage);
+          calculateCost(model, output.usage);
           output.stopReason = "stop";
           stream.push({ type: "done", reason: "stop", message: output });
           clearTurn();
@@ -352,8 +356,9 @@ export function streamDevin(deps: DevinProviderDeps) {
         const endWithToolUse = () => {
           closeThinking();
           closeText();
-          // These are display-only segments of one ACP turn. Account once
-          // on its final message, not once per replay card.
+          // Cache classification may arrive after a replay segment is already
+          // persisted. Account once on the terminal message rather than emit
+          // irreversible estimates; the runtime exposes live usage separately.
           output.stopReason = "toolUse";
           stream.push({ type: "done", reason: "toolUse", message: output });
           stream.end();
