@@ -58,8 +58,6 @@ const SETTINGS_FILE = `${piConfigDir("devin-acp")}/settings.json`;
 const DEFAULT_MODE = "accept-edits";
 /** Devin's yolo mode: auto-approves every tool call server-side. */
 const YOLO_MODE = "bypass";
-/** Minimum gap before another auto-triggered compaction is forwarded. */
-const AUTO_COMPACT_FORWARD_COOLDOWN_MS = 60_000;
 
 interface DevinModelCache {
   fetchedAt: number;
@@ -399,7 +397,6 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
   let yoloEnabled = readJson<DevinAcpSettings>(SETTINGS_FILE, {}).yolo === true;
 
   const forwardCompact = createCompactForwarder({
-    cooldownMs: AUTO_COMPACT_FORWARD_COOLDOWN_MS,
     send: createCompactSend((text, options) => pi.sendUserMessage(text, options)),
   });
 
@@ -810,10 +807,15 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
 
   pi.on("session_before_compact", (event, ctx) => {
     if (ctx.model?.provider !== DEVIN_PROVIDER) return;
-    // Devin owns context server-side; truncating pi's transcript cannot
-    // shrink the ACP session, so pi's pass is always vetoed here and the
-    // trigger is routed to devin's own /compact instead.
-    forwardCompact(event.reason, event.customInstructions, ctx.hasUI ? ctx.ui : undefined);
+    // Devin owns context server-side and compacts itself internally, so
+    // pi's pass is always vetoed — truncating pi's transcript cannot shrink
+    // the ACP session. Only a manual /compact routes to devin's own
+    // /compact; auto triggers (threshold, overflow) die here — the context
+    // gauge merely mirrors devin's reported usage and must never push devin
+    // into an extra compaction.
+    if (event.reason === "manual") {
+      forwardCompact(event.customInstructions, ctx.hasUI ? ctx.ui : undefined);
+    }
     return { cancel: true };
   });
 

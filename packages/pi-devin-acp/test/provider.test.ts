@@ -267,18 +267,29 @@ test("a background shell left open at turn end replays as a note, not an error",
   assert.match(recorded?.output ?? "", /bg started \(pid 63007\)/);
 });
 
-test("usage merge never clobbers known fields and honors the prompt response", async () => {
+test("request snapshots accumulate once; the prompt-response echo dedups", async () => {
   const { service, runtime } = fakeRuntime([
     {
       type: "usage",
       usage: { inputTokens: 10, outputTokens: 5, cachedReadTokens: 3 },
     },
-    // A context-only usage_update (no token counters) must not zero them.
+    // Devin emits every request's update twice — identical repeats count once.
+    {
+      type: "usage",
+      usage: { inputTokens: 10, outputTokens: 5, cachedReadTokens: 3 },
+    },
+    // A context-only usage_update (no token counters) is not billable.
     { type: "usage", usage: { contextUsed: 15, contextSize: 262000 } },
+    // A second request's snapshot accumulates on top of the first.
+    {
+      type: "usage",
+      usage: { inputTokens: 12, outputTokens: 6, cachedReadTokens: 3 },
+    },
+    // The prompt response echoes the last request's snapshot — deduped.
     {
       type: "result",
       stopReason: "end_turn",
-      usage: { inputTokens: 12, outputTokens: 6 },
+      usage: { inputTokens: 12, outputTokens: 6, cachedReadTokens: 3 },
     },
   ]);
   const stream = streamDevin({
@@ -291,11 +302,12 @@ test("usage merge never clobbers known fields and honors the prompt response", a
   const events = await drain(stream);
   const done = events.find((e) => e.type === "done");
   assert.ok(done && done.type === "done");
-  // devin inputTokens includes cachedReadTokens; pi usage.input is fresh-only.
-  assert.equal(done.message.usage.input, 9);
-  assert.equal(done.message.usage.output, 6);
-  assert.equal(done.message.usage.cacheRead, 3);
-  assert.equal(done.message.usage.totalTokens, 18);
+  // Bills {inputTokens:22, outputTokens:11, cachedReadTokens:6} once —
+  // devin inputTokens is cache-inclusive; pi usage.input is fresh-only.
+  assert.equal(done.message.usage.input, 16);
+  assert.equal(done.message.usage.output, 11);
+  assert.equal(done.message.usage.cacheRead, 6);
+  assert.equal(done.message.usage.totalTokens, 33);
 });
 
 test("summarization requests run in a disposable session with the resolved model", async () => {
@@ -345,9 +357,10 @@ test("turns without usage_update still report the prompt-response usage", async 
   assert.equal(done.message.usage.output, 4);
 });
 
-test("late cache classification is billed once with exact categories and cost", async () => {
-  // Never persist provisional categories on replay segments: late cache
-  // materialization can reclassify input that was previously all fresh.
+test("each segment bills its request's usage; the turn sums to the total", async () => {
+  // Delta billing: every replay segment persists only the turn's
+  // not-yet-billed share, so pi's footer fills live while the session log
+  // still sums to the turn's full billable total.
   const controller = new DevinTurnController("do it", "sess-1");
   const waves: DevinActivity[][] = [
     [
@@ -369,7 +382,12 @@ test("late cache classification is billed once with exact categories and cost", 
       },
       { type: "tool_update", view: { id: "cmd_1", status: "completed", output: "pass" } },
     ],
-    [{ type: "result", stopReason: "end_turn", usage: { inputTokens: 200, outputTokens: 50 } }],
+    [
+      // The last request's update lands just before the prompt response,
+      // which echoes it — consecutive-identical dedup counts it once.
+      { type: "usage", usage: { inputTokens: 200, outputTokens: 50 } },
+      { type: "result", stopReason: "end_turn", usage: { inputTokens: 200, outputTokens: 50 } },
+    ],
   ];
   let wave = 0;
   const service = {
@@ -403,24 +421,29 @@ test("late cache classification is billed once with exact categories and cost", 
 
   const segment1 = await run();
   assert.equal(segment1.stopReason, "toolUse");
-  assert.equal(segment1.usage.totalTokens, 0);
-  assert.equal(segment1.usage.cost.total, 0);
+  assert.equal(segment1.usage.input, 100);
+  assert.equal(segment1.usage.output, 20);
+  assert.equal(segment1.usage.totalTokens, 120);
+  assert.ok(Math.abs(segment1.usage.cost.total - 0.00028) < 1e-12);
 
   const segment2 = await run();
   assert.equal(segment2.stopReason, "toolUse");
-  assert.equal(segment2.usage.totalTokens, 0);
-  assert.equal(segment2.usage.cost.total, 0);
+  // devin inputTokens is cache-inclusive; pi input is the fresh portion.
+  assert.equal(segment2.usage.input, 60);
+  assert.equal(segment2.usage.output, 35);
+  assert.equal(segment2.usage.cacheRead, 90);
+  assert.equal(segment2.usage.totalTokens, 185);
+  assert.ok(Math.abs(segment2.usage.cost.total - 0.00035) < 1e-12);
 
   const final = await run();
   assert.equal(final.stopReason, "stop");
-  assert.equal(final.usage.input, 110);
-  assert.equal(final.usage.cacheRead, 90);
+  assert.equal(final.usage.input, 200);
   assert.equal(final.usage.output, 50);
   assert.equal(final.usage.totalTokens, 250);
-  assert.ok(Math.abs(final.usage.cost.total - 0.00051) < 1e-12);
+  assert.ok(Math.abs(final.usage.cost.total - 0.0006) < 1e-12);
 
   const sum = segment1.usage.totalTokens + segment2.usage.totalTokens + final.usage.totalTokens;
-  assert.equal(sum, 250, "segments sum to the canonical turn total (200 in + 50 out)");
+  assert.equal(sum, 555, "segments sum to the turn's full billable total");
 });
 
 test("cache writes are classified separately without double counting", () => {

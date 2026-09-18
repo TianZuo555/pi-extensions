@@ -69,11 +69,12 @@ unavailable.
   (e.g. `/devin-compact`). Only exists while a Devin model is selected;
   forwards `/<name> args` into the ACP session
 - `/compact` under a Devin model runs *Devin's* compaction instead — every pi
-  trigger (manual `/compact [instructions]`, the context threshold, overflow
-  recovery) is vetoed (`session_before_compact`) and forwarded into the ACP
-  session; auto-triggered forwards are rate-limited. `/skill:<name>` under a
-  Devin model runs Devin's same-named skill-command; pi's own skill never
-  expands.
+  compaction pass is vetoed (`session_before_compact`), and a manual
+  `/compact [instructions]` is forwarded into the ACP session. Auto triggers
+  (the context threshold, overflow recovery) are vetoed silently: Devin
+  compacts itself internally and reports it via `compaction_update`.
+  `/skill:<name>` under a Devin model runs Devin's same-named skill-command;
+  pi's own skill never expands.
 
 ## How it works
 
@@ -83,10 +84,11 @@ unavailable.
   the same Devin session via `session/load`.
 - Streamed `session/update` notifications become pi thinking/text blocks,
   tool-card placeholders, and usage. Billable tokens and estimated cost are
-  recorded once on the terminal assistant message, not on replay-only tool
-  segments, so late cache-read/cache-write metadata cannot corrupt accounting.
-  `/devin-usage` shows live usage; failed or aborted streams record their latest
-  observed turn usage, and successful summaries record their own usage.
+  delta-billed: each pi assistant message of a turn (replay segment or
+  terminal) persists only the share not already billed, so pi's footer fills
+  live while the session log still sums to the authoritative turn total.
+  `/devin-usage` shows live usage; failed or aborted streams record their
+  latest observed turn usage, and successful summaries record their own usage.
 - Devin tool calls appear as display-only `devin` tool calls; pi "executes"
   them by replaying the recorded Devin result, then re-enters the provider.
 - `session/request_permission` prompts through pi's select UI and reports
@@ -94,11 +96,11 @@ unavailable.
   bus while it waits, so integrations such as Herdr can flag the session as
   blocked. Headless runs deny by default; set
   `PI_DEVIN_HEADLESS_PERMISSION=allow` to auto-allow.
-- Pi-side compaction is vetoed for Devin models (`session_before_compact`)
-  and routed to Devin's own `/compact` — Devin compacts its context
-  server-side. Branch-summary prompts still run in disposable ACP sessions,
-  synced to the selected model, so they never pollute the real Devin
-  session's history.
+- Pi-side compaction is vetoed for Devin models (`session_before_compact`).
+  Devin compacts its context server-side on its own — only a manual
+  `/compact` is routed to Devin's `/compact`. Branch-summary prompts still
+  run in disposable ACP sessions, synced to the selected model, so they
+  never pollute the real Devin session's history.
 - Switching between Devin models keeps the live session — the new model is
   applied via `session/set_config_option`. Switching to or from another
   provider re-bootstraps the next turn from pi's transcript.

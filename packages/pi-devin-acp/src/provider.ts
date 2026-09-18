@@ -24,7 +24,6 @@ import {
 import type { ContentBlock } from "@agentclientprotocol/sdk";
 import type { DevinPromptRequest, DevinRuntimeInstance, DevinRuntimeShape } from "./runtime.ts";
 import {
-  mergeDevinUsage,
   TERMINAL_TOOL_STATUSES,
   type DevinActivity,
   type DevinTurnController,
@@ -161,8 +160,6 @@ const STOP_REASON_MAP: Record<string, "stop" | "length" | "aborted" | "error"> =
   max_turn_requests: "error",
 };
 
-export { mergeDevinUsage };
-
 export interface DevinProviderDeps {
   runtime: DevinRuntimeInstance;
   service: DevinRuntimeShape;
@@ -222,9 +219,9 @@ export function streamDevin(deps: DevinProviderDeps) {
       };
 
       const fail = (message: string) => {
-        // Replay segments carry no billable usage. On failure, account for
-        // the last observed turn snapshot once on this terminal message.
-        output.usage = mapUsage(turnController?.lastUsage);
+        // On failure, account for whatever turn usage was observed but not
+        // yet persisted on an earlier segment.
+        output.usage = mapUsage(turnController?.takeBillableUsage());
         calculateCost(model, output.usage);
         output.stopReason = options?.signal?.aborted ? "aborted" : "error";
         output.errorMessage = message;
@@ -313,27 +310,6 @@ export function streamDevin(deps: DevinProviderDeps) {
         );
 
         turnController = controller;
-        let usage: DevinUsage | undefined = controller.lastUsage;
-        /**
-         * Merge a usage snapshot into the turn's running usage. Once
-         * turn_stats' cumulative sums have landed they are authoritative:
-         * last-request snapshots (a trailing usage_update, or the prompt
-         * response's own usage) must not overwrite token fields again.
-         */
-        const mergeTurnUsage = (next: DevinUsage | undefined) => {
-          if (usage?.cumulative && next && !next.cumulative) {
-            const {
-              inputTokens: _i,
-              outputTokens: _o,
-              cachedReadTokens: _r,
-              cachedWriteTokens: _w,
-              ...rest
-            } = next;
-            next = rest;
-          }
-          usage = mergeDevinUsage(usage, next);
-          controller.lastUsage = usage;
-        };
         let textIndex: number | null = null;
         let textBuffer = "";
         let textMessageId: string | undefined;
@@ -368,17 +344,17 @@ export function streamDevin(deps: DevinProviderDeps) {
           textMessageId = undefined;
         };
 
-        const attachUsage = (u: DevinUsage | undefined) => {
-          output.usage = mapUsage(u);
+        const attachUsage = () => {
+          output.usage = mapUsage(controller.takeBillableUsage());
           calculateCost(model, output.usage);
         };
 
         const endWithToolUse = () => {
           closeThinking();
           closeText();
-          // Cache classification may arrive after a replay segment is already
-          // persisted. Account once on the terminal message rather than emit
-          // irreversible estimates; the runtime exposes live usage separately.
+          // Segments bill only the turn's not-yet-persisted share: the log
+          // sums to the authoritative total while the footer fills live.
+          attachUsage();
           output.stopReason = "toolUse";
           stream.push({ type: "done", reason: "toolUse", message: output });
           stream.end();
@@ -626,7 +602,7 @@ export function streamDevin(deps: DevinProviderDeps) {
               break;
             }
             case "usage":
-              mergeTurnUsage(activity.usage);
+              controller.recordUsage(activity.usage);
               break;
             case "stopped":
             case "retry":
@@ -643,10 +619,10 @@ export function streamDevin(deps: DevinProviderDeps) {
               }
               closeText();
               closeThinking();
-              // The prompt response carries the canonical turn usage; merge
-              // it over whatever usage_update reported during streaming.
-              mergeTurnUsage(activity.usage);
-              attachUsage(usage);
+              // The prompt response echoes the last request's usage — the
+              // controller dedups it — then bills whatever remains unbilled.
+              controller.recordUsage(activity.usage);
+              attachUsage();
 
               const reason = STOP_REASON_MAP[activity.stopReason] ?? "error";
               if (reason === "stop" || reason === "length") {

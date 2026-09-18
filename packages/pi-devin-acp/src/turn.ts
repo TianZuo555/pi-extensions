@@ -117,11 +117,6 @@ export class DevinTurnController {
   /** Assigned once the ACP session id is known (session/new or load). */
   sessionId: string;
   /**
-   * Latest usage_update seen this turn, carried across pi message
-   * boundaries so the final message can account for the whole ACP turn.
-   */
-  lastUsage?: DevinUsage;
-  /**
    * Client-supplied user message id stamped on this turn's session/prompt.
    * Devin echoes it as turnClientMessageId in `_cognition.ai/turn_stats`,
    * which lets the cumulative per-turn token sums be matched to exactly
@@ -133,6 +128,33 @@ export class DevinTurnController {
   #closed = false;
   #failure: Error | undefined;
   #incompleteTools = new Map<string, DevinToolView>();
+  /**
+   * Billable token totals observed this turn. usage_update and
+   * PromptResponse.usage each report ONE internal request, so they
+   * accumulate; turn_stats' cumulativeMetric sums are authoritative and
+   * replace the accumulated total.
+   */
+  #seenTokens = {
+    inputTokens: 0,
+    outputTokens: 0,
+    cachedReadTokens: 0,
+    cachedWriteTokens: 0,
+  };
+  /** Token totals already persisted on this turn's pi messages. */
+  #billedTokens = {
+    inputTokens: 0,
+    outputTokens: 0,
+    cachedReadTokens: 0,
+    cachedWriteTokens: 0,
+  };
+  #seenCumulative = false;
+  /**
+   * Token signature of the last accumulated request snapshot. Devin emits
+   * every request's usage_update twice (identical) and PromptResponse.usage
+   * echoes the last request — consecutive-identical snapshots accumulate
+   * once.
+   */
+  #lastRequestKey?: string;
 
   constructor(prompt: string, sessionId: string) {
     this.prompt = prompt;
@@ -177,6 +199,80 @@ export class DevinTurnController {
     const tools = [...this.#incompleteTools.values()];
     this.#incompleteTools.clear();
     return tools;
+  }
+
+  /**
+   * Fold a usage snapshot into the turn's billable total.
+   *
+   * usage_update and PromptResponse.usage report a single internal request
+   * — and devin emits each request's update twice (identical), while the
+   * prompt response echoes the last request — so request snapshots
+   * accumulate after consecutive-identical dedup. Context-only updates carry
+   * no token fields and are ignored without touching the dedup baseline.
+   * turn_stats' cumulative sums are authoritative: they replace the
+   * accumulated total, and once they land request-level snapshots stop
+   * accumulating (their tokens are already inside the cumulative sum).
+   */
+  recordUsage(next: DevinUsage | undefined): void {
+    if (!next) return;
+    if (next.cumulative) {
+      this.#seenTokens.inputTokens = next.inputTokens ?? this.#seenTokens.inputTokens;
+      this.#seenTokens.outputTokens = next.outputTokens ?? this.#seenTokens.outputTokens;
+      this.#seenTokens.cachedReadTokens =
+        next.cachedReadTokens ?? this.#seenTokens.cachedReadTokens;
+      this.#seenTokens.cachedWriteTokens =
+        next.cachedWriteTokens ?? this.#seenTokens.cachedWriteTokens;
+      this.#seenCumulative = true;
+      return;
+    }
+    if (this.#seenCumulative) return;
+    if (
+      next.inputTokens === undefined &&
+      next.outputTokens === undefined &&
+      next.cachedReadTokens === undefined &&
+      next.cachedWriteTokens === undefined
+    ) {
+      return;
+    }
+    const tokens = {
+      inputTokens: next.inputTokens ?? 0,
+      outputTokens: next.outputTokens ?? 0,
+      cachedReadTokens: next.cachedReadTokens ?? 0,
+      cachedWriteTokens: next.cachedWriteTokens ?? 0,
+    };
+    const key = `${tokens.inputTokens}/${tokens.outputTokens}/${tokens.cachedReadTokens}/${tokens.cachedWriteTokens}`;
+    if (key === this.#lastRequestKey) return;
+    this.#lastRequestKey = key;
+    this.#seenTokens.inputTokens += tokens.inputTokens;
+    this.#seenTokens.outputTokens += tokens.outputTokens;
+    this.#seenTokens.cachedReadTokens += tokens.cachedReadTokens;
+    this.#seenTokens.cachedWriteTokens += tokens.cachedWriteTokens;
+  }
+
+  /**
+   * The not-yet-persisted share of the turn's billable total. Every pi
+   * assistant message of the turn (replay segment or terminal) bills only
+   * what earlier ones did not, so the session log sums to the authoritative
+   * total while the footer fills live. A field whose observed total drops
+   * below what was already billed (e.g. a cumulative set smaller than the
+   * accumulated requests) bills zero rather than a negative correction —
+   * the excess stays in the log.
+   */
+  takeBillableUsage(): DevinUsage {
+    const billable: DevinUsage = {};
+    const take = (
+      key: "inputTokens" | "outputTokens" | "cachedReadTokens" | "cachedWriteTokens",
+    ) => {
+      const delta = this.#seenTokens[key] - this.#billedTokens[key];
+      if (delta <= 0) return;
+      billable[key] = delta;
+      this.#billedTokens[key] = this.#seenTokens[key];
+    };
+    take("inputTokens");
+    take("outputTokens");
+    take("cachedReadTokens");
+    take("cachedWriteTokens");
+    return billable;
   }
 
   /**
