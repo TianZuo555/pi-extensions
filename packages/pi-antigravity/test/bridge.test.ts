@@ -122,6 +122,44 @@ test("bridge routes tools/call through onCall and resolves with the pi result", 
   }
 });
 
+for (const content of [
+  [{ type: "image", data: "aGVsbG8=", mimeType: "image/png" }],
+  [
+    { type: "text", text: "Screenshot follows" },
+    { type: "image", data: "aGVsbG8=", mimeType: "image/png" },
+    { type: "text", text: "End" },
+  ],
+]) {
+  test(`bridge preserves tool result blocks: ${content.map((block) => block.type)}`, async () => {
+    const bridge = await startedBridge((call) => {
+      queueMicrotask(() =>
+        resolveBridgeResultsFromContext(bridge, [
+          {
+            role: "toolResult",
+            toolCallId: call.id,
+            content,
+            isError: true,
+          },
+        ]),
+      );
+      return true;
+    });
+    try {
+      bridge.refreshTools();
+      const response = await post(bridge, {
+        jsonrpc: "2.0",
+        id: 30,
+        method: "tools/call",
+        params: { name: `${BRIDGE_TOOL_PREFIX}commit`, arguments: {} },
+      });
+      assert.deepEqual(response.json.result.content, content);
+      assert.equal(response.json.result.isError, true);
+    } finally {
+      await bridge.close();
+    }
+  });
+}
+
 test("bridge fails closed when no agy turn is active", async () => {
   const bridge = await startedBridge(() => false);
   try {

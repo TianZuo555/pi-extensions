@@ -107,6 +107,49 @@ test("runtime re-entry keeps the active driver turn despite a newer bridge revis
   }
 });
 
+test("a delivered result cannot be reattached while executor cleanup is pending", async () => {
+  let finishCleanup!: () => void;
+  const cleanup = new Promise<void>((resolve) => {
+    finishCleanup = resolve;
+  });
+  let runs = 0;
+  const runtime = createAntigravityRuntime(async (request) => {
+    runs += 1;
+    request.onConversation?.("same-conversation");
+    request.onActivity?.({
+      type: "result",
+      status: "OK",
+      response: "answer",
+      error: undefined,
+      usage: undefined,
+    });
+    if (runs === 1) await cleanup;
+    return completedOutcome("same-conversation");
+  });
+  const service = runtime.runSync(AntigravityRuntime);
+  const request = { prompt: "continue", modelId: "gemini-3.7-flash" };
+  try {
+    const first = await runtime.runPromise(service.beginStreamTurn(request));
+    assert.equal((await first.next())?.type, "result");
+    assert.equal(first.isClosed(), false);
+    await runtime.runPromise(service.finishTurn);
+    const next = runtime.runPromise(service.beginStreamTurn(request));
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(runs, 1, "new turn must wait for the previous outcome to commit");
+    finishCleanup();
+    const second = await next;
+    assert.notEqual(second, first);
+    assert.equal((await second.next())?.type, "result");
+    assert.equal(await second.next(), null);
+    assert.equal(runs, 2);
+    assert.equal((await runtime.runPromise(service.snapshot)).turns, 2);
+  } finally {
+    finishCleanup();
+    await runtime.runPromise(service.close);
+    await runtime.dispose();
+  }
+});
+
 test("runtime restores the selected pi branch only when starting a fresh conversation", async () => {
   const requests: AgyTurnRequest[] = [];
   const runtime = createAntigravityRuntime(async (request) => {

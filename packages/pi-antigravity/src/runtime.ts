@@ -171,6 +171,9 @@ const makeRuntime = (executor: AgyTurnExecutor) =>
     let turns = 0;
     let closed = false;
     let active: AgyTurnController | undefined;
+    // Final output may reach Pi before the executor finishes process cleanup.
+    // New turns must wait for its state/usage commit, not reattach or abort it.
+    let activeTurnCompletion: Promise<void> | undefined;
     /** Aborts the in-flight agy child process when the runtime closes. */
     let activeTurnAbort: AbortController | undefined;
     let generation = 0;
@@ -185,6 +188,7 @@ const makeRuntime = (executor: AgyTurnExecutor) =>
       generation += 1;
       activeTurnAbort?.abort();
       activeTurnAbort = undefined;
+      activeTurnCompletion = undefined;
       active = undefined;
     };
 
@@ -259,7 +263,9 @@ const makeRuntime = (executor: AgyTurnExecutor) =>
       beginStreamTurn: (request) =>
         ensureOpen.pipe(
           Effect.andThen(
-            Effect.sync(() => {
+            Effect.promise(async () => {
+              if (!active && activeTurnCompletion) await activeTurnCompletion;
+              if (closed) throw new Error("antigravity runtime is shut down.");
               if (
                 active &&
                 active.prompt === request.prompt &&
@@ -521,7 +527,7 @@ const makeRuntime = (executor: AgyTurnExecutor) =>
               // open past cancellation. Its late callbacks are fenced above.
               // race attaches rejection handlers to both inputs, including the
               // loser; a late rejection does not require a separate swallow catch.
-              void Promise.race([runTurnWithStallRetries(), cancelled])
+              activeTurnCompletion = Promise.race([runTurnWithStallRetries(), cancelled])
                 .then((outcome: AgyTurnOutcome) => {
                   if (turnGeneration !== generation) {
                     controller.close(
@@ -558,7 +564,9 @@ const makeRuntime = (executor: AgyTurnExecutor) =>
         ),
 
       finishTurn: Effect.sync(() => {
-        if (active?.isClosed()) active = undefined;
+        // Called only when Pi has consumed the final result (or an error),
+        // never for the toolUse handoff that must keep this controller alive.
+        active = undefined;
       }),
 
       pushBridgeCall: (call) => {

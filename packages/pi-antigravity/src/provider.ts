@@ -670,7 +670,7 @@ export function streamAntigravity(
           const activity = await controller.next();
           if (activity === null) {
             const ended = turnEndedMessage(controller.closeReason());
-            if (emitIncompleteTools() > 0) {
+            if (!summaryRequest && emitIncompleteTools() > 0) {
               controller.deferResult({
                 type: "result",
                 status: "ERROR",
@@ -708,12 +708,14 @@ export function streamAntigravity(
             }
             case "tool_start": {
               controller.beginTextSegment();
+              if (summaryRequest) break;
               if (isBridgedMcpStep(activity, bridge.serverName)) break;
               closeText();
               emitStartedReplayTool(activity);
               break;
             }
             case "tool_done": {
+              if (summaryRequest) break;
               if (isBridgedMcpStep(activity, bridge.serverName)) break;
               emitFinishedTool(activity);
               if (pendingReplayTools.size === 0) {
@@ -723,6 +725,7 @@ export function streamAntigravity(
               break;
             }
             case "tool_error": {
+              if (summaryRequest) break;
               if (isBridgedMcpStep(activity, bridge.serverName)) break;
               emitFinishedTool(activity);
               if (pendingReplayTools.size === 0) {
@@ -778,7 +781,7 @@ export function streamAntigravity(
               break;
             }
             case "result": {
-              if (emitIncompleteTools(activity.error) > 0) {
+              if (!summaryRequest && emitIncompleteTools(activity.error) > 0) {
                 controller.deferResult(activity);
                 endWithToolUse();
                 return;
