@@ -92,6 +92,12 @@ export type DevinActivity =
     }
   | { type: "plan"; entries: { content: string; status?: string }[] }
   | { type: "compaction" }
+  /**
+   * `_cognition.ai/connection_retry`: devin is retrying its backend stream
+   * while the prompt request stays pending. `isStreamRetry` distinguishes
+   * "Connection failed" (stream creation) from "Connection lost" (mid-stream).
+   */
+  | { type: "retry"; attempt: number; maxAttempts?: number; isStreamRetry?: boolean }
   | { type: "result"; stopReason: string; usage?: DevinUsage }
   | { type: "stopped"; stats: DevinTurnStats };
 

@@ -38,7 +38,7 @@ import {
 import { streamDevin } from "./src/provider.ts";
 import { createDevinRuntime, DevinRuntime, runDevin } from "./src/runtime.ts";
 import { runDevinSessionsPicker } from "./src/sessions-ui.ts";
-import { describeLiveOp, runDevinTasksPicker } from "./src/tasks-ui.ts";
+import { describeLiveOp, formatElapsed, runDevinTasksPicker } from "./src/tasks-ui.ts";
 import { runDevinUsagePicker } from "./src/usage-ui.ts";
 
 const DEVIN_PROVIDER = "devin";
@@ -412,10 +412,10 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
   const refreshOpsWidget = async () => {
     const ui = sessionCtx?.hasUI ? sessionCtx.ui : undefined;
     if (!ui) return;
-    const ops = await runDevin(runtime, service.snapshot)
-      .then((s) => s.liveOps)
-      .catch(() => []);
-    if (ops.length === 0) {
+    const snapshot = await runDevin(runtime, service.snapshot).catch(() => undefined);
+    const ops = snapshot?.liveOps ?? [];
+    const retry = snapshot?.retry;
+    if (ops.length === 0 && !retry) {
       if (opsTicker) {
         clearInterval(opsTicker);
         opsTicker = undefined;
@@ -431,14 +431,36 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
       opsTicker = setInterval(() => void refreshOpsWidget(), 1_000);
       opsTicker.unref?.();
     }
+    const now = Date.now();
     try {
       ui.setWidget(DEVIN_OPS_WIDGET_KEY, (_tui, theme) => {
-        const line =
+        const segments: string[] = [];
+        if (retry) {
+          // Same wording as devin's own TUI status line.
+          const desc = retry.isStreamRetry ? "connection lost" : "connection failed";
+          const attempts = retry.maxAttempts
+            ? `${retry.attempt}/${retry.maxAttempts}`
+            : `${retry.attempt}`;
+          segments.push(
+            theme.fg(
+              "warning",
+              `${desc} (attempt ${attempts}), retrying… · ${formatElapsed(retry.at, now)}`,
+            ),
+          );
+        }
+        if (ops.length > 0) {
+          segments.push(theme.fg("text", `${ops.length} running — ${describeLiveOp(ops[0], now)}`));
+        }
+        let line =
           theme.fg("warning", "■ ") +
-          theme.fg("text", `devin: ${ops.length} running — ${describeLiveOp(ops[0], Date.now())}`) +
-          theme.fg("dim", " • ") +
-          theme.fg("accent", "/devin-tasks") +
-          theme.fg("dim", " to view");
+          theme.fg("text", "devin: ") +
+          segments.join(theme.fg("dim", " • "));
+        if (ops.length > 0) {
+          line +=
+            theme.fg("dim", " • ") +
+            theme.fg("accent", "/devin-tasks") +
+            theme.fg("dim", " to view");
+        }
         return {
           render: (width: number) => [truncateToWidth(line, width, "")],
           invalidate: () => {},
@@ -654,7 +676,11 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
       void runDevin(
         runtime,
         service.onActivity((activity) => {
-          if (activity.type === "tool_start" || activity.type === "tool_update") {
+          if (
+            activity.type === "tool_start" ||
+            activity.type === "tool_update" ||
+            activity.type === "retry"
+          ) {
             void refreshOpsWidget();
           }
         }),
@@ -1052,6 +1078,9 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
         ? `commands: ${snapshot.availableCommands.length} (via /devin-<name>)`
         : undefined,
       snapshot.liveOps.length ? `ops: ${snapshot.liveOps.length} (/devin-tasks)` : undefined,
+      snapshot.retry
+        ? `${snapshot.retry.isStreamRetry ? "connection lost" : "connection failed"} — retry ${snapshot.retry.attempt}${snapshot.retry.maxAttempts ? `/${snapshot.retry.maxAttempts}` : ""}`
+        : undefined,
     ].filter((part): part is string => part !== undefined);
     ctx.ui.notify(
       `devin: ${snapshot.title ?? snapshot.sessionId ?? "no session yet"}\nsession: ${snapshot.sessionId ?? "none"}\n${details.join(" · ")}`,
@@ -1073,6 +1102,7 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
       await runDevinTasksPicker(ctx, {
         listOps: async () => (await runDevin(runtime, service.snapshot)).liveOps,
         sendToSession: (text, options) => pi.sendUserMessage(text, options),
+        dismissOp: (toolCallId) => runDevin(runtime, service.dismissOp(toolCallId)),
       });
     },
   });

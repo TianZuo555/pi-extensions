@@ -24,7 +24,7 @@ import { sanitizeDevinText } from "../lib/render.ts";
 import { summarizeDevinCall, type DevinToolView } from "../lib/tool-content.ts";
 import type { DevinLiveOp } from "./runtime.ts";
 
-function formatElapsed(startedAt: number, now: number): string {
+export function formatElapsed(startedAt: number, now: number): string {
   const seconds = Math.max(0, Math.round((now - startedAt) / 1000));
   if (seconds < 60) return `${seconds}s`;
   const m = Math.floor(seconds / 60);
@@ -55,6 +55,12 @@ export interface DevinTasksUiDeps {
   listOps: () => Promise<DevinLiveOp[]> | DevinLiveOp[];
   /** Send a plain-text instruction into the live devin session. */
   sendToSession: ExtensionAPI["sendUserMessage"];
+  /**
+   * Drop an entry locally without asking devin — for ops stranded by missed
+   * terminal updates. A genuinely running op re-adds itself on its next
+   * update, so this is safe to offer unconditionally.
+   */
+  dismissOp: (toolCallId: string) => Promise<boolean> | boolean;
 }
 
 function oneLine(text: string, max = 120): string {
@@ -82,7 +88,7 @@ async function requestKill(
 ): Promise<void> {
   if (!op.view.shellId) {
     ctx.ui.notify(
-      `devin: "${oneLine(opLabel(op.view), 60)}" runs inside devin's turn — only devin can stop it.`,
+      `devin: "${oneLine(opLabel(op.view), 60)}" runs inside devin's turn — only devin can stop it. Press d to just remove it from the list.`,
       "info",
     );
     return;
@@ -108,7 +114,7 @@ async function requestKill(
 
 /** What the overlay flow decided to do with one op. */
 export interface DevinTasksAction {
-  kind: "inspect" | "kill";
+  kind: "inspect" | "kill" | "dismiss";
   op: DevinLiveOp;
 }
 
@@ -127,7 +133,16 @@ export async function runDevinTasksPicker(
     const picked = await ctx.ui.select("devin tasks", labels);
     if (!picked) return;
     const op = ops[labels.indexOf(picked)];
-    if (op) await requestKill(ctx, deps, op);
+    if (!op) return;
+    if (op.view.shellId) {
+      await requestKill(ctx, deps, op);
+      return;
+    }
+    const drop = await ctx.ui.confirm(
+      "devin tasks",
+      `"${oneLine(opLabel(op.view), 60)}" runs inside devin's turn — pi cannot stop it. Remove it from the list anyway?`,
+    );
+    if (drop) await deps.dismissOp(op.view.id);
     return;
   }
   const selection: OpsSelection = { index: 0 };
@@ -142,7 +157,7 @@ export async function runDevinTasksPicker(
     );
     if (!picked) return;
     const action =
-      picked.kind === "kill"
+      picked.kind !== "inspect"
         ? picked
         : // Inspect: after leaving the detail view, fall back to the dashboard.
           await ctx.ui.custom<DevinTasksAction | null>(
@@ -165,6 +180,7 @@ export async function runDevinTasksPicker(
     // custom overlay); afterwards the loop reopens the dashboard so several
     // ops can be stopped per visit.
     if (action?.kind === "kill") await requestKill(ctx, deps, action.op);
+    else if (action?.kind === "dismiss") await deps.dismissOp(action.op.view.id);
   }
 }
 
@@ -280,6 +296,11 @@ class DevinOpsDashboard implements Component {
       if (op) this.close({ kind: "kill", op });
       return;
     }
+    if (data === "d") {
+      const op = ops[this.selection.index];
+      if (op) this.close({ kind: "dismiss", op });
+      return;
+    }
     if (this.keybindings.matches(data, "tui.select.up") || data === "k") {
       if (ops.length > 0) {
         this.selection.index = (this.selection.index - 1 + ops.length) % ops.length;
@@ -371,7 +392,7 @@ class DevinOpsDashboard implements Component {
       truncateToWidth(
         theme.fg(
           "dim",
-          `  ${configuredKeys(this.keybindings, "tui.select.up")}/${configuredKeys(this.keybindings, "tui.select.down")}/jk select · ${configuredKeys(this.keybindings, "tui.select.confirm")} inspect · x kill · ${configuredKeys(this.keybindings, "tui.select.cancel")} close`,
+          `  ${configuredKeys(this.keybindings, "tui.select.up")}/${configuredKeys(this.keybindings, "tui.select.down")}/jk select · ${configuredKeys(this.keybindings, "tui.select.confirm")} inspect · x kill · d dismiss · ${configuredKeys(this.keybindings, "tui.select.cancel")} close`,
         ),
         width,
       ),
@@ -630,6 +651,10 @@ class DevinOpDetail implements Component {
       if (this.settledAt === undefined) this.close({ kind: "kill", op: this.op });
       return;
     }
+    if (data === "d") {
+      this.close({ kind: "dismiss", op: this.op });
+      return;
+    }
     if (this.keybindings.matches(data, "tui.editor.cursorUp") || data === "k") {
       this.scrollOffset += OP_SCROLL_STEP;
       this.tui.requestRender();
@@ -762,7 +787,7 @@ class DevinOpDetail implements Component {
       truncateToWidth(
         theme.fg(
           "dim",
-          `${configuredKeys(this.keybindings, "tui.select.cancel")} back · t/←/→/h/l tabs · x kill · ${configuredKeys(this.keybindings, "tui.editor.cursorUp")}/${configuredKeys(this.keybindings, "tui.editor.cursorDown")}/jk scroll · ${configuredKeys(this.keybindings, "tui.editor.pageUp")}/${configuredKeys(this.keybindings, "tui.editor.pageDown")} page · g/G top/bottom`,
+          `${configuredKeys(this.keybindings, "tui.select.cancel")} back · t/←/→/h/l tabs · x kill · d dismiss · ${configuredKeys(this.keybindings, "tui.editor.cursorUp")}/${configuredKeys(this.keybindings, "tui.editor.cursorDown")}/jk scroll · ${configuredKeys(this.keybindings, "tui.editor.pageUp")}/${configuredKeys(this.keybindings, "tui.editor.pageDown")} page · g/G top/bottom`,
         ),
         width,
       ),

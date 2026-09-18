@@ -1340,3 +1340,168 @@ test("snapshot.usage merges usage_update totals and turn_stats dims", async (t) 
   assert.equal(snap4.lastTurnStats?.tokensPerSec, 5);
   assert.equal(snap4.lastTurnStats?.dimensions, undefined);
 });
+
+test("connection_retry surfaces on the snapshot until progress resumes", async (t) => {
+  const { fake, runtime, service } = await makeRuntime();
+  t.after(() => runtime.dispose());
+
+  // With no bound session the retry cannot be attributed — ignored.
+  fake.customHandler?.("_cognition.ai/connection_retry", {
+    sessionId: "nowhere",
+    attempt: 1,
+    maxAttempts: 5,
+  });
+  assert.equal((await runDevin(runtime, service.snapshot)).retry, undefined);
+
+  // A pending prompt keeps the turn open so retries arrive mid-turn.
+  const pending = deferred<{ stopReason: string }>();
+  fake.prompt = async (sessionId, blocks) => {
+    fake.prompts.push({ sessionId, blocks });
+    return pending.promise;
+  };
+  const controller = await runDevin(runtime, service.beginStreamTurn(TURN()));
+  const sessionId = fake.createdSessions[0];
+
+  fake.customHandler?.("_cognition.ai/connection_retry", {
+    sessionId,
+    attempt: 2,
+    maxAttempts: 5,
+    isStreamRetry: false,
+  });
+  let snap = await runDevin(runtime, service.snapshot);
+  assert.equal(snap.retry?.attempt, 2);
+  assert.equal(snap.retry?.maxAttempts, 5);
+  assert.equal(snap.retry?.isStreamRetry, false);
+  // The retry activity also reaches the live turn controller.
+  assert.equal((await controller.next())?.type, "retry");
+
+  // Retries attributed to another session (e.g. a summary session) are ignored.
+  fake.customHandler?.("_cognition.ai/connection_retry", {
+    sessionId: "other-session",
+    attempt: 9,
+    maxAttempts: 9,
+  });
+  snap = await runDevin(runtime, service.snapshot);
+  assert.equal(snap.retry?.attempt, 2);
+
+  // Streamed content means the backend stream recovered — the state clears.
+  fake.sessions.get(sessionId)?.({
+    sessionUpdate: "agent_message_chunk",
+    content: { type: "text", text: "back" },
+  } as never);
+  snap = await runDevin(runtime, service.snapshot);
+  assert.equal(snap.retry, undefined);
+
+  pending.resolve({ stopReason: "end_turn" });
+  for (;;) {
+    if ((await controller.next()) === null) break;
+  }
+});
+
+test("connection_retry clears when the turn resolves", async (t) => {
+  const { fake, runtime, service } = await makeRuntime();
+  t.after(() => runtime.dispose());
+  const pending = deferred<{ stopReason: string }>();
+  fake.prompt = async (sessionId, blocks) => {
+    fake.prompts.push({ sessionId, blocks });
+    return pending.promise;
+  };
+  await runDevin(runtime, service.beginStreamTurn(TURN()));
+  const sessionId = fake.createdSessions[0];
+  fake.customHandler?.("_cognition.ai/connection_retry", {
+    sessionId,
+    attempt: 3,
+    isStreamRetry: true,
+  });
+  assert.equal((await runDevin(runtime, service.snapshot)).retry?.attempt, 3);
+  // The turn's terminal result means no further retrying — even if no
+  // content chunk streamed after the last attempt.
+  pending.resolve({ stopReason: "end_turn" });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal((await runDevin(runtime, service.snapshot)).retry, undefined);
+});
+
+test("terminal updates landing in the supersede window still clear liveOps", async (t) => {
+  const { fake, runtime, service } = await makeRuntime();
+  t.after(() => runtime.dispose());
+  const pending = deferred<{ stopReason: string }>();
+  fake.prompt = async (sessionId, blocks) => {
+    fake.prompts.push({ sessionId, blocks });
+    return pending.promise;
+  };
+  await runDevin(runtime, service.beginStreamTurn(TURN()));
+  const sessionId = fake.createdSessions[0];
+  fake.sessions.get(sessionId)?.({
+    sessionUpdate: "tool_call",
+    toolCallId: "exec_1",
+    title: "Ran sleep",
+    kind: "execute",
+    status: "in_progress",
+  } as never);
+  assert.equal((await runDevin(runtime, service.snapshot)).liveOps.length, 1);
+
+  // Superseding the turn bumps the generation; until the next turn re-attaches
+  // its own listener the old registration still receives the cancelled turn's
+  // trailing updates — devin emits the kill confirmations exactly here.
+  const staleListener = fake.sessions.get(sessionId)!;
+  const next = runDevin(
+    runtime,
+    service.beginStreamTurn(TURN({ prompt: "next", blocks: [{ type: "text", text: "next" }] })),
+  );
+  staleListener({
+    sessionUpdate: "tool_call_update",
+    toolCallId: "exec_1",
+    status: "completed",
+  } as never);
+  pending.resolve({ stopReason: "cancelled" });
+  const controller = await next;
+  for (;;) {
+    if ((await controller.next()) === null) break;
+  }
+  const snap = await runDevin(runtime, service.snapshot);
+  assert.equal(snap.liveOps.length, 0, "stale-generation terminal update cleared the op");
+});
+
+test("child process exit drops in-flight op tracking", async (t) => {
+  const { fake, runtime, service } = await makeRuntime();
+  t.after(() => runtime.dispose());
+  const pending = deferred<{ stopReason: string }>();
+  fake.prompt = async (sessionId, blocks) => {
+    fake.prompts.push({ sessionId, blocks });
+    return pending.promise;
+  };
+  await runDevin(runtime, service.beginStreamTurn(TURN()));
+  const sessionId = fake.createdSessions[0];
+  fake.sessions.get(sessionId)?.({
+    sessionUpdate: "tool_call",
+    toolCallId: "exec_1",
+    title: "Ran sleep",
+    kind: "execute",
+    status: "in_progress",
+  } as never);
+  assert.equal((await runDevin(runtime, service.snapshot)).liveOps.length, 1);
+  fake.onClose?.();
+  assert.equal(
+    (await runDevin(runtime, service.snapshot)).liveOps.length,
+    0,
+    "the dead child cannot report terminal state — stop listing its ops",
+  );
+});
+
+test("dismissOp drops a tracked op without touching the session", async (t) => {
+  const { fake, runtime, service } = await makeRuntime();
+  t.after(() => runtime.dispose());
+  await runDevin(runtime, service.beginStreamTurn(TURN()));
+  const sessionId = fake.createdSessions[0];
+  fake.sessions.get(sessionId)?.({
+    sessionUpdate: "tool_call",
+    toolCallId: "exec_1",
+    title: "Ran sleep",
+    kind: "execute",
+    status: "in_progress",
+  } as never);
+  assert.equal((await runDevin(runtime, service.snapshot)).liveOps.length, 1);
+  assert.equal(await runDevin(runtime, service.dismissOp("exec_1")), true);
+  assert.equal((await runDevin(runtime, service.snapshot)).liveOps.length, 0);
+  assert.equal(await runDevin(runtime, service.dismissOp("exec_1")), false);
+});

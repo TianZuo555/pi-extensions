@@ -193,6 +193,7 @@ export class DevinAcpClient {
     for (const method of [
       "_cognition.ai/agent_stopped",
       "_cognition.ai/turn_stats",
+      "_cognition.ai/connection_retry",
       "_cognition.ai/thinking_complete",
       "_cognition.ai/output",
       "_cognition.ai/mcp/serversChanged",

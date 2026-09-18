@@ -22,7 +22,12 @@ import {
   piSystemInstructionsPrompt,
   restoredPiContextPrompt,
 } from "../lib/prompt.ts";
-import { acpUpdateToActivities, agentStoppedToActivity, turnStatsToDimensions } from "./updates.ts";
+import {
+  acpUpdateToActivities,
+  agentStoppedToActivity,
+  connectionRetryToActivity,
+  turnStatsToDimensions,
+} from "./updates.ts";
 import {
   DevinTurnController,
   mergeDevinUsage,
@@ -43,6 +48,23 @@ export class DevinRuntimeClosedError extends Data.TaggedError("DevinRuntimeClose
  * only exists so a wedged agent cannot block a new turn forever.
  */
 const SUPERSEDE_SETTLE_TIMEOUT_MS = 3_000;
+
+/**
+ * A connection_retry state is only reported while fresh: devin notifies once
+ * per attempt and recovery is signalled implicitly by resumed updates, so a
+ * retry that arrived between turns would otherwise linger forever.
+ */
+const RETRY_STALE_MS = 30_000;
+
+/** Activity kinds that prove the backend stream is alive after a retry. */
+const PROGRESS_ACTIVITY_TYPES = new Set<DevinActivity["type"]>([
+  "text",
+  "thought",
+  "tool_start",
+  "tool_update",
+  "plan",
+  "compaction",
+]);
 
 export class DevinSessionError extends Data.TaggedError("DevinSessionError")<{
   readonly message: string;
@@ -76,6 +98,8 @@ export interface DevinStateSnapshot {
   lastTurnStats: DevinTurnStats | undefined;
   /** Devin-side operations still in flight (long execs, detached shells). */
   liveOps: DevinLiveOp[];
+  /** Present while devin is retrying its backend stream (fresh only). */
+  retry: DevinRetryState | undefined;
   client: { pid?: number; spawned: number; requestsSent: number; notificationsReceived: number };
 }
 
@@ -83,6 +107,15 @@ export interface DevinStateSnapshot {
 export interface DevinLiveOp {
   view: DevinToolView;
   startedAt: number;
+}
+
+/** Latest `_cognition.ai/connection_retry` state for the bound session. */
+export interface DevinRetryState {
+  attempt: number;
+  maxAttempts?: number;
+  isStreamRetry?: boolean;
+  /** When the latest retry notification arrived (Date.now). */
+  at: number;
 }
 
 export interface DevinTurnRequest {
@@ -171,6 +204,12 @@ export interface DevinRuntimeShape {
   readonly deleteSession: (
     sessionId: string,
   ) => Effect.Effect<boolean, DevinRuntimeClosedError | DevinSessionError>;
+  /**
+   * Drop a live-op entry locally without asking devin — for entries stranded
+   * by missed terminal updates. If the op is genuinely still running, its
+   * next update re-adds it.
+   */
+  readonly dismissOp: (toolCallId: string) => Effect.Effect<boolean, DevinRuntimeClosedError>;
   readonly authenticate: (
     methodId: string,
   ) => Effect.Effect<void, DevinRuntimeClosedError | DevinSessionError>;
@@ -206,6 +245,8 @@ const makeRuntime = (createClient: DevinClientFactory) =>
     let needsBootstrap = false;
     /** Devin-side tool calls still in flight; keyed by toolCallId. */
     const liveOps = new Map<string, DevinLiveOp>();
+    /** Latest backend-stream retry state for the bound session. */
+    let retry: DevinRetryState | undefined;
     const activitySubscribers = new Set<(activity: DevinActivity) => void>();
     let lastSentSystemPrompt: string | undefined;
     /** Monotonic sequence of committed instruction snapshots on this binding.
@@ -230,6 +271,10 @@ const makeRuntime = (createClient: DevinClientFactory) =>
           // binding a newer client already established.
           if (client !== created) return;
           invalidateActiveTurn();
+          // The dead child took its in-turn ops with it; nothing can report
+          // their terminal state now, and session/load replays are dropped.
+          liveOps.clear();
+          retry = undefined;
           if (sessionId && !pendingLoadId) {
             // Devin persists sessions server-side: retry session/load on the
             // next turn; its failure path falls back to a fresh session
@@ -245,8 +290,24 @@ const makeRuntime = (createClient: DevinClientFactory) =>
           if (method === "_cognition.ai/agent_stopped") {
             const activity = agentStoppedToActivity(params);
             if (activity?.type !== "stopped") return;
+            retry = undefined;
             lastTurnStats = activity.stats;
             active?.push(activity);
+          } else if (method === "_cognition.ai/connection_retry") {
+            const activity = connectionRetryToActivity(params);
+            if (activity?.type !== "retry") return;
+            const target = (params as { sessionId?: unknown }).sessionId;
+            // Only the bound session's retries are surfaced; a foreign
+            // target (e.g. a throwaway summary session) is ignored.
+            if (!sessionId || (typeof target === "string" && target !== sessionId)) return;
+            retry = {
+              attempt: activity.attempt,
+              maxAttempts: activity.maxAttempts,
+              isStreamRetry: activity.isStreamRetry,
+              at: Date.now(),
+            };
+            active?.push(activity);
+            notifySubscribers(activity);
           } else if (method === "_cognition.ai/turn_stats") {
             // Carries only response dimensions (also replayed on load) —
             // merge them into the existing stats instead of replacing.
@@ -317,6 +378,7 @@ const makeRuntime = (createClient: DevinClientFactory) =>
       needsBootstrap = bootstrap;
       lastSentSystemPrompt = undefined;
       liveOps.clear();
+      retry = undefined;
     };
 
     const ensureOpen: Effect.Effect<void, DevinRuntimeClosedError> = Effect.suspend(() =>
@@ -397,13 +459,21 @@ const makeRuntime = (createClient: DevinClientFactory) =>
       const acp = ensureClient();
       const listenerGeneration = generation;
       acp.setSessionListener(id, (update) => {
-        if (client !== acp || sessionId !== id || generation !== listenerGeneration) return;
+        if (client !== acp || sessionId !== id) return;
         const activities = acpUpdateToActivities(update);
-        applyStateUpdate(activities);
+        const deliver = generation === listenerGeneration;
+        // State updates are session-scoped and ordering-sensitive: a stale
+        // turn's trailing usage must not regress the newer turn's numbers.
+        if (deliver) applyStateUpdate(activities);
         for (const activity of activities) {
+          if (PROGRESS_ACTIVITY_TYPES.has(activity.type)) retry = undefined;
+          // Session-scoped bookkeeping keeps running through supersession:
+          // devin emits terminal tool updates right after a cancel, exactly
+          // when the listener generation is stale — dropping them here would
+          // strand the ops in liveOps forever.
           trackLiveOp(activity);
           notifySubscribers(activity);
-          controller?.push(activity);
+          if (deliver) controller?.push(activity);
         }
       });
     };
@@ -669,6 +739,7 @@ const makeRuntime = (createClient: DevinClientFactory) =>
                         return;
                       }
                       if (result.stopReason !== "cancelled") turns += 1;
+                      retry = undefined;
                       controller.push({
                         type: "result",
                         stopReason: result.stopReason ?? "end_turn",
@@ -860,6 +931,7 @@ const makeRuntime = (createClient: DevinClientFactory) =>
             availableCommands,
             lastTurnStats,
             liveOps: [...liveOps.values()],
+            retry: retry && Date.now() - retry.at < RETRY_STALE_MS ? retry : undefined,
             client: client?.stats ?? {
               spawned: 0,
               requestsSent: 0,
@@ -881,6 +953,9 @@ const makeRuntime = (createClient: DevinClientFactory) =>
           }),
         ),
       ),
+
+      dismissOp: (toolCallId) =>
+        ensureOpen.pipe(Effect.andThen(Effect.sync(() => liveOps.delete(toolCallId)))),
 
       deleteSession: (id) =>
         ensureOpen.pipe(
