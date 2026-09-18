@@ -1,5 +1,11 @@
 # @tian.zuo/pi-usage
 
+## 0.2.1
+
+### Patch Changes
+
+- [#87](https://github.com/TianZuo555/pi-extensions/pull/87) [`b982e60`](https://github.com/TianZuo555/pi-extensions/commit/b982e6072f27a166642ec881bd77b750c78a01ce) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Fix GLM Coding Plan (China) usage queries failing with "Z.ai usage endpoint returned no displayable data." The open.bigmodel.cn quota endpoint reports windows as `CREDIT_LIMIT` entries (the global api.z.ai uses `TOKENS_LIMIT`), which the parser did not recognize and dropped, leaving nothing to display. Both types are now labelled from their `unit`/`number` window encoding (5-hour and weekly windows for tokens or credits), and `CREDIT_LIMIT` windows additionally surface their absolute `remaining`/`usage` amounts (e.g. `1,930 / 2,000 credits`).
+
 ## 0.2.0
 
 ### Minor Changes
