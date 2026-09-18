@@ -51,9 +51,11 @@ unavailable.
   scrolling), `x` asks Devin to stop a background shell, `d` drops a stale
   entry (it reappears on the op's next update if it is genuinely still
   running)
-- `/devin-usage` — session usage reported over ACP: context-window bar,
-  cumulative tokens/cost (credits/ACUs when billed), and last-turn stats —
-  rendered `/usage`-style with Devin's own response-dimension grouping
+- `/devin-usage` — account quota plus session usage: daily/weekly quota
+  windows with reset times and the extra-usage balance (the same
+  `GetUserStatus` data Devin CLI's `/usage` shows), then the ACP-reported
+  session view — context-window bar, cumulative tokens/cost (credits/ACUs
+  when billed), and last-turn stats
 - `/devin mode [ask|plan|accept-edits|bypass]` — get/set Devin's permission mode
 - `/devin yolo [on|off]` — persistently pin Devin to `bypass` mode
   (`~/.pi/devin-acp/settings.json`); while on, `/devin mode` stays bypass and

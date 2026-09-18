@@ -19,6 +19,7 @@ import { createCompactForwarder, createCompactSend } from "./lib/compaction.ts";
 import { piConfigDir, readJson, writeJson } from "./lib/config.ts";
 import { applyYoloMode } from "./lib/yolo.ts";
 import { checkDevinBinary, MIN_DEVIN_VERSION, runDevinCommand } from "./lib/diagnostics.ts";
+import { fetchDevinQuota, type DevinQuotaResult } from "./lib/quota.ts";
 import {
   devinGroups,
   groupThinkingLevelMap,
@@ -642,6 +643,18 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
     return catalog;
   };
 
+  /**
+   * Pull the account quota devin's own /usage shows. The seat-management RPC
+   * wants a valid semver as the client version, so reuse the probed binary
+   * version and fall back to the supported floor when it isn't known.
+   */
+  const devinQuota = async (): Promise<DevinQuotaResult> => {
+    const binary = await checkDevinBinary().catch(() => undefined);
+    return fetchDevinQuota({
+      devinVersion: binary?.ok ? binary.version : MIN_DEVIN_VERSION,
+    });
+  };
+
   async function refreshModelsWhenSelected(): Promise<void> {
     if (catalog.fetchedAt && Date.now() - catalog.fetchedAt < modelCacheTtlMs(catalog.source)) {
       return;
@@ -885,6 +898,7 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
     if (sub === "usage") {
       await runDevinUsagePicker(ctx, {
         snapshot: () => runDevin(runtime, service.snapshot),
+        quota: devinQuota,
       });
       return;
     }
@@ -1111,11 +1125,12 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
 
   pi.registerCommand("devin-usage", {
     description:
-      "Show this devin session's usage (context window, tokens, credits/ACUs, last-turn stats) reported over ACP",
+      "Show account quota (daily/weekly windows, extra balance) plus this session's usage (context window, tokens, credits/ACUs, last-turn stats)",
     handler: async (_args: string, ctx: ExtensionContext) => {
       sessionCtx = ctx;
       await runDevinUsagePicker(ctx, {
         snapshot: () => runDevin(runtime, service.snapshot),
+        quota: devinQuota,
       });
     },
   });
