@@ -448,8 +448,14 @@ const makeRuntime = (createClient: DevinClientFactory) =>
       }
     };
 
-    /** Wire a live controller to a session's update stream. */
-    const attachSessionListener = (id: string, controller: DevinTurnController) => {
+    /**
+     * Wire a controller to a session's update stream. Pass undefined for a
+     * state-only listener (the session/load replay tail): replayed updates
+     * still refresh the snapshot, but they are the loaded session's stored
+     * state — not this turn's activity — so they must not reach the turn's
+     * usage accounting.
+     */
+    const attachSessionListener = (id: string, controller: DevinTurnController | undefined) => {
       const acp = ensureClient();
       const listenerGeneration = generation;
       acp.setSessionListener(id, (update) => {
@@ -467,7 +473,7 @@ const makeRuntime = (createClient: DevinClientFactory) =>
           // strand the ops in liveOps forever.
           trackLiveOp(activity);
           notifySubscribers(activity);
-          if (deliver) controller.push(activity);
+          if (deliver) controller?.push(activity);
         }
       });
     };
@@ -475,28 +481,27 @@ const makeRuntime = (createClient: DevinClientFactory) =>
     /**
      * Ensure a live ACP session for the current cwd. Loads the pending
      * persisted session when marked; falls back to session/new when the load
-     * reports a missing session. The session listener must already be wired
-     * to the turn controller so replayed state updates are captured.
+     * reports a missing session. Listeners stay state-only through setup —
+     * the caller points one at the turn controller when the prompt goes out.
      */
-    const ensureSession = async (
-      cwd: string,
-      controller: DevinTurnController,
-      check: () => void,
-    ): Promise<string> => {
+    const ensureSession = async (cwd: string, check: () => void): Promise<string> => {
       const acp = ensureClient();
       await acp.ensureStarted();
       check();
       if (sessionId && sessionCwd === cwd && !pendingLoadId) {
-        // Re-point the session listener at this turn's controller — the
-        // previous turn's controller is closed.
-        attachSessionListener(sessionId, controller);
+        // The previous turn's listener is still attached; its controller is
+        // closed, so stale updates are absorbed until the prompt attaches.
         return sessionId;
       }
       if (pendingLoadId) {
         const loadId = pendingLoadId;
         sessionId = loadId;
         sessionCwd = cwd;
-        attachSessionListener(loadId, controller);
+        // The replay tail is the loaded session's stored state. Feeding its
+        // usage snapshot to the fresh turn seeds lastUsage with prior-turn
+        // totals — a turn aborted before live usage arrives would persist
+        // them again, double-billing them in pi's session log.
+        attachSessionListener(loadId, undefined);
         try {
           await acp.loadSession(loadId, cwd);
           check();
@@ -532,7 +537,8 @@ const makeRuntime = (createClient: DevinClientFactory) =>
       sessionCwd = cwd;
       modeId = created.modes?.currentModeId ?? modeId;
       configOptions = created.configOptions ?? configOptions;
-      attachSessionListener(created.sessionId, controller);
+      // State-only until the prompt attaches the turn controller below.
+      attachSessionListener(created.sessionId, undefined);
       return created.sessionId;
     };
 
@@ -623,7 +629,7 @@ const makeRuntime = (createClient: DevinClientFactory) =>
                 try {
                   check();
                   const acp = ensureClient();
-                  const liveSessionId = await ensureSession(request.cwd, controller, check);
+                  const liveSessionId = await ensureSession(request.cwd, check);
                   check();
                   controller.sessionId = liveSessionId;
                   await syncConfig(liveSessionId, request.concreteModelId, check);
@@ -688,6 +694,10 @@ const makeRuntime = (createClient: DevinClientFactory) =>
 
                   const promptBindingGeneration = bindingGeneration;
                   const promptInstructionSeq = ++instructionSeq;
+                  // The turn's activity feed starts with its prompt: updates
+                  // arriving earlier (load replay, a superseded turn's tail)
+                  // are session state and must not seed the turn's usage.
+                  attachSessionListener(liveSessionId, controller);
                   const promptPromise = acp.prompt(liveSessionId, outgoing);
                   // Commit context state only once devin answers the prompt
                   // request — a transform-hook or transport failure leaves it

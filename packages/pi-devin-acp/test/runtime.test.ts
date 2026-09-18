@@ -1027,6 +1027,128 @@ for (const outcome of ["error", "aborted", "stop"] as const) {
   });
 }
 
+test("load-replayed usage seeds the snapshot but never the turn's accounting", async (t) => {
+  const { fake, runtime, service } = await makeRuntime();
+  t.after(async () => {
+    await runDevin(runtime, service.close);
+    await runtime.dispose();
+  });
+  await runDevin(
+    runtime,
+    service.restoreSession({
+      acpSessionId: "loaded",
+      cwd: "/tmp/proj",
+      modelId: "swe-2",
+      turns: 2,
+    }),
+  );
+  // The real client forwards the loadStats replay tail through the session
+  // listener while session/load is in flight.
+  fake.loadSession = async (id) => {
+    fake.sessions.get(id)?.({
+      sessionUpdate: "usage_update",
+      used: 90239,
+      size: 262000,
+      _meta: {
+        "cognition.ai/inputTokens": 90029,
+        "cognition.ai/outputTokens": 210,
+        "cognition.ai/cachedReadTokens": 89273,
+      },
+    } as never);
+    return { sessionId: id };
+  };
+  const prompted = deferred<void>();
+  fake.prompt = async (sessionId, blocks) => {
+    fake.prompts.push({ sessionId, blocks });
+    prompted.resolve();
+    return new Promise(() => {});
+  };
+  const abort = new AbortController();
+  const provider = streamDevin({
+    runtime,
+    service,
+    replay: new DevinReplayStore(),
+    families: () => LIFECYCLE_FAMILIES,
+    cwd: () => "/tmp/proj",
+  });
+  const messagePromise = provider(
+    LIFECYCLE_MODEL,
+    { messages: [{ role: "user", content: "hi", timestamp: 0 }] },
+    { signal: abort.signal },
+  ).result();
+  await prompted.promise;
+  // Let the provider take the controller and drain queued activities, then
+  // abort before the turn reports any usage of its own.
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  abort.abort();
+  const message = await messagePromise;
+  assert.equal(message.stopReason, "aborted");
+  assert.equal(
+    message.usage.totalTokens,
+    0,
+    "the replayed snapshot is prior-turn usage, not this turn's",
+  );
+  // The same snapshot still lands in the runtime snapshot for /devin-usage.
+  const snap = await runDevin(runtime, service.snapshot);
+  assert.equal(snap.usage?.inputTokens, 90029);
+  assert.equal(snap.contextTokens, 90239);
+});
+
+test("pre-prompt straggler usage never seeds the next turn's accounting", async (t) => {
+  const { fake, runtime, service } = await makeRuntime();
+  t.after(async () => {
+    await runDevin(runtime, service.close);
+    await runtime.dispose();
+  });
+  // Turn 1 completes so the session stays live for reuse.
+  const first = await runDevin(runtime, service.beginStreamTurn(TURN()));
+  for (;;) {
+    if ((await first.next()) === null) break;
+  }
+  // Turn 2 resolves a different concrete model, so syncConfig issues
+  // setConfigOption while no prompt is in flight. A straggler usage_update
+  // (the previous turn's tail) arriving in that window is session state,
+  // not turn-2 usage.
+  fake.setConfigOption = async (_id, configId, value) => {
+    fake.configSets.push({ configId, value });
+    fake.sessions.get("sess-1")?.({
+      sessionUpdate: "usage_update",
+      used: 90239,
+      size: 262000,
+      _meta: { "cognition.ai/inputTokens": 90029, "cognition.ai/outputTokens": 210 },
+    } as never);
+    return [];
+  };
+  const prompted = deferred<void>();
+  fake.prompt = async (sessionId, blocks) => {
+    fake.prompts.push({ sessionId, blocks });
+    if (fake.prompts.length === 2) prompted.resolve();
+    return new Promise(() => {});
+  };
+  const abort = new AbortController();
+  const provider = streamDevin({
+    runtime,
+    service,
+    replay: new DevinReplayStore(),
+    families: () => LIFECYCLE_FAMILIES,
+    cwd: () => "/tmp/proj",
+  });
+  const messagePromise = provider(
+    LIFECYCLE_MODEL,
+    { messages: [{ role: "user", content: "again", timestamp: 1 }] },
+    { signal: abort.signal },
+  ).result();
+  await prompted.promise;
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  abort.abort();
+  const message = await messagePromise;
+  assert.equal(message.stopReason, "aborted");
+  assert.equal(message.usage.totalTokens, 0);
+  assert.deepEqual(fake.configSets.at(-1), { configId: "model", value: "swe-2-none" });
+});
+
 test("summary usage merges streamed cache metadata with prompt-response totals", async (t) => {
   const { fake, runtime, service } = await makeRuntime();
   t.after(() => runtime.dispose());
