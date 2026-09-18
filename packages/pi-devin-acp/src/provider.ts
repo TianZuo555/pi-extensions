@@ -314,6 +314,26 @@ export function streamDevin(deps: DevinProviderDeps) {
 
         turnController = controller;
         let usage: DevinUsage | undefined = controller.lastUsage;
+        /**
+         * Merge a usage snapshot into the turn's running usage. Once
+         * turn_stats' cumulative sums have landed they are authoritative:
+         * last-request snapshots (a trailing usage_update, or the prompt
+         * response's own usage) must not overwrite token fields again.
+         */
+        const mergeTurnUsage = (next: DevinUsage | undefined) => {
+          if (usage?.cumulative && next && !next.cumulative) {
+            const {
+              inputTokens: _i,
+              outputTokens: _o,
+              cachedReadTokens: _r,
+              cachedWriteTokens: _w,
+              ...rest
+            } = next;
+            next = rest;
+          }
+          usage = mergeDevinUsage(usage, next);
+          controller.lastUsage = usage;
+        };
         let textIndex: number | null = null;
         let textBuffer = "";
         let textMessageId: string | undefined;
@@ -606,8 +626,7 @@ export function streamDevin(deps: DevinProviderDeps) {
               break;
             }
             case "usage":
-              usage = mergeDevinUsage(usage, activity.usage);
-              controller.lastUsage = usage;
+              mergeTurnUsage(activity.usage);
               break;
             case "stopped":
             case "mode":
@@ -625,8 +644,7 @@ export function streamDevin(deps: DevinProviderDeps) {
               closeThinking();
               // The prompt response carries the canonical turn usage; merge
               // it over whatever usage_update reported during streaming.
-              usage = mergeDevinUsage(usage, activity.usage);
-              controller.lastUsage = usage;
+              mergeTurnUsage(activity.usage);
               attachUsage(usage);
 
               const reason = STOP_REASON_MAP[activity.stopReason] ?? "error";
