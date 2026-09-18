@@ -268,12 +268,22 @@ export class DevinAcpClient {
     }
   }
 
-  async prompt(sessionId: string, prompt: DevinContentBlock[]): Promise<DevinPromptResult> {
+  async prompt(
+    sessionId: string,
+    prompt: DevinContentBlock[],
+    opts?: { clientMessageId?: string },
+  ): Promise<DevinPromptResult> {
     await this.ensureStarted();
     this.#stats.requestsSent += 1;
     const result = (await this.#agent!.request(acp.methods.agent.session.prompt, {
       sessionId,
       prompt,
+      // Devin adopts this as the user message id and echoes it as
+      // turnClientMessageId in turn_stats / userMessageId in the result —
+      // our correlation key for cumulative turn accounting.
+      ...(opts?.clientMessageId
+        ? { _meta: { "cognition.ai/clientMessageId": opts.clientMessageId } }
+        : {}),
     })) as acp.PromptResponse;
     return {
       stopReason: result.stopReason,

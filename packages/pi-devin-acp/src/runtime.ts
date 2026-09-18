@@ -8,6 +8,7 @@
  * failed load.
  */
 
+import { randomUUID } from "node:crypto";
 import { Context, Data, Effect, Layer, ManagedRuntime, Exit, Cause, Result } from "effect";
 import type { ContentBlock } from "@agentclientprotocol/sdk";
 import type {
@@ -27,6 +28,7 @@ import {
   agentStoppedToActivity,
   connectionRetryToActivity,
   turnStatsToDimensions,
+  turnStatsToUsage,
 } from "./updates.ts";
 import {
   DevinTurnController,
@@ -313,6 +315,18 @@ const makeRuntime = (createClient: DevinClientFactory) =>
             // merge them into the existing stats instead of replacing.
             const dimensions = turnStatsToDimensions(params);
             if (dimensions) lastTurnStats = { ...(lastTurnStats ?? {}), dimensions };
+            // The cumulative token sums are the turn's authoritative
+            // billable usage (every internal request, not just the last).
+            // turnClientMessageId ties them to the owning turn: replayed
+            // or superseded-turn stats carry other ids and stay state-only.
+            const stats = turnStatsToUsage(params);
+            if (
+              stats?.usage &&
+              stats.clientMessageId !== undefined &&
+              stats.clientMessageId === active?.turnClientMessageId
+            ) {
+              active?.push({ type: "usage", usage: stats.usage });
+            }
           }
         });
       }
@@ -698,7 +712,13 @@ const makeRuntime = (createClient: DevinClientFactory) =>
                   // arriving earlier (load replay, a superseded turn's tail)
                   // are session state and must not seed the turn's usage.
                   attachSessionListener(liveSessionId, controller);
-                  const promptPromise = acp.prompt(liveSessionId, outgoing);
+                  // Stamped on the prompt so devin echoes it as
+                  // turnClientMessageId — the correlation key that lets the
+                  // turn claim its cumulative turn_stats token sums.
+                  controller.turnClientMessageId = randomUUID();
+                  const promptPromise = acp.prompt(liveSessionId, outgoing, {
+                    clientMessageId: controller.turnClientMessageId,
+                  });
                   // Commit context state only once devin answers the prompt
                   // request — a transform-hook or transport failure leaves it
                   // pending so the next turn re-attaches the resources.
