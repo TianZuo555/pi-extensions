@@ -24,7 +24,7 @@ class FakeClient {
   sessions = new Map<string, DevinSessionListener>();
   createdSessions: string[] = [];
   loaded: string[] = [];
-  prompts: { sessionId: string; blocks: ContentBlock[] }[] = [];
+  prompts: { sessionId: string; blocks: ContentBlock[]; clientMessageId?: string }[] = [];
   nextId = 0;
   failLoads = new Set<string>();
   deleted: string[] = [];
@@ -58,8 +58,8 @@ class FakeClient {
     if (this.failLoads.has(id)) throw new Error("Session not found");
     return { sessionId: id };
   }
-  async prompt(sessionId: string, blocks: ContentBlock[]) {
-    this.prompts.push({ sessionId, blocks });
+  async prompt(sessionId: string, blocks: ContentBlock[], opts?: { clientMessageId?: string }) {
+    this.prompts.push({ sessionId, blocks, clientMessageId: opts?.clientMessageId });
     const listener = this.sessions.get(sessionId);
     listener?.({
       sessionUpdate: "agent_message_chunk",
@@ -1147,6 +1147,71 @@ test("pre-prompt straggler usage never seeds the next turn's accounting", async 
   assert.equal(message.stopReason, "aborted");
   assert.equal(message.usage.totalTokens, 0);
   assert.deepEqual(fake.configSets.at(-1), { configId: "model", value: "swe-2-none" });
+});
+
+test("matching turn_stats cumulative sums become the turn's billed usage", async (t) => {
+  const { fake, runtime, service } = await makeRuntime();
+  t.after(async () => {
+    await runDevin(runtime, service.close);
+    await runtime.dispose();
+  });
+  fake.prompt = async (sessionId, blocks, opts) => {
+    fake.prompts.push({ sessionId, blocks, clientMessageId: opts?.clientMessageId });
+    // The last-request snapshot usage_update reports mid-turn.
+    fake.sessions.get(sessionId)?.({
+      sessionUpdate: "usage_update",
+      used: 14627,
+      size: 262000,
+      _meta: {
+        "cognition.ai/inputTokens": 14613,
+        "cognition.ai/outputTokens": 14,
+        "cognition.ai/cachedReadTokens": 6656,
+      },
+    } as never);
+    // A stale turn_stats (another turn's clientMessageId) must be ignored.
+    fake.customHandler?.("_cognition.ai/turn_stats", {
+      sessionId,
+      turnClientMessageId: "some-other-turn",
+      responseDimensions: [
+        { uid: "input_tokens", kind: { type: "cumulativeMetric", value: 999999 } },
+      ],
+    });
+    // This turn's own turn_stats: cumulative sums across its internal
+    // requests (input_tokens is the uncached sum; the two internal requests
+    // here totalled 22454 uncached + 6656 cached + 80 output).
+    fake.customHandler?.("_cognition.ai/turn_stats", {
+      sessionId,
+      turnClientMessageId: opts?.clientMessageId,
+      responseDimensions: [
+        { uid: "agent_messages", kind: { type: "cumulativeMetric", value: 2 } },
+        { uid: "input_tokens", kind: { type: "cumulativeMetric", value: 22454 } },
+        { uid: "output_tokens", kind: { type: "cumulativeMetric", value: 80 } },
+        { uid: "cached_input_tokens", kind: { type: "cumulativeMetric", value: 6656 } },
+      ],
+    });
+    // The prompt response still carries last-request usage; it must not
+    // clobber the cumulative sums that already landed.
+    return { stopReason: "end_turn", usage: { inputTokens: 14613, outputTokens: 14 } };
+  };
+  const provider = streamDevin({
+    runtime,
+    service,
+    replay: new DevinReplayStore(),
+    families: () => LIFECYCLE_FAMILIES,
+    cwd: () => "/tmp/proj",
+  });
+  const message = await provider(
+    LIFECYCLE_MODEL,
+    { messages: [{ role: "user", content: "hi", timestamp: 0 }] },
+    {},
+  ).result();
+  assert.equal(message.stopReason, "stop");
+  assert.equal(message.usage.input, 22454);
+  assert.equal(message.usage.output, 80);
+  assert.equal(message.usage.cacheRead, 6656);
+  assert.equal(message.usage.cacheWrite, 0);
+  assert.equal(message.usage.totalTokens, 29190);
+  assert.ok(fake.prompts[0].clientMessageId, "the turn stamps a correlation id");
 });
 
 test("summary usage merges streamed cache metadata with prompt-response totals", async (t) => {

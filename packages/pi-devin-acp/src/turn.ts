@@ -44,6 +44,12 @@ export interface DevinUsage {
   totalCreditCost?: number;
   totalAcuCost?: number;
   dimensions?: DevinResponseDimension[];
+  /**
+   * Set when the token fields are the turn's cumulative sums (turn_stats
+   * responseDimensions) rather than a last-request snapshot. Authoritative:
+   * later snapshots must not overwrite them.
+   */
+  cumulative?: boolean;
 }
 
 export interface DevinTurnStats {
@@ -115,6 +121,13 @@ export class DevinTurnController {
    * boundaries so the final message can account for the whole ACP turn.
    */
   lastUsage?: DevinUsage;
+  /**
+   * Client-supplied user message id stamped on this turn's session/prompt.
+   * Devin echoes it as turnClientMessageId in `_cognition.ai/turn_stats`,
+   * which lets the cumulative per-turn token sums be matched to exactly
+   * this turn (replayed or superseded-turn stats carry other ids).
+   */
+  turnClientMessageId?: string;
   #queue: DevinActivity[] = [];
   #waiters: Waiter[] = [];
   #closed = false;
