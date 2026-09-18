@@ -273,11 +273,26 @@ function copilotSnapshotLabel(key: string, creditBilled: boolean): string {
 // `percentage` = the share of the allowance already *used* (so remaining is
 // 100 - percentage) and a `nextResetTime` in epoch *milliseconds* — unlike
 // Codex's seconds, which is why we divide before handing it to the formatter.
-// Only the 5-hour token pool is surfaced; the tool/MCP allowance (TIME_LIMIT)
-// and any other windows Z.ai returns are intentionally ignored.
-const ZAI_LIMIT_LABELS: Record<string, string> = {
-  TOKENS_LIMIT: "5h tokens",
-};
+// The global endpoint types its token windows TOKENS_LIMIT while the China
+// endpoint reports them as CREDIT_LIMIT with absolute amounts in `usage`
+// (total), `currentValue` (used) and `remaining`; both encode the window in
+// `unit`/`number` (3 = hourly, 6 = weekly). The tool/MCP allowance
+// (TIME_LIMIT) and any other windows Z.ai returns are intentionally ignored.
+function zaiLimitLabel(limit: Record<string, unknown>): string | undefined {
+  const type = asString(limit.type);
+  const unit = asNumber(limit.unit);
+  const count = asNumber(limit.number) ?? 1;
+  if (type === "TOKENS_LIMIT") {
+    // The original TOKENS_LIMIT responses carried no unit and were always the
+    // five-hour pool, so anything non-weekly keeps the historical label.
+    return unit === 6 ? (count === 1 ? "Weekly tokens" : `${count}-week tokens`) : "5h tokens";
+  }
+  if (type === "CREDIT_LIMIT") {
+    if (unit === 3) return `${count}h credits`;
+    if (unit === 6) return count === 1 ? "Weekly credits" : `${count}-week credits`;
+  }
+  return undefined;
+}
 
 export function queryZaiUsageEffect(
   token: string,
@@ -326,8 +341,7 @@ function normalizeZaiReport(
   for (const entry of limits) {
     const limit = asObject(entry);
     if (!limit) continue;
-    const typeLabel = asString(limit.type);
-    const label = typeLabel ? ZAI_LIMIT_LABELS[typeLabel] : undefined;
+    const label = zaiLimitLabel(limit);
     const used = asNumber(limit.percentage);
     // Skip limits we cannot label (e.g. a plan tier exposes an extra window we
     // don't yet name) rather than showing a confusing raw key.
@@ -336,6 +350,9 @@ function normalizeZaiReport(
     windows.push({
       label,
       remainingPercent: clampPercent(100 - used),
+      remaining: asNumber(limit.remaining),
+      entitlement: asNumber(limit.usage),
+      credits: asString(limit.type) === "CREDIT_LIMIT" || undefined,
       resetsAt: resetsAtMs !== undefined ? Math.round(resetsAtMs / 1000) : undefined,
     });
   }
