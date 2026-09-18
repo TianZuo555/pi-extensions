@@ -475,6 +475,70 @@ test("liveOps tracks in-flight tools across turns until terminal or exit", async
   await runtime.dispose();
 });
 
+test("liveOps does not resurrect ops after a terminal update", async () => {
+  const { fake, runtime, service } = await makeRuntime();
+  await runDevin(runtime, service.beginStreamTurn(TURN()));
+  const sessionId = fake.createdSessions[0];
+  const emit = (update: unknown) => fake.sessions.get(sessionId)?.(update as never);
+
+  emit({
+    sessionUpdate: "tool_call",
+    toolCallId: "exec_0",
+    title: "Ran pnpm",
+    kind: "execute",
+    status: "in_progress",
+  });
+  emit({ sessionUpdate: "tool_call_update", toolCallId: "exec_0", status: "completed" });
+  let snap = await runDevin(runtime, service.snapshot);
+  assert.equal(snap.liveOps.length, 0);
+
+  // Reading a finished exec session (get_output) makes devin re-emit a
+  // non-terminal tool_call_update under the same toolCallId; it must not
+  // bring the op back as "running" forever.
+  emit({ sessionUpdate: "tool_call_update", toolCallId: "exec_0", status: "in_progress" });
+  emit({
+    sessionUpdate: "tool_call_update",
+    toolCallId: "exec_0",
+    _meta: { "cognition.ai/inferenceToolName": "exec" },
+  });
+  snap = await runDevin(runtime, service.snapshot);
+  assert.equal(snap.liveOps.length, 0, "late update must not resurrect a closed op");
+
+  // Same tombstone applies when the op closed via terminal_exit instead of a
+  // terminal status.
+  emit({
+    sessionUpdate: "tool_call",
+    toolCallId: "exec_1",
+    title: "Ran server",
+    kind: "execute",
+    status: "in_progress",
+    _meta: { "cognition.ai/background": true, "cognition.ai/backgroundShellId": "9f00" },
+  });
+  emit({
+    sessionUpdate: "tool_call_update",
+    toolCallId: "exec_1",
+    _meta: { "cognition.ai/terminal_exit": { terminal_id: "9f00", exit_code: 0 } },
+  });
+  snap = await runDevin(runtime, service.snapshot);
+  assert.equal(snap.liveOps.length, 0);
+  emit({ sessionUpdate: "tool_call_update", toolCallId: "exec_1", status: "in_progress" });
+  snap = await runDevin(runtime, service.snapshot);
+  assert.equal(snap.liveOps.length, 0);
+
+  // A genuinely new call under a different id still tracks normally.
+  emit({
+    sessionUpdate: "tool_call",
+    toolCallId: "exec_2",
+    title: "Ran build",
+    kind: "execute",
+    status: "in_progress",
+  });
+  snap = await runDevin(runtime, service.snapshot);
+  assert.equal(snap.liveOps.length, 1);
+  assert.equal(snap.liveOps[0].view.id, "exec_2");
+  await runtime.dispose();
+});
+
 test("reset drops the session binding", async () => {
   const { runtime, service } = await makeRuntime();
   const controller = await runDevin(runtime, service.beginStreamTurn(TURN()));

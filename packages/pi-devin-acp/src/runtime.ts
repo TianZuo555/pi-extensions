@@ -247,6 +247,14 @@ const makeRuntime = (createClient: DevinClientFactory) =>
     let needsBootstrap = false;
     /** Devin-side tool calls still in flight; keyed by toolCallId. */
     const liveOps = new Map<string, DevinLiveOp>();
+    /**
+     * Ids that already reached a terminal state. Devin re-emits non-terminal
+     * tool_call_update for a finished exec when a later get_output read (or
+     * late PTY output) touches its session — without tombstoning, the stale
+     * update resurrects the op as "running" forever.
+     */
+    const closedOps = new Set<string>();
+    const CLOSED_OPS_LIMIT = 4_000;
     /** Latest backend-stream retry state for the bound session. */
     let retry: DevinRetryState | undefined;
     const activitySubscribers = new Set<(activity: DevinActivity) => void>();
@@ -276,6 +284,7 @@ const makeRuntime = (createClient: DevinClientFactory) =>
           // The dead child took its in-turn ops with it; nothing can report
           // their terminal state now, and session/load replays are dropped.
           liveOps.clear();
+          closedOps.clear();
           retry = undefined;
           if (sessionId && !pendingLoadId) {
             // Devin persists sessions server-side: retry session/load on the
@@ -392,6 +401,7 @@ const makeRuntime = (createClient: DevinClientFactory) =>
       needsBootstrap = bootstrap;
       lastSentSystemPrompt = undefined;
       liveOps.clear();
+      closedOps.clear();
       retry = undefined;
     };
 
@@ -425,10 +435,15 @@ const makeRuntime = (createClient: DevinClientFactory) =>
     const trackLiveOp = (activity: DevinActivity) => {
       if (activity.type !== "tool_start" && activity.type !== "tool_update") return;
       const view = activity.view;
+      if (closedOps.has(view.id)) return;
       const prev = liveOps.get(view.id);
       const merged = prev ? { ...prev.view, ...view } : view;
       if (TERMINAL_TOOL_STATUSES.has(merged.status ?? "") || merged.exitCode !== undefined) {
         liveOps.delete(view.id);
+        if (closedOps.size >= CLOSED_OPS_LIMIT) {
+          closedOps.delete(closedOps.values().next().value as string);
+        }
+        closedOps.add(view.id);
       } else {
         liveOps.set(view.id, { view: merged, startedAt: prev?.startedAt ?? Date.now() });
       }
