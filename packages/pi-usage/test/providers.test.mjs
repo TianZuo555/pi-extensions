@@ -71,6 +71,40 @@ const validZaiUsage = {
   },
 };
 
+// Real response captured from a zai-coding-cn Lite account (issue #84): the
+// domestic endpoint reports quota windows as CREDIT_LIMIT rather than
+// TOKENS_LIMIT, carrying absolute amounts (usage = total, remaining = left).
+const validZaiCnUsage = {
+  code: 200,
+  msg: "操作成功",
+  success: true,
+  data: {
+    level: "lite",
+    limits: [
+      {
+        type: "CREDIT_LIMIT",
+        unit: 3,
+        number: 5,
+        usage: 2000,
+        currentValue: 69,
+        remaining: 1930,
+        percentage: 3,
+        nextResetTime: 1_789_672_295_126,
+      },
+      {
+        type: "CREDIT_LIMIT",
+        unit: 6,
+        number: 1,
+        usage: 10_000,
+        currentValue: 69,
+        remaining: 9930,
+        percentage: 1,
+        nextResetTime: 1_790_255_473_995,
+      },
+    ],
+  },
+};
+
 function jsonResponse(body, status = 200, statusText = "OK") {
   return new Response(JSON.stringify(body), {
     status,
@@ -425,6 +459,68 @@ test("Z.ai China usage uses the domestic endpoint and raw API-key auth", async (
   assert.equal(report.id, "zai-coding-cn");
   assert.equal(report.name, "GLM Coding Plan (China)");
   assert.equal(formatStatusline(report), "zai-cn 59% 5h");
+});
+
+test("Z.ai China usage parses CREDIT_LIMIT windows with absolute amounts", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  globalThis.fetch = async () => jsonResponse(validZaiCnUsage);
+
+  const report = await queryZaiCnUsage("test-key", undefined, 50, 0);
+  assert.equal(report.id, "zai-coding-cn");
+  assert.equal(report.plan, "lite");
+
+  const fiveHour = report.windows.find((window) => window.label === "5h credits");
+  assert.equal(fiveHour?.remainingPercent, 97); // 100 - 3
+  assert.equal(fiveHour?.remaining, 1930);
+  assert.equal(fiveHour?.entitlement, 2000);
+  assert.equal(fiveHour?.credits, true);
+  assert.equal(fiveHour?.resetsAt, 1_789_672_295); // ms -> s, rounded
+
+  const weekly = report.windows.find((window) => window.label === "Weekly credits");
+  assert.equal(weekly?.remainingPercent, 99); // 100 - 1
+  assert.equal(weekly?.remaining, 9930);
+  assert.equal(weekly?.entitlement, 10_000);
+  assert.equal(weekly?.credits, true);
+
+  const body = formatReport({ id: report.id, name: report.name, status: "ready", report });
+  assert.match(body, /GLM Coding Plan \(China\) · Lite/);
+  assert.match(body, /5h credits:/);
+  assert.match(body, /1,930 \/ 2,000 credits/);
+  assert.match(body, /Weekly credits:/);
+  assert.equal(formatStatusline(report), "zai-cn 97% 5h");
+});
+
+test("Z.ai usage labels weekly TOKENS_LIMIT windows", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  globalThis.fetch = async () =>
+    jsonResponse({
+      ...validZaiUsage,
+      data: {
+        level: "pro",
+        limits: [
+          { type: "TOKENS_LIMIT", unit: 3, percentage: 41, nextResetTime: 1_785_226_974_785 },
+          {
+            type: "TOKENS_LIMIT",
+            unit: 6,
+            number: 1,
+            percentage: 10,
+            nextResetTime: 1_790_000_000_000,
+          },
+        ],
+      },
+    });
+
+  const report = await queryZaiUsage("test-key", undefined, 50, 0);
+  assert.deepEqual(
+    report.windows.map((window) => window.label),
+    ["5h tokens", "Weekly tokens"],
+  );
 });
 
 test("Z.ai usage surfaces in-body error messages", async (t) => {
