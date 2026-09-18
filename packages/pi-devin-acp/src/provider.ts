@@ -132,7 +132,10 @@ export function isSummarizationRequest(prompt: string): boolean {
 }
 
 /** Map devin usage fields to pi usage fields. */
-export function mapUsage(u: DevinUsage | undefined): AssistantMessage["usage"] {
+export function mapUsage(
+  u: DevinUsage | undefined,
+  contextWindow?: number,
+): AssistantMessage["usage"] {
   // Devin's inputTokens is the TOTAL prompt size and already includes
   // cache reads/writes; pi's usage.input is the non-cached portion (Anthropic
   // convention). Passing the total through double-counts cache reads and
@@ -145,10 +148,32 @@ export function mapUsage(u: DevinUsage | undefined): AssistantMessage["usage"] {
     reasoning: undefined,
     cacheRead: cached,
     cacheWrite: written,
-    // Context occupancy lives in the runtime snapshot, not billable usage.
-    totalTokens: (u?.inputTokens ?? 0) + (u?.outputTokens ?? 0),
+    // pi reads totalTokens as "context occupancy" — the compaction
+    // threshold and footer gauge both consume it — so report devin's real
+    // fill scaled into this model's window, never the billed prompt sums
+    // (a multi-request segment's sum would read as a bogus overflow).
+    totalTokens:
+      contextOccupancyTokens(u, contextWindow) ?? (u?.inputTokens ?? 0) + (u?.outputTokens ?? 0),
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   };
+}
+
+/**
+ * Devin's contextUsed scaled into the registered model's window units.
+ * When devin's contextSize differs from the model's contextWindow, scaling
+ * preserves the true fill ratio so pi's percent-of-window math stays right.
+ */
+function contextOccupancyTokens(
+  u: DevinUsage | undefined,
+  contextWindow?: number,
+): number | undefined {
+  const used = u?.contextUsed;
+  if (used === undefined) return undefined;
+  const size = u?.contextSize;
+  if (size === undefined || size <= 0 || contextWindow === undefined || contextWindow <= 0) {
+    return Math.round(used);
+  }
+  return Math.round((used * contextWindow) / size);
 }
 
 /** ACP stopReason → pi terminal event kind. */
@@ -221,7 +246,10 @@ export function streamDevin(deps: DevinProviderDeps) {
       const fail = (message: string) => {
         // On failure, account for whatever turn usage was observed but not
         // yet persisted on an earlier segment.
-        output.usage = mapUsage(turnController?.takeBillableUsage());
+        output.usage = mapUsage(
+          turnController?.takeBillableUsage(model.contextWindow),
+          model.contextWindow,
+        );
         calculateCost(model, output.usage);
         output.stopReason = options?.signal?.aborted ? "aborted" : "error";
         output.errorMessage = message;
@@ -273,7 +301,7 @@ export function streamDevin(deps: DevinProviderDeps) {
             partial: output,
           });
           // Compaction/summary turns consume tokens too; record their usage.
-          output.usage = mapUsage(result.usage);
+          output.usage = mapUsage(result.usage, model.contextWindow);
           calculateCost(model, output.usage);
           output.stopReason = "stop";
           stream.push({ type: "done", reason: "stop", message: output });
@@ -345,7 +373,10 @@ export function streamDevin(deps: DevinProviderDeps) {
         };
 
         const attachUsage = () => {
-          output.usage = mapUsage(controller.takeBillableUsage());
+          output.usage = mapUsage(
+            controller.takeBillableUsage(model.contextWindow),
+            model.contextWindow,
+          );
           calculateCost(model, output.usage);
         };
 

@@ -6,6 +6,7 @@ import { test } from "node:test";
 import {
   devinCredentialsPaths,
   fetchDevinQuota,
+  formatDevinQuotaStatusline,
   parseQuotaResponse,
   readDevinCredentials,
 } from "../lib/quota.ts";
@@ -146,4 +147,22 @@ test("fetchDevinQuota reports missing credentials and server errors", async () =
   }) as unknown as typeof fetch;
   const offline = await fetchDevinQuota({ credentialsPath: file, fetchImpl: failing });
   assert.deepEqual(offline, { ok: false, reason: "offline" });
+});
+
+test("formatDevinQuotaStatusline renders remaining percents like pi-usage", () => {
+  assert.equal(
+    formatDevinQuotaStatusline({ dailyUsedPercent: 0, weeklyUsedPercent: 19 }),
+    "devin 100% day 81% wk",
+  );
+  // Single-window plans render just that window.
+  assert.equal(formatDevinQuotaStatusline({ weeklyUsedPercent: 42 }), "devin 58% wk");
+  assert.equal(formatDevinQuotaStatusline({ dailyUsedPercent: 99 }), "devin 1% day");
+  // An exhausted window floors at 0%, never negative.
+  assert.equal(
+    formatDevinQuotaStatusline({ dailyUsedPercent: 100, weeklyUsedPercent: 100 }),
+    "devin 0% day 0% wk",
+  );
+  // No reported windows leaves the footer empty.
+  assert.equal(formatDevinQuotaStatusline({}), undefined);
+  assert.equal(formatDevinQuotaStatusline({ overageBalanceUsd: 10 }), undefined);
 });

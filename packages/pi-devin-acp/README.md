@@ -55,7 +55,10 @@ unavailable.
   windows with reset times and the extra-usage balance (the same
   `GetUserStatus` data Devin CLI's `/usage` shows), then the ACP-reported
   session view — context-window bar, cumulative tokens/cost (credits/ACUs
-  when billed), and last-turn stats
+  when billed), and last-turn stats. While a Devin model is selected the
+  footer status line also shows the compact quota (`devin 100% day 81% wk`,
+  remaining percents, refreshed on session start, model select, and turns
+  with a 60s cache)
 - `/devin mode [ask|plan|accept-edits|bypass]` — get/set Devin's permission mode
 - `/devin yolo [on|off]` — persistently pin Devin to `bypass` mode
   (`~/.pi/devin-acp/settings.json`); while on, `/devin mode` stays bypass and
@@ -89,8 +92,13 @@ unavailable.
   delta-billed: each pi assistant message of a turn (replay segment or
   terminal) persists only the share not already billed, so pi's footer fills
   live while the session log still sums to the authoritative turn total.
-  `/devin-usage` shows live usage; failed or aborted streams record their
-  latest observed turn usage, and successful summaries record their own usage.
+  `usage.totalTokens` separately reports Devin's context occupancy
+  (`usage_update.used` scaled into the model window) rather than the billed
+  sums, so pi's context gauge and auto-compaction threshold see the real
+  fill level — summed internal requests would otherwise read as a bogus
+  context overflow. `/devin-usage` shows live usage; failed or aborted
+  streams record their latest observed turn usage, and successful summaries
+  record their own usage.
 - Devin tool calls appear as display-only `devin` tool calls; pi "executes"
   them by replaying the recorded Devin result, then re-enters the provider.
 - `session/request_permission` prompts through pi's select UI and reports

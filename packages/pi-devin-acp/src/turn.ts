@@ -155,6 +155,20 @@ export class DevinTurnController {
    * once.
    */
   #lastRequestKey?: string;
+  /**
+   * Latest context occupancy snapshot (`usage_update.used`/`size`). These
+   * are point-in-time gauges, not billed deltas — the newest value always
+   * wins and rides along on every emitted usage so pi's context checks see
+   * devin's real fill level instead of accumulated prompt sums.
+   */
+  #contextUsed?: number;
+  #contextSize?: number;
+  /**
+   * Last single request's input+output size — the occupancy estimate used
+   * when devin never reports contextUsed (e.g. before the first
+   * usage_update with `used` arrives).
+   */
+  #lastRequestTokens = 0;
 
   constructor(prompt: string, sessionId: string) {
     this.prompt = prompt;
@@ -215,6 +229,8 @@ export class DevinTurnController {
    */
   recordUsage(next: DevinUsage | undefined): void {
     if (!next) return;
+    if (next.contextUsed !== undefined) this.#contextUsed = next.contextUsed;
+    if (next.contextSize !== undefined) this.#contextSize = next.contextSize;
     if (next.cumulative) {
       this.#seenTokens.inputTokens = next.inputTokens ?? this.#seenTokens.inputTokens;
       this.#seenTokens.outputTokens = next.outputTokens ?? this.#seenTokens.outputTokens;
@@ -243,6 +259,7 @@ export class DevinTurnController {
     const key = `${tokens.inputTokens}/${tokens.outputTokens}/${tokens.cachedReadTokens}/${tokens.cachedWriteTokens}`;
     if (key === this.#lastRequestKey) return;
     this.#lastRequestKey = key;
+    this.#lastRequestTokens = tokens.inputTokens + tokens.outputTokens;
     this.#seenTokens.inputTokens += tokens.inputTokens;
     this.#seenTokens.outputTokens += tokens.outputTokens;
     this.#seenTokens.cachedReadTokens += tokens.cachedReadTokens;
@@ -258,7 +275,7 @@ export class DevinTurnController {
    * accumulated requests) bills zero rather than a negative correction —
    * the excess stays in the log.
    */
-  takeBillableUsage(): DevinUsage {
+  takeBillableUsage(contextWindow?: number): DevinUsage {
     const billable: DevinUsage = {};
     const take = (
       key: "inputTokens" | "outputTokens" | "cachedReadTokens" | "cachedWriteTokens",
@@ -272,6 +289,31 @@ export class DevinTurnController {
     take("outputTokens");
     take("cachedReadTokens");
     take("cachedWriteTokens");
+    // Occupancy is a snapshot, not a delta: the latest known value rides on
+    // every message (even one with no new billed tokens) so pi's context
+    // gauge and compaction threshold see devin's real fill level. Without a
+    // report, the last single request's size is the best estimate — never
+    // the accumulated sums, which read as context size to pi's checks.
+    const occupancy =
+      this.#contextUsed ?? (this.#lastRequestTokens > 0 ? this.#lastRequestTokens : undefined);
+    if (occupancy !== undefined) billable.contextUsed = occupancy;
+    if (this.#contextSize !== undefined) billable.contextSize = this.#contextSize;
+    // pi's silent-overflow heuristic reads usage.input + usage.cacheRead as
+    // "this response's prompt size" and force-compacts above the window.
+    // A multi-request segment's summed deltas can exceed it without any
+    // real overflow, so shift the excess out of cacheRead into cacheWrite —
+    // session totals stay intact and mapUsage's non-cached input (which
+    // subtracts the unchanged read+write sum) is unaffected.
+    if (contextWindow !== undefined) {
+      const read = billable.cachedReadTokens ?? 0;
+      const written = billable.cachedWriteTokens ?? 0;
+      const input = Math.max(0, (billable.inputTokens ?? 0) - read - written);
+      const shift = Math.min(input + read - contextWindow, read);
+      if (shift > 0) {
+        billable.cachedReadTokens = read - shift;
+        billable.cachedWriteTokens = written + shift;
+      }
+    }
     return billable;
   }
 

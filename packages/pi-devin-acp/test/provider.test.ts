@@ -307,7 +307,8 @@ test("request snapshots accumulate once; the prompt-response echo dedups", async
   assert.equal(done.message.usage.input, 16);
   assert.equal(done.message.usage.output, 11);
   assert.equal(done.message.usage.cacheRead, 6);
-  assert.equal(done.message.usage.totalTokens, 33);
+  // totalTokens is the reported context occupancy (15), not the billed sum.
+  assert.equal(done.message.usage.totalTokens, 15);
 });
 
 test("summarization requests run in a disposable session with the resolved model", async () => {
@@ -423,6 +424,7 @@ test("each segment bills its request's usage; the turn sums to the total", async
   assert.equal(segment1.stopReason, "toolUse");
   assert.equal(segment1.usage.input, 100);
   assert.equal(segment1.usage.output, 20);
+  // totalTokens is context occupancy (last request's size), not a delta.
   assert.equal(segment1.usage.totalTokens, 120);
   assert.ok(Math.abs(segment1.usage.cost.total - 0.00028) < 1e-12);
 
@@ -442,7 +444,8 @@ test("each segment bills its request's usage; the turn sums to the total", async
   assert.equal(final.usage.totalTokens, 250);
   assert.ok(Math.abs(final.usage.cost.total - 0.0006) < 1e-12);
 
-  const sum = segment1.usage.totalTokens + segment2.usage.totalTokens + final.usage.totalTokens;
+  const billed = (u: typeof segment1.usage) => u.input + u.output + u.cacheRead + u.cacheWrite;
+  const sum = billed(segment1.usage) + billed(segment2.usage) + billed(final.usage);
   assert.equal(sum, 555, "segments sum to the turn's full billable total");
 });
 
@@ -456,7 +459,28 @@ test("cache writes are classified separately without double counting", () => {
   assert.equal(usage.input, 80);
   assert.equal(usage.cacheRead, 90);
   assert.equal(usage.cacheWrite, 30);
-  assert.equal(usage.totalTokens, usage.input + usage.cacheRead + usage.cacheWrite + usage.output);
+  // No occupancy report: totalTokens falls back to the request's own size.
+  assert.equal(usage.totalTokens, 250);
+});
+
+test("totalTokens reports devin's context occupancy scaled to the model window", () => {
+  // Devin's usage_update carries `used`/`size`; pi's compaction threshold
+  // and context gauge consume totalTokens as "tokens in this model's
+  // window", so occupancy is scaled when the windows differ.
+  const usage = mapUsage(
+    {
+      inputTokens: 999999,
+      outputTokens: 999,
+      contextUsed: 524288,
+      contextSize: 1048576,
+    },
+    262144,
+  );
+  assert.equal(usage.totalTokens, 131072);
+  // A matching window passes occupancy through untouched.
+  assert.equal(mapUsage({ contextUsed: 50000, contextSize: 262144 }, 262144).totalTokens, 50000);
+  // Without a reported size the raw value is the best available estimate.
+  assert.equal(mapUsage({ contextUsed: 50000 }, 262144).totalTokens, 50000);
 });
 
 test("persisted tool card arguments carry the terminal view, not the call start", async () => {

@@ -35,6 +35,22 @@ export interface DevinQuota {
 
 export type DevinQuotaResult = { ok: true; quota: DevinQuota } | { ok: false; reason: string };
 
+/**
+ * Compact footer text in the pi-usage statusline convention
+ * (`provider <remaining>% <window>`): `devin 100% day 81% wk`.
+ * Undefined when neither window is reported.
+ */
+export function formatDevinQuotaStatusline(quota: DevinQuota): string | undefined {
+  const parts: string[] = [];
+  if (quota.dailyUsedPercent !== undefined) {
+    parts.push(`${Math.max(0, 100 - quota.dailyUsedPercent)}% day`);
+  }
+  if (quota.weeklyUsedPercent !== undefined) {
+    parts.push(`${Math.max(0, 100 - quota.weeklyUsedPercent)}% wk`);
+  }
+  return parts.length > 0 ? `devin ${parts.join(" ")}` : undefined;
+}
+
 export interface FetchDevinQuotaOptions {
   /** devin CLI version, sent as ide/extension version (server requires semver). */
   devinVersion?: string;

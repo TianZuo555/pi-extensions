@@ -927,8 +927,18 @@ for (const buffered of [false, true]) {
       30,
     );
     assert.equal(
-      messages.reduce((sum, m) => sum + m.usage.totalTokens, 0),
+      messages.reduce(
+        (sum, m) => sum + m.usage.input + m.usage.output + m.usage.cacheRead + m.usage.cacheWrite,
+        0,
+      ),
       230,
+      "segments sum to the turn's billable total",
+    );
+    // totalTokens is devin's reported context occupancy (usage_update
+    // used=9000), a snapshot on every message — not a billed delta.
+    assert.deepEqual(
+      messages.map((m) => m.usage.totalTokens),
+      [9000, 9000, 9000],
     );
     assert.ok(Math.abs(messages.reduce((sum, m) => sum + m.usage.cost.total, 0) - 0.00049) < 1e-12);
     assert.equal((await runDevin(runtime, service.snapshot)).contextTokens, 9000);
@@ -1025,7 +1035,9 @@ for (const outcome of ["error", "aborted", "stop"] as const) {
     assert.equal(final.usage.cacheRead, outcome === "stop" ? 170 : 90);
     assert.equal(final.usage.cacheWrite, outcome === "stop" ? 50 : 30);
     assert.equal(final.usage.output, outcome === "stop" ? 90 : 50);
-    assert.equal(final.usage.totalTokens, outcome === "stop" ? 470 : 250);
+    // totalTokens is the latest reported occupancy (used=250), not a billed
+    // sum — the same snapshot on every terminal outcome.
+    assert.equal(final.usage.totalTokens, 250);
     assert.ok(Math.abs(final.usage.cost.total - (outcome === "stop" ? 0.001 : 0.00054)) < 1e-12);
   });
 }
@@ -1213,7 +1225,10 @@ test("matching turn_stats cumulative sums become the turn's billed usage", async
   assert.equal(message.usage.output, 80);
   assert.equal(message.usage.cacheRead, 6656);
   assert.equal(message.usage.cacheWrite, 0);
-  assert.equal(message.usage.totalTokens, 29190);
+  // totalTokens is the reported context occupancy (used=14627), not the
+  // cumulative billed sum (29190) — pi reads it as context fill, where the
+  // summed internal requests would read as a bogus overflow.
+  assert.equal(message.usage.totalTokens, 14627);
   assert.ok(fake.prompts[0].clientMessageId, "the turn stamps a correlation id");
 });
 
