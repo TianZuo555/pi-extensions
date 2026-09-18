@@ -1,19 +1,18 @@
 /**
- * Compaction forwarding: devin owns context server-side, so every pi
- * compaction trigger — manual `/compact`, the context threshold, and overflow
- * recovery — is vetoed and routed to devin's own `/compact` through a normal
- * turn.
+ * Compaction forwarding: devin owns context server-side and compacts itself
+ * internally (`compaction_update`), so every pi compaction pass is vetoed.
+ * Only a manual `/compact` is routed to devin's own `/compact` through a
+ * normal turn — auto triggers (threshold, overflow) die with the veto: pi's
+ * context gauge merely mirrors devin's reported usage, and a misread must
+ * never push devin into an extra compaction.
  *
- * pi checks compaction from three places, and two of them run while the agent
- * is still working: before a submitted prompt starts its turn, and (pi 0.84.3+)
- * between assistant responses of a running turn. `sendUserMessage` without a
- * delivery mode throws "Agent is already processing" in that state, and pi
- * swallows the rejection inside its own runtime — the forward would be dropped
- * while the notice claimed it was running. Sending as a follow-up queues the
- * command whenever a run is active and sends it immediately when idle.
+ * The forward is deferred one tick so the cancelled pi pass finishes first,
+ * and sent as a follow-up so an in-flight run queues it instead of
+ * rejecting the send: `sendUserMessage` without a delivery mode throws
+ * "Agent is already processing" while a turn is active, and pi swallows the
+ * rejection inside its own runtime — the forward would be dropped while the
+ * notice claimed it was running.
  */
-
-export type CompactionReason = "manual" | "threshold" | "overflow";
 
 /** The slice of pi's UI surface the forwarder needs. */
 export interface CompactForwardUi {
@@ -21,47 +20,23 @@ export interface CompactForwardUi {
 }
 
 export interface CompactForwarderOptions {
-  /** Minimum gap before another auto-triggered forward is scheduled. */
-  cooldownMs: number;
   /** Send the forwarded command as a user turn. */
   send: (text: string) => void;
-  /** Current time source (test seam). */
-  now?: () => number;
   /** Deferral used to let the cancelled pass finish first (test seam). */
   schedule?: (run: () => void) => void;
 }
 
 /**
- * Build the forwarder for `session_before_compact`. Manual compaction always
- * forwards (and carries its custom instructions); auto triggers are
- * rate-limited because devin's compaction does not shrink pi's transcript, so
- * the threshold re-checks every turn.
+ * Build the forwarder for `session_before_compact`. Only invoked for
+ * `reason === "manual"` — the caller vetoes every pi pass, so auto triggers
+ * never reach this.
  */
 export function createCompactForwarder(
   options: CompactForwarderOptions,
-): (
-  reason: CompactionReason,
-  customInstructions: string | undefined,
-  ui: CompactForwardUi | undefined,
-) => void {
-  const now = options.now ?? Date.now;
+): (customInstructions: string | undefined, ui: CompactForwardUi | undefined) => void {
   const schedule = options.schedule ?? ((run: () => void) => setTimeout(run, 0));
-  let lastAutoForwardAt = 0;
-
-  return (reason, customInstructions, ui) => {
-    const isManual = reason === "manual";
-    if (!isManual) {
-      if (now() - lastAutoForwardAt < options.cooldownMs) return;
-      lastAutoForwardAt = now();
-    }
-    if (ui) {
-      ui.notify(
-        isManual
-          ? "devin owns context — running devin's /compact instead."
-          : `devin owns context — forwarding ${reason} compaction to devin's /compact.`,
-        "info",
-      );
-    }
+  return (customInstructions, ui) => {
+    ui?.notify("devin owns context — running devin's /compact instead.", "info");
     const instructions = customInstructions?.trim();
     schedule(() => {
       options.send(instructions ? `/compact ${instructions}` : "/compact");

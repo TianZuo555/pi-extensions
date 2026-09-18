@@ -915,8 +915,8 @@ for (const buffered of [false, true]) {
     );
     assert.deepEqual(
       messages.map((m) => m.usage.input),
-      [0, 0, 70],
-      "only the terminal message bills the canonical turn usage",
+      [70, 0, 100],
+      "each segment bills the usage observed since the previous message",
     );
     assert.equal(
       messages.reduce((sum, m) => sum + m.usage.cacheRead, 0),
@@ -924,13 +924,13 @@ for (const buffered of [false, true]) {
     );
     assert.equal(
       messages.reduce((sum, m) => sum + m.usage.output, 0),
-      20,
+      30,
     );
     assert.equal(
       messages.reduce((sum, m) => sum + m.usage.totalTokens, 0),
-      120,
+      230,
     );
-    assert.ok(Math.abs(messages.reduce((sum, m) => sum + m.usage.cost.total, 0) - 0.00025) < 1e-12);
+    assert.ok(Math.abs(messages.reduce((sum, m) => sum + m.usage.cost.total, 0) - 0.00049) < 1e-12);
     assert.equal((await runDevin(runtime, service.snapshot)).contextTokens, 9000);
     // A later turn may reuse ACP tool IDs, but never Pi replay IDs.
     const next = await provider(LIFECYCLE_MODEL, {
@@ -991,7 +991,8 @@ for (const outcome of ["error", "aborted", "stop"] as const) {
     const context: Context = { messages: [{ role: "user", content: "hi", timestamp: 0 }] };
     const first = await provider(model, context, { signal: abort.signal }).result();
     assert.equal(first.stopReason, "toolUse");
-    assert.equal(first.usage.totalTokens, 0);
+    // The segment bills the first request's usage_update (100 in + 20 out).
+    assert.equal(first.usage.totalTokens, 120);
     const last = provider(model, context, { signal: abort.signal }).result();
     fake.sessions.get("sess-1")!({
       sessionUpdate: "usage_update",
@@ -1017,13 +1018,15 @@ for (const outcome of ["error", "aborted", "stop"] as const) {
       });
     const final = await last;
     assert.equal(final.stopReason, outcome);
-    // A canonical response can correct provisional counts downward.
-    assert.equal(final.usage.input, 80);
-    assert.equal(final.usage.cacheRead, outcome === "stop" ? 80 : 90);
-    assert.equal(final.usage.cacheWrite, outcome === "stop" ? 20 : 30);
-    assert.equal(final.usage.output, outcome === "stop" ? 40 : 50);
-    assert.equal(final.usage.totalTokens, outcome === "stop" ? 220 : 250);
-    assert.ok(Math.abs(final.usage.cost.total - (outcome === "stop" ? 0.00046 : 0.00054)) < 1e-12);
+    // The terminal message bills only the share no segment persisted yet:
+    // error/aborted keep the second request's snapshot, while stop adds the
+    // response's distinct final-request usage on top.
+    assert.equal(final.usage.input, outcome === "stop" ? 160 : 80);
+    assert.equal(final.usage.cacheRead, outcome === "stop" ? 170 : 90);
+    assert.equal(final.usage.cacheWrite, outcome === "stop" ? 50 : 30);
+    assert.equal(final.usage.output, outcome === "stop" ? 90 : 50);
+    assert.equal(final.usage.totalTokens, outcome === "stop" ? 470 : 250);
+    assert.ok(Math.abs(final.usage.cost.total - (outcome === "stop" ? 0.001 : 0.00054)) < 1e-12);
   });
 }
 

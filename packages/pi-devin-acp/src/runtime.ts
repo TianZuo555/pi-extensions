@@ -512,9 +512,9 @@ const makeRuntime = (createClient: DevinClientFactory) =>
         sessionId = loadId;
         sessionCwd = cwd;
         // The replay tail is the loaded session's stored state. Feeding its
-        // usage snapshot to the fresh turn seeds lastUsage with prior-turn
-        // totals — a turn aborted before live usage arrives would persist
-        // them again, double-billing them in pi's session log.
+        // usage snapshot to the fresh turn seeds the turn's billable total
+        // with prior-turn totals — a turn aborted before live usage arrives
+        // would persist them again, double-billing them in pi's session log.
         attachSessionListener(loadId, undefined);
         try {
           await acp.loadSession(loadId, cwd);
