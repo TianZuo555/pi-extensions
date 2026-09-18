@@ -29,15 +29,27 @@ export function devinKillShellPrompt(shellId: string): string {
   return `Kill background shell ${shellId} and confirm it stopped.`;
 }
 
-/** `devin acp` has no system-role input; relay Pi instructions as a labeled resource. */
+/**
+ * The only part of pi's instruction snapshot devin cannot learn itself:
+ * where the local pi docs and examples live and how to resolve them. The
+ * rest describes pi's own tool surface (wrong for devin's tools) or
+ * duplicates what devin already loads — AGENTS.md rules, user skills,
+ * the session cwd — so it is not relayed. Falls back to the full
+ * snapshot when the section cannot be found.
+ */
+export function piDocumentationSection(instructions: string): string {
+  const match = instructions.match(/^Pi documentation[^\n]*\n(?:- [^\n]*\n?)+/m);
+  return match ? match[0].trim() : instructions;
+}
+
+/** `devin acp` has no system-role input; relay pi's doc pointers as a labeled resource. */
 export function piSystemInstructionsPrompt(instructions: string): string {
   return [
-    "## Current Pi instructions",
-    "The following is Pi's current instruction snapshot, relayed as attached context because this ACP channel has no system-prompt role. It replaces any earlier Pi instruction snapshot in this session; your native system instructions still take precedence.",
-    "These instructions do not register tools. Use only the tools actually available to you, while respecting applicable project and user guidance.",
-    instructions ||
-      "Pi's instruction snapshot is now empty. Stop applying earlier relayed Pi instructions.",
-    "## End of Pi instructions",
+    "## Pi documentation pointers",
+    "Only the documentation section of Pi's instruction snapshot is relayed here, as attached context because this ACP channel has no system-prompt role; the rest describes pi's own tool surface and does not apply. Your native system instructions still take precedence.",
+    piDocumentationSection(instructions) ||
+      "Pi's instruction snapshot has no documentation section; earlier relayed pointers no longer apply.",
+    "## End of Pi documentation pointers",
   ].join("\n\n");
 }
 
