@@ -158,6 +158,27 @@ export function mapUsage(
   };
 }
 
+/** Price the original counters before adapting them to pi's overflow heuristic. */
+function billedUsage(
+  u: DevinUsage | undefined,
+  model: Model<import("@earendil-works/pi-ai").Api>,
+): AssistantMessage["usage"] {
+  const usage = mapUsage(u, model.contextWindow);
+  calculateCost(model, usage);
+  // pi treats input + cacheRead as one request's prompt, but our message
+  // can bill many requests. Keep aggregate tokens out of that heuristic.
+  // cacheWrite is a synthetic overflow bucket here, NOT a pricing input:
+  // cost above retains the original input/read/write attribution.
+  if (Number.isFinite(model.contextWindow) && model.contextWindow > 0) {
+    const excess = Math.max(0, usage.input + usage.cacheRead - model.contextWindow);
+    const reads = Math.min(excess, usage.cacheRead);
+    usage.cacheRead -= reads;
+    usage.input -= excess - reads;
+    usage.cacheWrite += excess;
+  }
+  return usage;
+}
+
 /**
  * Devin's contextUsed scaled into the registered model's window units.
  * When devin's contextSize differs from the model's contextWindow, scaling
@@ -246,11 +267,7 @@ export function streamDevin(deps: DevinProviderDeps) {
       const fail = (message: string) => {
         // On failure, account for whatever turn usage was observed but not
         // yet persisted on an earlier segment.
-        output.usage = mapUsage(
-          turnController?.takeBillableUsage(model.contextWindow),
-          model.contextWindow,
-        );
-        calculateCost(model, output.usage);
+        output.usage = billedUsage(turnController?.takeBillableUsage(), model);
         output.stopReason = options?.signal?.aborted ? "aborted" : "error";
         output.errorMessage = message;
         clearTurn();
@@ -301,8 +318,7 @@ export function streamDevin(deps: DevinProviderDeps) {
             partial: output,
           });
           // Compaction/summary turns consume tokens too; record their usage.
-          output.usage = mapUsage(result.usage, model.contextWindow);
-          calculateCost(model, output.usage);
+          output.usage = billedUsage(result.usage, model);
           output.stopReason = "stop";
           stream.push({ type: "done", reason: "stop", message: output });
           clearTurn();
@@ -373,11 +389,7 @@ export function streamDevin(deps: DevinProviderDeps) {
         };
 
         const attachUsage = () => {
-          output.usage = mapUsage(
-            controller.takeBillableUsage(model.contextWindow),
-            model.contextWindow,
-          );
-          calculateCost(model, output.usage);
+          output.usage = billedUsage(controller.takeBillableUsage(), model);
         };
 
         const endWithToolUse = () => {

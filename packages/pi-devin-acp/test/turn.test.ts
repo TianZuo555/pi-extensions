@@ -163,18 +163,20 @@ test("reported context occupancy always wins over the request-size fallback", ()
   assert.equal(billable.contextSize, 262144);
 });
 
-test("terminal billing keeps input+cacheRead under the context window", () => {
+test("billing preserves original token classes for pricing and subsequent deltas", () => {
   const c = new DevinTurnController("p", "s1");
-  // One segment covering many internal requests sums past the window — pi's
-  // silent-overflow check reads input+cacheRead as the prompt size, so the
-  // excess shifts into cacheWrite (session totals preserved).
   c.recordUsage({ inputTokens: 295382, outputTokens: 1000, cachedReadTokens: 294400 });
-  const billable = c.takeBillableUsage(262144);
-  // pi-side input = 295382 - 294400 = 982; in+cr must land at the window.
-  assert.equal(billable.cachedReadTokens, 262144 - 982);
-  assert.equal(billable.cachedWriteTokens, 294400 - (262144 - 982));
-  // Without a window the raw sums pass through untouched.
-  const open = new DevinTurnController("p", "s1");
-  open.recordUsage({ inputTokens: 295382, outputTokens: 1000, cachedReadTokens: 294400 });
-  assert.equal(open.takeBillableUsage().cachedReadTokens, 294400);
+  assert.deepEqual(c.takeBillableUsage(), {
+    inputTokens: 295382,
+    outputTokens: 1000,
+    cachedReadTokens: 294400,
+    contextUsed: 296382,
+  });
+  c.recordUsage({ inputTokens: 300000, outputTokens: 2000, cachedReadTokens: 290000 });
+  assert.deepEqual(c.takeBillableUsage(), {
+    inputTokens: 300000,
+    outputTokens: 2000,
+    cachedReadTokens: 290000,
+    contextUsed: 302000,
+  });
 });

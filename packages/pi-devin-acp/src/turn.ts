@@ -275,7 +275,7 @@ export class DevinTurnController {
    * accumulated requests) bills zero rather than a negative correction —
    * the excess stays in the log.
    */
-  takeBillableUsage(contextWindow?: number): DevinUsage {
+  takeBillableUsage(): DevinUsage {
     const billable: DevinUsage = {};
     const take = (
       key: "inputTokens" | "outputTokens" | "cachedReadTokens" | "cachedWriteTokens",
@@ -298,22 +298,6 @@ export class DevinTurnController {
       this.#contextUsed ?? (this.#lastRequestTokens > 0 ? this.#lastRequestTokens : undefined);
     if (occupancy !== undefined) billable.contextUsed = occupancy;
     if (this.#contextSize !== undefined) billable.contextSize = this.#contextSize;
-    // pi's silent-overflow heuristic reads usage.input + usage.cacheRead as
-    // "this response's prompt size" and force-compacts above the window.
-    // A multi-request segment's summed deltas can exceed it without any
-    // real overflow, so shift the excess out of cacheRead into cacheWrite —
-    // session totals stay intact and mapUsage's non-cached input (which
-    // subtracts the unchanged read+write sum) is unaffected.
-    if (contextWindow !== undefined) {
-      const read = billable.cachedReadTokens ?? 0;
-      const written = billable.cachedWriteTokens ?? 0;
-      const input = Math.max(0, (billable.inputTokens ?? 0) - read - written);
-      const shift = Math.min(input + read - contextWindow, read);
-      if (shift > 0) {
-        billable.cachedReadTokens = read - shift;
-        billable.cachedWriteTokens = written + shift;
-      }
-    }
     return billable;
   }
 

@@ -96,7 +96,13 @@ unavailable.
   (`usage_update.used` scaled into the model window) rather than the billed
   sums, so pi's context gauge and auto-compaction threshold see the real
   fill level — summed internal requests would otherwise read as a bogus
-  context overflow. `/devin-usage` shows live usage; failed or aborted
+  context overflow. Pi also treats `input + cacheRead` as a single request's
+  prompt size: when aggregated billing exceeds the model window, the excess
+  is stored in `cacheWrite` as a synthetic overflow bucket (including
+  uncached input if necessary). Token totals are preserved; costs are
+  calculated **before** this adaptation from the original token classes,
+  so the synthetic counters must not be used to recalculate costs.
+  `/devin-usage` shows live usage; failed or aborted
   streams record their latest observed turn usage, and successful summaries
   record their own usage.
 - Devin tool calls appear as display-only `devin` tool calls; pi "executes"

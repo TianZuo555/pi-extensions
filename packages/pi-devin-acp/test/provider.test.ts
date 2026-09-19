@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { AssistantMessageEvent } from "@earendil-works/pi-ai";
+import {
+  calculateCost,
+  isContextOverflow,
+  type AssistantMessageEvent,
+} from "@earendil-works/pi-ai";
 import { DevinReplayStore } from "../lib/replay.ts";
 import { mapUsage, streamDevin } from "../src/provider.ts";
-import { DevinTurnController, type DevinActivity } from "../src/turn.ts";
+import { DevinTurnController, type DevinActivity, type DevinUsage } from "../src/turn.ts";
 import type { DevinRuntimeInstance, DevinRuntimeShape } from "../src/runtime.ts";
 import type { DevinModelFamily } from "../lib/models.ts";
 
@@ -482,6 +486,62 @@ test("totalTokens reports devin's context occupancy scaled to the model window",
   // Without a reported size the raw value is the best available estimate.
   assert.equal(mapUsage({ contextUsed: 50000 }, 262144).totalTokens, 50000);
 });
+
+for (const cachedReadTokens of [0, 10000, 145000]) {
+  for (const cacheWritePrice of [0, 3.75]) {
+    for (const stopReason of ["end_turn", "cancelled", "refusal"]) {
+      test(`overflow adaptation preserves cost and tokens (reads=${cachedReadTokens}, write price=${cacheWritePrice}, ${stopReason})`, async () => {
+        const requests: DevinUsage[] = [150000, 160000].map((inputTokens) => ({
+          inputTokens,
+          outputTokens: 1000,
+          cachedReadTokens,
+          cachedWriteTokens: 2000,
+          contextUsed: 51000,
+          contextSize: 262144,
+        }));
+        const { service, runtime } = fakeRuntime([
+          ...requests.map((usage): DevinActivity => ({ type: "usage", usage })),
+          { type: "result", stopReason },
+        ]);
+        const model = {
+          ...MODEL,
+          input: [...MODEL.input],
+          contextWindow: 262144,
+          cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: cacheWritePrice },
+        };
+        const events = await drain(
+          streamDevin({
+            service,
+            runtime,
+            replay: new DevinReplayStore(),
+            families: () => FAMILIES,
+            cwd: () => "/tmp",
+          })(model, CONTEXT),
+        );
+        const terminal = events.at(-1);
+        assert.ok(terminal?.type === "done" || terminal?.type === "error");
+        const message = terminal.type === "done" ? terminal.message : terminal.error;
+        const expected = mapUsage({
+          inputTokens: 310000,
+          outputTokens: 2000,
+          cachedReadTokens: cachedReadTokens * 2,
+          cachedWriteTokens: 4000,
+        });
+        calculateCost(model, expected);
+        const usage = message.usage;
+        assert.deepEqual(
+          usage.cost,
+          expected.cost,
+          "price original token classes, not the synthetic bucket",
+        );
+        assert.equal(usage.input + usage.output + usage.cacheRead + usage.cacheWrite, 312000);
+        assert.equal(usage.totalTokens, 51000);
+        assert.equal(usage.input + usage.cacheRead, model.contextWindow);
+        assert.equal(isContextOverflow(message, model.contextWindow), false);
+      });
+    }
+  }
+}
 
 test("persisted tool card arguments carry the terminal view, not the call start", async () => {
   const { service, runtime } = fakeRuntime([
