@@ -19,7 +19,8 @@ import { createCompactForwarder, createCompactSend } from "./lib/compaction.ts";
 import { piConfigDir, readJson, writeJson } from "./lib/config.ts";
 import { applyYoloMode } from "./lib/yolo.ts";
 import { checkDevinBinary, MIN_DEVIN_VERSION, runDevinCommand } from "./lib/diagnostics.ts";
-import { fetchDevinQuota, formatDevinQuotaStatusline, type DevinQuotaResult } from "./lib/quota.ts";
+import { fetchDevinQuota, type DevinQuotaResult } from "./lib/quota.ts";
+import { createDevinQuotaStatus } from "./lib/quota-status.ts";
 import {
   devinGroups,
   groupThinkingLevelMap,
@@ -655,57 +656,10 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
     });
   };
 
-  // --- Footer status line (mirrors the pi-usage extension) -------------------
-
-  const DEVIN_STATUS_KEY = "devin-usage";
-  const DEVIN_VIOLET = "\x1b[38;2;167;139;250m";
-  const RESET_FOREGROUND = "\x1b[39m";
-  const QUOTA_STATUS_TTL_MS = 60_000;
-  let quotaStatus: { at: number; result: DevinQuotaResult } | undefined;
-  let quotaStatusInflight: Promise<DevinQuotaResult> | undefined;
-
-  const setDevinStatus = (ctx: ExtensionContext, value: string | undefined) => {
-    try {
-      ctx.ui.setStatus(DEVIN_STATUS_KEY, value);
-    } catch {
-      // No UI (print/RPC) or already torn down — status is best-effort.
-    }
-  };
-
-  const publishQuotaResult = (ctx: ExtensionContext, result: DevinQuotaResult) => {
-    const text = result.ok ? formatDevinQuotaStatusline(result.quota) : undefined;
-    setDevinStatus(ctx, text ? `${DEVIN_VIOLET}${text}${RESET_FOREGROUND}` : undefined);
-  };
-
-  /**
-   * Refresh the footer's devin quota segment. The quota RPC is cached for
-   * QUOTA_STATUS_TTL_MS and deduped in flight so render-adjacent triggers
-   * never stack requests; failures leave the footer empty, like pi-usage.
-   */
-  const publishUsageStatus = async (ctx: ExtensionContext): Promise<void> => {
-    if (ctx.model?.provider !== DEVIN_PROVIDER) {
-      setDevinStatus(ctx, undefined);
-      return;
-    }
-    if (quotaStatus && Date.now() - quotaStatus.at < QUOTA_STATUS_TTL_MS) {
-      publishQuotaResult(ctx, quotaStatus.result);
-      return;
-    }
-    if (!quotaStatusInflight) {
-      quotaStatusInflight = devinQuota()
-        .then((result) => {
-          quotaStatus = { at: Date.now(), result };
-          return result;
-        })
-        .finally(() => {
-          quotaStatusInflight = undefined;
-        });
-    }
-    publishQuotaResult(ctx, await quotaStatusInflight);
-  };
+  const quotaStatus = createDevinQuotaStatus(devinQuota);
 
   const publishUsageStatusDetached = (ctx: ExtensionContext) => {
-    void publishUsageStatus(ctx).catch(() => {
+    void quotaStatus.refresh(ctx).catch(() => {
       // Never let footer upkeep take the process down.
     });
   };
@@ -733,6 +687,7 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
   };
 
   pi.on("session_start", async (event, ctx: ExtensionContext) => {
+    quotaStatus.clear(ctx);
     sessionCtx = ctx;
     cwd = ctx.cwd;
     piSessionId = ctx.sessionManager.getSessionId();
@@ -790,6 +745,7 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("model_select", async (event, ctx) => {
+    quotaStatus.clear(ctx);
     syncWrapperToolActivation(event.model?.provider);
     const nextKey = event.model ? `${event.model.provider}:${event.model.id}` : undefined;
     const wasDevin = selectedModelKey?.startsWith(`${DEVIN_PROVIDER}:`) === true;
@@ -908,7 +864,7 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
     } catch {
       // UI already gone.
     }
-    if (sessionCtx) setDevinStatus(sessionCtx, undefined);
+    quotaStatus.clear(sessionCtx);
     // Extensions are cached and reused across /new, /resume, and /fork — only
     // quit and /reload replace the instance — so session replacement must
     // suspend the runtime (kill the devin child, drop the binding) instead of
