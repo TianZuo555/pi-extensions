@@ -126,7 +126,10 @@ unavailable.
   a failure card; it drops off the list when its `terminal_exit` arrives.
   In the picker, `x` asks Devin to stop a background shell and `d` drops an
   entry that was stranded without a terminal update (a genuinely running op
-  re-adds itself on its next update). Closing the runtime (`/new`, `/quit`,
+  re-adds itself on its next update). A cancelled prompt sweeps its in-turn
+  ops automatically after a short grace window (swept ids are tombstoned
+  against late updates); detached background shells stay listed until their
+  `terminal_exit`. Closing the runtime (`/new`, `/quit`,
   `/reload`) kills detached background shells together with the `devin acp`
   child — their process groups are signalled before the child dies, so
   nothing is orphaned.
