@@ -1,5 +1,68 @@
 # @tian.zuo/pi-devin-acp
 
+## 0.3.4
+
+### Patch Changes
+
+- [#91](https://github.com/TianZuo555/pi-extensions/pull/91) [`76806f2`](https://github.com/TianZuo555/pi-extensions/commit/76806f24b55ebe41ac508911b4df7c8678b325f0) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Calculate costs from the original Devin token counters before adapting
+  aggregate usage for pi's overflow heuristic, and cap aggregated uncached
+  input as well: the shift previously ran before pricing (repricing moved
+  tokens at the cacheWrite rate) and was capped at cacheRead, so a
+  mostly-uncached aggregate still exceeded the context window and tripped
+  spurious compaction. Token totals are preserved; the synthetic counters
+  must not be used to recalculate costs.
+
+- [#91](https://github.com/TianZuo555/pi-extensions/pull/91) [`76806f2`](https://github.com/TianZuo555/pi-extensions/commit/76806f24b55ebe41ac508911b4df7c8678b325f0) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Stop listing in-turn devin ops as running after a cancelled turn. When a
+  prompt is cancelled (pi-side `esc` or a superseding prompt) while devin
+  tool calls are in flight and no trailing terminal update ever arrives,
+  the entries stayed in the live-op tracker forever — the status bar kept
+  reporting `devin: N running` and `/devin-tasks` kept listing the dead
+  entries until each was dismissed by hand with `d`. A cancelled prompt's
+  in-turn ops (no background shell id) are now swept from the tracker
+  after a short grace window that lets devin's own trailing terminal
+  updates land first; swept ids are tombstoned so late re-notifications
+  cannot resurrect them, detached background shells stay listed, and a
+  newer turn's ops started inside the window are never touched.
+  
+  Fixes [#92](https://github.com/TianZuo555/pi-extensions/issues/92)
+
+- [#91](https://github.com/TianZuo555/pi-extensions/pull/91) [`76806f2`](https://github.com/TianZuo555/pi-extensions/commit/76806f24b55ebe41ac508911b4df7c8678b325f0) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Relay only the "Pi documentation" section of pi's instruction snapshot
+  to devin instead of the whole snapshot. The rest describes pi's own tool
+  surface (wrong for devin's tools) or duplicates what devin already loads
+  itself — AGENTS.md rules, user skills, the session cwd — so it was dead
+  context weight on every prompt. The doc paths are the one part devin
+  cannot discover alone; when the section is absent the full snapshot is
+  still sent as a fallback.
+
+- [#91](https://github.com/TianZuo555/pi-extensions/pull/91) [`76806f2`](https://github.com/TianZuo555/pi-extensions/commit/76806f24b55ebe41ac508911b4df7c8678b325f0) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Show the account quota in the footer status line while a Devin model is
+  selected (`devin 100% day 81% wk`, refreshed with a 60s cache on session
+  start, model select, and turns — same convention as the pi-usage
+  extension), and report real context occupancy in `usage.totalTokens`
+  instead of summed internal-request usage. The summed prompts could exceed
+  the model window on multi-request segments, tripping pi's auto-compaction
+  threshold (and silent-overflow heuristic) and printing
+  "Auto-compaction cancelled" on every vetoed attempt; the occupancy signal
+  keeps the context gauge truthful while the session_before_compact veto
+  stays as the guardrail for genuinely full contexts.
+
+- [#91](https://github.com/TianZuo555/pi-extensions/pull/91) [`76806f2`](https://github.com/TianZuo555/pi-extensions/commit/76806f24b55ebe41ac508911b4df7c8678b325f0) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Keep finished devin operations from resurrecting in /devin-tasks. Devin
+  re-emits a non-terminal `tool_call_update` under the original toolCallId
+  when a later `get_output` read (or late PTY output) touches a completed
+  exec session, which brought the op back as "running" forever. Tool-call
+  ids that reach a terminal status or `terminal_exit` are now tombstoned so
+  late re-notifications can no longer re-open them; genuinely running ops
+  still track normally, and `d` dismissal behavior is unchanged.
+
+- [#91](https://github.com/TianZuo555/pi-extensions/pull/91) [`76806f2`](https://github.com/TianZuo555/pi-extensions/commit/76806f24b55ebe41ac508911b4df7c8678b325f0) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Prevent pending quota requests from restoring the Devin footer after a
+  model switch or session shutdown, while retaining account-wide caching
+  and request deduplication. Footer bookkeeping moves to a dedicated
+  `createDevinQuotaStatus` helper whose generation counter invalidates
+  older publications and rechecks the live provider after the await.
+
+- [#91](https://github.com/TianZuo555/pi-extensions/pull/91) [`76806f2`](https://github.com/TianZuo555/pi-extensions/commit/76806f24b55ebe41ac508911b4df7c8678b325f0) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Show the account quota Devin CLI's `/usage` reports at the top of `/devin-usage`.
+  
+  `/devin-usage` only rendered the session snapshot devin pushes over ACP, and ACP has no pull-based quota request — so the daily/weekly quota windows, reset times, and extra-usage balance were invisible from pi. The report now also calls `SeatManagementService/GetUserStatus` (the same Connect RPC Devin CLI's `/usage` uses) with the `windsurf_api_key` from `~/.local/share/devin/credentials.toml`, and renders a leading Quota section in devin's own wording: `0% used · resets in 19h 1m` for the daily window, `19% used · resets Sep 20, 4:00 PM (UTC+8)` for the weekly one, `Extra usage balance  $10.00`, and the `No quota consumed yet in this session.` tail on fresh sessions. Fetch failures degrade to a `Quota: unavailable — <reason>` row instead of hiding the section; the session view (context bar, tokens/cost, last-turn stats) is unchanged below it.
+
 ## 0.3.3
 
 ### Patch Changes
