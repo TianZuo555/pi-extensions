@@ -11,6 +11,7 @@ import {
   createDevinRuntime,
   DevinRuntime,
   runDevin,
+  type DevinRuntimeOptions,
   type DevinRuntimeShape,
 } from "../src/runtime.ts";
 import type { DevinSessionListener } from "../lib/acp-client.ts";
@@ -101,9 +102,9 @@ const TURN = (over: Partial<Parameters<DevinRuntimeShape["beginStreamTurn"]>[0]>
   ...over,
 });
 
-async function makeRuntime() {
+async function makeRuntime(options?: DevinRuntimeOptions) {
   const fake = new FakeClient();
-  const runtime = createDevinRuntime(() => fake as unknown as DevinAcpClient);
+  const runtime = createDevinRuntime(() => fake as unknown as DevinAcpClient, options);
   const service = runtime.runSync(DevinRuntime);
   return { fake, runtime, service };
 }
@@ -472,6 +473,70 @@ test("liveOps tracks in-flight tools across turns until terminal or exit", async
   });
   snap = await runDevin(runtime, service.snapshot);
   assert.equal(snap.liveOps.length, 0);
+  await runtime.dispose();
+});
+
+test("liveOps does not resurrect ops after a terminal update", async () => {
+  const { fake, runtime, service } = await makeRuntime();
+  await runDevin(runtime, service.beginStreamTurn(TURN()));
+  const sessionId = fake.createdSessions[0];
+  const emit = (update: unknown) => fake.sessions.get(sessionId)?.(update as never);
+
+  emit({
+    sessionUpdate: "tool_call",
+    toolCallId: "exec_0",
+    title: "Ran pnpm",
+    kind: "execute",
+    status: "in_progress",
+  });
+  emit({ sessionUpdate: "tool_call_update", toolCallId: "exec_0", status: "completed" });
+  let snap = await runDevin(runtime, service.snapshot);
+  assert.equal(snap.liveOps.length, 0);
+
+  // Reading a finished exec session (get_output) makes devin re-emit a
+  // non-terminal tool_call_update under the same toolCallId; it must not
+  // bring the op back as "running" forever.
+  emit({ sessionUpdate: "tool_call_update", toolCallId: "exec_0", status: "in_progress" });
+  emit({
+    sessionUpdate: "tool_call_update",
+    toolCallId: "exec_0",
+    _meta: { "cognition.ai/inferenceToolName": "exec" },
+  });
+  snap = await runDevin(runtime, service.snapshot);
+  assert.equal(snap.liveOps.length, 0, "late update must not resurrect a closed op");
+
+  // Same tombstone applies when the op closed via terminal_exit instead of a
+  // terminal status.
+  emit({
+    sessionUpdate: "tool_call",
+    toolCallId: "exec_1",
+    title: "Ran server",
+    kind: "execute",
+    status: "in_progress",
+    _meta: { "cognition.ai/background": true, "cognition.ai/backgroundShellId": "9f00" },
+  });
+  emit({
+    sessionUpdate: "tool_call_update",
+    toolCallId: "exec_1",
+    _meta: { "cognition.ai/terminal_exit": { terminal_id: "9f00", exit_code: 0 } },
+  });
+  snap = await runDevin(runtime, service.snapshot);
+  assert.equal(snap.liveOps.length, 0);
+  emit({ sessionUpdate: "tool_call_update", toolCallId: "exec_1", status: "in_progress" });
+  snap = await runDevin(runtime, service.snapshot);
+  assert.equal(snap.liveOps.length, 0);
+
+  // A genuinely new call under a different id still tracks normally.
+  emit({
+    sessionUpdate: "tool_call",
+    toolCallId: "exec_2",
+    title: "Ran build",
+    kind: "execute",
+    status: "in_progress",
+  });
+  snap = await runDevin(runtime, service.snapshot);
+  assert.equal(snap.liveOps.length, 1);
+  assert.equal(snap.liveOps[0].view.id, "exec_2");
   await runtime.dispose();
 });
 
@@ -927,8 +992,18 @@ for (const buffered of [false, true]) {
       30,
     );
     assert.equal(
-      messages.reduce((sum, m) => sum + m.usage.totalTokens, 0),
+      messages.reduce(
+        (sum, m) => sum + m.usage.input + m.usage.output + m.usage.cacheRead + m.usage.cacheWrite,
+        0,
+      ),
       230,
+      "segments sum to the turn's billable total",
+    );
+    // totalTokens is devin's reported context occupancy (usage_update
+    // used=9000), a snapshot on every message — not a billed delta.
+    assert.deepEqual(
+      messages.map((m) => m.usage.totalTokens),
+      [9000, 9000, 9000],
     );
     assert.ok(Math.abs(messages.reduce((sum, m) => sum + m.usage.cost.total, 0) - 0.00049) < 1e-12);
     assert.equal((await runDevin(runtime, service.snapshot)).contextTokens, 9000);
@@ -1025,7 +1100,9 @@ for (const outcome of ["error", "aborted", "stop"] as const) {
     assert.equal(final.usage.cacheRead, outcome === "stop" ? 170 : 90);
     assert.equal(final.usage.cacheWrite, outcome === "stop" ? 50 : 30);
     assert.equal(final.usage.output, outcome === "stop" ? 90 : 50);
-    assert.equal(final.usage.totalTokens, outcome === "stop" ? 470 : 250);
+    // totalTokens is the latest reported occupancy (used=250), not a billed
+    // sum — the same snapshot on every terminal outcome.
+    assert.equal(final.usage.totalTokens, 250);
     assert.ok(Math.abs(final.usage.cost.total - (outcome === "stop" ? 0.001 : 0.00054)) < 1e-12);
   });
 }
@@ -1213,7 +1290,10 @@ test("matching turn_stats cumulative sums become the turn's billed usage", async
   assert.equal(message.usage.output, 80);
   assert.equal(message.usage.cacheRead, 6656);
   assert.equal(message.usage.cacheWrite, 0);
-  assert.equal(message.usage.totalTokens, 29190);
+  // totalTokens is the reported context occupancy (used=14627), not the
+  // cumulative billed sum (29190) — pi reads it as context fill, where the
+  // summed internal requests would read as a bogus overflow.
+  assert.equal(message.usage.totalTokens, 14627);
   assert.ok(fake.prompts[0].clientMessageId, "the turn stamps a correlation id");
 });
 
@@ -1528,6 +1608,397 @@ test("terminal updates landing in the supersede window still clear liveOps", asy
   }
   const snap = await runDevin(runtime, service.snapshot);
   assert.equal(snap.liveOps.length, 0, "stale-generation terminal update cleared the op");
+});
+
+/** Wait long enough for a scheduled sweep timer (and pending microtasks) to fire. */
+const settleSweep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+test("an aborted turn sweeps its stranded in-turn ops", async (t) => {
+  const { fake, runtime, service } = await makeRuntime({ cancelSweepMs: 0 });
+  t.after(() => runtime.dispose());
+  const pending = deferred<{ stopReason: string }>();
+  fake.prompt = async (sessionId, blocks) => {
+    fake.prompts.push({ sessionId, blocks });
+    return pending.promise;
+  };
+  const abort = new AbortController();
+  const controller = await runDevin(
+    runtime,
+    service.beginStreamTurn(TURN({ signal: abort.signal })),
+  );
+  fake.sessions.get("sess-1")?.({
+    sessionUpdate: "tool_call",
+    toolCallId: "find_1",
+    title: "Find files",
+    kind: "search",
+    status: "in_progress",
+  } as never);
+  assert.equal((await runDevin(runtime, service.snapshot)).liveOps.length, 1);
+
+  // esc: pi aborts the turn and devin never reports a terminal update for
+  // the in-flight call — the sweep must clear it instead of listing it as
+  // running forever. (Drain queued activities first: next() only rejects
+  // once the queue is empty.)
+  const drained = (async () => {
+    for (;;) await controller.next();
+  })();
+  const rejected = assert.rejects(drained, /aborted/);
+  abort.abort();
+  await rejected;
+  await settleSweep(10);
+  assert.equal((await runDevin(runtime, service.snapshot)).liveOps.length, 0);
+});
+
+test("the cancel sweep keeps detached background shells listed", async (t) => {
+  const { fake, runtime, service } = await makeRuntime({ cancelSweepMs: 0 });
+  t.after(() => runtime.dispose());
+  const pending = deferred<{ stopReason: string }>();
+  fake.prompt = async (sessionId, blocks) => {
+    fake.prompts.push({ sessionId, blocks });
+    return pending.promise;
+  };
+  const abort = new AbortController();
+  await runDevin(runtime, service.beginStreamTurn(TURN({ signal: abort.signal })));
+  const emit = (update: unknown) => fake.sessions.get("sess-1")!(update as never);
+  emit({
+    sessionUpdate: "tool_call",
+    toolCallId: "find_1",
+    title: "Find files",
+    kind: "search",
+    status: "in_progress",
+  });
+  emit({
+    sessionUpdate: "tool_call",
+    toolCallId: "exec_1",
+    title: "Ran server",
+    kind: "execute",
+    status: "in_progress",
+    _meta: { "cognition.ai/background": true, "cognition.ai/backgroundShellId": "b1" },
+  });
+  assert.equal((await runDevin(runtime, service.snapshot)).liveOps.length, 2);
+
+  abort.abort();
+  await settleSweep(10);
+  let snap = await runDevin(runtime, service.snapshot);
+  assert.equal(snap.liveOps.length, 1, "only the in-turn op is swept");
+  assert.equal(snap.liveOps[0].view.id, "exec_1");
+
+  // The detached shell still behaves normally: its terminal_exit clears it.
+  emit({
+    sessionUpdate: "tool_call_update",
+    toolCallId: "exec_1",
+    _meta: { "cognition.ai/terminal_exit": { terminal_id: "b1", exit_code: 0 } },
+  });
+  snap = await runDevin(runtime, service.snapshot);
+  assert.equal(snap.liveOps.length, 0);
+});
+
+test("swept ops are tombstoned so late updates cannot resurrect them", async (t) => {
+  const { fake, runtime, service } = await makeRuntime({ cancelSweepMs: 0 });
+  t.after(() => runtime.dispose());
+  const pending = deferred<{ stopReason: string }>();
+  fake.prompt = async (sessionId, blocks) => {
+    fake.prompts.push({ sessionId, blocks });
+    return pending.promise;
+  };
+  const abort = new AbortController();
+  await runDevin(runtime, service.beginStreamTurn(TURN({ signal: abort.signal })));
+  const emit = (update: unknown) => fake.sessions.get("sess-1")!(update as never);
+  emit({
+    sessionUpdate: "tool_call",
+    toolCallId: "find_1",
+    title: "Find files",
+    kind: "search",
+    status: "in_progress",
+  });
+  abort.abort();
+  await settleSweep(10);
+  assert.equal((await runDevin(runtime, service.snapshot)).liveOps.length, 0);
+
+  // A late non-terminal update for the cancelled turn's call (late PTY
+  // output, a replay) must not bring the swept op back as running.
+  emit({ sessionUpdate: "tool_call_update", toolCallId: "find_1", status: "in_progress" });
+  assert.equal((await runDevin(runtime, service.snapshot)).liveOps.length, 0);
+});
+
+test("a sweep from an earlier cancel never touches a newer turn's ops", async (t) => {
+  const { fake, runtime, service } = await makeRuntime({ cancelSweepMs: 25 });
+  t.after(() => runtime.dispose());
+  const first = deferred<{ stopReason: string }>();
+  fake.prompt = async (sessionId, blocks) => {
+    fake.prompts.push({ sessionId, blocks });
+    if (fake.prompts.length === 1) {
+      fake.sessions.get(sessionId)?.({
+        sessionUpdate: "tool_call",
+        toolCallId: "find_1",
+        title: "Find files",
+        kind: "search",
+        status: "in_progress",
+      } as never);
+      return first.promise;
+    }
+    fake.sessions.get(sessionId)?.({
+      sessionUpdate: "tool_call",
+      toolCallId: "find_2",
+      title: "Find more",
+      kind: "search",
+      status: "in_progress",
+    } as never);
+    return new Promise(() => {});
+  };
+  const abort = new AbortController();
+  const cancelledController = await runDevin(
+    runtime,
+    service.beginStreamTurn(TURN({ signal: abort.signal })),
+  );
+  const drained = (async () => {
+    for (;;) await cancelledController.next();
+  })();
+  const rejected = assert.rejects(drained, /aborted/);
+  abort.abort();
+  await rejected;
+  // The cancelled prompt settles so the next turn may reuse the session.
+  first.resolve({ stopReason: "cancelled" });
+  await runDevin(
+    runtime,
+    service.beginStreamTurn(TURN({ prompt: "again", blocks: [{ type: "text", text: "again" }] })),
+  );
+  assert.equal((await runDevin(runtime, service.snapshot)).liveOps.length, 2);
+
+  // The sweep fires while the new turn's op is live but must only remove
+  // the ids snapshotted at cancel time.
+  await settleSweep(50);
+  const snap = await runDevin(runtime, service.snapshot);
+  assert.deepEqual(
+    snap.liveOps.map((op) => op.view.id),
+    ["find_2"],
+  );
+});
+
+test("a devin-answered cancelled prompt also sweeps in-turn ops", async (t) => {
+  const { fake, runtime, service } = await makeRuntime({ cancelSweepMs: 0 });
+  t.after(() => runtime.dispose());
+  fake.prompt = async (sessionId, blocks) => {
+    fake.prompts.push({ sessionId, blocks });
+    fake.sessions.get(sessionId)?.({
+      sessionUpdate: "tool_call",
+      toolCallId: "find_1",
+      title: "Find files",
+      kind: "search",
+      status: "in_progress",
+    } as never);
+    return { stopReason: "cancelled" };
+  };
+  const controller = await runDevin(runtime, service.beginStreamTurn(TURN()));
+  for (;;) {
+    if ((await controller.next()) === null) break;
+  }
+  assert.equal((await runDevin(runtime, service.snapshot)).turns, 0);
+  await settleSweep(10);
+  assert.equal((await runDevin(runtime, service.snapshot)).liveOps.length, 0);
+});
+
+test("a sweep never deletes a rebuilt session's reused op id", async (t) => {
+  const { fake, runtime, service } = await makeRuntime({ cancelSweepMs: 30 });
+  t.after(() => runtime.dispose());
+  const first = deferred<{ stopReason: string }>();
+  fake.prompt = async (sessionId, blocks) => {
+    fake.prompts.push({ sessionId, blocks });
+    return first.promise;
+  };
+  const abort = new AbortController();
+  const c1 = await runDevin(runtime, service.beginStreamTurn(TURN({ signal: abort.signal })));
+  fake.sessions.get("sess-1")?.({
+    sessionUpdate: "tool_call",
+    toolCallId: "exec_0",
+    title: "Ran build",
+    kind: "execute",
+    status: "in_progress",
+  } as never);
+  abort.abort();
+  const drained = (async () => {
+    for (;;) await c1.next();
+  })();
+  await assert.rejects(drained, /aborted/);
+
+  // The child dies and the reload fails, so the next turn rebuilds on a
+  // fresh session — whose executor reuses the same sequential op id.
+  fake.onClose?.();
+  first.resolve({ stopReason: "cancelled" });
+  fake.failLoads.add("sess-1");
+  fake.prompt = async (sessionId, blocks) => {
+    fake.prompts.push({ sessionId, blocks });
+    fake.sessions.get(sessionId)?.({
+      sessionUpdate: "tool_call",
+      toolCallId: "exec_0",
+      title: "Ran build",
+      kind: "execute",
+      status: "in_progress",
+    } as never);
+    return new Promise(() => {});
+  };
+  await runDevin(
+    runtime,
+    service.beginStreamTurn(TURN({ prompt: "again", blocks: [{ type: "text", text: "again" }] })),
+  );
+  assert.equal((await runDevin(runtime, service.snapshot)).sessionId, "sess-2");
+  assert.equal((await runDevin(runtime, service.snapshot)).liveOps.length, 1);
+
+  // The stale sweep fires while sess-2's exec_0 is live — it must not touch
+  // the rebuilt binding's op.
+  await settleSweep(60);
+  let snap = await runDevin(runtime, service.snapshot);
+  assert.deepEqual(
+    snap.liveOps.map((op) => op.view.id),
+    ["exec_0"],
+    "the rebuilt session's op survives the stale sweep",
+  );
+
+  // It was never tombstoned either: its terminal update clears it normally.
+  fake.sessions.get("sess-2")?.({
+    sessionUpdate: "tool_call_update",
+    toolCallId: "exec_0",
+    status: "completed",
+  } as never);
+  snap = await runDevin(runtime, service.snapshot);
+  assert.equal(snap.liveOps.length, 0);
+});
+
+test("an op promoted to a background shell inside the window survives the sweep", async (t) => {
+  const { fake, runtime, service } = await makeRuntime({ cancelSweepMs: 30 });
+  t.after(() => runtime.dispose());
+  const pending = deferred<{ stopReason: string }>();
+  fake.prompt = async (sessionId, blocks) => {
+    fake.prompts.push({ sessionId, blocks });
+    return pending.promise;
+  };
+  const abort = new AbortController();
+  const controller = await runDevin(
+    runtime,
+    service.beginStreamTurn(TURN({ signal: abort.signal })),
+  );
+  const emit = (update: unknown) => fake.sessions.get("sess-1")!(update as never);
+  emit({
+    sessionUpdate: "tool_call",
+    toolCallId: "exec_0",
+    title: "Ran server",
+    kind: "execute",
+    status: "in_progress",
+  });
+  abort.abort();
+  const drained = (async () => {
+    for (;;) await controller.next();
+  })();
+  await assert.rejects(drained, /aborted/);
+
+  // The detach notice was already on the wire when the cancel landed: it
+  // promotes the in-turn op to a background shell inside the grace window.
+  emit({
+    sessionUpdate: "tool_call_update",
+    toolCallId: "exec_0",
+    status: "in_progress",
+    _meta: { "cognition.ai/background": true, "cognition.ai/backgroundShellId": "b7" },
+  });
+  await settleSweep(60);
+  let snap = await runDevin(runtime, service.snapshot);
+  assert.deepEqual(
+    snap.liveOps.map((op) => op.view.id),
+    ["exec_0"],
+    "a promoted background shell must not be swept",
+  );
+  assert.equal(snap.liveOps[0].view.shellId, "b7");
+
+  // It keeps its normal lifecycle: terminal_exit clears it later.
+  emit({
+    sessionUpdate: "tool_call_update",
+    toolCallId: "exec_0",
+    _meta: { "cognition.ai/terminal_exit": { terminal_id: "b7", exit_code: 0 } },
+  });
+  snap = await runDevin(runtime, service.snapshot);
+  assert.equal(snap.liveOps.length, 0);
+});
+
+test("a tool start arriving after the cancel still joins the sweep", async (t) => {
+  const { fake, runtime, service } = await makeRuntime({ cancelSweepMs: 30 });
+  t.after(() => runtime.dispose());
+  const pending = deferred<{ stopReason: string }>();
+  fake.prompt = async (sessionId, blocks) => {
+    fake.prompts.push({ sessionId, blocks });
+    return pending.promise;
+  };
+  const abort = new AbortController();
+  const controller = await runDevin(
+    runtime,
+    service.beginStreamTurn(TURN({ signal: abort.signal })),
+  );
+  const emit = (update: unknown) => fake.sessions.get("sess-1")!(update as never);
+  emit({
+    sessionUpdate: "tool_call",
+    toolCallId: "find_1",
+    title: "Find files",
+    kind: "search",
+    status: "in_progress",
+  });
+  // Cancel with one op live; a second call's tool_call was already on the
+  // wire and lands right after the cancel.
+  abort.abort();
+  const drained = (async () => {
+    for (;;) await controller.next();
+  })();
+  await assert.rejects(drained, /aborted/);
+  emit({
+    sessionUpdate: "tool_call",
+    toolCallId: "find_2",
+    title: "Find more",
+    kind: "search",
+    status: "in_progress",
+  });
+
+  await settleSweep(60);
+  assert.equal(
+    (await runDevin(runtime, service.snapshot)).liveOps.length,
+    0,
+    "both the snapshotted and the late-arriving op are swept",
+  );
+
+  // The late arrival was tombstoned with the rest — no resurrection.
+  emit({ sessionUpdate: "tool_call_update", toolCallId: "find_2", status: "in_progress" });
+  assert.equal((await runDevin(runtime, service.snapshot)).liveOps.length, 0);
+});
+
+test("a cancel with no live ops still sweeps a tool start arriving late", async (t) => {
+  const { fake, runtime, service } = await makeRuntime({ cancelSweepMs: 30 });
+  t.after(() => runtime.dispose());
+  const pending = deferred<{ stopReason: string }>();
+  fake.prompt = async (sessionId, blocks) => {
+    fake.prompts.push({ sessionId, blocks });
+    return pending.promise;
+  };
+  const abort = new AbortController();
+  const controller = await runDevin(
+    runtime,
+    service.beginStreamTurn(TURN({ signal: abort.signal })),
+  );
+  abort.abort();
+  const drained = (async () => {
+    for (;;) await controller.next();
+  })();
+  await assert.rejects(drained, /aborted/);
+  // The fan-out's first tool_call lands only after the cancel: with no op
+  // live at cancel time, the sweep must still arm and catch it.
+  fake.sessions.get("sess-1")?.({
+    sessionUpdate: "tool_call",
+    toolCallId: "find_1",
+    title: "Find files",
+    kind: "search",
+    status: "in_progress",
+  } as never);
+  await settleSweep(60);
+  assert.equal(
+    (await runDevin(runtime, service.snapshot)).liveOps.length,
+    0,
+    "a late tool start on a cancelled turn is swept",
+  );
 });
 
 test("child process exit drops in-flight op tracking", async (t) => {

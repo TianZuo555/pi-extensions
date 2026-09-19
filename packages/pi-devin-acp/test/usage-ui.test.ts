@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import type { DevinStateSnapshot } from "../src/runtime.ts";
 import type { DevinUsage } from "../src/turn.ts";
-import { formatDevinUsageReport } from "../src/usage-ui.ts";
+import { formatDevinUsageReport, formatResetAt, formatResetIn } from "../src/usage-ui.ts";
 
 function snapshot(partial: Partial<DevinStateSnapshot>): DevinStateSnapshot {
   return {
@@ -122,4 +122,68 @@ test("formatDevinUsageReport renders server-grouped dimensions", () => {
   // Counters are not duplicated when dimensions carry them.
   assert.equal((report.match(/Input tokens:/g) ?? []).length, 2);
   assert.doesNotMatch(report, / {2}Input: {2,}/);
+});
+
+test("formatResetIn renders devin's relative countdown", () => {
+  const now = Date.now();
+  assert.equal(formatResetIn(now + 30_000, now), "in <1m");
+  assert.equal(formatResetIn(now + 42 * 60_000, now), "in 42m");
+  assert.equal(formatResetIn(now + (19 * 60 + 1) * 60_000, now), "in 19h 1m");
+  assert.equal(formatResetIn(now + 43 * 60 * 60_000, now), "in 1d 19h");
+});
+
+test("formatResetAt renders devin's absolute local time", () => {
+  const previous = process.env.TZ;
+  process.env.TZ = "Asia/Shanghai";
+  try {
+    // 2026-09-20 16:00:00 in UTC+8.
+    assert.equal(formatResetAt(Date.UTC(2026, 8, 20, 8, 0)), "Sep 20, 4:00 PM (UTC+8)");
+  } finally {
+    if (previous === undefined) delete process.env.TZ;
+    else process.env.TZ = previous;
+  }
+});
+
+test("formatDevinUsageReport renders the quota section in devin /usage style", () => {
+  const report = formatDevinUsageReport(snapshot({}), {
+    ok: true,
+    quota: {
+      dailyUsedPercent: 0,
+      dailyResetAtMs: Date.now() + (19 * 60 + 30) * 60_000,
+      weeklyUsedPercent: 19,
+      weeklyResetAtMs: Date.UTC(2026, 8, 20, 8, 0),
+      overageBalanceUsd: 10,
+    },
+  });
+  assert.ok(report);
+  assert.match(report, / {2}Quota\n/);
+  assert.match(report, /Daily:\s+\[░+\] 0% used · resets in 19h \d+m/);
+  assert.match(
+    report,
+    /Weekly:\s+\[█+░+\] 19% used · resets \w{3} \d+, \d+:\d{2} [AP]M \(UTC[+-]\d/,
+  );
+  assert.match(report, /Extra usage balance:\s+\$10\.00/);
+  // No session usage → devin's fixed tail line.
+  assert.match(report, /\n No quota consumed yet in this session\.$/);
+});
+
+test("formatDevinUsageReport drops the empty tail line once the session consumed quota", () => {
+  const report = formatDevinUsageReport(
+    snapshot({ usage: { inputTokens: 100, outputTokens: 5 } }),
+    { ok: true, quota: { dailyUsedPercent: 40, overageBalanceUsd: 0 } },
+  );
+  assert.ok(report);
+  assert.match(report, /Daily:\s+\[█+░+\] 40% used$/m);
+  assert.match(report, /Extra usage balance:\s+\$0\.00/);
+  assert.match(report, /Session\n {2}Input: {2,}100 tokens/);
+  assert.doesNotMatch(report, /No quota consumed/);
+});
+
+test("formatDevinUsageReport surfaces a quota fetch failure as a row", () => {
+  const report = formatDevinUsageReport(snapshot({}), {
+    ok: false,
+    reason: "no devin credentials found",
+  });
+  assert.ok(report);
+  assert.match(report, /Quota:\s+unavailable — no devin credentials found/);
 });

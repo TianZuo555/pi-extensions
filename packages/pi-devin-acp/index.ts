@@ -19,6 +19,8 @@ import { createCompactForwarder, createCompactSend } from "./lib/compaction.ts";
 import { piConfigDir, readJson, writeJson } from "./lib/config.ts";
 import { applyYoloMode } from "./lib/yolo.ts";
 import { checkDevinBinary, MIN_DEVIN_VERSION, runDevinCommand } from "./lib/diagnostics.ts";
+import { fetchDevinQuota, type DevinQuotaResult } from "./lib/quota.ts";
+import { createDevinQuotaStatus } from "./lib/quota-status.ts";
 import {
   devinGroups,
   groupThinkingLevelMap,
@@ -642,6 +644,26 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
     return catalog;
   };
 
+  /**
+   * Pull the account quota devin's own /usage shows. The seat-management RPC
+   * wants a valid semver as the client version, so reuse the probed binary
+   * version and fall back to the supported floor when it isn't known.
+   */
+  const devinQuota = async (): Promise<DevinQuotaResult> => {
+    const binary = await checkDevinBinary().catch(() => undefined);
+    return fetchDevinQuota({
+      devinVersion: binary?.ok ? binary.version : MIN_DEVIN_VERSION,
+    });
+  };
+
+  const quotaStatus = createDevinQuotaStatus(devinQuota);
+
+  const publishUsageStatusDetached = (ctx: ExtensionContext) => {
+    void quotaStatus.refresh(ctx).catch(() => {
+      // Never let footer upkeep take the process down.
+    });
+  };
+
   async function refreshModelsWhenSelected(): Promise<void> {
     if (catalog.fetchedAt && Date.now() - catalog.fetchedAt < modelCacheTtlMs(catalog.source)) {
       return;
@@ -665,6 +687,7 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
   };
 
   pi.on("session_start", async (event, ctx: ExtensionContext) => {
+    quotaStatus.clear(ctx);
     sessionCtx = ctx;
     cwd = ctx.cwd;
     piSessionId = ctx.sessionManager.getSessionId();
@@ -718,9 +741,11 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
     if (ctx.model?.provider === DEVIN_PROVIDER) {
       await refreshModelsWhenSelected();
     }
+    publishUsageStatusDetached(ctx);
   });
 
   pi.on("model_select", async (event, ctx) => {
+    quotaStatus.clear(ctx);
     syncWrapperToolActivation(event.model?.provider);
     const nextKey = event.model ? `${event.model.provider}:${event.model.id}` : undefined;
     const wasDevin = selectedModelKey?.startsWith(`${DEVIN_PROVIDER}:`) === true;
@@ -737,6 +762,11 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
     if (event.model?.provider === DEVIN_PROVIDER) {
       await refreshModelsWhenSelected();
     }
+    publishUsageStatusDetached(ctx);
+  });
+
+  pi.on("turn_start", (_event, ctx) => {
+    publishUsageStatusDetached(ctx);
   });
 
   pi.on("session_tree", async (_event, ctx: ExtensionContext) => {
@@ -834,6 +864,7 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
     } catch {
       // UI already gone.
     }
+    quotaStatus.clear(sessionCtx);
     // Extensions are cached and reused across /new, /resume, and /fork — only
     // quit and /reload replace the instance — so session replacement must
     // suspend the runtime (kill the devin child, drop the binding) instead of
@@ -885,6 +916,7 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
     if (sub === "usage") {
       await runDevinUsagePicker(ctx, {
         snapshot: () => runDevin(runtime, service.snapshot),
+        quota: devinQuota,
       });
       return;
     }
@@ -1111,11 +1143,12 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
 
   pi.registerCommand("devin-usage", {
     description:
-      "Show this devin session's usage (context window, tokens, credits/ACUs, last-turn stats) reported over ACP",
+      "Show account quota (daily/weekly windows, extra balance) plus this session's usage (context window, tokens, credits/ACUs, last-turn stats)",
     handler: async (_args: string, ctx: ExtensionContext) => {
       sessionCtx = ctx;
       await runDevinUsagePicker(ctx, {
         snapshot: () => runDevin(runtime, service.snapshot),
+        quota: devinQuota,
       });
     },
   });

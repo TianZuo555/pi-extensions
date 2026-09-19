@@ -4,9 +4,13 @@
  * style: padded label column, a block bar for context occupancy, grouped
  * sections. ACP has no pull-based usage request, so the report renders the
  * latest pushed snapshot; Refresh re-reads it (useful while a turn runs).
+ * The account quota (daily/weekly windows, overage balance) is pulled
+ * separately via fetchDevinQuota — the same GetUserStatus RPC devin's own
+ * /usage calls — and rendered as the leading Quota section.
  */
 
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { DevinQuota, DevinQuotaResult } from "../lib/quota.ts";
 import type { DevinStateSnapshot } from "./runtime.ts";
 import type { DevinResponseDimension, DevinTurnStats, DevinUsage } from "./turn.ts";
 
@@ -41,6 +45,64 @@ function formatAmount(value: number): string {
 
 function formatMs(ms: number): string {
   return ms < 1000 ? `${Math.round(ms)}ms` : `${(ms / 1000).toFixed(1)}s`;
+}
+
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** devin's daily reset wording: "in 19h 1m" / "in 1d 4h" / "in 7m". */
+export function formatResetIn(resetAtMs: number, now = Date.now()): string {
+  const ms = Math.max(0, resetAtMs - now);
+  const minutes = Math.floor(ms / 60_000);
+  if (minutes < 1) return "in <1m";
+  const hours = Math.floor(minutes / 60);
+  if (hours < 1) return `in ${minutes}m`;
+  const days = Math.floor(hours / 24);
+  if (days >= 1) return `in ${days}d ${hours % 24}h`;
+  return `in ${hours}h ${minutes % 60}m`;
+}
+
+/** devin's weekly reset wording: "Sep 20, 4:00 PM (UTC+8)" in local time. */
+export function formatResetAt(resetAtMs: number): string {
+  const date = new Date(resetAtMs);
+  const h24 = date.getHours();
+  const h12 = h24 % 12 === 0 ? 12 : h24 % 12;
+  const meridiem = h24 < 12 ? "AM" : "PM";
+  const minute = String(date.getMinutes()).padStart(2, "0");
+  const offset = -date.getTimezoneOffset();
+  const sign = offset < 0 ? "-" : "+";
+  const abs = Math.abs(offset);
+  const tz =
+    abs % 60 === 0
+      ? `UTC${sign}${abs / 60}`
+      : `UTC${sign}${Math.floor(abs / 60)}:${String(abs % 60).padStart(2, "0")}`;
+  return `${MONTHS[date.getMonth()]} ${date.getDate()}, ${h12}:${minute} ${meridiem} (${tz})`;
+}
+
+/**
+ * Quota rows mirroring devin's own /usage: daily resets get a relative
+ * countdown, weekly an absolute local time; the balance is a flat dollar row.
+ */
+function quotaRows(quota: DevinQuota, now: number): UsageRow[] {
+  const rows: UsageRow[] = [];
+  const window = (label: string, usedPercent: number | undefined, reset: string | undefined) => {
+    if (usedPercent === undefined) return;
+    const value = `${bar(usedPercent)} ${usedPercent}% used${reset ? ` · resets ${reset}` : ""}`;
+    rows.push({ label, value });
+  };
+  window(
+    "Daily",
+    quota.dailyUsedPercent,
+    quota.dailyResetAtMs === undefined ? undefined : formatResetIn(quota.dailyResetAtMs, now),
+  );
+  window(
+    "Weekly",
+    quota.weeklyUsedPercent,
+    quota.weeklyResetAtMs === undefined ? undefined : formatResetAt(quota.weeklyResetAtMs),
+  );
+  if (quota.overageBalanceUsd !== undefined) {
+    rows.push({ label: "Extra usage balance", value: `$${quota.overageBalanceUsd.toFixed(2)}` });
+  }
+  return rows;
 }
 
 /** Format one server-reported dimension (metric string or cumulativeMetric). */
@@ -105,14 +167,28 @@ function turnTailRows(stats: DevinTurnStats): UsageRow[] {
 }
 
 /**
- * Multi-line report body for /devin-usage, or undefined when the session has
- * reported nothing yet. Mirrors pi-usage's `  Label:`-padded row style.
+ * Multi-line report body for /devin-usage, or undefined when neither quota
+ * nor session has anything to show. Mirrors pi-usage's `  Label:`-padded row
+ * style; the leading Quota section matches devin CLI's own /usage wording.
  */
-export function formatDevinUsageReport(snapshot: DevinStateSnapshot): string | undefined {
+export function formatDevinUsageReport(
+  snapshot: DevinStateSnapshot,
+  quotaResult?: DevinQuotaResult,
+): string | undefined {
   const usage = snapshot.usage;
   const stats = snapshot.lastTurnStats;
 
   const sections: { header?: string; rows: UsageRow[] }[] = [];
+  const headRows: UsageRow[] = [];
+  let quotaSectionRows: UsageRow[] = [];
+
+  if (quotaResult) {
+    if (quotaResult.ok) {
+      quotaSectionRows = quotaRows(quotaResult.quota, Date.now());
+    } else {
+      headRows.push({ label: "Quota", value: `unavailable — ${quotaResult.reason}` });
+    }
+  }
 
   // Context occupancy — the only percentage-shaped window devin reports.
   const contextRows: UsageRow[] = [];
@@ -142,7 +218,14 @@ export function formatDevinUsageReport(snapshot: DevinStateSnapshot): string | u
     if (rows.length) sections.push({ header: "Last turn", rows });
   }
 
-  if (contextRows.length === 0 && sections.length === 0) return undefined;
+  if (
+    headRows.length === 0 &&
+    quotaSectionRows.length === 0 &&
+    contextRows.length === 0 &&
+    sections.length === 0
+  ) {
+    return undefined;
+  }
 
   const model = stats?.modelLabel ?? snapshot.concreteModel ?? snapshot.model;
   const title = snapshot.title ? ` — ${snapshot.title.replace(/\s+/g, " ").trim()}` : "";
@@ -156,6 +239,8 @@ export function formatDevinUsageReport(snapshot: DevinStateSnapshot): string | u
     }
   };
 
+  emit(undefined, headRows);
+  if (quotaSectionRows.length) emit("Quota", quotaSectionRows);
   emit(undefined, contextRows);
 
   // Merge consecutive dimension sections that share a group header.
@@ -167,11 +252,36 @@ export function formatDevinUsageReport(snapshot: DevinStateSnapshot): string | u
   }
   for (const section of merged) emit(section.header, section.rows);
 
+  // devin's /usage closes with the session's own consumption; when nothing
+  // was consumed yet its fixed line is the whole tail.
+  if (quotaResult?.ok && merged.length === 0) {
+    lines.push("", " No quota consumed yet in this session.");
+  }
+
   return lines.join("\n");
 }
 
 export interface DevinUsageUiDeps {
   snapshot: () => Promise<DevinStateSnapshot>;
+  /**
+   * Pull the account quota (GetUserStatus). When omitted the report renders
+   * session usage only, like before quota support existed.
+   */
+  quota?: () => Promise<DevinQuotaResult>;
+}
+
+/** Snapshot + quota in one round trip; a quota throw degrades to an error row. */
+async function gatherUsageReport(deps: DevinUsageUiDeps): Promise<string | undefined> {
+  const quotaPromise = deps.quota
+    ? deps.quota().catch(
+        (error): DevinQuotaResult => ({
+          ok: false,
+          reason: error instanceof Error ? error.message : String(error),
+        }),
+      )
+    : Promise.resolve(undefined);
+  const [snapshot, quota] = await Promise.all([deps.snapshot(), quotaPromise]);
+  return formatDevinUsageReport(snapshot, quota);
 }
 
 /** Run the /devin-usage flow: a Refresh/Close report like /usage's menu. */
@@ -181,7 +291,7 @@ export async function runDevinUsagePicker(
 ): Promise<void> {
   let report: string | undefined;
   try {
-    report = formatDevinUsageReport(await deps.snapshot());
+    report = await gatherUsageReport(deps);
   } catch (error) {
     ctx.ui.notify(
       `devin: usage unavailable (${error instanceof Error ? error.message : error}).`,
@@ -201,7 +311,7 @@ export async function runDevinUsagePicker(
     const action = await ctx.ui.select(report, [REFRESH, CLOSE]);
     if (!action || action === CLOSE) return;
     try {
-      report = formatDevinUsageReport(await deps.snapshot()) ?? report;
+      report = (await gatherUsageReport(deps)) ?? report;
     } catch {
       // A failed refresh keeps the last report.
     }

@@ -58,6 +58,34 @@ const SUPERSEDE_SETTLE_TIMEOUT_MS = 3_000;
  */
 const RETRY_STALE_MS = 30_000;
 
+/**
+ * How long after a cancel before the stranded in-turn ops are swept from
+ * liveOps. `session/cancel` stops the agent's executor, and devin's terminal
+ * updates for the killed calls trail the cancel by a few milliseconds —
+ * sweeping immediately would race them for no benefit. Detached background
+ * shells legitimately outlive the turn and are never swept.
+ */
+const CANCEL_SWEEP_MS = 2_000;
+
+/** Options for {@link createDevinRuntime}; all optional. */
+export interface DevinRuntimeOptions {
+  /** Delay before a cancelled prompt's in-turn ops are swept from liveOps. */
+  readonly cancelSweepMs?: number;
+}
+
+/** A cancelled prompt's pending in-turn-op sweep. */
+interface CancelledOpSweep {
+  /** Turn generation the cancelled prompt ran under. */
+  readonly generation: number;
+  /** Binding generation at cancel time; a dropped binding voids the sweep. */
+  readonly binding: number;
+  /** Client/session identity at cancel time; a rebind voids the sweep. */
+  readonly client: DevinAcpClient | undefined;
+  readonly sessionId: string | undefined;
+  /** In-turn op ids to sweep: snapshotted at cancel plus late arrivals. */
+  readonly ids: Set<string>;
+}
+
 /** Activity kinds that prove the backend stream is alive after a retry. */
 const PROGRESS_ACTIVITY_TYPES = new Set<DevinActivity["type"]>([
   "text",
@@ -224,8 +252,9 @@ export class DevinRuntime extends Context.Service<DevinRuntime, DevinRuntimeShap
 
 export type DevinClientFactory = () => DevinAcpClient;
 
-const makeRuntime = (createClient: DevinClientFactory) =>
+const makeRuntime = (createClient: DevinClientFactory, options?: DevinRuntimeOptions) =>
   Effect.gen(function* () {
+    const cancelSweepMs = options?.cancelSweepMs ?? CANCEL_SWEEP_MS;
     let client: DevinAcpClient | undefined;
     let sessionId: string | undefined;
     let sessionCwd: string | undefined;
@@ -247,6 +276,20 @@ const makeRuntime = (createClient: DevinClientFactory) =>
     let needsBootstrap = false;
     /** Devin-side tool calls still in flight; keyed by toolCallId. */
     const liveOps = new Map<string, DevinLiveOp>();
+    /**
+     * The latest cancelled prompt's pending in-turn-op sweep. Ops may join
+     * after the cancel (updates already on the wire when it landed), so the
+     * id set stays open until the sweep fires.
+     */
+    let pendingSweep: CancelledOpSweep | undefined;
+    /**
+     * Ids that already reached a terminal state. Devin re-emits non-terminal
+     * tool_call_update for a finished exec when a later get_output read (or
+     * late PTY output) touches its session — without tombstoning, the stale
+     * update resurrects the op as "running" forever.
+     */
+    const closedOps = new Set<string>();
+    const CLOSED_OPS_LIMIT = 4_000;
     /** Latest backend-stream retry state for the bound session. */
     let retry: DevinRetryState | undefined;
     const activitySubscribers = new Set<(activity: DevinActivity) => void>();
@@ -276,6 +319,7 @@ const makeRuntime = (createClient: DevinClientFactory) =>
           // The dead child took its in-turn ops with it; nothing can report
           // their terminal state now, and session/load replays are dropped.
           liveOps.clear();
+          closedOps.clear();
           retry = undefined;
           if (sessionId && !pendingLoadId) {
             // Devin persists sessions server-side: retry session/load on the
@@ -392,6 +436,7 @@ const makeRuntime = (createClient: DevinClientFactory) =>
       needsBootstrap = bootstrap;
       lastSentSystemPrompt = undefined;
       liveOps.clear();
+      closedOps.clear();
       retry = undefined;
     };
 
@@ -417,6 +462,14 @@ const makeRuntime = (createClient: DevinClientFactory) =>
       return Array.isArray(replaced) && replaced.length > 0 ? replaced : prompt;
     };
 
+    /** Mark an op id as finished so late updates cannot re-open it. */
+    const tombstoneOp = (id: string) => {
+      if (closedOps.size >= CLOSED_OPS_LIMIT) {
+        closedOps.delete(closedOps.values().next().value as string);
+      }
+      closedOps.add(id);
+    };
+
     /**
      * Track in-flight devin operations across turns: a backgrounded shell or
      * a slow exec stays listed until its terminal status (or terminal_exit)
@@ -425,13 +478,74 @@ const makeRuntime = (createClient: DevinClientFactory) =>
     const trackLiveOp = (activity: DevinActivity) => {
       if (activity.type !== "tool_start" && activity.type !== "tool_update") return;
       const view = activity.view;
+      if (closedOps.has(view.id)) return;
       const prev = liveOps.get(view.id);
       const merged = prev ? { ...prev.view, ...view } : view;
       if (TERMINAL_TOOL_STATUSES.has(merged.status ?? "") || merged.exitCode !== undefined) {
         liveOps.delete(view.id);
+        tombstoneOp(view.id);
       } else {
         liveOps.set(view.id, { view: merged, startedAt: prev?.startedAt ?? Date.now() });
+        registerWithPendingSweep(view.id, merged);
       }
+    };
+
+    /**
+     * A tool_call/update that was already on the wire when the cancel
+     * landed joins the pending sweep — but only while it provably belongs
+     * to the cancelled turn: the turn generation must not have moved (a
+     * newer turn's ops never enroll) and the client/session the sweep was
+     * armed on must still be the live binding (a rebuilt child or a
+     * rebound session starts a fresh op-id space).
+     */
+    const registerWithPendingSweep = (id: string, view: DevinToolView) => {
+      const sweep = pendingSweep;
+      if (!sweep) return;
+      if (generation !== sweep.generation) return;
+      if (client !== sweep.client || sessionId !== sweep.sessionId) return;
+      if (!view.background && view.shellId === undefined) sweep.ids.add(id);
+    };
+
+    /**
+     * A cancelled prompt strands its in-turn ops: `session/cancel` stops the
+     * executor, and when no trailing terminal update ever arrives for them
+     * (a pi-side abort), nothing else removes the entries. Sweep them after
+     * a grace window — devin's own terminal updates for these ids land
+     * within milliseconds and clear them first. The sweep is invalidated by
+     * any rebinding (client exit, session reload, /devin reset) so it can
+     * never delete a newer binding's ops, re-checks each op at fire time so
+     * one promoted to a detached background shell inside the window stays
+     * listed, and tombstones what it removes so late re-notifications cannot
+     * resurrect it.
+     */
+    const scheduleCancelledOpSweep = () => {
+      const sweep: CancelledOpSweep = {
+        generation,
+        binding: bindingGeneration,
+        client,
+        sessionId,
+        ids: new Set(
+          [...liveOps.values()]
+            .filter((op) => !op.view.background && op.view.shellId === undefined)
+            .map((op) => op.view.id),
+        ),
+      };
+      // Always arm the timer: tool calls still on the wire at cancel time
+      // join the sweep afterwards and would otherwise strand forever.
+      pendingSweep = sweep;
+      const timer = setTimeout(() => {
+        if (pendingSweep === sweep) pendingSweep = undefined;
+        if (closed || bindingGeneration !== sweep.binding) return;
+        if (client !== sweep.client || sessionId !== sweep.sessionId) return;
+        for (const id of sweep.ids) {
+          const op = liveOps.get(id);
+          if (!op) continue;
+          if (op.view.background || op.view.shellId !== undefined) continue;
+          liveOps.delete(id);
+          tombstoneOp(id);
+        }
+      }, cancelSweepMs);
+      timer.unref?.();
     };
 
     const notifySubscribers = (activity: DevinActivity) => {
@@ -700,6 +814,10 @@ const makeRuntime = (createClient: DevinClientFactory) =>
                       "abort",
                       () => {
                         void acp.cancel(liveSessionId).catch(() => {});
+                        // This abort is what strands the turn's in-flight
+                        // in-turn ops; devin's trailing terminal updates
+                        // (if any) land within the grace window.
+                        scheduleCancelledOpSweep();
                         reject(new Error("devin turn was aborted."));
                       },
                       { once: true },
@@ -759,6 +877,7 @@ const makeRuntime = (createClient: DevinClientFactory) =>
                         return;
                       }
                       if (result.stopReason !== "cancelled") turns += 1;
+                      else scheduleCancelledOpSweep();
                       retry = undefined;
                       controller.push({
                         type: "result",
@@ -1023,11 +1142,16 @@ const makeRuntime = (createClient: DevinClientFactory) =>
     });
   });
 
-const runtimeLayer = (createClient: DevinClientFactory): Layer.Layer<DevinRuntime> =>
-  Layer.effect(DevinRuntime, makeRuntime(createClient));
+const runtimeLayer = (
+  createClient: DevinClientFactory,
+  options?: DevinRuntimeOptions,
+): Layer.Layer<DevinRuntime> => Layer.effect(DevinRuntime, makeRuntime(createClient, options));
 
-export function createDevinRuntime(createClient: DevinClientFactory) {
-  return ManagedRuntime.make(runtimeLayer(createClient));
+export function createDevinRuntime(
+  createClient: DevinClientFactory,
+  options?: DevinRuntimeOptions,
+) {
+  return ManagedRuntime.make(runtimeLayer(createClient, options));
 }
 
 export type DevinRuntimeInstance = ReturnType<typeof createDevinRuntime>;

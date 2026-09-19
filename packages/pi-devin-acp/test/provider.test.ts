@@ -1,9 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { AssistantMessageEvent } from "@earendil-works/pi-ai";
+import {
+  calculateCost,
+  isContextOverflow,
+  type AssistantMessageEvent,
+} from "@earendil-works/pi-ai";
 import { DevinReplayStore } from "../lib/replay.ts";
 import { mapUsage, streamDevin } from "../src/provider.ts";
-import { DevinTurnController, type DevinActivity } from "../src/turn.ts";
+import { DevinTurnController, type DevinActivity, type DevinUsage } from "../src/turn.ts";
 import type { DevinRuntimeInstance, DevinRuntimeShape } from "../src/runtime.ts";
 import type { DevinModelFamily } from "../lib/models.ts";
 
@@ -307,7 +311,8 @@ test("request snapshots accumulate once; the prompt-response echo dedups", async
   assert.equal(done.message.usage.input, 16);
   assert.equal(done.message.usage.output, 11);
   assert.equal(done.message.usage.cacheRead, 6);
-  assert.equal(done.message.usage.totalTokens, 33);
+  // totalTokens is the reported context occupancy (15), not the billed sum.
+  assert.equal(done.message.usage.totalTokens, 15);
 });
 
 test("summarization requests run in a disposable session with the resolved model", async () => {
@@ -423,6 +428,7 @@ test("each segment bills its request's usage; the turn sums to the total", async
   assert.equal(segment1.stopReason, "toolUse");
   assert.equal(segment1.usage.input, 100);
   assert.equal(segment1.usage.output, 20);
+  // totalTokens is context occupancy (last request's size), not a delta.
   assert.equal(segment1.usage.totalTokens, 120);
   assert.ok(Math.abs(segment1.usage.cost.total - 0.00028) < 1e-12);
 
@@ -442,7 +448,8 @@ test("each segment bills its request's usage; the turn sums to the total", async
   assert.equal(final.usage.totalTokens, 250);
   assert.ok(Math.abs(final.usage.cost.total - 0.0006) < 1e-12);
 
-  const sum = segment1.usage.totalTokens + segment2.usage.totalTokens + final.usage.totalTokens;
+  const billed = (u: typeof segment1.usage) => u.input + u.output + u.cacheRead + u.cacheWrite;
+  const sum = billed(segment1.usage) + billed(segment2.usage) + billed(final.usage);
   assert.equal(sum, 555, "segments sum to the turn's full billable total");
 });
 
@@ -456,8 +463,85 @@ test("cache writes are classified separately without double counting", () => {
   assert.equal(usage.input, 80);
   assert.equal(usage.cacheRead, 90);
   assert.equal(usage.cacheWrite, 30);
-  assert.equal(usage.totalTokens, usage.input + usage.cacheRead + usage.cacheWrite + usage.output);
+  // No occupancy report: totalTokens falls back to the request's own size.
+  assert.equal(usage.totalTokens, 250);
 });
+
+test("totalTokens reports devin's context occupancy scaled to the model window", () => {
+  // Devin's usage_update carries `used`/`size`; pi's compaction threshold
+  // and context gauge consume totalTokens as "tokens in this model's
+  // window", so occupancy is scaled when the windows differ.
+  const usage = mapUsage(
+    {
+      inputTokens: 999999,
+      outputTokens: 999,
+      contextUsed: 524288,
+      contextSize: 1048576,
+    },
+    262144,
+  );
+  assert.equal(usage.totalTokens, 131072);
+  // A matching window passes occupancy through untouched.
+  assert.equal(mapUsage({ contextUsed: 50000, contextSize: 262144 }, 262144).totalTokens, 50000);
+  // Without a reported size the raw value is the best available estimate.
+  assert.equal(mapUsage({ contextUsed: 50000 }, 262144).totalTokens, 50000);
+});
+
+for (const cachedReadTokens of [0, 10000, 145000]) {
+  for (const cacheWritePrice of [0, 3.75]) {
+    for (const stopReason of ["end_turn", "cancelled", "refusal"]) {
+      test(`overflow adaptation preserves cost and tokens (reads=${cachedReadTokens}, write price=${cacheWritePrice}, ${stopReason})`, async () => {
+        const requests: DevinUsage[] = [150000, 160000].map((inputTokens) => ({
+          inputTokens,
+          outputTokens: 1000,
+          cachedReadTokens,
+          cachedWriteTokens: 2000,
+          contextUsed: 51000,
+          contextSize: 262144,
+        }));
+        const { service, runtime } = fakeRuntime([
+          ...requests.map((usage): DevinActivity => ({ type: "usage", usage })),
+          { type: "result", stopReason },
+        ]);
+        const model = {
+          ...MODEL,
+          input: [...MODEL.input],
+          contextWindow: 262144,
+          cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: cacheWritePrice },
+        };
+        const events = await drain(
+          streamDevin({
+            service,
+            runtime,
+            replay: new DevinReplayStore(),
+            families: () => FAMILIES,
+            cwd: () => "/tmp",
+          })(model, CONTEXT),
+        );
+        const terminal = events.at(-1);
+        assert.ok(terminal?.type === "done" || terminal?.type === "error");
+        const message = terminal.type === "done" ? terminal.message : terminal.error;
+        const expected = mapUsage({
+          inputTokens: 310000,
+          outputTokens: 2000,
+          cachedReadTokens: cachedReadTokens * 2,
+          cachedWriteTokens: 4000,
+        });
+        calculateCost(model, expected);
+        const usage = message.usage;
+        assert.deepEqual(
+          usage.cost,
+          expected.cost,
+          "price original token classes, not the synthetic bucket",
+        );
+        assert.equal(usage.input + usage.output + usage.cacheRead + usage.cacheWrite, 312000);
+        assert.equal(usage.totalTokens, 51000);
+        assert.equal(usage.input + usage.cacheRead, model.contextWindow);
+        assert.equal(isContextOverflow(message, model.contextWindow), false);
+      });
+    }
+  }
+}
 
 test("persisted tool card arguments carry the terminal view, not the call start", async () => {
   const { service, runtime } = fakeRuntime([

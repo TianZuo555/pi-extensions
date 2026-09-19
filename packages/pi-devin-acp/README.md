@@ -51,9 +51,14 @@ unavailable.
   scrolling), `x` asks Devin to stop a background shell, `d` drops a stale
   entry (it reappears on the op's next update if it is genuinely still
   running)
-- `/devin-usage` — session usage reported over ACP: context-window bar,
-  cumulative tokens/cost (credits/ACUs when billed), and last-turn stats —
-  rendered `/usage`-style with Devin's own response-dimension grouping
+- `/devin-usage` — account quota plus session usage: daily/weekly quota
+  windows with reset times and the extra-usage balance (the same
+  `GetUserStatus` data Devin CLI's `/usage` shows), then the ACP-reported
+  session view — context-window bar, cumulative tokens/cost (credits/ACUs
+  when billed), and last-turn stats. While a Devin model is selected the
+  footer status line also shows the compact quota (`devin 100% day 81% wk`,
+  remaining percents, refreshed on session start, model select, and turns
+  with a 60s cache)
 - `/devin mode [ask|plan|accept-edits|bypass]` — get/set Devin's permission mode
 - `/devin yolo [on|off]` — persistently pin Devin to `bypass` mode
   (`~/.pi/devin-acp/settings.json`); while on, `/devin mode` stays bypass and
@@ -87,8 +92,19 @@ unavailable.
   delta-billed: each pi assistant message of a turn (replay segment or
   terminal) persists only the share not already billed, so pi's footer fills
   live while the session log still sums to the authoritative turn total.
-  `/devin-usage` shows live usage; failed or aborted streams record their
-  latest observed turn usage, and successful summaries record their own usage.
+  `usage.totalTokens` separately reports Devin's context occupancy
+  (`usage_update.used` scaled into the model window) rather than the billed
+  sums, so pi's context gauge and auto-compaction threshold see the real
+  fill level — summed internal requests would otherwise read as a bogus
+  context overflow. Pi also treats `input + cacheRead` as a single request's
+  prompt size: when aggregated billing exceeds the model window, the excess
+  is stored in `cacheWrite` as a synthetic overflow bucket (including
+  uncached input if necessary). Token totals are preserved; costs are
+  calculated **before** this adaptation from the original token classes,
+  so the synthetic counters must not be used to recalculate costs.
+  `/devin-usage` shows live usage; failed or aborted
+  streams record their latest observed turn usage, and successful summaries
+  record their own usage.
 - Devin tool calls appear as display-only `devin` tool calls; pi "executes"
   them by replaying the recorded Devin result, then re-enters the provider.
 - `session/request_permission` prompts through pi's select UI and reports
@@ -116,7 +132,10 @@ unavailable.
   a failure card; it drops off the list when its `terminal_exit` arrives.
   In the picker, `x` asks Devin to stop a background shell and `d` drops an
   entry that was stranded without a terminal update (a genuinely running op
-  re-adds itself on its next update). Closing the runtime (`/new`, `/quit`,
+  re-adds itself on its next update). A cancelled prompt sweeps its in-turn
+  ops automatically after a short grace window (swept ids are tombstoned
+  against late updates); detached background shells stay listed until their
+  `terminal_exit`. Closing the runtime (`/new`, `/quit`,
   `/reload`) kills detached background shells together with the `devin acp`
   child — their process groups are signalled before the child dies, so
   nothing is orphaned.
