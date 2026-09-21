@@ -29,7 +29,6 @@ test("TokenSpeed computeRate and computeAverageRate", () => {
       { t: 1000, tokens: 10 },
       { t: 2000, tokens: 20 },
     ],
-    head: 0,
     startedAt: 1000,
     firstTokenAt: 1000,
     estimatedTokens: 30,
@@ -72,6 +71,49 @@ test("TokenSpeedRuntime stream lifecycle and mode cycling", async () => {
 
   const last = await runTokenSpeed(runtime, service.getLastSummary);
   assert.equal(last, end.summary);
+
+  await runtime.dispose();
+});
+
+test("computeRate ignores samples older than the window", () => {
+  const samples = [
+    { t: 0, tokens: 5000 },
+    { t: 1000, tokens: 5000 },
+    { t: 10_000, tokens: 4 },
+    { t: 10_100, tokens: 4 },
+  ];
+  const stream = {
+    samples,
+    startedAt: 0,
+    firstTokenAt: 0,
+    estimatedTokens: 10_008,
+    streaming: true,
+  };
+
+  // Window is [5100, 10100]: only the two tiny samples count. 8 tokens over
+  // a span clamped to MIN_SPAN_MS (250ms) → exactly 32 tok/s, not ~991 as it
+  // would be if the stale 10k samples leaked into the window.
+  const rate = computeRate(stream, 10_100);
+  assert.equal(rate, 32);
+});
+
+test("sliding-window samples stay bounded across a long stream", async () => {
+  const runtime = createTokenSpeedRuntime();
+  const service = runtime.runSync(TokenSpeedRuntime);
+
+  await runTokenSpeed(runtime, service.setMode("live"));
+  await runTokenSpeed(runtime, service.beginStream(0));
+
+  // 60s of streaming, one delta every 50ms — 1200 deltas, far more than the
+  // 5s window can hold. Regression guard: the old implementation never
+  // advanced its head index, so the buffer grew without bound.
+  for (let t = 50; t <= 60_000; t += 50) {
+    await runTokenSpeed(runtime, service.recordDelta("abcd", t));
+  }
+
+  const count = await runTokenSpeed(runtime, service.getWindowSampleCount);
+  // Exactly one window: samples at t ∈ [55000, 60000] every 50ms = 101.
+  assert.equal(count, 101, `expected exactly one 5s window of samples, got ${count}`);
 
   await runtime.dispose();
 });
