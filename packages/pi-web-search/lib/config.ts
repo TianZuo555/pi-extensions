@@ -643,14 +643,23 @@ export function resolveFetchChain(
   return dedupe([...(head ? [head] : []), ...order, ...available]);
 }
 
-const PDF_URL_RE = /\.pdf$/i;
+/**
+ * URL path suffixes that make `direct` lead the fetch chain: PDFs (free
+ * local unpdf extraction) and plain-text documents, data/config files, and
+ * raw source code — all served as text/* and returned verbatim, so scraper
+ * providers only add cost and the risk of reformatting. Server-rendered
+ * page suffixes (.php, .asp, .aspx, .jsp, ...) are deliberately excluded.
+ */
+const DIRECT_FIRST_URL_RE =
+  /\.(?:pdf|md|markdown|mdx|txt|text|rst|adoc|asciidoc|json|jsonc|json5|ya?ml|toml|xml|csv|tsv|ini|cfg|conf|env|properties|plist|sql|graphql|proto|ipynb|lock|js|mjs|cjs|jsx|ts|tsx|py|pyi|rb|go|rs|java|kt|kts|swift|c|cc|cpp|cxx|h|hh|hpp|cs|fs|scala|clj|ex|exs|erl|hs|lua|dart|sh|bash|zsh|fish|ps1|mk|cmake|gradle|css|scss|sass|less|styl|vue|svelte|astro|hbs|ejs|pug|twig|r|jl|m|mm)$/i;
 
 /**
- * Fetch chain for a specific URL. `direct` moves to the head for .pdf URLs so
- * free local extraction (unpdf) runs before credit-billed providers; scanned
- * or unparseable PDFs still fall through to Firecrawl's OCR-capable pipeline.
- * Explicit provider choices — a requested provider, `fetchProvider`, or
- * `fetchOrder` — are honored as-is.
+ * Fetch chain for a specific URL. `direct` moves to the head for PDF URLs so
+ * free local extraction (unpdf) runs before credit-billed providers, and for
+ * plain-text/source-file URLs so their verbatim text skips the scrapers
+ * entirely. Scanned or unparseable PDFs still fall through to Firecrawl's
+ * OCR-capable pipeline. Explicit provider choices — a requested provider,
+ * `fetchProvider`, or `fetchOrder` — are honored as-is.
  */
 export function resolveFetchChainForUrl(
   url: string,
@@ -665,6 +674,6 @@ export function resolveFetchChainForUrl(
   } catch {
     return chain;
   }
-  if (!PDF_URL_RE.test(pathname) || !chain.includes("direct")) return chain;
+  if (!DIRECT_FIRST_URL_RE.test(pathname) || !chain.includes("direct")) return chain;
   return ["direct", ...chain.filter((p) => p !== "direct")];
 }

@@ -166,8 +166,13 @@ Fetch.
   inline answer points at the file; extractions over ~200K chars are always
   persisted that way with a short preview inline.
   Scanned PDFs without a text layer fall through the chain to Firecrawl,
-  whose `auto` parser mode applies OCR. Explicit `fetchProvider`/`fetchOrder`
-  settings disable the direct-first reordering.
+  whose `auto` parser mode applies OCR.
+- **Raw text files**: plain-text document, data/config, and source-file URLs
+  (`.md`, `.txt`, `.json`, `.yaml`, `.csv`, `.py`, `.ts`, … — deliberately not
+  server-page suffixes like `.php`) also start at `direct`, which returns
+  `text/*` bodies verbatim: no scraper credits, no reformatting. Explicit
+  `fetchProvider`/`fetchOrder` settings disable the direct-first reordering
+  for both cases.
 
 ## License
 
