@@ -1,5 +1,11 @@
 # @tian.zuo/pi-devin-acp
 
+## 0.3.5
+
+### Patch Changes
+
+- [#94](https://github.com/TianZuo555/pi-extensions/pull/94) [`bec80c9`](https://github.com/TianZuo555/pi-extensions/commit/bec80c96674cd7e004e74c32e6de42a489e59be8) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Preserve Devin text/thinking stream order when ACP omits message IDs, so a final answer remains the last rendered block.
+
 ## 0.3.4
 
 ### Patch Changes
