@@ -561,6 +561,7 @@ export function streamDevin(deps: DevinProviderDeps) {
             }
             case "thought": {
               if (thinkingIndex === null || activity.messageId !== thinkingMessageId) {
+                closeText();
                 closeThinking();
                 output.content.push({ type: "thinking", thinking: "" });
                 thinkingIndex = output.content.length - 1;

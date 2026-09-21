@@ -132,6 +132,43 @@ test("streamDevin emits text deltas then done", async () => {
   assert.equal(done.message.usage.output, 5);
 });
 
+test("streamDevin preserves text-thought-text block order without message ids", async () => {
+  const { service, runtime } = fakeRuntime([
+    { type: "text", delta: "draft" },
+    { type: "thought", delta: "late thought" },
+    { type: "text", delta: "final answer" },
+  ]);
+  const stream = streamDevin({
+    runtime,
+    service,
+    replay: new DevinReplayStore(),
+    families: () => FAMILIES,
+    cwd: () => "/tmp",
+  })(MODEL as never, CONTEXT, undefined);
+  const events = await drain(stream);
+  const done = events.find((event) => event.type === "done");
+  assert.ok(done && done.type === "done");
+  assert.deepEqual(done.message.content, [
+    { type: "text", text: "draft" },
+    { type: "thinking", thinking: "late thought" },
+    { type: "text", text: "final answer" },
+  ]);
+
+  const transitions = events
+    .filter((event) =>
+      ["text_start", "text_end", "thinking_start", "thinking_end"].includes(event.type),
+    )
+    .map((event) => event.type);
+  assert.deepEqual(transitions, [
+    "text_start",
+    "text_end",
+    "thinking_start",
+    "thinking_end",
+    "text_start",
+    "text_end",
+  ]);
+});
+
 test("streamDevin ends with toolUse after a completed tool call and replays the result", async () => {
   const { service, runtime } = fakeRuntime([
     {
