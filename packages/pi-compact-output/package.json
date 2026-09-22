@@ -1,6 +1,6 @@
 {
   "name": "@tian.zuo/pi-compact-output",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "TUI-only Pi extension with bordered tool status previews and compact reasoning blocks with Ctrl+O expansion.",
   "type": "module",
   "keywords": [
