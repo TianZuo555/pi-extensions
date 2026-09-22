@@ -558,7 +558,7 @@ test("fallback chain follows searchOrder/fetchOrder sequence including monid", (
   }
 });
 
-test("resolveFetchChainForUrl leads with direct for .pdf URLs unless configured", () => {
+test("resolveFetchChainForUrl leads with direct for .pdf and plain-text URLs unless configured", () => {
   const env = snapshotEnv();
   const restoreFs = hidePiAuthFile();
   try {
@@ -587,17 +587,37 @@ test("resolveFetchChainForUrl leads with direct for .pdf URLs unless configured"
       "exa",
     ]);
 
-    // Non-PDF URLs and extension-less PDF paths keep the canonical order.
-    assert.deepEqual(resolveFetchChainForUrl("https://a.com/page", undefined, cfg), [
-      "firecrawl",
-      "exa",
-      "direct",
-    ]);
-    assert.deepEqual(resolveFetchChainForUrl("https://arxiv.org/pdf/2307.06435", undefined, cfg), [
-      "firecrawl",
-      "exa",
-      "direct",
-    ]);
+    // Plain-text document / data / source-file URLs: direct returns those
+    // verbatim, so it also leads — no scraper credits, no reformatting.
+    for (const [path, url] of [
+      ["raw README", "https://raw.githubusercontent.com/o/r/main/README.md?plain=1"],
+      ["json data", "https://a.com/data/config.json"],
+      ["yaml", "https://a.com/ci/pipeline.yaml"],
+      ["csv", "https://a.com/export/rows.csv"],
+      ["source file", "https://a.com/src/index.ts"],
+      ["shell script", "https://a.com/scripts/deploy.SH"],
+    ] as const) {
+      assert.deepEqual(
+        resolveFetchChainForUrl(url, undefined, cfg),
+        ["direct", "firecrawl", "exa"],
+        `${path} should lead with direct`,
+      );
+    }
+
+    // Server-rendered page suffixes and extension-less paths keep the
+    // canonical order: those are real HTML pages the scrapers must render.
+    for (const url of [
+      "https://a.com/page",
+      "https://a.com/page.php",
+      "https://a.com/view.asp",
+      "https://arxiv.org/pdf/2307.06435",
+    ]) {
+      assert.deepEqual(resolveFetchChainForUrl(url, undefined, cfg), [
+        "firecrawl",
+        "exa",
+        "direct",
+      ]);
+    }
 
     // Explicit provider choices are honored as-is.
     assert.deepEqual(resolveFetchChainForUrl("https://a.com/paper.pdf", "exa", cfg), [
