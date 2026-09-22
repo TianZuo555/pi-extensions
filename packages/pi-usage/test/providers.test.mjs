@@ -4,6 +4,7 @@ import {
   queryCodexUsage,
   queryCopilotUsage,
   queryDeepSeekUsage,
+  queryXiaomiUsage,
   queryZaiCnUsage,
   queryZaiUsage,
 } from "../lib/providers.ts";
@@ -418,6 +419,99 @@ test("DeepSeek usage errors on a balance-less response", async (t) => {
   globalThis.fetch = async () => jsonResponse({ is_available: true, balance_infos: [] });
 
   await assert.rejects(queryDeepSeekUsage("test-key", undefined, 50, 0), /no displayable data/);
+});
+
+const validXiaomiBalance = {
+  code: 0,
+  message: "",
+  data: {
+    balance: "21.66",
+    frozenBalance: "0.00",
+    currency: "CNY",
+    overdraftLimit: "0.00",
+    remainingOverdraftLimit: "0.00",
+    giftBalance: "21.66",
+    cashBalance: "0.00",
+  },
+};
+
+test("Xiaomi usage reports the money balance from the console cookie", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  let sentUrl = "";
+  let sentHeaders = {};
+  globalThis.fetch = async (url, init) => {
+    sentUrl = String(url);
+    sentHeaders = init?.headers ?? {};
+    return jsonResponse(validXiaomiBalance);
+  };
+
+  const report = await queryXiaomiUsage("api-platform_serviceToken=test", undefined, 50, 0);
+  const balance = report.windows[0];
+  assert.equal(report.name, "Xiaomi MiMo");
+  assert.equal(balance?.label, "Balance");
+  assert.equal(balance?.remaining, 21.66);
+  assert.equal(balance?.currency, "CNY");
+  assert.deepEqual(report.notes, ["Granted: ¥21.66"]);
+  assert.equal(formatStatusline(report), "xiaomi ¥21.66");
+
+  const body = formatReport({ id: report.id, name: report.name, status: "ready", report });
+  assert.match(body, /Xiaomi MiMo/);
+  assert.match(body, /Balance:\s+¥21\.66/);
+  assert.match(body, /Granted: ¥21\.66/);
+
+  // Cookie auth: no bearer token, credentials travel in the Cookie header.
+  assert.equal(sentUrl, "https://platform.xiaomimimo.com/api/v1/balance");
+  assert.equal(sentHeaders.Cookie, "api-platform_serviceToken=test");
+  assert.equal(sentHeaders.Authorization, undefined);
+});
+
+test("Xiaomi usage flags an insufficient balance and formats USD", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  globalThis.fetch = async () =>
+    jsonResponse({
+      code: 0,
+      message: "",
+      data: {
+        balance: "0.00",
+        frozenBalance: "0.00",
+        currency: "USD",
+        overdraftLimit: "0.00",
+        remainingOverdraftLimit: "0.00",
+        giftBalance: "0.00",
+        cashBalance: "0.50",
+      },
+    });
+
+  const report = await queryXiaomiUsage("test-cookie", undefined, 50, 0);
+  assert.equal(report.windows[0]?.remaining, 0);
+  assert.deepEqual(report.notes, ["Topped up: $0.50", "Balance insufficient for API calls"]);
+  assert.equal(formatStatusline(report), "xiaomi $0.00");
+});
+
+test("Xiaomi usage errors on a balance-less response", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  globalThis.fetch = async () => jsonResponse({ code: 0, message: "", data: {} });
+
+  await assert.rejects(queryXiaomiUsage("test-cookie", undefined, 50, 0), /no displayable data/);
+});
+
+test("Xiaomi usage errors on a non-zero console code", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  globalThis.fetch = async () => jsonResponse({ code: 401, message: "login required" });
+
+  await assert.rejects(queryXiaomiUsage("test-cookie", undefined, 50, 0), /code 401/);
 });
 
 test("Z.ai usage treats percentage as used and converts ms resets to seconds", async (t) => {

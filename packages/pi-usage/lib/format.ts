@@ -5,6 +5,7 @@ import {
   CODEX_PROVIDER_ID,
   COPILOT_PROVIDER_ID,
   DEEPSEEK_PROVIDER_ID,
+  XIAOMI_PROVIDER_ID,
   ZAI_CN_PROVIDER_ID,
   ZAI_PROVIDER_ID,
   formatMoney,
@@ -132,13 +133,14 @@ export function formatStatusline(report: ProviderReport): string | undefined {
     }
     return undefined;
   }
-  if (report.id === DEEPSEEK_PROVIDER_ID) {
-    // DeepSeek has no percentage quota — the footer shows the money balance.
+  if (report.id === DEEPSEEK_PROVIDER_ID || report.id === XIAOMI_PROVIDER_ID) {
+    // Money-balance providers have no percentage quota — the footer shows the
+    // balance (report.id doubles as the statusline label: `deepseek`, `xiaomi`).
     const balance = report.windows.find(
       (window) => window.remaining !== undefined && window.currency !== undefined,
     );
     if (balance?.remaining !== undefined && balance.currency !== undefined) {
-      return `deepseek ${formatMoney(balance.remaining, balance.currency)}`;
+      return `${report.id} ${formatMoney(balance.remaining, balance.currency)}`;
     }
     return undefined;
   }

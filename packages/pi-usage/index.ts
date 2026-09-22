@@ -1,5 +1,5 @@
 // usage — show OpenAI Codex, GitHub Copilot, Z.ai (GLM Coding Plan), Z.ai
-// China (BigModel), and DeepSeek account usage in the pi coding agent.
+// China (BigModel), DeepSeek, and Xiaomi MiMo account usage in the pi coding agent.
 //
 // Architecture: query cache and in-flight dedup live in an Effect v4
 // `UsageRuntime` service behind one `ManagedRuntime` (see `src/runtime.ts`).
@@ -13,12 +13,13 @@
 // Statusline:
 //   When the active model belongs to a supported provider, a compact meter is
 //   published to the footer (e.g. `codex 40% wk`, `copilot 49% premium`, or
-//   `deepseek ¥110.00`) and refreshed at most every 5 minutes.
+//   `deepseek ¥110.00`, `xiaomi ¥21.66`) and refreshed at most every 5 minutes.
 //
 // Credentials are resolved from the same store pi writes (~/.pi/agent/auth.json).
 // Codex uses the ChatGPT OAuth access token; Copilot uses the GitHub OAuth token;
-// Z.ai, Z.ai China, and DeepSeek use their API keys. Inspired by
-// @narumitw/pi-usage, trimmed to Codex, Copilot, Z.ai, and DeepSeek.
+// Z.ai, Z.ai China, and DeepSeek use their API keys. Xiaomi MiMo uses the
+// console session cookie (its API key cannot query balance). Inspired by
+// @narumitw/pi-usage, trimmed to Codex, Copilot, Z.ai, DeepSeek, and Xiaomi MiMo.
 
 import {
   BorderedLoader,
@@ -31,11 +32,13 @@ import {
   hasCopilotLoginInfo,
   hasDeepSeekLoginInfo,
   hasProviderLoginInfo,
+  hasXiaomiLoginInfo,
   hasZaiCnLoginInfo,
   hasZaiLoginInfo,
   resolveCodexToken,
   resolveCopilotToken,
   resolveDeepSeekToken,
+  resolveXiaomiToken,
   resolveZaiCnToken,
   resolveZaiToken,
 } from "./lib/auth.ts";
@@ -59,11 +62,13 @@ import {
   CODEX_PROVIDER_ID,
   COPILOT_PROVIDER_ID,
   DEEPSEEK_PROVIDER_ID,
+  XIAOMI_PROVIDER_ID,
   ZAI_CN_PROVIDER_ID,
   ZAI_PROVIDER_ID,
   queryCodexUsageEffect,
   queryCopilotUsageEffect,
   queryDeepSeekUsageEffect,
+  queryXiaomiUsageEffect,
   queryZaiCnUsageEffect,
   queryZaiUsageEffect,
 } from "./lib/providers.ts";
@@ -124,6 +129,17 @@ const PROVIDERS: ProviderQuerySpec[] = [
     hasLoginInfo: (ctx) => hasProviderLoginInfo(ctx, DEEPSEEK_PROVIDER_ID, hasDeepSeekLoginInfo),
     resolve: async () => resolveDeepSeekToken(),
     queryEffect: queryDeepSeekUsageEffect,
+  },
+  {
+    id: XIAOMI_PROVIDER_ID,
+    name: "Xiaomi MiMo",
+    configureHint:
+      "save the platform.xiaomimimo.com console cookie as xiaomi-console in ~/.pi/agent/auth.json or set MIMO_COOKIE",
+    // The `xiaomi` API key pi stores for model calls cannot query balance, so
+    // only the console cookie counts as configured here.
+    hasLoginInfo: () => hasXiaomiLoginInfo(),
+    resolve: async () => resolveXiaomiToken(),
+    queryEffect: queryXiaomiUsageEffect,
   },
 ];
 
@@ -390,7 +406,7 @@ export default function usageExtension(pi: ExtensionAPI): void {
 
   pi.registerCommand("usage", {
     description:
-      "Show OpenAI Codex, GitHub Copilot, Z.ai GLM Coding Plan (global and China), and DeepSeek usage",
+      "Show OpenAI Codex, GitHub Copilot, Z.ai GLM Coding Plan (global and China), DeepSeek, and Xiaomi MiMo usage",
     handler: async (args, ctx) => {
       if (args.trim()) {
         ctx.ui.notify("/usage takes no arguments; use its menu.", "warning");
