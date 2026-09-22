@@ -35,7 +35,6 @@ export interface Sample {
 
 export interface StreamState {
   samples: Sample[];
-  head: number;
   startedAt: number;
   firstTokenAt?: number;
   estimatedTokens: number;
@@ -65,19 +64,16 @@ export function formatDuration(ms: number): string {
 
 export function computeRate(stream: StreamState, now: number): number {
   const cutoff = now - WINDOW_MS;
-  let head = stream.head;
-  while (head < stream.samples.length && stream.samples[head].t < cutoff) {
-    head++;
-  }
-  if (head >= stream.samples.length) return 0;
-
   let tokens = 0;
-  for (let i = head; i < stream.samples.length; i++) {
-    tokens += stream.samples[i].tokens;
+  let oldest: Sample | undefined;
+  for (const sample of stream.samples) {
+    if (sample.t < cutoff) continue;
+    oldest ??= sample;
+    tokens += sample.tokens;
   }
-  if (tokens === 0) return 0;
+  if (oldest === undefined || tokens === 0) return 0;
 
-  const span = Math.max(now - stream.samples[head].t, MIN_SPAN_MS);
+  const span = Math.max(now - oldest.t, MIN_SPAN_MS);
   return (1000 * tokens) / span;
 }
 
@@ -92,6 +88,7 @@ export interface TokenSpeedRuntimeShape {
   readonly setMode: (mode: DisplayMode) => Effect.Effect<DisplayMode, TokenSpeedConfigError>;
   readonly cycleMode: Effect.Effect<DisplayMode, TokenSpeedConfigError>;
   readonly beginStream: (now: number) => Effect.Effect<void>;
+  readonly getWindowSampleCount: Effect.Effect<number>;
   readonly recordDelta: (
     delta: string,
     now: number,
@@ -120,7 +117,6 @@ const makeTokenSpeedRuntime = Effect.gen(function* () {
     lastSummary: "",
     stream: {
       samples: [],
-      head: 0,
       startedAt: 0,
       estimatedTokens: 0,
       streaming: false,
@@ -159,13 +155,16 @@ const makeTokenSpeedRuntime = Effect.gen(function* () {
       lastRender: 0,
       stream: {
         samples: [],
-        head: 0,
         startedAt: now,
         firstTokenAt: undefined,
         estimatedTokens: 0,
         streaming: true,
       },
     }));
+
+  const getWindowSampleCount: Effect.Effect<number> = SynchronizedRef.get(ref).pipe(
+    Effect.map((s) => s.stream.samples.length),
+  );
 
   const recordDelta = (
     delta: string,
@@ -182,12 +181,12 @@ const makeTokenSpeedRuntime = Effect.gen(function* () {
         if (stream.firstTokenAt === undefined) stream.firstTokenAt = now;
         const tokens = Math.max(1, Math.round(delta.length / CHARS_PER_TOKEN));
         stream.estimatedTokens += tokens;
-        stream.samples = [...stream.samples, { t: now, tokens }];
-
-        if (stream.head > 512) {
-          stream.samples = stream.samples.slice(stream.head);
-          stream.head = 0;
-        }
+        // Sliding window: drop samples older than the window so the buffer
+        // stays bounded by the delta rate inside WINDOW_MS (a long stream must
+        // not accumulate samples — or force O(n²) copies — forever).
+        const cutoff = now - WINDOW_MS;
+        stream.samples = stream.samples.filter((sample) => sample.t >= cutoff);
+        stream.samples.push({ t: now, tokens });
 
         if (now - s.lastRender < RENDER_INTERVAL_MS) {
           return [{ shouldRender: false }, { ...s, stream }];
@@ -244,6 +243,7 @@ const makeTokenSpeedRuntime = Effect.gen(function* () {
     setMode,
     cycleMode,
     beginStream,
+    getWindowSampleCount,
     recordDelta,
     endStream,
     getLastSummary,
