@@ -69,10 +69,7 @@ test("requestCommitMessage passes a normalized transcript with the commit system
     },
   };
 
-  const message = await runCommit(
-    runtime,
-    commit.requestCommitMessage(resolved, mockSnapshot, ""),
-  );
+  const message = await runCommit(runtime, commit.requestCommitMessage(resolved, mockSnapshot, ""));
 
   assert.equal(message, "fix: update runtime");
   assert.ok(captured);
