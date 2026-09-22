@@ -19,22 +19,30 @@ permissions, modes, and persistent sessions.
 ## Models
 
 Run `devin models list` to see the catalog. The extension registers one pi
-model per Devin model family/variant and resolves pi's thinking suffix to a
-concrete Devin row:
+model per Devin model family (plus `-1m` context variants where a family has
+them); pi's thinking level selects the Devin effort:
 
-| pi model                       | resolves to (examples)            |
-| ------------------------------ | --------------------------------- |
-| `devin/adaptive`               | Devin's auto model selection      |
-| `devin/swe-2`                  | `swe-2-medium` (default)          |
-| `devin/swe-2:max`              | `swe-2-max`                       |
-| `devin/claude-opus-5:high`     | `claude-opus-5-high`              |
-| `devin/claude-opus-5-fast:low` | `claude-opus-5-low-fast`          |
-| `devin/gpt-5.4:off`            | `gpt-5-4-none`                    |
-| `devin/gpt-5.4-fast:high`      | `gpt-5-4-high-priority`           |
-| `devin/claude-sonnet-4.6:high` | `claude-sonnet-4-6-thinking`      |
+| pi model                      | runs as (examples)             |
+| ----------------------------- | ------------------------------ |
+| `devin/adaptive`              | Devin's auto model selection   |
+| `devin/swe-2`                 | SWE-2 (no thinking requested)  |
+| `devin/swe-2:max`             | SWE-2 Max                      |
+| `devin/claude-opus-5:high`    | Claude Opus 5 High             |
+| `devin/gpt-5.6-sol:off`       | GPT-5.6 Sol No Thinking        |
+| `devin/claude-sonnet-4.6-1m`  | Claude Sonnet 4.6 1M           |
 
-Requested thinking levels resolve to the highest available Devin variant at or
+Requested thinking levels resolve to the highest available Devin effort at or
 below that level (e.g. `:xhigh` on a family without xhigh picks `high`).
+Without a `:level` suffix pi requests no thinking: `off` uses the family's
+`none` variant where it has one, else its lowest effort (some families always
+reason). Fast/priority serving is a session toggle, not a model — see
+`/devin-fast` below.
+
+Devin's ACP surface addresses `model` at family granularity and carries the
+variant dimensions in separate `thought_level` and `speed` config options
+(devin 3000.11+), so a resolved row is written as the closest triple the
+session advertises: family anchor + clamped effort + speed. Builds that accept
+concrete row ids directly keep the single-write behavior.
 
 Model discovery runs `devin models list`, caches the parsed catalog in
 `~/.pi/devin-acp/models.json`, and falls back to a bundled snapshot when the CLI is
@@ -42,7 +50,7 @@ unavailable.
 
 ## Commands
 
-- `/devin` — current session, model, mode, and turn stats
+- `/devin` — current session, model, mode, fast tier, and turn stats
 - `/devin reset` — drop the Devin session binding (next turn starts fresh)
 - `/devin sessions` — list Devin sessions; attach or delete one
 - `/devin-tasks` — list Devin operations still in flight (slow execs,
@@ -63,6 +71,13 @@ unavailable.
 - `/devin yolo [on|off]` — persistently pin Devin to `bypass` mode
   (`~/.pi/devin-acp/settings.json`); while on, `/devin mode` stays bypass and
   any permission request that still arrives is auto-approved
+- `/devin-fast [on|off]` — standalone command: no argument toggles Devin's
+  fast/priority serving tier, `on`/`off` sets it explicitly (the ACP `speed`
+  option; persisted in `~/.pi/devin-acp/settings.json`); the footer shows
+  `devin:<model> · fast:on|off|n/a` (n/a when the family has no priority
+  tier). Changes apply to the next ACP turn; an in-flight turn keeps its
+  original serving tier and pricing across all tool-replay segments.
+  Also available as `/devin fast [on|off]`
 - `/devin models` — re-discover models and re-register the picker
 - `/devin login` — trigger Devin's browser authentication
 - `/devin doctor` — binary, auth, catalog, and runtime diagnostics

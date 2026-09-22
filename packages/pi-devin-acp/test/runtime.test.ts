@@ -13,7 +13,7 @@ import {
   type TranscriptContext,
 } from "@earendil-works/pi-ai";
 import type { DevinModelFamily } from "../lib/models.ts";
-import type { DevinAcpClient } from "../lib/acp-client.ts";
+import type { DevinAcpClient, DevinConfigOption } from "../lib/acp-client.ts";
 import {
   createDevinRuntime,
   DevinRuntime,
@@ -39,6 +39,9 @@ class FakeClient {
   modes: string[] = [];
   cancelled: string[] = [];
   configSets: { configId: string; value: string }[] = [];
+  /** Config options advertised by new/load sessions and refreshed on writes. */
+  configOptions: DevinConfigOption[] | undefined;
+  onSetConfigOption: ((configId: string, value: string) => void) | undefined;
   onClose: (() => void) | undefined;
   customHandler: ((method: string, params: unknown) => void) | undefined;
 
@@ -59,12 +62,16 @@ class FakeClient {
   async newSession(_cwd: string) {
     const id = `sess-${++this.nextId}`;
     this.createdSessions.push(id);
-    return { sessionId: id, modes: { currentModeId: "accept-edits" } };
+    return {
+      sessionId: id,
+      modes: { currentModeId: "accept-edits" },
+      configOptions: this.configOptions,
+    };
   }
   async loadSession(id: string) {
     this.loaded.push(id);
     if (this.failLoads.has(id)) throw new Error("Session not found");
-    return { sessionId: id };
+    return { sessionId: id, configOptions: this.configOptions };
   }
   async prompt(sessionId: string, blocks: ContentBlock[], opts?: { clientMessageId?: string }) {
     this.prompts.push({ sessionId, blocks, clientMessageId: opts?.clientMessageId });
@@ -83,7 +90,8 @@ class FakeClient {
   }
   async setConfigOption(_id: string, configId: string, value: string) {
     this.configSets.push({ configId, value });
-    return [];
+    this.onSetConfigOption?.(configId, value);
+    return this.configOptions ?? [];
   }
   async listSessions() {
     return [];
@@ -105,6 +113,7 @@ const TURN = (over: Partial<Parameters<DevinRuntimeShape["beginStreamTurn"]>[0]>
   blocks: [{ type: "text" as const, text: "hi" }],
   modelId: "swe-2",
   concreteModelId: "swe-2-medium",
+  modelCost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   cwd: "/tmp/proj",
   ...over,
 });
@@ -132,6 +141,87 @@ test("beginStreamTurn creates a session, syncs model, and streams a result", asy
   const snapshot = await runDevin(runtime, service.snapshot);
   assert.equal(snapshot.sessionId, "sess-1");
   assert.equal(snapshot.turns, 1);
+  await runtime.dispose();
+});
+
+const select = (id: string, values: string[]): DevinConfigOption => ({
+  id,
+  options: values.map((value) => ({ value, name: value })),
+});
+
+test("beginStreamTurn maps the row onto model + thought_level config options", async () => {
+  const { fake, runtime, service } = await makeRuntime();
+  // devin 3000.11+ anchors `model` at one row per family and carries the
+  // effort in `thought_level`.
+  fake.configOptions = [
+    select("model", ["swe-2-high", "adaptive"]),
+    select("thought_level", ["medium", "high", "max"]),
+  ];
+  await runDevin(runtime, service.beginStreamTurn(TURN({ concreteModelId: "swe-2-max" })));
+  assert.deepEqual(fake.configSets, [
+    { configId: "model", value: "swe-2-high" },
+    { configId: "thought_level", value: "max" },
+  ]);
+  await runtime.dispose();
+});
+
+test("model writes plan against the refreshed per-family option set", async () => {
+  const { fake, runtime, service } = await makeRuntime();
+  fake.configOptions = [
+    select("model", ["claude-opus-5-medium", "gemini-3-8-flash-medium"]),
+    select("thought_level", ["medium", "high", "max"]),
+  ];
+  // Switching families swaps the advertised thought_level set; the effort
+  // must clamp onto the refreshed values, not the stale ones.
+  fake.onSetConfigOption = (configId) => {
+    if (configId === "model") {
+      fake.configOptions = [
+        select("model", ["claude-opus-5-medium", "gemini-3-8-flash-medium"]),
+        select("thought_level", ["low", "high"]),
+      ];
+    }
+  };
+  await runDevin(runtime, service.beginStreamTurn(TURN({ concreteModelId: "claude-opus-5-max" })));
+  assert.deepEqual(fake.configSets, [
+    { configId: "model", value: "claude-opus-5-medium" },
+    { configId: "thought_level", value: "high" },
+  ]);
+  await runtime.dispose();
+});
+
+test("beginStreamTurn maps fast rows onto the speed config option", async () => {
+  const { fake, runtime, service } = await makeRuntime();
+  fake.configOptions = [
+    select("model", ["claude-opus-5-medium"]),
+    select("thought_level", ["low", "medium", "high", "xhigh", "max"]),
+    select("speed", ["standard", "fast"]),
+  ];
+  await runDevin(
+    runtime,
+    service.beginStreamTurn(TURN({ concreteModelId: "claude-opus-5-high-fast" })),
+  );
+  assert.deepEqual(fake.configSets, [
+    { configId: "model", value: "claude-opus-5-medium" },
+    { configId: "thought_level", value: "high" },
+    { configId: "speed", value: "fast" },
+  ]);
+  await runtime.dispose();
+});
+
+test("runSummaryTurn maps the summary model onto config options", async () => {
+  const { fake, runtime, service } = await makeRuntime();
+  fake.configOptions = [
+    select("model", ["swe-2-high"]),
+    select("thought_level", ["medium", "high", "max"]),
+  ];
+  await runDevin(
+    runtime,
+    service.runSummaryTurn("<conversation>\nx\n</conversation>", undefined, "swe-2-max"),
+  );
+  assert.deepEqual(fake.configSets, [
+    { configId: "model", value: "swe-2-high" },
+    { configId: "thought_level", value: "max" },
+  ]);
   await runtime.dispose();
 });
 
@@ -670,7 +760,7 @@ for (const stage of ["start", "new", "load", "mode", "config"] as const) {
         );
         fake.loadSession = async (id) => {
           await blocked.wait();
-          return { sessionId: id };
+          return { sessionId: id, configOptions: undefined };
         };
       } else if (stage === "new") {
         const original = fake.newSession.bind(fake);
@@ -854,6 +944,13 @@ const LIFECYCLE_FAMILIES: DevinModelFamily[] = [
   },
 ];
 
+/** Row pricing is the billing source — cost-sensitive tests price rows too. */
+const pricedLifecycle = (cost: Model<Api>["cost"]): DevinModelFamily[] =>
+  LIFECYCLE_FAMILIES.map((family) => ({
+    ...family,
+    rows: family.rows.map((row) => ({ ...row, cost })),
+  }));
+
 test("provider abort returns during startup without waiting for ACP", async (t) => {
   const { fake, runtime, service } = await makeRuntime();
   t.after(async () => {
@@ -1030,6 +1127,122 @@ for (const buffered of [false, true]) {
   });
 }
 
+for (const initialFast of [false, true]) {
+  for (const buffered of [false, true]) {
+    for (const stopReason of ["end_turn", "refusal", "cancelled"] as const) {
+      test(`turn pricing survives fast ${initialFast ? "on → off" : "off → on"} (${buffered ? "buffered" : "live"}, ${stopReason})`, async (t) => {
+        const { fake, runtime, service } = await makeRuntime();
+        t.after(() => runtime.dispose());
+        const families: DevinModelFamily[] = [
+          {
+            id: "claude-opus-5",
+            name: "Claude Opus 5",
+            aliases: [],
+            rows: [false, true].map((fast) => ({
+              id: `claude-opus-5-high${fast ? "-fast" : ""}`,
+              name: "Claude Opus 5 High",
+              effort: "high",
+              fast,
+              contextWindow: 1_000_000,
+              cost: {
+                input: fast ? 10 : 5,
+                output: fast ? 50 : 25,
+                cacheRead: fast ? 1 : 0.5,
+                cacheWrite: 0,
+              },
+            })),
+          },
+        ];
+        const model: Model<Api> = {
+          ...LIFECYCLE_MODEL,
+          id: "claude-opus-5",
+          contextWindow: 1_000_000,
+          cost: families[0].rows[0].cost,
+        };
+        const pending = deferred<{
+          stopReason: string;
+          usage: { inputTokens: number; outputTokens: number };
+        }>();
+        const emitUsage = (inputTokens: number, outputTokens: number) => {
+          fake.sessions.get("sess-1")!({
+            sessionUpdate: "usage_update",
+            used: inputTokens + outputTokens,
+            size: 1_000_000,
+            _meta: {
+              "cognition.ai/inputTokens": inputTokens,
+              "cognition.ai/outputTokens": outputTokens,
+            },
+          } as never);
+        };
+        const finish = () => {
+          emitUsage(2000, 200);
+          pending.resolve({ stopReason, usage: { inputTokens: 2000, outputTokens: 200 } });
+        };
+        fake.prompt = async (sessionId, blocks) => {
+          fake.prompts.push({ sessionId, blocks });
+          emitUsage(1000, 100);
+          fake.sessions.get(sessionId)!({
+            sessionUpdate: "tool_call",
+            toolCallId: "read",
+            title: "read",
+            status: "completed",
+          } as never);
+          if (buffered) finish();
+          return pending.promise;
+        };
+        let fast = initialFast;
+        const replay = new DevinReplayStore();
+        // Re-create the provider too: model discovery can re-register it
+        // while the runtime still owns the same ACP turn.
+        const provider = () =>
+          streamDevin({
+            runtime,
+            service,
+            replay,
+            families: () => families,
+            cwd: () => "/tmp",
+            fast: () => fast,
+          });
+        const context = transcriptContext([{ role: "user", content: "do it", timestamp: 0 }]);
+        const first = await provider()(model, context, { reasoning: "high" }).result();
+        assert.equal(first.stopReason, "toolUse");
+        const initialCost = initialFast ? 0.015 : 0.0075;
+        assert.ok(Math.abs(first.usage.cost.total - initialCost) < 1e-12);
+        const initialConfigSets = [...fake.configSets];
+
+        fast = !initialFast;
+        const finalStream = provider()(model, context, { reasoning: "high" });
+        if (!buffered) finish();
+        const final = await finalStream.result();
+        assert.equal(
+          final.stopReason,
+          stopReason === "end_turn" ? "stop" : stopReason === "cancelled" ? "aborted" : "error",
+        );
+        assert.equal(fake.prompts.length, 1, "re-attachment must keep the existing ACP prompt");
+        assert.deepEqual(fake.configSets, initialConfigSets, "fast applies only to the next turn");
+        assert.ok(Math.abs(final.usage.cost.total - initialCost * 2) < 1e-12);
+
+        fake.prompt = async (sessionId, blocks) => {
+          fake.prompts.push({ sessionId, blocks });
+          return { stopReason: "end_turn", usage: { inputTokens: 1000, outputTokens: 100 } };
+        };
+        const next = await provider()(
+          model,
+          transcriptContext([{ role: "user", content: "next turn", timestamp: 1 }]),
+          { reasoning: "high" },
+        ).result();
+        assert.equal(next.stopReason, "stop");
+        assert.equal(fake.prompts.length, 2);
+        assert.equal(
+          (await runDevin(runtime, service.snapshot)).concreteModel,
+          `claude-opus-5-high${fast ? "-fast" : ""}`,
+        );
+        assert.ok(Math.abs(next.usage.cost.total - (fast ? 0.015 : 0.0075)) < 1e-12);
+      });
+    }
+  }
+}
+
 for (const outcome of ["error", "aborted", "stop"] as const) {
   test(`usage survives replay segments and terminal ${outcome}`, async (t) => {
     const { fake, runtime, service } = await makeRuntime();
@@ -1068,7 +1281,7 @@ for (const outcome of ["error", "aborted", "stop"] as const) {
       runtime,
       service,
       replay: new DevinReplayStore(),
-      families: () => LIFECYCLE_FAMILIES,
+      families: () => pricedLifecycle({ input: 2, output: 4, cacheRead: 1, cacheWrite: 3 }),
       cwd: () => "/tmp/proj",
     });
     const model = {
@@ -1147,7 +1360,7 @@ test("load-replayed usage seeds the snapshot but never the turn's accounting", a
         "cognition.ai/cachedReadTokens": 89273,
       },
     } as never);
-    return { sessionId: id };
+    return { sessionId: id, configOptions: undefined };
   };
   const prompted = deferred<void>();
   fake.prompt = async (sessionId, blocks) => {

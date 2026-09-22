@@ -10,6 +10,7 @@
  */
 
 import type { DevinConfigOption } from "../lib/acp-client.ts";
+import type { DevinModelPricing } from "../lib/models.ts";
 import type { DevinToolView } from "../lib/tool-content.ts";
 
 /**
@@ -114,6 +115,8 @@ export const TERMINAL_TOOL_STATUSES = new Set(["completed", "failed"]);
 export class DevinTurnController {
   /** The base user prompt text, used to match provider re-attachment. */
   readonly prompt: string;
+  /** Pricing captured when this ACP turn starts; shared by every replay segment. */
+  readonly modelCost: Readonly<DevinModelPricing>;
   /** Assigned once the ACP session id is known (session/new or load). */
   sessionId: string;
   /**
@@ -170,9 +173,10 @@ export class DevinTurnController {
    */
   #lastRequestTokens = 0;
 
-  constructor(prompt: string, sessionId: string) {
+  constructor(prompt: string, sessionId: string, modelCost: DevinModelPricing) {
     this.prompt = prompt;
     this.sessionId = sessionId;
+    this.modelCost = Object.freeze({ ...modelCost });
   }
 
   isClosed(): boolean {

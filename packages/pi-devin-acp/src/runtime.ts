@@ -39,6 +39,11 @@ import {
   type DevinUsage,
 } from "./turn.ts";
 import type { DevinToolView } from "../lib/tool-content.ts";
+import {
+  MODEL_SYNC_CONFIG_IDS,
+  planDevinConfigSet,
+  type DevinModelPricing,
+} from "../lib/models.ts";
 
 export class DevinRuntimeClosedError extends Data.TaggedError("DevinRuntimeClosedError")<{
   readonly message: string;
@@ -100,6 +105,32 @@ export class DevinSessionError extends Data.TaggedError("DevinSessionError")<{
   readonly message: string;
 }> {}
 
+/**
+ * Write a model selection onto an ACP session as the session's advertised
+ * config options describe it: modern devin addresses `model` at family-anchor
+ * granularity and carries the variant dimensions in `thought_level`/`speed`,
+ * while older builds accept the concrete row id in one write. Every response
+ * may refresh the advertised options (effort levels are per family), so each
+ * write is planned against the latest values.
+ */
+async function applyModelConfig(
+  acp: DevinAcpClient,
+  id: string,
+  rowId: string,
+  options: DevinConfigOption[],
+  check: () => void,
+): Promise<DevinConfigOption[]> {
+  let current = options;
+  for (const configId of MODEL_SYNC_CONFIG_IDS) {
+    const set = planDevinConfigSet(configId, rowId, current);
+    if (!set) continue;
+    const next = await acp.setConfigOption(id, set.configId, set.value);
+    check();
+    if (next.length > 0) current = next;
+  }
+  return current;
+}
+
 export type DevinRuntimeError = DevinRuntimeClosedError | DevinSessionError;
 
 export interface DevinSessionBindingState {
@@ -157,6 +188,8 @@ export interface DevinTurnRequest {
   readonly modelId: string;
   /** Concrete devin model id resolved from the group + thinking level. */
   readonly concreteModelId: string;
+  /** Pricing of the selected row, snapshotted only when starting a new turn. */
+  readonly modelCost: DevinModelPricing;
   readonly cwd: string;
   readonly systemPrompt?: string;
   /** Serialized pi history, sent only when the session needs bootstrapping. */
@@ -683,8 +716,13 @@ const makeRuntime = (createClient: DevinClientFactory, options?: DevinRuntimeOpt
         modeId = next;
       }
       if (concreteModelId && syncedModelId !== concreteModelId) {
-        await acp.setConfigOption(id, "model", concreteModelId);
-        check();
+        configOptions = await applyModelConfig(
+          acp,
+          id,
+          concreteModelId,
+          configOptions ?? [],
+          check,
+        );
         syncedModelId = concreteModelId;
       }
     };
@@ -752,7 +790,7 @@ const makeRuntime = (createClient: DevinClientFactory, options?: DevinRuntimeOpt
                   request.signal?.removeEventListener("abort", onAbort);
                   if (activeAbort === turnAbort) activeAbort = undefined;
                 };
-                const controller = new DevinTurnController(request.prompt, "");
+                const controller = new DevinTurnController(request.prompt, "", request.modelCost);
                 active = controller;
                 try {
                   check();
@@ -938,7 +976,13 @@ const makeRuntime = (createClient: DevinClientFactory, options?: DevinRuntimeOpt
                   check();
                   if (modelId) {
                     try {
-                      await acp.setConfigOption(created.sessionId, "model", modelId);
+                      await applyModelConfig(
+                        acp,
+                        created.sessionId,
+                        modelId,
+                        created.configOptions ?? [],
+                        check,
+                      );
                     } catch {
                       // Best-effort: a summary on the session default beats none.
                     }

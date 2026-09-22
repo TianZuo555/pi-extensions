@@ -214,6 +214,8 @@ export interface DevinProviderDeps {
   replay: DevinReplayStore;
   families: () => DevinModelFamily[];
   cwd: () => string;
+  /** Whether /devin-fast selected the priority serving tier. */
+  fast?: () => boolean;
   /** Model-facing surface for turn activity (e.g. widget updates). */
   onActivity?: (activity: DevinActivity) => void;
 }
@@ -260,6 +262,8 @@ export function streamDevin(deps: DevinProviderDeps) {
 
       let turnController: DevinTurnController | undefined;
       let turnCleared = false;
+      /** Priced by the resolved devin row: /devin-fast tiers cost more. */
+      let billingModel = model;
       const clearTurn = () => {
         if (turnCleared) return;
         turnCleared = true;
@@ -269,7 +273,7 @@ export function streamDevin(deps: DevinProviderDeps) {
       const fail = (message: string) => {
         // On failure, account for whatever turn usage was observed but not
         // yet persisted on an earlier segment.
-        output.usage = billedUsage(turnController?.takeBillableUsage(), model);
+        output.usage = billedUsage(turnController?.takeBillableUsage(), billingModel);
         output.stopReason = options?.signal?.aborted ? "aborted" : "error";
         output.errorMessage = message;
         clearTurn();
@@ -290,9 +294,15 @@ export function streamDevin(deps: DevinProviderDeps) {
         }
 
         const group = findDevinGroup(deps.families(), model.id);
-        const concreteModelId = group
-          ? resolveDevinModelRow(group, options?.reasoning ?? "off").id
-          : model.id;
+        const resolvedRow = group
+          ? resolveDevinModelRow(group, options?.reasoning ?? "off", deps.fast?.() ?? false)
+          : undefined;
+        const concreteModelId = resolvedRow?.id ?? model.id;
+        // The registered group prices the standard tier; the selected row
+        // bills at its own rates (a /devin-fast tier costs more).
+        if (resolvedRow) {
+          billingModel = { ...model, cost: { ...resolvedRow.cost } };
+        }
 
         const summaryRequest = isSummarizationRequest(prompt);
         if (summaryRequest) {
@@ -320,7 +330,7 @@ export function streamDevin(deps: DevinProviderDeps) {
             partial: output,
           });
           // Compaction/summary turns consume tokens too; record their usage.
-          output.usage = billedUsage(result.usage, model);
+          output.usage = billedUsage(result.usage, billingModel);
           output.stopReason = "stop";
           stream.push({ type: "done", reason: "stop", message: output });
           clearTurn();
@@ -349,6 +359,7 @@ export function streamDevin(deps: DevinProviderDeps) {
             blocks,
             modelId: model.id,
             concreteModelId,
+            modelCost: billingModel.cost,
             cwd: deps.cwd(),
             systemPrompt,
             historyBootstrap: piHistoryBootstrap(context),
@@ -359,6 +370,10 @@ export function streamDevin(deps: DevinProviderDeps) {
         );
 
         turnController = controller;
+        // Re-attachment keeps the original ACP model even if /devin-fast or
+        // the catalog changed between replay segments. Bill at that turn's
+        // captured rates; the new selection applies only to the next turn.
+        billingModel = { ...model, cost: controller.modelCost };
         let textIndex: number | null = null;
         let textBuffer = "";
         let textMessageId: string | undefined;
@@ -394,7 +409,7 @@ export function streamDevin(deps: DevinProviderDeps) {
         };
 
         const attachUsage = () => {
-          output.usage = billedUsage(controller.takeBillableUsage(), model);
+          output.usage = billedUsage(controller.takeBillableUsage(), billingModel);
         };
 
         const endWithToolUse = () => {

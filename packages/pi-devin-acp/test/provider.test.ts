@@ -9,7 +9,7 @@ import {
 import { DevinReplayStore } from "../lib/replay.ts";
 import { mapUsage, streamDevin } from "../src/provider.ts";
 import { DevinTurnController, type DevinActivity, type DevinUsage } from "../src/turn.ts";
-import type { DevinRuntimeInstance, DevinRuntimeShape } from "../src/runtime.ts";
+import type { DevinRuntimeInstance, DevinRuntimeShape, DevinTurnRequest } from "../src/runtime.ts";
 import type { DevinModelFamily } from "../lib/models.ts";
 
 const FAMILIES: DevinModelFamily[] = [
@@ -36,6 +36,18 @@ const FAMILIES: DevinModelFamily[] = [
   },
 ];
 
+/**
+ * The selected devin row is the billing source, so cost-sensitive tests must
+ * price the fixture rows like their synthetic model.
+ */
+const priced = (cost: {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+}): DevinModelFamily[] =>
+  FAMILIES.map((family) => ({ ...family, rows: family.rows.map((row) => ({ ...row, cost })) }));
+
 /** Drive a canned activity sequence through a real controller. */
 function fakeRuntime(
   activities: DevinActivity[],
@@ -47,10 +59,10 @@ function fakeRuntime(
 ) {
   const controllers: DevinTurnController[] = [];
   const service = {
-    beginStreamTurn: (request: Record<string, unknown>) => {
+    beginStreamTurn: (request: DevinTurnRequest) => {
       capture.prompts = (capture.prompts ?? 0) + 1;
-      capture.turnRequest = request;
-      const controller = new DevinTurnController("do it", "sess-1");
+      capture.turnRequest = { ...request };
+      const controller = new DevinTurnController("do it", "sess-1", request.modelCost);
       controllers.push(controller);
       // Push on the next tick so the provider's drain loop is waiting.
       queueMicrotask(() => {
@@ -371,6 +383,71 @@ test("request snapshots accumulate once; the prompt-response echo dedups", async
   assert.equal(done.message.usage.totalTokens, 15);
 });
 
+test("turns bill the selected row's pricing (fast tier)", async () => {
+  const families: DevinModelFamily[] = [
+    {
+      id: "claude-opus-5",
+      name: "Claude Opus 5",
+      aliases: [],
+      rows: [
+        {
+          id: "claude-opus-5-high",
+          name: "Claude Opus 5 High",
+          contextWindow: 1_000_000,
+          cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 0 },
+          effort: "high",
+        },
+        {
+          id: "claude-opus-5-high-fast",
+          name: "Claude Opus 5 High Fast",
+          contextWindow: 1_000_000,
+          cost: { input: 10, output: 50, cacheRead: 1, cacheWrite: 0 },
+          effort: "high",
+          fast: true,
+        },
+      ],
+    },
+  ];
+  const capture: { turnRequest?: Record<string, unknown> } = {};
+  const { service, runtime } = fakeRuntime(
+    [{ type: "usage", usage: { inputTokens: 1000, outputTokens: 100 } }],
+    capture,
+  );
+  const stream = streamDevin({
+    runtime,
+    service,
+    replay: new DevinReplayStore(),
+    families: () => families,
+    cwd: () => "/tmp",
+    fast: () => true,
+  })(
+    {
+      id: "claude-opus-5",
+      name: "Claude Opus 5",
+      api: "devin-acp",
+      provider: "devin",
+      baseUrl: "devin://acp",
+      reasoning: true,
+      input: ["text", "image"],
+      cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 0 },
+      contextWindow: 1_000_000,
+      maxTokens: 64_000,
+    } as never,
+    CONTEXT,
+    undefined,
+  );
+  const events = await drain(stream);
+  const done = events.find((e) => e.type === "done");
+  assert.ok(done && done.type === "done");
+  // /devin-fast resolves the priority-tier row …
+  assert.equal(capture.turnRequest?.concreteModelId, "claude-opus-5-high-fast");
+  // … and bills at ITS rates, not the registered standard-tier group cost:
+  // 1000 input × $10/1M + 100 output × $50/1M.
+  assert.ok(Math.abs(done.message.usage.cost.input - 0.01) < 1e-9);
+  assert.ok(Math.abs(done.message.usage.cost.output - 0.005) < 1e-9);
+  assert.ok(Math.abs(done.message.usage.cost.total - 0.015) < 1e-9);
+});
+
 test("summarization requests run in a disposable session with the resolved model", async () => {
   const capture: { summaryModelId?: string } = {};
   const { service, runtime } = fakeRuntime([], capture);
@@ -427,7 +504,12 @@ test("each segment bills its request's usage; the turn sums to the total", async
   // Delta billing: every replay segment persists only the turn's
   // not-yet-billed share, so pi's footer fills live while the session log
   // still sums to the turn's full billable total.
-  const controller = new DevinTurnController("do it", "sess-1");
+  const controller = new DevinTurnController("do it", "sess-1", {
+    input: 2,
+    output: 4,
+    cacheRead: 1,
+    cacheWrite: 3,
+  });
   const waves: DevinActivity[][] = [
     [
       { type: "usage", usage: { inputTokens: 100, outputTokens: 20 } },
@@ -478,7 +560,7 @@ test("each segment bills its request's usage; the turn sums to the total", async
       runtime,
       service,
       replay: new DevinReplayStore(),
-      families: () => FAMILIES,
+      families: () => priced({ input: 2, output: 4, cacheRead: 1, cacheWrite: 3 }),
       cwd: () => "/tmp",
     })(
       { ...MODEL, cost: { input: 2, output: 4, cacheRead: 1, cacheWrite: 3 } } as never,
@@ -575,7 +657,8 @@ for (const cachedReadTokens of [0, 10000, 145000]) {
             service,
             runtime,
             replay: new DevinReplayStore(),
-            families: () => FAMILIES,
+            families: () =>
+              priced({ input: 3, output: 15, cacheRead: 0.3, cacheWrite: cacheWritePrice }),
             cwd: () => "/tmp",
           })(model, CONTEXT),
         );

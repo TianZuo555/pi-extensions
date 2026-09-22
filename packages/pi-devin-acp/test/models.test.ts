@@ -1,14 +1,17 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  clampDevinEffort,
   devinGroups,
   findDevinGroup,
   modelCacheTtlMs,
   parseDevinModels,
   parseRowMeta,
+  planDevinConfigSet,
   resolveDevinModelRow,
   rowMarkers,
 } from "../lib/models.ts";
+import type { DevinConfigOption } from "../lib/acp-client.ts";
 
 const MODELS_OUTPUT = `Available models (47 families)
 
@@ -61,30 +64,35 @@ or switch models in a session with \`/model <name>\`.
 
 test("rowMarkers extracts effort/fast/context suffixes", () => {
   assert.deepEqual(rowMarkers("claude-opus-5-high"), {
+    base: "claude-opus-5",
     effort: "high",
     thinking: false,
     fast: false,
     contextVariant: undefined,
   });
   assert.deepEqual(rowMarkers("gpt-5-4-none-priority"), {
+    base: "gpt-5-4",
     effort: "none",
     thinking: false,
     fast: true,
     contextVariant: undefined,
   });
   assert.deepEqual(rowMarkers("claude-sonnet-4-6-thinking-1m"), {
+    base: "claude-sonnet-4-6",
     effort: undefined,
     thinking: true,
     fast: false,
     contextVariant: "1m",
   });
   assert.deepEqual(rowMarkers("MODEL_GPT_5_2_XHIGH"), {
+    base: "MODEL_GPT_5_2",
     effort: "xhigh",
     thinking: false,
     fast: false,
     contextVariant: undefined,
   });
   assert.deepEqual(rowMarkers("swe-1-6-fast"), {
+    base: "swe-1-6",
     effort: undefined,
     thinking: false,
     fast: true,
@@ -118,18 +126,21 @@ test("parseDevinModels parses families, aliases, and rows; skips noise", () => {
   assert.equal(gpt52?.rows[0].id, "MODEL_GPT_5_2_LOW");
 });
 
-test("buildGroups splits fast and context variants into separate pi models", () => {
+test("buildGroups splits context variants into separate pi models", () => {
   const families = parseDevinModels(MODELS_OUTPUT);
   const groups = devinGroups(families);
   const ids = groups.map((g) => g.id);
   assert.ok(ids.includes("claude-opus-5"));
-  assert.ok(ids.includes("claude-opus-5-fast"));
   assert.ok(ids.includes("gpt-5.4"));
-  assert.ok(ids.includes("gpt-5.4-fast"));
+  // Serving tiers stay inside the family model: /devin-fast picks them.
+  assert.ok(!ids.includes("claude-opus-5-fast"));
+  assert.ok(!ids.includes("gpt-5.4-fast"));
+  const opus = groups.find((g) => g.id === "claude-opus-5")!;
+  assert.equal(opus.rows.length, 8);
   // claude-sonnet-4.6 splits by context variant: base + 1m
   assert.ok(ids.includes("claude-sonnet-4.6"));
   assert.ok(ids.includes("claude-sonnet-4.6-1m"));
-  // swe-1.6-fast family has a single (fast) group → keeps its own slug
+  // swe-1.6-fast family has a single (fast) row → keeps its own slug
   const sweFast = groups.find((g) => g.id === "swe-1.6-fast");
   assert.ok(sweFast);
   assert.equal(sweFast.rows.length, 1);
@@ -156,13 +167,6 @@ test("resolveDevinModelRow maps thinking levels to concrete variants", () => {
     contextWindow: 262_000,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     reasoning: true,
-    defaultRow: {
-      id: "swe-2-medium",
-      name: "SWE-2 Medium",
-      contextWindow: 262_000,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      effort: "medium",
-    },
     rows: [
       {
         id: "swe-2-high",
@@ -190,8 +194,12 @@ test("resolveDevinModelRow maps thinking levels to concrete variants", () => {
   assert.equal(resolveDevinModelRow(floorOnly, "low").id, "swe-2-medium");
   assert.equal(resolveDevinModelRow(floorOnly, "minimal").id, "swe-2-medium");
 
-  const fast = findDevinGroup(families, "gpt-5.4-fast")!;
-  assert.equal(resolveDevinModelRow(fast, "high").id, "gpt-5-4-high-priority");
+  // /devin-fast tier: same family resolves within its priority rows.
+  const fast = findDevinGroup(families, "gpt-5.4")!;
+  assert.equal(resolveDevinModelRow(fast, "high", true).id, "gpt-5-4-high-priority");
+  assert.equal(resolveDevinModelRow(fast, "high", false).id, "gpt-5-4-high");
+  // A family without a priority tier falls back to all its rows.
+  assert.equal(resolveDevinModelRow(floorOnly, "high", true).id, "swe-2-high");
 
   // Binary-thinking family: any level → thinking row; off → plain row
   const sonnet = findDevinGroup(families, "claude-sonnet-4.6")!;
@@ -208,4 +216,161 @@ test("resolveDevinModelRow maps thinking levels to concrete variants", () => {
 
 test("modelCacheTtlMs distinguishes live and fallback caches", () => {
   assert.ok(modelCacheTtlMs("live") > modelCacheTtlMs("fallback"));
+});
+
+const select = (id: string, values: string[]): DevinConfigOption => ({
+  id,
+  options: values.map((value) => ({ value, name: value })),
+});
+
+/** devin 3000.11+ shape: family-anchor model values + variant options. */
+const MODERN_OPTIONS = [
+  select("model", ["swe-2-high", "claude-opus-5-medium", "adaptive"]),
+  select("thought_level", ["medium", "high", "max"]),
+];
+
+/** devin 3000.10 shape: every catalog row is an accepted model value. */
+const LEGACY_OPTIONS = [
+  select("model", ["swe-2-high", "swe-2-medium", "swe-2-max", "claude-opus-5-medium"]),
+  select("thought_level", ["medium", "high", "max"]),
+];
+
+test("rowMarkers parses fusion rows as lead + verbatim sidekick", () => {
+  // The lead uid carries the markers — including a mid-id `-fast`.
+  assert.deepEqual(rowMarkers("fusion-claude-opus-5-max-fast-sidekick-swe-2-medium"), {
+    base: "fusion-claude-opus-5-sidekick-swe-2-medium",
+    effort: "max",
+    thinking: false,
+    fast: true,
+    contextVariant: undefined,
+  });
+  // The sidekick uid is anchor identity — its own tier marker stays verbatim.
+  assert.deepEqual(
+    rowMarkers("fusion-claude-fable-5-1-medium-sidekick-gpt-5-6-luna-high-priority"),
+    {
+      base: "fusion-claude-fable-5-1-sidekick-gpt-5-6-luna-high-priority",
+      effort: "medium",
+      thinking: false,
+      fast: false,
+      contextVariant: undefined,
+    },
+  );
+});
+
+test("planDevinConfigSet maps fusion rows onto the advertised anchor", () => {
+  const options = [
+    select("model", ["fusion-claude-opus-5-high-sidekick-swe-2-medium", "swe-2-high"]),
+    select("thought_level", ["low", "medium", "high", "xhigh", "max"]),
+    select("speed", ["standard", "fast"]),
+  ];
+  // Devin rejects concrete fusion rows as model values: pick the anchor for
+  // the same lead family + sidekick, then carry the LEAD's effort and tier.
+  const row = "fusion-claude-opus-5-max-fast-sidekick-swe-2-medium";
+  assert.deepEqual(planDevinConfigSet("model", row, options), {
+    configId: "model",
+    value: "fusion-claude-opus-5-high-sidekick-swe-2-medium",
+  });
+  assert.deepEqual(planDevinConfigSet("thought_level", row, options), {
+    configId: "thought_level",
+    value: "max",
+  });
+  assert.deepEqual(planDevinConfigSet("speed", row, options), {
+    configId: "speed",
+    value: "fast",
+  });
+  // Sidekick variants without an anchor fall back to the closest one.
+  assert.deepEqual(
+    planDevinConfigSet("model", "fusion-claude-opus-5-high-sidekick-swe-2-max", options),
+    { configId: "model", value: "fusion-claude-opus-5-high-sidekick-swe-2-medium" },
+  );
+});
+
+test("clampDevinEffort clamps onto the advertised levels", () => {
+  const levels = ["medium", "high", "max"];
+  assert.equal(clampDevinEffort("max", levels), "max");
+  assert.equal(clampDevinEffort("high", levels), "high");
+  assert.equal(clampDevinEffort("xhigh", levels), "high");
+  // Below the floor: lowest available, never upward past the request.
+  assert.equal(clampDevinEffort("low", levels), "medium");
+  assert.equal(clampDevinEffort("none", levels), "medium");
+  assert.equal(clampDevinEffort(undefined, levels), undefined);
+  assert.equal(clampDevinEffort("max", []), undefined);
+});
+
+test("planDevinConfigSet anchors the model and carries effort via thought_level", () => {
+  // Anchor-only model select: the family anchor + thought_level carry the row.
+  assert.deepEqual(planDevinConfigSet("model", "swe-2-max", MODERN_OPTIONS), {
+    configId: "model",
+    value: "swe-2-high",
+  });
+  assert.deepEqual(planDevinConfigSet("thought_level", "swe-2-max", MODERN_OPTIONS), {
+    configId: "thought_level",
+    value: "max",
+  });
+  assert.deepEqual(planDevinConfigSet("thought_level", "swe-2-medium", MODERN_OPTIONS), {
+    configId: "thought_level",
+    value: "medium",
+  });
+  // No speed option for this family → no write.
+  assert.equal(planDevinConfigSet("speed", "swe-2-max", MODERN_OPTIONS), undefined);
+
+  // A row id the model select accepts already encodes effort — write it as-is.
+  assert.deepEqual(planDevinConfigSet("model", "swe-2-high", MODERN_OPTIONS), {
+    configId: "model",
+    value: "swe-2-high",
+  });
+  assert.equal(planDevinConfigSet("thought_level", "swe-2-high", MODERN_OPTIONS), undefined);
+
+  // Legacy full-row selects keep the single-write behavior.
+  assert.deepEqual(planDevinConfigSet("model", "swe-2-max", LEGACY_OPTIONS), {
+    configId: "model",
+    value: "swe-2-max",
+  });
+  assert.equal(planDevinConfigSet("thought_level", "swe-2-max", LEGACY_OPTIONS), undefined);
+
+  // No advertised options (unknown/devin-less session) → single raw write.
+  assert.deepEqual(planDevinConfigSet("model", "swe-2-max", []), {
+    configId: "model",
+    value: "swe-2-max",
+  });
+  assert.equal(planDevinConfigSet("thought_level", "swe-2-max", []), undefined);
+});
+
+test("planDevinConfigSet maps fast rows onto the speed option", () => {
+  const options = [
+    select("model", ["claude-opus-5-medium"]),
+    select("thought_level", ["low", "medium", "high", "xhigh", "max"]),
+    select("speed", ["standard", "fast"]),
+  ];
+  assert.deepEqual(planDevinConfigSet("model", "claude-opus-5-high-fast", options), {
+    configId: "model",
+    value: "claude-opus-5-medium",
+  });
+  assert.deepEqual(planDevinConfigSet("thought_level", "claude-opus-5-high-fast", options), {
+    configId: "thought_level",
+    value: "high",
+  });
+  assert.deepEqual(planDevinConfigSet("speed", "claude-opus-5-high-fast", options), {
+    configId: "speed",
+    value: "fast",
+  });
+  assert.deepEqual(planDevinConfigSet("speed", "claude-opus-5-high", options), {
+    configId: "speed",
+    value: "standard",
+  });
+});
+
+test("planDevinConfigSet clamps effort onto the advertised thought_level", () => {
+  const options = [
+    select("model", ["gemini-3-8-flash-medium"]),
+    select("thought_level", ["low", "high"]),
+  ];
+  assert.deepEqual(planDevinConfigSet("model", "gemini-3-8-flash-max", options), {
+    configId: "model",
+    value: "gemini-3-8-flash-medium",
+  });
+  assert.deepEqual(planDevinConfigSet("thought_level", "gemini-3-8-flash-max", options), {
+    configId: "thought_level",
+    value: "high",
+  });
 });
