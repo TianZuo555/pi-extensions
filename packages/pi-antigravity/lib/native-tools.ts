@@ -9,16 +9,17 @@
  * never re-executed — they replay through the display-only `antigravity`
  * wrapper tool instead.
  */
+import type { JsonObject } from "@earendil-works/pi-ai";
 
 export interface NativeToolCall {
   /** pi builtin tool name (`read`, `ls`, `grep`, `find`). */
   tool: string;
   /** Arguments conforming to the builtin's schema. */
-  args: Record<string, unknown>;
+  args: JsonObject;
 }
 
 /** First non-empty string among the given keys (agy mixes key casings). */
-function str(input: Record<string, unknown>, keys: string[]): string | undefined {
+function str(input: JsonObject, keys: string[]): string | undefined {
   for (const key of keys) {
     const value = input[key];
     if (typeof value === "string" && value.trim()) return value;
@@ -26,7 +27,7 @@ function str(input: Record<string, unknown>, keys: string[]): string | undefined
   return undefined;
 }
 
-function num(input: Record<string, unknown>, keys: string[]): number | undefined {
+function num(input: JsonObject, keys: string[]): number | undefined {
   for (const key of keys) {
     const value = input[key];
     if (typeof value === "number" && Number.isInteger(value) && value > 0) return value;
@@ -34,7 +35,7 @@ function num(input: Record<string, unknown>, keys: string[]): number | undefined
   return undefined;
 }
 
-function onlyKeys(input: Record<string, unknown>, allowed: readonly string[]): boolean {
+function onlyKeys(input: JsonObject, allowed: readonly string[]): boolean {
   const accepted = new Set(allowed);
   return Object.entries(input).every(
     ([key, value]) => value === undefined || value === null || accepted.has(key),
@@ -58,10 +59,7 @@ const END_LINE_KEYS = ["EndLine", "end_line", "endLine"] as const;
  * Map an agy tool step to a native pi toolCall when re-execution is safe.
  * Returns undefined for everything that must stay on the replay wrapper.
  */
-export function mapAgyToolToNative(
-  tool: string,
-  args: Record<string, unknown>,
-): NativeToolCall | undefined {
+export function mapAgyToolToNative(tool: string, args: JsonObject): NativeToolCall | undefined {
   switch (tool) {
     case "view_file": {
       if (!onlyKeys(args, [...VIEW_PATH_KEYS, ...START_LINE_KEYS, ...END_LINE_KEYS])) {

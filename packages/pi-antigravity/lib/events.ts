@@ -4,6 +4,7 @@
  * tolerantly: unknown fields are kept, unknown event names are surfaced as
  * `unknown` so callers can ignore or log them without crashing.
  */
+import type { JsonObject } from "@earendil-works/pi-ai";
 
 /** First event of every stream: session capabilities and tool inventory. */
 export interface AgyInit {
@@ -29,7 +30,7 @@ export interface AgyToolError {
 /** Live parameters of an ACTIVE tool step. */
 export interface AgyToolInfo {
   name?: string;
-  parameters?: Record<string, unknown>;
+  parameters?: JsonObject;
   /** Tool output on DONE steps (agy nests it here, not at the step top level). */
   output?: string;
   /** Error detail on ERROR steps (agy nests it here, not at the step top level). */

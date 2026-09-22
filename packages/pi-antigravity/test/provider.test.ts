@@ -10,7 +10,7 @@ import {
 } from "../src/provider.ts";
 import { AgyTurnController } from "../lib/turn.ts";
 import { agyIncompleteToolError } from "../lib/prompt.ts";
-import { newTurnOutcome } from "../lib/reducer.ts";
+import { newTurnOutcome, type AgyActivity } from "../lib/reducer.ts";
 import { AntigravityRuntime, createAntigravityRuntime } from "../src/runtime.ts";
 import { AgyReplayStore } from "../lib/replay.ts";
 import { AgyPiBridge } from "../lib/bridge.ts";
@@ -774,7 +774,7 @@ test("streamAntigravity replays native-tool errors instead of re-executing them"
 
 test("streamAntigravity reports cumulative agy usage exactly once across tool cards", async () => {
   const { controller, collect } = makeStreamHarness();
-  for (const activity of [
+  const activities: AgyActivity[] = [
     { type: "usage", usage: { input_tokens: 13_712, output_tokens: 264, total_tokens: 13_976 } },
     { type: "tool_start", stepId: 1, name: "view_file", args: { AbsolutePath: "/tmp/a" } },
     {
@@ -799,7 +799,8 @@ test("streamAntigravity reports cumulative agy usage exactly once across tool ca
       error: "permission denied",
       usage: { input_tokens: 44_909, output_tokens: 610, total_tokens: 45_519 },
     },
-  ] as const) {
+  ];
+  for (const activity of activities) {
     controller.push(activity);
   }
 

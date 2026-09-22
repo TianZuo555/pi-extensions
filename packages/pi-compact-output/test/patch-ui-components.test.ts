@@ -594,11 +594,14 @@ test("restoration restores the exact saved methods", () => {
 });
 
 test("unsupported Pi versions leave original rendering active", () => {
-  assert.equal(
-    isSupportedPiVersion(VERSION),
-    VERSION.startsWith("0.83.") || VERSION.startsWith("0.84.") || VERSION.startsWith("0.85."),
-  );
-  if (VERSION.startsWith("0.83.") || VERSION.startsWith("0.84.") || VERSION.startsWith("0.85.")) {
+  const supported =
+    VERSION.startsWith("0.83.") ||
+    VERSION.startsWith("0.84.") ||
+    VERSION.startsWith("0.85.") ||
+    VERSION.startsWith("0.86.") ||
+    VERSION.startsWith("0.87.");
+  assert.equal(isSupportedPiVersion(VERSION), supported);
+  if (supported) {
     return;
   }
 

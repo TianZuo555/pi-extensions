@@ -1,3 +1,4 @@
+import { normalizeContext } from "@earendil-works/pi-ai";
 import {
   RemoteCompactionProtocolError,
   type CollectedCompaction,
@@ -40,7 +41,7 @@ export async function requestRemoteCompactionV2(
     });
   };
 
-  const stream = request.provider.stream(request.model, request.context, {
+  const stream = request.provider.stream(request.model, normalizeContext(request.context), {
     apiKey: request.apiKey,
     headers: request.headers,
     env: request.env,

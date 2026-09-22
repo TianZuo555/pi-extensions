@@ -415,7 +415,7 @@ export function streamDevin(deps: DevinProviderDeps) {
             arguments: {
               tool: view.tool ?? view.title ?? "tool",
               title: view.title ?? "tool call",
-              kind: view.kind,
+              ...(view.kind ? { kind: view.kind } : {}),
               summary: summarizeDevinCall(view),
             },
           };
@@ -444,7 +444,7 @@ export function streamDevin(deps: DevinProviderDeps) {
             arguments: {
               tool: view.tool ?? view.title ?? "tool",
               title: view.title ?? "tool call",
-              kind: view.kind,
+              ...(view.kind ? { kind: view.kind } : {}),
               summary: summarizeDevinCall(view),
             },
           };

@@ -8,10 +8,10 @@ shellEmulator: true
 overrides:
   brace-expansion: ^5.0.8
   "@xmldom/xmldom": ^0.9.12
-  "@earendil-works/pi-ai": ^0.85.1
-  "@earendil-works/pi-coding-agent": ^0.85.1
-  "@earendil-works/pi-tui": ^0.85.1
-  "@earendil-works/pi-agent-core": ^0.85.1
+  "@earendil-works/pi-ai": ^0.87.0
+  "@earendil-works/pi-coding-agent": ^0.87.0
+  "@earendil-works/pi-tui": ^0.87.0
+  "@earendil-works/pi-agent-core": ^0.87.0
 
 # Don't install package versions published less than 2 days ago (the
 # built-in default is 1 day). Applies to all deps including transitive
@@ -29,6 +29,16 @@ minimumReleaseAge: 2880
 # that entry for you; `pnpm update --no-save` (what Dependabot runs)
 # cannot, so security-update PRs need it added by hand. See AGENTS.md.
 minimumReleaseAgeStrict: false
+
+# 0.87.0 was published <2 days ago; allow the pin until it ages past
+# minimumReleaseAge. Drop these entries once the versions mature.
+minimumReleaseAgeExclude:
+  - '@earendil-works/pi-ai@0.87.0'
+  - '@earendil-works/pi-coding-agent@0.87.0'
+  - '@earendil-works/pi-tui@0.87.0'
+  - '@earendil-works/pi-agent-core@0.87.0'
+  - '@earendil-works/chord@0.87.0'
+  - '@earendil-works/pi-telemetry@0.87.0'
 
 # Dependencies of the pi runtime whose install scripts npm ran automatically;
 # pnpm 11 denies dependency build scripts unless explicitly allowed here.

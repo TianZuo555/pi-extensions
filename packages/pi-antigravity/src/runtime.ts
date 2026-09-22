@@ -8,6 +8,7 @@
  * reset only when the selected model changes or the user asks (/agy-reset).
  */
 
+import type { JsonObject } from "@earendil-works/pi-ai";
 import { Context, Data, Effect, Layer, ManagedRuntime, Exit, Cause, Result } from "effect";
 import { AgySpawnError, AgyStallError, type AgyTurnRequest } from "../lib/agy-client.ts";
 import {
@@ -135,7 +136,7 @@ export interface AntigravityRuntimeShape {
   readonly pushBridgeCall: (call: {
     readonly id: string;
     readonly tool: string;
-    readonly args: Record<string, unknown>;
+    readonly args: JsonObject;
   }) => boolean;
   readonly reset: Effect.Effect<void, AntigravityRuntimeClosedError>;
   readonly snapshot: Effect.Effect<AntigravityStateSnapshot, AntigravityRuntimeClosedError>;

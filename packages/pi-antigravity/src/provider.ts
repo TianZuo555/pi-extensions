@@ -22,6 +22,7 @@ import {
   type AssistantMessage,
   type AssistantMessageEventStream,
   type Context,
+  type JsonObject,
   type Model,
   type SimpleStreamOptions,
   type ThinkingLevel,
@@ -381,7 +382,7 @@ export function streamAntigravity(
             type: "toolCall";
             id: string;
             name: string;
-            arguments: { tool: string; input: Record<string, unknown> };
+            arguments: { tool: string; input: JsonObject };
           };
         };
         const pendingReplayTools = new Map<string, PendingReplayTool>();

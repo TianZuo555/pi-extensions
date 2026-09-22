@@ -13,7 +13,7 @@ TUI-only [pi coding agent](https://pi.dev) extension that keeps the transcript c
 
 ## Requirements
 
-- Pi **0.83.x** (`@earendil-works/pi-coding-agent >=0.83.0 <0.84.0`). On other versions the extension installs safely but leaves Pi's default rendering in place and shows one warning in TUI mode.
+- Pi **0.83.x–0.87.x** (`@earendil-works/pi-coding-agent >=0.83.0 <0.88.0`). On other versions the extension installs safely but leaves Pi's default rendering in place and shows one warning in TUI mode.
 
 ## Install
 
