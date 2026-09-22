@@ -1,5 +1,11 @@
 # @tian.zuo/pi-compact-output
 
+## 0.1.2
+
+### Patch Changes
+
+- [#103](https://github.com/TianZuo555/pi-extensions/pull/103) [`09ffcc1`](https://github.com/TianZuo555/pi-extensions/commit/09ffcc1a46be322022adc08034dccd9c323af120) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Support Pi 0.87.x — the TUI internals pi-compact-output patches are unchanged, so the version gate now accepts 0.86.x/0.87.x in addition to 0.83.x–0.85.x.
+
 ## 0.1.1
 
 ### Patch Changes
