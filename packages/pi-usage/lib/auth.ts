@@ -8,6 +8,9 @@
 // (https://api.z.ai/api/monitor/usage/quota/limit), Z.ai China usage
 // (https://open.bigmodel.cn/api/monitor/usage/quota/limit), and DeepSeek balance
 // (https://api.deepseek.com/user/balance) are authenticated with plain API keys.
+// Xiaomi MiMo balance (https://platform.xiaomimimo.com/api/v1/balance) is the
+// odd one out: it is the web console API and only accepts Xiaomi account
+// session cookies — the `sk-` model API key cannot query balance.
 //
 // Pi persists both under ~/.pi/agent/auth.json. We read that file directly (it is
 // the same store pi itself writes) so `/usage` reports every configured provider
@@ -32,6 +35,7 @@ const COPILOT_TOKEN_ENV = [
 const ZAI_TOKEN_ENV = ["ZAI_API_KEY"];
 const ZAI_CN_TOKEN_ENV = ["ZAI_CODING_CN_API_KEY", "ZHIPU_API_KEY"];
 const DEEPSEEK_TOKEN_ENV = ["DEEPSEEK_API_KEY"];
+const XIAOMI_TOKEN_ENV = ["MIMO_COOKIE"];
 const AUTH_RESOLVE_TIMEOUT_MS = 30_000;
 
 interface PiAuthEntry {
@@ -229,6 +233,28 @@ export function resolveDeepSeekToken(): ResolvedToken | undefined {
   if (key) return { token: key, source: "~/.pi/agent/auth.json" };
 
   for (const name of DEEPSEEK_TOKEN_ENV) {
+    const value = process.env[name];
+    if (value) return { token: value, source: `$${name}` };
+  }
+  return undefined;
+}
+
+/** Return whether a supported Xiaomi console credential source is configured. */
+export function hasXiaomiLoginInfo(): boolean {
+  return resolveXiaomiToken() !== undefined;
+}
+
+/**
+ * Resolve the Xiaomi console session cookie used for the balance endpoint.
+ *
+ * Stored in pi's auth store under `xiaomi-console` (kept apart from the `xiaomi`
+ * api_key entry pi manages for model calls), with an env fallback.
+ */
+export function resolveXiaomiToken(): ResolvedToken | undefined {
+  const key = readPiAuth()["xiaomi-console"]?.key;
+  if (key) return { token: key, source: "~/.pi/agent/auth.json" };
+
+  for (const name of XIAOMI_TOKEN_ENV) {
     const value = process.env[name];
     if (value) return { token: value, source: `$${name}` };
   }

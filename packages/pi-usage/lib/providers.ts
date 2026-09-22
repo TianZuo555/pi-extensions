@@ -1,5 +1,5 @@
 // Provider queries and normalization for Codex, GitHub Copilot, Z.ai (global
-// and China), and DeepSeek usage.
+// and China), DeepSeek, and Xiaomi MiMo usage.
 //
 // Each provider is normalized into a small, presentation-friendly `ProviderReport`
 // so the formatter does not need to know provider-specific JSON shapes.
@@ -18,12 +18,14 @@ export const COPILOT_PROVIDER_ID = "github-copilot";
 export const ZAI_PROVIDER_ID = "zai";
 export const ZAI_CN_PROVIDER_ID = "zai-coding-cn";
 export const DEEPSEEK_PROVIDER_ID = "deepseek";
+export const XIAOMI_PROVIDER_ID = "xiaomi";
 
 const CODEX_USAGE_URL = "https://chatgpt.com/backend-api/wham/usage";
 const COPILOT_USAGE_URL = "https://api.github.com/copilot_internal/user";
 const ZAI_QUOTA_URL = "https://api.z.ai/api/monitor/usage/quota/limit";
 const ZAI_CN_QUOTA_URL = "https://open.bigmodel.cn/api/monitor/usage/quota/limit";
 const DEEPSEEK_BALANCE_URL = "https://api.deepseek.com/user/balance";
+const XIAOMI_BALANCE_URL = "https://platform.xiaomimimo.com/api/v1/balance";
 
 // Copilot's internal endpoint expects the editor client headers plus a REST API
 // version. Values mirror the GitHub Copilot chat client.
@@ -478,6 +480,83 @@ function normalizeDeepSeekReport(data: Record<string, unknown>): ProviderReport 
   return {
     id: DEEPSEEK_PROVIDER_ID,
     name: "DeepSeek",
+    windows,
+    notes,
+  };
+}
+
+// --- Xiaomi MiMo -----------------------------------------------------------
+
+// Xiaomi MiMo's pay-as-you-go balance lives on the web console API
+// (platform.xiaomimimo.com/api/v1/balance), which authenticates with Xiaomi
+// account session cookies — the `sk-` model API key is rejected with an SSO
+// login redirect and cannot query balance. The body is { code, message, data:
+// { balance, cashBalance, giftBalance, frozenBalance, currency, ... } } with
+// decimal-string money fields: `balance` is the total the API draws from,
+// `giftBalance` the promotional credit, and `cashBalance` the prepaid cash.
+// Like DeepSeek there is no usage window or percentage, so the total balance
+// is surfaced as a single monetary window.
+export function queryXiaomiUsageEffect(
+  cookie: string,
+  signal?: AbortSignal,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+  retryCount = DEFAULT_RETRY_COUNT,
+): Effect.Effect<ProviderReport, ProviderQueryFailure> {
+  return queryFromFetch(
+    fetchProviderJsonEffect(
+      XIAOMI_BALANCE_URL,
+      "",
+      { Cookie: cookie, "User-Agent": "pi-usage" },
+      signal,
+      timeoutMs,
+      retryCount,
+      cookie,
+    ),
+    normalizeXiaomiReport,
+  );
+}
+
+export async function queryXiaomiUsage(
+  cookie: string,
+  signal?: AbortSignal,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+  retryCount = DEFAULT_RETRY_COUNT,
+): Promise<ProviderReport> {
+  return runQueryPromise(queryXiaomiUsageEffect(cookie, signal, timeoutMs, retryCount), signal);
+}
+
+function normalizeXiaomiReport(data: Record<string, unknown>): ProviderReport {
+  const code = asNumber(data.code);
+  if (code !== undefined && code !== 0) {
+    throw new Error(`Xiaomi balance endpoint returned code ${code}.`);
+  }
+  const payload = asObject(data.data) ?? {};
+  const windows: UsageWindow[] = [];
+  const notes: string[] = [];
+  const currency = asString(payload.currency) ?? "CNY";
+  const total = asNumber(payload.balance);
+  if (total !== undefined) {
+    windows.push({ label: "Balance", remaining: total, currency });
+  }
+  const gift = asNumber(payload.giftBalance);
+  if (gift !== undefined && gift > 0) {
+    notes.push(`Granted: ${formatMoney(gift, currency)}`);
+  }
+  const cash = asNumber(payload.cashBalance);
+  if (cash !== undefined && cash > 0) {
+    notes.push(`Topped up: ${formatMoney(cash, currency)}`);
+  }
+  if (total !== undefined && total <= 0) {
+    notes.push("Balance insufficient for API calls");
+  }
+
+  if (windows.length === 0 && notes.length === 0) {
+    throw new Error("Xiaomi balance endpoint returned no displayable data.");
+  }
+
+  return {
+    id: XIAOMI_PROVIDER_ID,
+    name: "Xiaomi MiMo",
     windows,
     notes,
   };

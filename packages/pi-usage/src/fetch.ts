@@ -100,7 +100,9 @@ function fetchProviderJsonOnceEffect(
         const response = await fetch(url, {
           headers: {
             Accept: "application/json",
-            Authorization: `Bearer ${token}`,
+            // Cookie-authenticated providers pass an empty token and carry
+            // their own credentials in extraHeaders.
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
             ...extraHeaders,
           },
           signal: controller.signal,

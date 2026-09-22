@@ -5,9 +5,9 @@ Release notes:
 · [GitHub releases](https://github.com/TianZuo555/pi-extensions/releases)
 
 Show **OpenAI Codex**, **GitHub Copilot**, **Z.ai (GLM Coding Plan)**, **Z.ai
-Coding Plan (China)**, and **DeepSeek** account usage from inside the
-[pi coding agent](https://pi.dev), plus a `/tokens` dashboard of the token and
-cost history pi records locally.
+Coding Plan (China)**, **DeepSeek**, and **Xiaomi MiMo** account usage from
+inside the [pi coding agent](https://pi.dev), plus a `/tokens` dashboard of the
+token and cost history pi records locally.
 
 `/usage` opens a menu with the current usage for every configured provider, and
 a compact meter is shown in the footer whenever the active model belongs to a
@@ -32,6 +32,10 @@ GLM Coding Plan (China) · Pro
 DeepSeek
   Balance:          ¥27.00
   Topped up: ¥27.00
+
+Xiaomi MiMo
+  Balance:          ¥21.66
+  Granted: ¥21.66
 ```
 
 `/tokens` opens an interactive token and cost dashboard with an ASCII/Unicode
@@ -85,10 +89,11 @@ bar chart, peak breakdown, and scrollable model rankings (up to top 10 models):
 ## Statusline
 
 When the active model provider is Codex, Copilot, Z.ai, Z.ai Coding Plan
-(China), or DeepSeek, the footer shows a compact Azure Blue meter such as
-`codex 60% wk`, `copilot 31% credits`, `copilot 49% premium`, `zai 59% 5h`,
-`zai-cn 82% 5h`, or `deepseek ¥27.00`, refreshed at most every five minutes
-(results are cached to avoid hammering the endpoints).
+(China), DeepSeek, or Xiaomi MiMo, the footer shows a compact Azure Blue meter
+such as `codex 60% wk`, `copilot 31% credits`, `copilot 49% premium`,
+`zai 59% 5h`, `zai-cn 82% 5h`, `deepseek ¥27.00`, or `xiaomi ¥21.66`,
+refreshed at most every five minutes (results are cached to avoid hammering the
+endpoints).
 
 ## How /tokens works
 
@@ -101,6 +106,39 @@ start date is more than 7 days older than the window are skipped; non-standard
 names are always scanned. Cost is the model's list price recorded at request
 time — subscription plans (Codex, Copilot, GLM Coding Plan) may cover it, which
 the panel notes as _cost at list prices_.
+
+## Xiaomi MiMo setup
+
+Xiaomi MiMo's balance is only exposed by the web console API
+(`platform.xiaomimimo.com/api/v1/balance`), which authenticates with **Xiaomi
+account session cookies** — the `sk-` model API key you use for `/login` (and
+for model calls) cannot query balance. The cookie is only needed for this
+extension's usage display.
+
+1. Log in at <https://platform.xiaomimimo.com/#/console/balance> and open the
+   balance page (the one showing 账户余额 / Account Balance).
+2. Open DevTools (`F12`, or `Cmd+Option+I` on macOS) → **Network** tab.
+3. Refresh the page (`Cmd/Ctrl+R`) so the balance request is captured.
+4. In the Network tab's filter box type `balance` — you should see a request
+   named `balance` (`GET …/api/v1/balance`). Click it.
+5. In **Headers** → **Request Headers**, find the `Cookie:` line. Right-click
+   the value → **Copy value** (on older Chrome: select the whole line and copy).
+   The parts that matter are `api-platform_serviceToken`, `api-platform_ph`,
+   `api-platform_slh`, and `userId`; copying the entire header is fine.
+6. Store it in pi's auth store, `~/.pi/agent/auth.json`, under the
+   `xiaomi-console` entry (kept separate from the `xiaomi` api_key entry so
+   `/login` never clobbers it):
+
+```json
+"xiaomi-console": { "type": "cookie", "key": "api-platform_serviceToken=…; api-platform_ph=…; api-platform_slh=…; userId=…" }
+```
+
+Alternatively export the same string as `MIMO_COOKIE` (the auth store entry
+wins when both are set).
+
+When the cookie expires the balance query starts failing: the statusline goes
+blank and `/usage` shows the query failure for Xiaomi MiMo. Repeat the steps
+above with a fresh `Cookie:` header to recover.
 
 ## Install
 
