@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { AssistantMessage } from "@earendil-works/pi-ai";
+import {
+  getCurrentSystemPrompt,
+  type AssistantMessage,
+  type TranscriptContext,
+} from "@earendil-works/pi-ai";
 import { Effect } from "effect";
 import {
   CommitRuntime,
@@ -11,6 +15,7 @@ import {
   type ResolvedModel,
 } from "../src/runtime.ts";
 import { parseModelReference } from "../lib/config.ts";
+import { COMMIT_SYSTEM_PROMPT } from "../lib/prompt.ts";
 
 function mockResolvedModel(responseText: string): ResolvedModel {
   return {
@@ -40,6 +45,40 @@ const mockSnapshot = {
   omittedPatchBytes: 0,
   recentCommitSubjects: "init",
 };
+
+test("requestCommitMessage passes a normalized transcript with the commit system prompt", async () => {
+  const runtime = createCommitRuntime();
+  const commit = runtime.runSync(CommitRuntime);
+
+  let captured: TranscriptContext | undefined;
+  const resolved: ResolvedModel = {
+    model: { provider: "openai", id: "test" } as ResolvedModel["model"],
+    reference: { provider: "openai", id: "test", value: "openai/test" },
+    auth: {},
+    providerInvoker: {
+      streamSimple: (_model, context) => {
+        captured = context;
+        return {
+          result: async () =>
+            ({
+              stopReason: "stop",
+              content: [{ type: "text", text: "fix: update runtime" }],
+            }) as AssistantMessage,
+        };
+      },
+    },
+  };
+
+  const message = await runCommit(runtime, commit.requestCommitMessage(resolved, mockSnapshot, ""));
+
+  assert.equal(message, "fix: update runtime");
+  assert.ok(captured);
+  assert.equal(captured.messages[0]?.role, "system");
+  assert.equal(getCurrentSystemPrompt(captured.messages), COMMIT_SYSTEM_PROMPT);
+  assert.equal("systemPrompt" in captured, false);
+
+  await runtime.dispose();
+});
 
 test("runCommit throws AbortError on runtime interruption", async () => {
   const runtime = createCommitRuntime();

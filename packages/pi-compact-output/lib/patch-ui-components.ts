@@ -112,7 +112,7 @@ export function isSupportedPiVersion(version: string): boolean {
   if (!match) return false;
   const major = Number(match[1]);
   const minor = Number(match[2]);
-  return major === 0 && (minor === 83 || minor === 84 || minor === 85);
+  return major === 0 && minor >= 83 && minor <= 87;
 }
 
 function createPatchState(): PatchState {
@@ -595,7 +595,7 @@ export function installUiPatches(): PatchInstallResult {
   state.refCount = 1;
 
   if (!isSupportedPiVersion(VERSION)) {
-    state.unsupportedReason = `pi-compact-output requires Pi 0.83.x–0.85.x (found ${VERSION})`;
+    state.unsupportedReason = `pi-compact-output requires Pi 0.83.x–0.87.x (found ${VERSION})`;
     setPatchState(state);
     return { installed: false, reason: state.unsupportedReason };
   }

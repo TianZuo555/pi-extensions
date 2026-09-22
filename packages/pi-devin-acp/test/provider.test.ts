@@ -3,6 +3,7 @@ import { test } from "node:test";
 import {
   calculateCost,
   isContextOverflow,
+  normalizeContext,
   type AssistantMessageEvent,
 } from "@earendil-works/pi-ai";
 import { DevinReplayStore } from "../lib/replay.ts";
@@ -91,10 +92,9 @@ const MODEL = {
   maxTokens: 64_000,
 } as const;
 
-const CONTEXT = {
-  systemPrompt: undefined,
-  messages: [{ role: "user", content: "do it" }],
-} as never;
+const CONTEXT = normalizeContext({
+  messages: [{ role: "user", content: "do it", timestamp: 0 }],
+});
 
 async function drain(stream: AsyncIterable<AssistantMessageEvent>) {
   const events: AssistantMessageEvent[] = [];
@@ -130,6 +130,25 @@ test("streamDevin emits text deltas then done", async () => {
   assert.equal(done.message.stopReason, "stop");
   assert.equal(done.message.usage.input, 10);
   assert.equal(done.message.usage.output, 5);
+});
+
+test("streamDevin reads instructions from the normalized transcript", async () => {
+  const capture: { turnRequest?: Record<string, unknown> } = {};
+  const { service, runtime } = fakeRuntime([], capture);
+  const context = normalizeContext({
+    systemPrompt: "Pi documentation:\n- /opt/pi/docs",
+    messages: [{ role: "user", content: "do it", timestamp: 0 }],
+  });
+  const stream = streamDevin({
+    runtime,
+    service,
+    replay: new DevinReplayStore(),
+    families: () => FAMILIES,
+    cwd: () => "/tmp",
+  })(MODEL as never, context, undefined);
+  await drain(stream);
+  assert.equal(capture.turnRequest?.systemPrompt, "Pi documentation:\n- /opt/pi/docs");
+  assert.equal(capture.turnRequest?.historyBootstrap, undefined);
 });
 
 test("streamDevin preserves text-thought-text block order without message ids", async () => {
@@ -363,10 +382,15 @@ test("summarization requests run in a disposable session with the resolved model
     cwd: () => "/tmp",
   })(
     MODEL as never,
-    {
-      systemPrompt: undefined,
-      messages: [{ role: "user", content: "<conversation>\nprior chat\n</conversation>" }],
-    } as never,
+    normalizeContext({
+      messages: [
+        {
+          role: "user",
+          content: "<conversation>\nprior chat\n</conversation>",
+          timestamp: 0,
+        },
+      ],
+    }),
     undefined,
   );
   const events = await drain(stream);

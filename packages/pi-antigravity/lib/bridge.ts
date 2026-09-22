@@ -20,7 +20,7 @@
 
 import { createHash, randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
+import type { ImageContent, JsonObject, TextContent } from "@earendil-works/pi-ai";
 import { WRAPPER_TOOL_NAME } from "./prompt.ts";
 
 export const BRIDGE_SERVER_NAME = "pi-bridge";
@@ -84,7 +84,7 @@ export interface BridgeCallResult {
 export interface BridgeCall {
   id: string;
   tool: string;
-  args: Record<string, unknown>;
+  args: JsonObject;
 }
 
 type PendingCall = BridgeCall & {
@@ -96,7 +96,7 @@ type PendingCall = BridgeCall & {
 interface DynamicTool {
   description: string;
   parameters: unknown;
-  handler: (args: Record<string, unknown>) => Promise<BridgeCallResult>;
+  handler: (args: JsonObject) => Promise<BridgeCallResult>;
 }
 
 interface JsonRpcRequest {
@@ -105,7 +105,7 @@ interface JsonRpcRequest {
   params?: {
     protocolVersion?: string;
     name?: string;
-    arguments?: Record<string, unknown>;
+    arguments?: JsonObject;
   };
 }
 
@@ -194,7 +194,7 @@ export class AgyPiBridge {
       name: string;
       description: string;
       parameters: unknown;
-      handler: (args: Record<string, unknown>) => Promise<BridgeCallResult>;
+      handler: (args: JsonObject) => Promise<BridgeCallResult>;
     }>,
   ): void {
     this.#dynamic = new Map(tools.map((tool) => [tool.name, { ...tool }]));
@@ -409,7 +409,7 @@ export class AgyPiBridge {
    * to execute it. Fails closed: no active turn, unknown tool, or timeout
    * all produce an isError result rather than hanging agy.
    */
-  async #routeCall(mcpName: string, args: Record<string, unknown>): Promise<BridgeCallResult> {
+  async #routeCall(mcpName: string, args: JsonObject): Promise<BridgeCallResult> {
     if (!mcpName.startsWith(this.#toolPrefix)) {
       return {
         content: `antigravity: unknown tool "${mcpName}" — only ${this.#toolPrefix}* bridge tools exist.`,
@@ -425,7 +425,7 @@ export class AgyPiBridge {
     return { content: `antigravity: tool "${tool}" is not currently active in pi.`, isError: true };
   }
 
-  async #routeToPiTool(tool: string, args: Record<string, unknown>): Promise<BridgeCallResult> {
+  async #routeToPiTool(tool: string, args: JsonObject): Promise<BridgeCallResult> {
     const id = `pi-bridge-${++this.#seq}`;
     const dispatched = this.#onCall?.({ id, tool, args }) ?? false;
     if (!dispatched) {

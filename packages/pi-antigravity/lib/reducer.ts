@@ -8,6 +8,7 @@
  * events the provider renders as native pi tool cards.
  */
 
+import type { JsonObject } from "@earendil-works/pi-ai";
 import type { AgyStepUpdate, AgyUsage, ParsedAgyEvent } from "./events.ts";
 import { parseAgyLine } from "./events.ts";
 
@@ -20,12 +21,12 @@ import { parseAgyLine } from "./events.ts";
 const MIN_VISIBLE_THOUGHT_TOKENS = 64;
 
 export type AgyActivity =
-  | { type: "tool_start"; stepId?: number; name: string; args: Record<string, unknown> }
+  | { type: "tool_start"; stepId?: number; name: string; args: JsonObject }
   | {
       type: "tool_done";
       stepId?: number;
       name: string;
-      args: Record<string, unknown>;
+      args: JsonObject;
       output?: string;
       durationSeconds?: number;
     }
@@ -33,7 +34,7 @@ export type AgyActivity =
       type: "tool_error";
       stepId?: number;
       name: string;
-      args: Record<string, unknown>;
+      args: JsonObject;
       message: string;
     }
   | {
@@ -42,7 +43,7 @@ export type AgyActivity =
       type: "bridge_call";
       id: string;
       name: string;
-      args: Record<string, unknown>;
+      args: JsonObject;
     }
   | {
       /** Synthetic — a persisted native conversation disappeared, so the
@@ -99,11 +100,11 @@ export interface AgyTurnOutcome {
  * pickName/pickDetail and the call renderer already read (Name/Type/Task).
  * The first spawn leads; extra spawns in the same step fold into the name.
  */
-function subagentStepArgs(step: AgyStepUpdate): Record<string, unknown> {
+function subagentStepArgs(step: AgyStepUpdate): JsonObject {
   const subs = step.subagent_info?.subagents;
   if (!subs?.length) return {};
   const first = subs[0];
-  const args: Record<string, unknown> = {};
+  const args: JsonObject = {};
   if (first.role) args.Name = subs.length > 1 ? `${first.role} +${subs.length - 1}` : first.role;
   if (first.type_name) args.Type = first.type_name;
   if (first.initial_prompt) args.Task = first.initial_prompt;
