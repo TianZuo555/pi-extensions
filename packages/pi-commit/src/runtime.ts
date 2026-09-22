@@ -6,13 +6,15 @@
  */
 
 import { randomUUID } from "node:crypto";
-import type {
-  Api,
-  AssistantMessage,
-  Context,
-  Model,
-  ProviderHeaders,
-  SimpleStreamOptions,
+import {
+  normalizeContext,
+  type Api,
+  type AssistantMessage,
+  type Context,
+  type Model,
+  type ProviderHeaders,
+  type SimpleStreamOptions,
+  type TranscriptContext,
 } from "@earendil-works/pi-ai";
 import { completeSimple } from "@earendil-works/pi-ai/compat";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
@@ -52,7 +54,7 @@ export interface ResolvedAuth {
 interface ProviderInvoker {
   streamSimple(
     model: Model<Api>,
-    context: Context,
+    context: TranscriptContext,
     options?: SimpleStreamOptions,
   ): { result(): Promise<AssistantMessage> };
 }
@@ -273,6 +275,7 @@ function requestModelText(
           },
         ],
       };
+      const transcript = normalizeContext(context);
       const options: SimpleStreamOptions = {
         apiKey: resolved.auth.apiKey,
         headers: resolved.auth.headers,
@@ -286,8 +289,10 @@ function requestModelText(
         maxRetryDelayMs: 60_000,
         sessionId: randomUUID(),
       };
+      // Raw Provider.streamSimple only reads the prompt from transcript system
+      // messages. completeSimple still accepts Context and normalizes internally.
       const response = resolved.providerInvoker
-        ? await resolved.providerInvoker.streamSimple(resolved.model, context, options).result()
+        ? await resolved.providerInvoker.streamSimple(resolved.model, transcript, options).result()
         : await completeSimple(resolved.model, context, options);
 
       if (response.stopReason === "aborted") return undefined;
