@@ -15,11 +15,12 @@ import { randomUUID } from "node:crypto";
 import {
   calculateCost,
   createAssistantMessageEventStream,
+  getCurrentSystemPrompt,
   type AssistantMessage,
   type AssistantMessageEventStream,
-  type Context,
   type Model,
   type SimpleStreamOptions,
+  type TranscriptContext,
 } from "@earendil-works/pi-ai";
 import type { ContentBlock } from "@agentclientprotocol/sdk";
 import type { DevinPromptRequest, DevinRuntimeInstance, DevinRuntimeShape } from "./runtime.ts";
@@ -51,7 +52,7 @@ interface ImagePart {
  * Preserve the latest contiguous user-message batch in order. Trailing
  * assistant/tool messages are tool-loop re-entry, not new user input.
  */
-function latestUserBatch(context: Context): {
+function latestUserBatch(context: TranscriptContext): {
   start: number;
   prompt: string;
   images: ImagePart[];
@@ -87,12 +88,13 @@ function latestUserBatch(context: Context): {
 const MAX_RESTORED_HISTORY_CHARS = 240_000;
 
 /** Serialize the active pi branch before its latest user request. */
-export function piHistoryBootstrap(context: Context): string | undefined {
+export function piHistoryBootstrap(context: TranscriptContext): string | undefined {
   const { start: latestUser } = latestUserBatch(context);
   if (latestUser <= 0) return undefined;
 
   const entries: string[] = [];
   for (const raw of context.messages.slice(0, latestUser)) {
+    if (raw.role === "system") continue;
     const message = raw as { role?: string; toolName?: string; content?: unknown };
     const parts = Array.isArray(message.content) ? message.content : [];
     const rendered: string[] =
@@ -239,7 +241,7 @@ export function streamDevin(deps: DevinProviderDeps) {
 
   return (
     model: Model<import("@earendil-works/pi-ai").Api>,
-    context: Context,
+    context: TranscriptContext,
     options?: SimpleStreamOptions,
   ): AssistantMessageEventStream => {
     const stream = createAssistantMessageEventStream();
@@ -338,6 +340,9 @@ export function streamDevin(deps: DevinProviderDeps) {
           }));
         blocks.push({ type: "text", text: prompt });
 
+        const systemPrompt = context.messages.some((message) => message.role === "system")
+          ? getCurrentSystemPrompt(context.messages)
+          : undefined;
         const controller: DevinTurnController = await runtime.runPromise(
           service.beginStreamTurn({
             prompt,
@@ -345,7 +350,7 @@ export function streamDevin(deps: DevinProviderDeps) {
             modelId: model.id,
             concreteModelId,
             cwd: deps.cwd(),
-            systemPrompt: context.systemPrompt ?? undefined,
+            systemPrompt,
             historyBootstrap: piHistoryBootstrap(context),
             signal: options?.signal,
             transformPrompt: promptTransformFromPayloadHook(options?.onPayload, model),

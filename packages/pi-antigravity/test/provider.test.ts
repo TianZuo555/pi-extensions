@@ -16,10 +16,18 @@ import { AgyReplayStore } from "../lib/replay.ts";
 import { AgyPiBridge } from "../lib/bridge.ts";
 import { assertDeltasMatchPartial } from "./delta-replay.ts";
 import { Effect } from "effect";
-import type { Context, Model } from "@earendil-works/pi-ai";
+import {
+  normalizeContext,
+  type Context,
+  type Model,
+  type TranscriptContext,
+} from "@earendil-works/pi-ai";
 
-function contextWith(messages: unknown[]): Context {
-  return { messages } as Context;
+function contextWith(messages: unknown[], systemPrompt?: string): TranscriptContext {
+  return normalizeContext({
+    messages: messages as Context["messages"],
+    ...(systemPrompt === undefined ? {} : { systemPrompt }),
+  });
 }
 
 test("latestUserPrompt extracts the last user text", () => {
@@ -100,13 +108,16 @@ test("latestUserPrompt skips empty batches and does not carry images from histor
   );
 });
 
-test("piHistoryBootstrap excludes the entire first-turn user batch", () => {
+test("piHistoryBootstrap excludes first-turn user and system messages", () => {
   assert.equal(
     piHistoryBootstrap(
-      contextWith([
-        { role: "user", content: "Reply with exactly: PONG" },
-        { role: "user", content: "Extension context" },
-      ]),
+      contextWith(
+        [
+          { role: "user", content: "Reply with exactly: PONG" },
+          { role: "user", content: "Extension context" },
+        ],
+        "Available tools:\n- bash: execute commands",
+      ),
     ),
     undefined,
   );
@@ -332,7 +343,7 @@ for (const status of ["OK", "ERROR", "missing-result"] as const) {
 function makeStreamHarness(
   options: {
     prompt?: string;
-    context?: Context;
+    context?: TranscriptContext;
     createIsolatedRuntime?: () => any;
     getSystemPromptRelay?: () => string | undefined;
   } = {},
@@ -514,10 +525,10 @@ test("streamAntigravity refreshes bridge state and passes effort, profile, and r
     const events = [];
     for await (const event of streamFn(
       model,
-      {
-        ...contextWith([{ role: "user", content: [{ type: "text", text: prompt }] }]),
-        systemPrompt: "Project instructions from Pi",
-      },
+      contextWith(
+        [{ role: "user", content: [{ type: "text", text: prompt }] }],
+        "Project instructions from Pi",
+      ),
       { reasoning: "medium" },
     )) {
       events.push(event);
@@ -571,10 +582,7 @@ for (const tools of ["none", "done", "error", "incomplete"] as const) {
     };
     const harness = makeStreamHarness({
       prompt: summaryPrompt,
-      context: {
-        ...contextWith([{ role: "user", content: summaryPrompt }]),
-        systemPrompt: "Pi summary instructions",
-      },
+      context: contextWith([{ role: "user", content: summaryPrompt }], "Pi summary instructions"),
       createIsolatedRuntime: () => isolatedRuntime as any,
       // A live relay getter must not override the summary's own instructions.
       getSystemPromptRelay: () => "DOCS-ONLY-RELAY",
@@ -638,10 +646,7 @@ for (const tools of ["none", "done", "error", "incomplete"] as const) {
 test("streamAntigravity relays the docs-only block on user turns", async () => {
   const harness = makeStreamHarness({
     prompt: "hello",
-    context: {
-      ...contextWith([{ role: "user", content: "hello" }]),
-      systemPrompt: "full pi system prompt blob",
-    },
+    context: contextWith([{ role: "user", content: "hello" }], "full pi system prompt blob"),
     getSystemPromptRelay: () => "DOCS-ONLY-RELAY",
   });
   const eventsPromise = harness.collect();

@@ -4,7 +4,14 @@ import type { ContentBlock } from "@agentclientprotocol/sdk";
 import { getEventListeners } from "node:events";
 import { streamDevin } from "../src/provider.ts";
 import { DevinReplayStore } from "../lib/replay.ts";
-import type { AssistantMessage, Context, Model, Api } from "@earendil-works/pi-ai";
+import {
+  normalizeContext,
+  type Api,
+  type AssistantMessage,
+  type Context,
+  type Model,
+  type TranscriptContext,
+} from "@earendil-works/pi-ai";
 import type { DevinModelFamily } from "../lib/models.ts";
 import type { DevinAcpClient } from "../lib/acp-client.ts";
 import {
@@ -828,6 +835,10 @@ const LIFECYCLE_MODEL: Model<Api> = {
   maxTokens: 64000,
   cost: { input: 2, output: 4, cacheRead: 1, cacheWrite: 0 },
 };
+function transcriptContext(messages: Context["messages"]): TranscriptContext {
+  return normalizeContext({ messages });
+}
+
 const LIFECYCLE_FAMILIES: DevinModelFamily[] = [
   {
     id: "swe-2",
@@ -861,7 +872,7 @@ test("provider abort returns during startup without waiting for ACP", async (t) 
   });
   const stream = provider(
     LIFECYCLE_MODEL,
-    { messages: [{ role: "user", content: "do it", timestamp: 0 }] },
+    transcriptContext([{ role: "user", content: "do it", timestamp: 0 }]),
     { signal: abort.signal },
   );
   await blocked.entered;
@@ -890,7 +901,7 @@ for (const buffered of [false, true]) {
       families: () => LIFECYCLE_FAMILIES,
       cwd: () => "/tmp/proj",
     });
-    const context: Context = { messages: [{ role: "user", content: "do it", timestamp: 0 }] };
+    const context = transcriptContext([{ role: "user", content: "do it", timestamp: 0 }]);
     const response = deferred<{
       stopReason: string;
       usage: { inputTokens: number; outputTokens: number };
@@ -1008,9 +1019,10 @@ for (const buffered of [false, true]) {
     assert.ok(Math.abs(messages.reduce((sum, m) => sum + m.usage.cost.total, 0) - 0.00049) < 1e-12);
     assert.equal((await runDevin(runtime, service.snapshot)).contextTokens, 9000);
     // A later turn may reuse ACP tool IDs, but never Pi replay IDs.
-    const next = await provider(LIFECYCLE_MODEL, {
-      messages: [{ role: "user", content: "new request", timestamp: 1 }],
-    }).result();
+    const next = await provider(
+      LIFECYCLE_MODEL,
+      transcriptContext([{ role: "user", content: "new request", timestamp: 1 }]),
+    ).result();
     const nextCall = next.content.find((c) => c.type === "toolCall");
     assert.ok(nextCall);
     assert.ok(!ids.includes(nextCall.id));
@@ -1063,7 +1075,7 @@ for (const outcome of ["error", "aborted", "stop"] as const) {
       ...LIFECYCLE_MODEL,
       cost: { input: 2, output: 4, cacheRead: 1, cacheWrite: 3 },
     };
-    const context: Context = { messages: [{ role: "user", content: "hi", timestamp: 0 }] };
+    const context = transcriptContext([{ role: "user", content: "hi", timestamp: 0 }]);
     const first = await provider(model, context, { signal: abort.signal }).result();
     assert.equal(first.stopReason, "toolUse");
     // The segment bills the first request's usage_update (100 in + 20 out).
@@ -1153,7 +1165,7 @@ test("load-replayed usage seeds the snapshot but never the turn's accounting", a
   });
   const messagePromise = provider(
     LIFECYCLE_MODEL,
-    { messages: [{ role: "user", content: "hi", timestamp: 0 }] },
+    transcriptContext([{ role: "user", content: "hi", timestamp: 0 }]),
     { signal: abort.signal },
   ).result();
   await prompted.promise;
@@ -1216,7 +1228,7 @@ test("pre-prompt straggler usage never seeds the next turn's accounting", async 
   });
   const messagePromise = provider(
     LIFECYCLE_MODEL,
-    { messages: [{ role: "user", content: "again", timestamp: 1 }] },
+    transcriptContext([{ role: "user", content: "again", timestamp: 1 }]),
     { signal: abort.signal },
   ).result();
   await prompted.promise;
@@ -1282,7 +1294,7 @@ test("matching turn_stats cumulative sums become the turn's billed usage", async
   });
   const message = await provider(
     LIFECYCLE_MODEL,
-    { messages: [{ role: "user", content: "hi", timestamp: 0 }] },
+    transcriptContext([{ role: "user", content: "hi", timestamp: 0 }]),
     {},
   ).result();
   assert.equal(message.stopReason, "stop");

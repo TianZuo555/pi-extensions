@@ -19,13 +19,14 @@
 import {
   calculateCost,
   createAssistantMessageEventStream,
+  getCurrentSystemPrompt,
   type AssistantMessage,
   type AssistantMessageEventStream,
-  type Context,
   type JsonObject,
   type Model,
   type SimpleStreamOptions,
   type ThinkingLevel,
+  type TranscriptContext,
 } from "@earendil-works/pi-ai";
 import type { AgyEffort } from "../lib/agy-client.ts";
 import { type AgyPiBridge, resolveBridgeResultsFromContext } from "../lib/bridge.ts";
@@ -65,7 +66,11 @@ interface ImagePart {
  * the caller's request. Trailing assistant/tool messages are tool-loop re-entry.
  * Skip wholly empty batches, using the same boundary for history restoration.
  */
-function latestUserBatch(context: Context): { start: number; prompt: string; images: number } {
+function latestUserBatch(context: TranscriptContext): {
+  start: number;
+  prompt: string;
+  images: number;
+} {
   for (let i = context.messages.length - 1; i >= 0; i--) {
     if (context.messages[i].role !== "user") continue;
     const end = i + 1;
@@ -98,7 +103,7 @@ function latestUserBatch(context: Context): { start: number; prompt: string; ima
 }
 
 /** Extract all text in the latest user batch (plus an image-omitted note). */
-export function latestUserPrompt(context: Context): { prompt: string; images: number } {
+export function latestUserPrompt(context: TranscriptContext): { prompt: string; images: number } {
   const { prompt, images } = latestUserBatch(context);
   return { prompt, images };
 }
@@ -110,12 +115,13 @@ export function latestUserPrompt(context: Context): { prompt: string; images: nu
 const MAX_RESTORED_HISTORY_CHARS = 240_000;
 
 /** Serialize the active pi branch before its latest user request. */
-export function piHistoryBootstrap(context: Context): string | undefined {
+export function piHistoryBootstrap(context: TranscriptContext): string | undefined {
   const { start: latestUser } = latestUserBatch(context);
   if (latestUser <= 0) return undefined;
 
   const entries: string[] = [];
   for (const raw of context.messages.slice(0, latestUser)) {
+    if (raw.role === "system") continue;
     const message = raw as {
       role?: string;
       toolName?: string;
@@ -257,7 +263,7 @@ export function streamAntigravity(
 ) {
   return (
     model: Model<string>,
-    context: Context,
+    context: TranscriptContext,
     options?: SimpleStreamOptions,
   ): AssistantMessageEventStream => {
     const stream = createAssistantMessageEventStream();
@@ -343,16 +349,19 @@ export function streamAntigravity(
         }
         const requestedEffort = mapThinkingToEffort(options?.reasoning);
         const effort = resolveAgyModelEffort(getModelInfo(model.id), requestedEffort);
+        const systemPrompt = context.messages.some((message) => message.role === "system")
+          ? getCurrentSystemPrompt(context.messages)
+          : undefined;
 
         const controller = await turnRuntime.runPromise(
           turnService.beginStreamTurn({
             prompt,
             // Summary requests (compaction, branch summaries) carry their own
-            // instructions in context.systemPrompt — the docs-only relay is
-            // for user turns only and must not override them.
+            // instructions in transcript system messages — the docs-only relay
+            // is for user turns only and must not override them.
             systemPrompt: summaryRequest
-              ? context.systemPrompt
-              : (getSystemPromptRelay?.() ?? context.systemPrompt),
+              ? systemPrompt
+              : (getSystemPromptRelay?.() ?? systemPrompt),
             historyBootstrap: summaryRequest ? undefined : piHistoryBootstrap(context),
             bootstrapSuffix: summaryRequest ? undefined : getBootstrapSuffix?.(),
             modelId: model.id,
