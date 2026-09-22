@@ -23,6 +23,7 @@ import { fetchDevinQuota, type DevinQuotaResult } from "./lib/quota.ts";
 import { createDevinQuotaStatus } from "./lib/quota-status.ts";
 import {
   devinGroups,
+  findDevinGroup,
   groupThinkingLevelMap,
   parseDevinModels,
   type DevinModelFamily,
@@ -71,6 +72,8 @@ interface DevinModelCache {
 interface DevinAcpSettings {
   /** Always run devin's yolo (bypass) mode: no permission prompts. */
   yolo?: boolean;
+  /** Serve on the fast/priority tier where the model family has one. */
+  fast?: boolean;
 }
 
 /** Bundled snapshot of `devin models list` (devin 3000.10.x, 2026-09). */
@@ -397,6 +400,10 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
   let persistedSessionKey: string | undefined;
   let piSessionId = "";
   let yoloEnabled = readJson<DevinAcpSettings>(SETTINGS_FILE, {}).yolo === true;
+  let fastEnabled = readJson<DevinAcpSettings>(SETTINGS_FILE, {}).fast === true;
+  const persistSettings = () => {
+    writeJson(SETTINGS_FILE, { yolo: yoloEnabled, fast: fastEnabled } satisfies DevinAcpSettings);
+  };
 
   const forwardCompact = createCompactForwarder({
     send: createCompactSend((text, options) => pi.sendUserMessage(text, options)),
@@ -603,6 +610,7 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
         replay,
         families: () => catalog.families,
         cwd: () => cwd,
+        fast: () => fastEnabled,
       }),
     });
   };
@@ -686,6 +694,23 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
     );
   };
 
+  /** `fast: on|off|n/a` — n/a when the family has no priority serving tier. */
+  const fastStateFor = (modelId: string | undefined): string => {
+    const group = modelId ? findDevinGroup(catalog.families, modelId) : undefined;
+    if (group && !group.rows.some((row) => row.fast)) return "n/a";
+    return fastEnabled ? "on" : "off";
+  };
+
+  /** Footer status, in the `cursor:local · fast:off` shape. */
+  const refreshDevinStatus = (ctx: ExtensionContext) => {
+    if (!ctx.hasUI) return;
+    const modelId = ctx.model?.provider === DEVIN_PROVIDER ? ctx.model.id : undefined;
+    ctx.ui.setStatus(
+      "devin",
+      modelId ? `devin:${modelId} · fast:${fastStateFor(modelId)}` : undefined,
+    );
+  };
+
   pi.on("session_start", async (event, ctx: ExtensionContext) => {
     quotaStatus.clear(ctx);
     sessionCtx = ctx;
@@ -741,6 +766,7 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
     if (ctx.model?.provider === DEVIN_PROVIDER) {
       await refreshModelsWhenSelected();
     }
+    refreshDevinStatus(ctx);
     publishUsageStatusDetached(ctx);
   });
 
@@ -762,6 +788,7 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
     if (event.model?.provider === DEVIN_PROVIDER) {
       await refreshModelsWhenSelected();
     }
+    refreshDevinStatus(ctx);
     publishUsageStatusDetached(ctx);
   });
 
@@ -861,6 +888,7 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
     }
     try {
       sessionCtx?.hasUI && sessionCtx.ui.setWidget(DEVIN_OPS_WIDGET_KEY, undefined);
+      sessionCtx?.hasUI && sessionCtx.ui.setStatus("devin", undefined);
     } catch {
       // UI already gone.
     }
@@ -883,6 +911,43 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
       }
     }
   });
+
+  /**
+   * `/devin-fast [on|off]` — toggle (no argument) or set the priority
+   * serving tier. The ACP `speed` option syncs with the next turn's model
+   * config; the preference persists in ~/.pi/devin-acp/settings.json.
+   */
+  const fastCommandHandler = async (args: string, ctx: ExtensionContext): Promise<void> => {
+    sessionCtx = ctx;
+    const requested = args.trim().toLowerCase();
+    if (requested !== "" && requested !== "on" && requested !== "off") {
+      ctx.ui.notify(
+        `devin fast: unknown argument "${requested}". Use on | off, or no argument to toggle.`,
+        "error",
+      );
+      return;
+    }
+    const next = requested === "" ? !fastEnabled : requested === "on";
+    fastEnabled = next;
+    let persistError: unknown;
+    try {
+      persistSettings();
+    } catch (error) {
+      persistError = error;
+    }
+    refreshDevinStatus(ctx);
+    const state = next
+      ? "on — priority serving tier where the family has one"
+      : "off — standard serving tier";
+    if (persistError !== undefined) {
+      ctx.ui.notify(
+        `devin fast: ${state} for this runtime, but saving the preference failed (${persistError instanceof Error ? persistError.message : persistError}). The saved setting is unchanged; check it before restarting or reloading.`,
+        "warning",
+      );
+    } else {
+      ctx.ui.notify(`devin fast: ${state}.`, "info");
+    }
+  };
 
   const devinCommandHandler = async (args: string, ctx: ExtensionContext): Promise<void> => {
     sessionCtx = ctx;
@@ -1007,8 +1072,7 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
           setEnabled: (enabled) => {
             yoloEnabled = enabled;
           },
-          persist: (enabled) =>
-            writeJson(SETTINGS_FILE, { yolo: enabled } satisfies DevinAcpSettings),
+          persist: () => persistSettings(),
         });
         if (!result.persisted) {
           ctx.ui.notify(
@@ -1029,6 +1093,12 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
           "error",
         );
       }
+      return;
+    }
+
+    const fastMatch = sub.match(/^fast(?:\s+(on|off))?$/);
+    if (fastMatch) {
+      await fastCommandHandler(fastMatch[1] ?? "", ctx);
       return;
     }
 
@@ -1091,7 +1161,7 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
 
     if (sub) {
       ctx.ui.notify(
-        `devin: unknown argument "${sub}". Use reset | models | sessions | usage | mode | yolo | login | doctor.`,
+        `devin: unknown argument "${sub}". Use reset | models | sessions | usage | mode | yolo | fast | login | doctor.`,
         "error",
       );
       return;
@@ -1101,6 +1171,7 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
     const details = [
       `model: ${snapshot.concreteModel ?? snapshot.model ?? "unselected"}`,
       `mode: ${snapshot.modeId ?? "default"}${yoloEnabled ? " (yolo)" : ""}`,
+      `fast: ${fastStateFor(snapshot.model)}`,
       `turns: ${snapshot.turns}`,
       snapshot.contextTokens === undefined
         ? undefined
@@ -1124,8 +1195,14 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
 
   pi.registerCommand("devin", {
     description:
-      "Manage the devin backend: status | reset | models | sessions | usage | mode | yolo | login | doctor — devin's own slash commands run as /devin-<name>",
+      "Manage the devin backend: status | reset | models | sessions | usage | mode | yolo | fast | login | doctor — devin's own slash commands run as /devin-<name>",
     handler: devinCommandHandler,
+  });
+
+  pi.registerCommand("devin-fast", {
+    description:
+      "Toggle Devin's fast/priority serving tier (the ACP `speed` option); on|off sets it explicitly",
+    handler: fastCommandHandler,
   });
 
   pi.registerCommand("devin-tasks", {

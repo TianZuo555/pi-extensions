@@ -3,14 +3,25 @@ import { test } from "node:test";
 import { DevinTurnController } from "../src/turn.ts";
 import type { DevinToolView } from "../lib/tool-content.ts";
 
+const ZERO_COST = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+
 const view = (id: string, status?: string): DevinToolView => ({
   id,
   title: `tool ${id}`,
   status,
 });
 
+test("controller snapshots pricing independently of catalog updates", () => {
+  const cost = { input: 10, output: 50, cacheRead: 1, cacheWrite: 0 };
+  const c = new DevinTurnController("p", "s1", cost);
+  cost.input = 5;
+  cost.output = 25;
+  assert.deepEqual(c.modelCost, { input: 10, output: 50, cacheRead: 1, cacheWrite: 0 });
+  assert.ok(Object.isFrozen(c.modelCost));
+});
+
 test("controller queues activities and resolves waiters in order", async () => {
-  const c = new DevinTurnController("p", "s1");
+  const c = new DevinTurnController("p", "s1", ZERO_COST);
   const first = c.next();
   c.push({ type: "text", delta: "a" });
   assert.deepEqual(await first, { type: "text", delta: "a" });
@@ -21,7 +32,7 @@ test("controller queues activities and resolves waiters in order", async () => {
 });
 
 test("incomplete tools are tracked until terminal updates", () => {
-  const c = new DevinTurnController("p", "s1");
+  const c = new DevinTurnController("p", "s1", ZERO_COST);
   c.push({ type: "tool_start", view: view("t1", "in_progress") });
   c.push({ type: "tool_start", view: view("t2", "in_progress") });
   c.push({ type: "tool_update", view: view("t1", "completed") });
@@ -34,7 +45,7 @@ test("incomplete tools are tracked until terminal updates", () => {
 
 for (const status of ["completed", "failed"]) {
   test(`initial ${status} tool calls are not incomplete`, () => {
-    const c = new DevinTurnController("p", "s1");
+    const c = new DevinTurnController("p", "s1", ZERO_COST);
     c.push({ type: "tool_start", view: view("t1", status) });
     c.close();
     assert.deepEqual(c.takeIncompleteTools(), []);
@@ -42,7 +53,7 @@ for (const status of ["completed", "failed"]) {
 }
 
 test("deferResult keeps a result pending for re-entry after close", async () => {
-  const c = new DevinTurnController("p", "s1");
+  const c = new DevinTurnController("p", "s1", ZERO_COST);
   c.push({ type: "result", stopReason: "end_turn" });
   c.close();
   assert.equal(c.isClosed(), true);
@@ -56,7 +67,7 @@ test("deferResult keeps a result pending for re-entry after close", async () => 
 });
 
 test("fail rejects pending and future next() calls", async () => {
-  const c = new DevinTurnController("p", "s1");
+  const c = new DevinTurnController("p", "s1", ZERO_COST);
   const pending = c.next();
   c.fail(new Error("boom"));
   await assert.rejects(pending, /boom/);
@@ -64,7 +75,7 @@ test("fail rejects pending and future next() calls", async () => {
 });
 
 test("request usage snapshots dedup consecutive repeats and accumulate", () => {
-  const c = new DevinTurnController("p", "s1");
+  const c = new DevinTurnController("p", "s1", ZERO_COST);
   // Devin emits every request's update twice — identical repeats count once.
   c.recordUsage({ inputTokens: 10, outputTokens: 5, cachedReadTokens: 3 });
   c.recordUsage({ inputTokens: 10, outputTokens: 5, cachedReadTokens: 3 });
@@ -83,7 +94,7 @@ test("request usage snapshots dedup consecutive repeats and accumulate", () => {
 });
 
 test("context-only usage updates are not billable and keep the dedup baseline", () => {
-  const c = new DevinTurnController("p", "s1");
+  const c = new DevinTurnController("p", "s1", ZERO_COST);
   c.recordUsage({ inputTokens: 10, outputTokens: 5 });
   // No token counters — updates the occupancy snapshot only.
   c.recordUsage({ contextUsed: 15, contextSize: 262000 });
@@ -100,7 +111,7 @@ test("context-only usage updates are not billable and keep the dedup baseline", 
 });
 
 test("cumulative turn_stats usage replaces accumulation and blocks snapshots", () => {
-  const c = new DevinTurnController("p", "s1");
+  const c = new DevinTurnController("p", "s1", ZERO_COST);
   c.recordUsage({ inputTokens: 10, outputTokens: 5 });
   // turn_stats' cumulative sums are authoritative — they replace the
   // accumulated request total.
@@ -119,7 +130,7 @@ test("cumulative turn_stats usage replaces accumulation and blocks snapshots", (
 });
 
 test("takeBillableUsage returns the not-yet-billed delta across messages", () => {
-  const c = new DevinTurnController("p", "s1");
+  const c = new DevinTurnController("p", "s1", ZERO_COST);
   c.recordUsage({ inputTokens: 100, outputTokens: 20 });
   assert.deepEqual(c.takeBillableUsage(), {
     inputTokens: 100,
@@ -139,7 +150,7 @@ test("takeBillableUsage returns the not-yet-billed delta across messages", () =>
 });
 
 test("a cumulative set below already-billed totals bills no negative correction", () => {
-  const c = new DevinTurnController("p", "s1");
+  const c = new DevinTurnController("p", "s1", ZERO_COST);
   c.recordUsage({ inputTokens: 100, outputTokens: 20 });
   assert.deepEqual(c.takeBillableUsage(), {
     inputTokens: 100,
@@ -153,7 +164,7 @@ test("a cumulative set below already-billed totals bills no negative correction"
 });
 
 test("reported context occupancy always wins over the request-size fallback", () => {
-  const c = new DevinTurnController("p", "s1");
+  const c = new DevinTurnController("p", "s1", ZERO_COST);
   c.recordUsage({ inputTokens: 100, outputTokens: 20 });
   // Devin's real occupancy arrives later — it replaces the estimate.
   c.recordUsage({ contextUsed: 54321, contextSize: 262144 });
@@ -164,7 +175,7 @@ test("reported context occupancy always wins over the request-size fallback", ()
 });
 
 test("billing preserves original token classes for pricing and subsequent deltas", () => {
-  const c = new DevinTurnController("p", "s1");
+  const c = new DevinTurnController("p", "s1", ZERO_COST);
   c.recordUsage({ inputTokens: 295382, outputTokens: 1000, cachedReadTokens: 294400 });
   assert.deepEqual(c.takeBillableUsage(), {
     inputTokens: 295382,
