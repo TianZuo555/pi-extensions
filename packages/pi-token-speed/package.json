@@ -1,6 +1,6 @@
 {
   "name": "@tian.zuo/pi-token-speed",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Live and final tokens-per-second meter for the pi coding agent.",
   "type": "module",
   "keywords": [
