@@ -17,7 +17,7 @@ Minimal description and tool schemas for saving context
 ### `grep`
 
 ```text
-grep(pattern, path?, glob?, output?, literal?, context?)
+grep(pattern, path?, glob?, output?, literal?)
 ```
 
 - `pattern` is a case-sensitive ripgrep regular expression. Set `literal: true`
@@ -26,15 +26,14 @@ grep(pattern, path?, glob?, output?, literal?, context?)
 - `glob` optionally limits file names, for example `*.ts` or `**/*.test.ts`.
 - `output` is `"content"` (default) or `"files"`. File mode uses `rg -l` to
   return unique paths without collecting every matching line in each file.
-- `context` is the number of surrounding lines, from 0 to 50. Omit it to
-  automatically include up to **5 lines before and after** when a complete
-  search has **1–3 matching lines**. Set `context: 0` for matches only, or a
-  positive number to request context explicitly. File mode ignores context.
+- A complete content search with **1–3 matching lines** automatically includes
+  up to **5 lines before and after** each match; there is no context parameter.
+  For a wider window, `read` the file at the reported line.
 
 ```jsonc
 { "pattern": "TODO|FIXME", "path": "src", "glob": "*.ts" }
 { "pattern": "registerTool(", "literal": true, "output": "files" }
-{ "pattern": "SearchRuntime", "path": "src", "context": 0 }
+{ "pattern": "SearchRuntime", "path": "src" }
 ```
 
 Content is grouped by file, with `:` for matching lines and `-` for context:
@@ -50,9 +49,8 @@ src/main.ts
 
 Overlapping context windows are merged and context is not counted as matches.
 Automatic context is collected in the same search, not by rereading files. It
-is omitted for incomplete searches (limits, timeout, or skipped records), or
-if it would exceed the output budget. Explicit context that cannot fit is
-omitted with a notice so it never crowds out the matching lines.
+is omitted for incomplete searches (limits, timeout, or skipped records) or if
+it would exceed the output budget, so it never crowds out the matching lines.
 
 ### `find`
 

@@ -31,23 +31,28 @@ export function grepRows(outcome: GrepOutcome): ResultRow[] {
   // Only groups containing a returned match are useful. Context from a later
   // file can arrive just before the match that exceeds the result limit.
   for (const match of outcome.matches) {
-    if (!groups.has(match.path)) groups.set(match.path, new Map());
-  }
-  for (const row of outcome.context) {
-    groups.get(row.path)?.set(row.lineNumber, { text: row.text, isMatch: false });
+    const group = groups.get(match.path) ?? new Map();
+    group.set(match.lineNumber, { text: match.text, isMatch: true });
+    groups.set(match.path, group);
   }
   // Matches win over context, including overlapping windows.
-  for (const row of outcome.matches) {
-    groups.get(row.path)!.set(row.lineNumber, { text: row.text, isMatch: true });
+  for (const row of outcome.context) {
+    const group = groups.get(row.path);
+    if (group && !group.has(row.lineNumber)) {
+      group.set(row.lineNumber, { text: row.text, isMatch: false });
+    }
   }
 
   const rows: ResultRow[] = [];
-  for (const path of [...groups.keys()].sort()) {
+  for (const [path, group] of [...groups].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) {
     let previous: number | undefined;
-    for (const [number, row] of [...groups.get(path)!].sort(([a], [b]) => a - b)) {
-      const prefix = previous === undefined
-        ? `${rows.length > 0 ? "\n" : ""}${displayPath(path)}\n`
-        : number > previous + 1 ? "--\n" : "";
+    for (const [number, row] of [...group].sort(([a], [b]) => a - b)) {
+      const prefix =
+        previous === undefined
+          ? `${rows.length > 0 ? "\n" : ""}${displayPath(path)}\n`
+          : number > previous + 1
+            ? "--\n"
+            : "";
       rows.push({
         path,
         isMatch: row.isMatch,

@@ -76,13 +76,26 @@ export function decodeRgEvent(line: string): RgLine | undefined {
   const first = data.submatches?.[0];
   let matchStart: number | undefined;
   let matchEnd: number | undefined;
-  if (first && Number.isInteger(first.start) && Number.isInteger(first.end) && first.start >= 0 && first.end >= first.start) {
-    const bytes = typeof data.lines?.bytes === "string"
-      ? Buffer.from(data.lines.bytes, "base64")
-      : Buffer.from(decodeText(data.lines), "utf8");
+  if (
+    first &&
+    Number.isInteger(first.start) &&
+    Number.isInteger(first.end) &&
+    first.start >= 0 &&
+    first.end >= first.start
+  ) {
+    const bytes =
+      typeof data.lines?.bytes === "string"
+        ? Buffer.from(data.lines.bytes, "base64")
+        : Buffer.from(decodeText(data.lines), "utf8");
     if (first.end <= bytes.length) {
-      matchStart = Math.min(text.length, bytes.subarray(0, first.start).toString("utf8").replace(/\r/g, "").length);
-      matchEnd = Math.min(text.length, bytes.subarray(0, first.end).toString("utf8").replace(/\r/g, "").length);
+      matchStart = Math.min(
+        text.length,
+        bytes.subarray(0, first.start).toString("utf8").replace(/\r/g, "").length,
+      );
+      matchEnd = Math.min(
+        text.length,
+        bytes.subarray(0, first.end).toString("utf8").replace(/\r/g, "").length,
+      );
     }
   }
 

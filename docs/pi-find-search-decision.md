@@ -1,6 +1,6 @@
 # pi-find grep/find — search tooling decision
 
-**Status:** implemented on `feat/pi-find-search-modes` (six `tsc --noEmit` errors pending — see [Follow-ups](#follow-ups))
+**Status:** implemented on `feat/pi-find-search-modes`; tests and `tsc --noEmit` green
 **Package:** `@tian.zuo/pi-find` (`packages/pi-find`)
 
 ## Context
@@ -11,10 +11,10 @@ pi registers `grep` and `find` under the built-in tool names, replacing the buil
 
 | Topic | Decision | Rationale |
 |---|---|---|
-| Surface | `grep(pattern, path?, glob?, output?, literal?, context?)`, `find(pattern, path?)` | A small schema cannot be misused; several roots, counts, sorting, and pipelines go to the shell |
+| Surface | `grep(pattern, path?, glob?, output?, literal?)`, `find(pattern, path?)` | A small schema cannot be misused; several roots, counts, sorting, and pipelines go to the shell |
 | Overflow detection | Check the cap *before* adding; the (N+1)th record's arrival is the overflow signal | Distinguishes an exact fit (complete) from a truncated set with certainty, for one record's cost |
 | Context | Enrichment only; never crowds out matches | Two-level defense: runtime judges trustworthiness, render judges fit |
-| Auto context | `context` omitted → ±5 lines kept only when the search is complete and sparse (1–3 matches) | A lone hit is usually the answer; a 100-hit list is not improved by context |
+| Context control | **No parameter** — ±5 lines kept only when the search is complete and sparse (1–3 matches) | A lone hit is usually the answer; a 100-hit list is not improved by context. The model cannot know the match count before searching, so the decision belongs after the search, not in the schema. Wider windows belong to `read` |
 | Partial labeling | `partial` covers truncation, timeout, skipped records, omitted context; counts are displayed-only | The true total is unknowable once rg is killed at the cap; only displayed counts are honest |
 | Slash globs | Relative to the search root only | Dual-base (root or cwd) matching let one glob silently select from two directory trees |
 | Sorting | Sort the collected batch, not the search space | A global sort would require enumerating past the cap |
@@ -32,8 +32,8 @@ With cap N, "returned N rows" is ambiguous: the result set may be exactly N (com
 
 Context is bulk; matches are the point. Two levels defend that priority because neither layer alone has enough information:
 
-- **Runtime — is this context worth keeping?** Auto mode speculatively buffers context in the same rg pass (`--context 5` is always on in content mode), clears the buffer the moment a 4th match arrives, and stops collecting once any record was dropped. `finalizeGrep` retains context only for complete sparse searches and filters orphan windows — context belonging to a match that fell past the cap.
-- **Render — does it fit?** `boundedBody` renders rows with context; if the byte budget overflows and context was present, it re-renders match rows only. Auto context drops silently (a freebie the model never asked for); explicit context drops with `CONTEXT_OMITTED` and marks the result partial — the model asked for something it did not get.
+- **Runtime — is this context worth keeping?** rg always runs with `--context 5` in content mode; the collector speculatively buffers context rows in the same pass, clears the buffer the moment a 4th match arrives, and stops collecting once any record was dropped. `finalizeGrep` retains context only for complete sparse searches and filters orphan windows — context belonging to a match that fell past the cap.
+- **Render — does it fit?** `boundedBody` renders rows with context; if the byte budget overflows and context was present, it re-renders match rows only. Context is always the automatic enrichment, so dropping it is silent — a freebie the model never asked for. (In practice a ≤3-match window cannot exceed the budget; the retry is a cheap guard against future constant changes.)
 
 The runtime cannot know rendered size (clipping, grouping headings, separators all affect bytes); the renderer cannot know a context window is orphaned. Merging the checks would misjudge both.
 
@@ -49,7 +49,5 @@ The cost: the common model habit of redundantly prefixing the path (`path: "src"
 
 ## Follow-ups
 
-- **Typecheck (blocking):** six `tsc --noEmit` errors — `StringEnum`'s `TUnsafe<string>` does not satisfy `GrepOutput` at `tools.ts:77`, tests read `.enum`/`.minimum`/`.maximum` off `TOptional` wrappers, and `String.prototype.isWellFormed` is ES2024 under an ES2022 lib. Candidate fix: `Type.Unsafe<GrepOutput>({ type: "string", enum: [...] })` keeps the flat Google-compatible schema and restores the literal union.
 - **Clipped context counts as skipped:** a >8 MiB context record flips `skippedRecords`, suppressing auto context and marking an otherwise-complete search partial. Conservative and safe, but a clipped *context* record is not a missing *match* — the two could be distinguished.
 - **Empty-result hints don't cover the glob-base change:** an empty result shows file-size and hidden-path notices, but nothing points at a `/`-glob written against the wrong base. A targeted notice when the result is empty and the glob contains `/` would let the model self-correct.
-- **`50` has three sources of truth:** `MAX_CONTEXT_LINES`, the schema `maximum`, and the `(0–50)` description text.

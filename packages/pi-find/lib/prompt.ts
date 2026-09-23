@@ -5,7 +5,6 @@ export const GREP_FILE_LIMIT = 200;
 export const FIND_RESULT_LIMIT = 200;
 export const AUTO_CONTEXT_LINES = 5;
 export const AUTO_CONTEXT_MAX_MATCHES = 3;
-export const MAX_CONTEXT_LINES = 50;
 
 /** Wall-clock budget for one rg/fd run; a search should finish well under it. */
 export const SEARCH_TIMEOUT_MS = 30_000;
@@ -18,9 +17,8 @@ export const GREP_PARAMETER_DESCRIPTIONS = {
   pattern: "Case-sensitive ripgrep regex, or exact text when literal is true.",
   path: "Search file or directory; defaults to cwd. Name hidden paths explicitly (e.g. '.github').",
   glob: "Case-sensitive glob: basename at any depth, or path relative to the search root; prefix ! to exclude.",
-  output: "content (default): matching lines. files: paths only; context is ignored.",
+  output: "content (default): matching lines. files: paths only.",
   literal: "Treat pattern as exact text instead of regex; defaults to false.",
-  context: "Surrounding lines (0–50). Omit for ±5 on 1–3 complete matches; 0 disables. Context does not count as matches.",
 };
 
 export const FIND_TOOL_DESCRIPTION =
@@ -28,7 +26,8 @@ export const FIND_TOOL_DESCRIPTION =
 export const FIND_PROMPT_SNIPPET = "Find files with a glob";
 
 export const FIND_PARAMETER_DESCRIPTIONS = {
-  pattern: "Case-insensitive glob: basename at any depth, or path relative to the search root; prefix ! to exclude.",
+  pattern:
+    "Case-insensitive glob: basename at any depth, or path relative to the search root; prefix ! to exclude.",
   path: "Search directory; defaults to cwd. Name hidden paths explicitly (e.g. '.github').",
 };
 
@@ -36,11 +35,7 @@ export const QUOTED_PATH_NOTICE = "[JSON-decode quoted paths before read/edit.]"
 export const FILE_SIZE_LIMIT_NOTICE = "[Files >4 MiB are skipped during traversal.]";
 export const HIDDEN_PATH_NOTICE =
   '[Default searches skip hidden paths; set path explicitly to search one (e.g. ".github").]';
-export const AUTO_CONTEXT_NOTICE =
-  "[Added up to 5 surrounding lines automatically; context: 0 shows only matches.]";
-export const CONTEXT_OMITTED_NOTICE =
-  "[Context omitted to fit the output budget; matching lines take priority. Narrow the search for context.]";
-export const CONTEXT_RANGE_ERROR = "Context must be an integer between 0 and 50.";
+export const AUTO_CONTEXT_NOTICE = "[Added up to 5 surrounding lines automatically.]";
 export const NO_GREP_MATCHES = "No matches found.";
 export const NO_FILES_FOUND = "No files found.";
 export const EMPTY_PATTERN_ERROR = "Search pattern cannot be empty.";

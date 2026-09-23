@@ -6,7 +6,6 @@ import { Text } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
 import {
   AUTO_CONTEXT_NOTICE,
-  CONTEXT_OMITTED_NOTICE,
   FILE_SIZE_LIMIT_NOTICE,
   FIND_PARAMETER_DESCRIPTIONS,
   FIND_PROMPT_SNIPPET,
@@ -20,7 +19,6 @@ import {
   GREP_TOOL_DESCRIPTION,
   grepResultHeader,
   HIDDEN_PATH_NOTICE,
-  MAX_CONTEXT_LINES,
   NO_FILES_FOUND,
   NO_GREP_MATCHES,
   outputLimitNotice,
@@ -38,9 +36,10 @@ export const GrepParams = Type.Object({
   pattern: Type.String({ minLength: 1, description: GREP_PARAMETER_DESCRIPTIONS.pattern }),
   path: Type.Optional(Type.String({ minLength: 1, description: GREP_PARAMETER_DESCRIPTIONS.path })),
   glob: Type.Optional(Type.String({ minLength: 1, description: GREP_PARAMETER_DESCRIPTIONS.glob })),
-  output: Type.Optional(StringEnum(["content", "files"], { description: GREP_PARAMETER_DESCRIPTIONS.output })),
+  output: Type.Optional(
+    StringEnum(["content", "files"] as const, { description: GREP_PARAMETER_DESCRIPTIONS.output }),
+  ),
   literal: Type.Optional(Type.Boolean({ description: GREP_PARAMETER_DESCRIPTIONS.literal })),
-  context: Type.Optional(Type.Integer({ minimum: 0, maximum: MAX_CONTEXT_LINES, description: GREP_PARAMETER_DESCRIPTIONS.context })),
 });
 
 export type GrepInput = Static<typeof GrepParams>;
@@ -72,34 +71,38 @@ export function registerTools(pi: ExtensionAPI, runtime: SearchRuntimeInstance):
 
     async execute(_toolCallId, params: GrepInput, signal, _onUpdate, ctx) {
       const service = runtime.runSync(SearchRuntime);
-      const outcome = await runSearch(
-        runtime,
-        service.grep({ ...params, cwd: ctx.cwd, signal }),
-        { signal },
-      );
+      const outcome = await runSearch(runtime, service.grep({ ...params, cwd: ctx.cwd, signal }), {
+        signal,
+      });
       const filesOnly = outcome.output === "files";
       let body = boundedBody(filesOnly ? fileRows(outcome.files) : grepRows(outcome));
       const droppedContext = body.truncated && outcome.context.length > 0;
-      // Context must never crowd out the actual matches. Automatic context is
-      // optional; an explicit request that cannot fit gets an omission notice.
+      // Context is enrichment and must never crowd out the actual matches.
       if (droppedContext) body = boundedBody(grepRows({ ...outcome, context: [] }));
-      const contextOmitted = droppedContext && params.context !== undefined;
-      const truncated = outcome.truncated || body.truncated || contextOmitted || outcome.skippedRecords > 0;
+      const truncated = outcome.truncated || body.truncated || outcome.skippedRecords > 0;
       const partial = truncated || outcome.timedOut;
       const notices = [
         ...(body.quotedPaths ? [QUOTED_PATH_NOTICE] : []),
-        ...(outcome.truncated ? [resultLimitNotice(filesOnly ? "files" : "matches", filesOnly ? GREP_FILE_LIMIT : GREP_RESULT_LIMIT)] : []),
+        ...(outcome.truncated
+          ? [
+              resultLimitNotice(
+                filesOnly ? "files" : "matches",
+                filesOnly ? GREP_FILE_LIMIT : GREP_RESULT_LIMIT,
+              ),
+            ]
+          : []),
         ...(body.truncated ? [outputLimitNotice(filesOnly ? "find" : "grep")] : []),
-        ...(contextOmitted ? [CONTEXT_OMITTED_NOTICE] : []),
         ...(outcome.skippedRecords > 0 ? [oversizedRecordNotice(MAX_RECORD_BYTES)] : []),
         ...(outcome.timedOut ? [searchTimeoutNotice(SEARCH_TIMEOUT_MS)] : []),
-        ...(!droppedContext && params.context === undefined && outcome.context.length > 0 ? [AUTO_CONTEXT_NOTICE] : []),
+        ...(!droppedContext && outcome.context.length > 0 ? [AUTO_CONTEXT_NOTICE] : []),
         ...(body.resultCount === 0 && !partial ? [FILE_SIZE_LIMIT_NOTICE, HIDDEN_PATH_NOTICE] : []),
       ];
-      const header = body.resultCount === 0 && !partial
-        ? NO_GREP_MATCHES
-        : filesOnly ? findResultHeader(body.resultCount, partial)
-        : grepResultHeader(body.resultCount, body.fileCount, partial);
+      const header =
+        body.resultCount === 0 && !partial
+          ? NO_GREP_MATCHES
+          : filesOnly
+            ? findResultHeader(body.resultCount, partial)
+            : grepResultHeader(body.resultCount, body.fileCount, partial);
       return {
         content: [{ type: "text" as const, text: resultText(header, body.text, notices) }],
         details: {
@@ -115,14 +118,18 @@ export function registerTools(pi: ExtensionAPI, runtime: SearchRuntimeInstance):
     },
 
     renderCall(args: Partial<GrepInput> | undefined, theme: Theme) {
-      const pattern = typeof args?.pattern === "string" && args.pattern.length > 0
-        ? theme.fg("accent", args.literal ? JSON.stringify(args.pattern) : `/${args.pattern}/`)
-        : theme.fg("muted", "…");
+      const pattern =
+        typeof args?.pattern === "string" && args.pattern.length > 0
+          ? theme.fg("accent", args.literal ? JSON.stringify(args.pattern) : `/${args.pattern}/`)
+          : theme.fg("muted", "…");
       const scope = typeof args?.path === "string" ? theme.fg("muted", ` in ${args.path}`) : "";
       const filter = typeof args?.glob === "string" ? theme.fg("muted", ` (${args.glob})`) : "";
       const mode = args?.output === "files" ? theme.fg("muted", " [files]") : "";
-      const context = typeof args?.context === "number" ? theme.fg("muted", ` [context: ${args.context}]`) : "";
-      return new Text(theme.fg("toolTitle", theme.bold("grep ")) + pattern + scope + filter + mode + context, 0, 0);
+      return new Text(
+        theme.fg("toolTitle", theme.bold("grep ")) + pattern + scope + filter + mode,
+        0,
+        0,
+      );
     },
 
     renderResult(result, options, theme, context) {
@@ -139,11 +146,9 @@ export function registerTools(pi: ExtensionAPI, runtime: SearchRuntimeInstance):
 
     async execute(_toolCallId, params: FindInput, signal, _onUpdate, ctx) {
       const service = runtime.runSync(SearchRuntime);
-      const outcome = await runSearch(
-        runtime,
-        service.find({ ...params, cwd: ctx.cwd, signal }),
-        { signal },
-      );
+      const outcome = await runSearch(runtime, service.find({ ...params, cwd: ctx.cwd, signal }), {
+        signal,
+      });
       const body = boundedBody(fileRows(outcome.files));
       const count = body.resultCount;
       const truncated = outcome.truncated || body.truncated || outcome.skippedRecords > 0;
@@ -171,9 +176,10 @@ export function registerTools(pi: ExtensionAPI, runtime: SearchRuntimeInstance):
     },
 
     renderCall(args: Partial<FindInput> | undefined, theme: Theme) {
-      const pattern = typeof args?.pattern === "string" && args.pattern.length > 0
-        ? theme.fg("accent", args.pattern)
-        : theme.fg("muted", "…");
+      const pattern =
+        typeof args?.pattern === "string" && args.pattern.length > 0
+          ? theme.fg("accent", args.pattern)
+          : theme.fg("muted", "…");
       const scope = typeof args?.path === "string" ? theme.fg("muted", ` in ${args.path}`) : "";
       return new Text(theme.fg("toolTitle", theme.bold("find ")) + pattern + scope, 0, 0);
     },
@@ -216,7 +222,12 @@ function renderSearchResult(
 
   const details = result.details as SearchDetails | undefined;
   if (details === undefined) {
-    return expandedResult(theme.fg("success", "✓ search completed"), output, options.expanded, theme);
+    return expandedResult(
+      theme.fg("success", "✓ search completed"),
+      output,
+      options.expanded,
+      theme,
+    );
   }
   if (details.resultCount === 0) {
     const summary = details.timedOut
@@ -231,10 +242,13 @@ function renderSearchResult(
   const unit = filesOnly
     ? `file${details.resultCount === 1 ? "" : "s"}`
     : `match${details.resultCount === 1 ? "" : "es"}`;
-  const scope = filesOnly ? "" : ` in ${details.fileCount} file${details.fileCount === 1 ? "" : "s"}`;
+  const scope = filesOnly
+    ? ""
+    : ` in ${details.fileCount} file${details.fileCount === 1 ? "" : "s"}`;
   const more =
     (details.truncated ? theme.fg("warning", " (truncated)") : "") +
     (details.timedOut ? theme.fg("warning", " (timed out)") : "");
-  const summary = theme.fg("success", "✓ ") + theme.fg("muted", `${details.resultCount} ${unit}${scope}`) + more;
+  const summary =
+    theme.fg("success", "✓ ") + theme.fg("muted", `${details.resultCount} ${unit}${scope}`) + more;
   return expandedResult(summary, output, options.expanded, theme);
 }

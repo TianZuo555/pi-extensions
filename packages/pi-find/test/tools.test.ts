@@ -29,31 +29,48 @@ function outcome(matches: ReadonlyArray<[string, number, string]>): GrepOutcome 
 }
 
 test("grep groups by file and sorts lines without repeating paths", () => {
-  const result = boundedBody(grepRows(outcome([
-    ["src/b.ts", 2, "const b = 2;"],
-    ["src/a.ts", 8, "const c = 3;"],
-    ["src/a.ts", 1, "const a = 1;"],
-  ])));
-  assert.equal(result.text, "src/a.ts\n1: const a = 1;\n--\n8: const c = 3;\n\nsrc/b.ts\n2: const b = 2;");
+  const result = boundedBody(
+    grepRows(
+      outcome([
+        ["src/b.ts", 2, "const b = 2;"],
+        ["src/a.ts", 8, "const c = 3;"],
+        ["src/a.ts", 1, "const a = 1;"],
+      ]),
+    ),
+  );
+  assert.equal(
+    result.text,
+    "src/a.ts\n1: const a = 1;\n--\n8: const c = 3;\n\nsrc/b.ts\n2: const b = 2;",
+  );
   assert.equal(result.resultCount, 3);
   assert.equal(result.fileCount, 2);
 });
 
 test("overlapping context is deduplicated, matches win, and only matches are counted", () => {
   const result = outcome([["a.ts", 2, "needle"]]);
-  const body = boundedBody(grepRows({ ...result, context: [
-    { path: "a.ts", lineNumber: 1, text: "before" },
-    { path: "a.ts", lineNumber: 1, text: "before" },
-    { path: "a.ts", lineNumber: 2, text: "needle" },
-    { path: "orphan.ts", lineNumber: 1, text: "not useful" },
-  ] }));
+  const body = boundedBody(
+    grepRows({
+      ...result,
+      context: [
+        { path: "a.ts", lineNumber: 1, text: "before" },
+        { path: "a.ts", lineNumber: 1, text: "before" },
+        { path: "a.ts", lineNumber: 2, text: "needle" },
+        { path: "orphan.ts", lineNumber: 1, text: "not useful" },
+      ],
+    }),
+  );
   assert.equal(body.text, "a.ts\n1- before\n2: needle");
   assert.equal(body.resultCount, 1);
   assert.equal(body.fileCount, 1);
 });
 
 test("byte truncation counts only displayed results and cannot leave an orphan heading", () => {
-  const rows = grepRows(outcome([["a.ts", 1, "needle"], ["b.ts", 1, "needle"]]));
+  const rows = grepRows(
+    outcome([
+      ["a.ts", 1, "needle"],
+      ["b.ts", 1, "needle"],
+    ]),
+  );
   const body = boundedBody(rows, Buffer.byteLength(rows[0]!.text) + 3);
   assert.equal(body.resultCount, 1);
   assert.equal(body.fileCount, 1);
@@ -67,12 +84,16 @@ test("byte truncation counts only displayed results and cannot leave an orphan h
 });
 
 test("grep exposes a small schema with a flat, Google-compatible output enum", () => {
-  assert.deepEqual(Object.keys(GrepParams.properties), ["pattern", "path", "glob", "output", "literal", "context"]);
+  assert.deepEqual(Object.keys(GrepParams.properties), [
+    "pattern",
+    "path",
+    "glob",
+    "output",
+    "literal",
+  ]);
   assert.deepEqual(GrepParams.required, ["pattern"]);
-  assert.deepEqual(GrepParams.properties.output.enum, ["content", "files"]);
+  assert.match(JSON.stringify(GrepParams.properties.output), /"enum":\["content","files"\]/);
   assert.equal(JSON.stringify(GrepParams).includes("anyOf"), false);
-  assert.equal(GrepParams.properties.context.minimum, 0);
-  assert.equal(GrepParams.properties.context.maximum, 50);
 });
 
 test("find exposes exactly pattern and path", () => {
@@ -89,17 +110,20 @@ test("every public parameter carries a description", () => {
 
 test("model-facing metadata stays concise and explains defaults and budgets", () => {
   for (const value of [
-    GREP_TOOL_DESCRIPTION, GREP_PROMPT_SNIPPET, FIND_TOOL_DESCRIPTION, FIND_PROMPT_SNIPPET,
-    ...Object.values(GREP_PARAMETER_DESCRIPTIONS), ...Object.values(FIND_PARAMETER_DESCRIPTIONS),
-  ]) assert.ok(value.length <= 160, `metadata is too long: ${value}`);
+    GREP_TOOL_DESCRIPTION,
+    GREP_PROMPT_SNIPPET,
+    FIND_TOOL_DESCRIPTION,
+    FIND_PROMPT_SNIPPET,
+    ...Object.values(GREP_PARAMETER_DESCRIPTIONS),
+    ...Object.values(FIND_PARAMETER_DESCRIPTIONS),
+  ])
+    assert.ok(value.length <= 160, `metadata is too long: ${value}`);
   assert.match(GREP_TOOL_DESCRIPTION, /case-sensitive regex/);
   assert.match(GREP_TOOL_DESCRIPTION, /100 matching lines or 200 files/);
   for (const description of [GREP_TOOL_DESCRIPTION, FIND_TOOL_DESCRIPTION]) {
     assert.match(description, /respects \.gitignore/);
     assert.match(description, /skips hidden paths by default/);
   }
-  assert.match(GREP_PARAMETER_DESCRIPTIONS.context, /1–3 complete matches/);
-  assert.match(GREP_PARAMETER_DESCRIPTIONS.context, /0 disables/);
   assert.match(FIND_PARAMETER_DESCRIPTIONS.pattern, /relative to the search root/);
 });
 
@@ -108,7 +132,10 @@ test("result text keeps one blank line between sections", () => {
     resultText("Showing 0 matches (partial results)", "", [searchTimeoutNotice(30_000)]),
     "Showing 0 matches (partial results)\n\n[Search timed out after 30s; results are partial. Narrow the path, pattern, or glob.]",
   );
-  assert.equal(resultText("1 match in 1 file", "a.ts\n1: needle", []), "1 match in 1 file\n\na.ts\n1: needle");
+  assert.equal(
+    resultText("1 match in 1 file", "a.ts\n1: needle", []),
+    "1 match in 1 file\n\na.ts\n1: needle",
+  );
   assert.equal(resultText("0 files", "", []), "0 files");
 });
 

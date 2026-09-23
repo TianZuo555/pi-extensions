@@ -8,7 +8,6 @@ import { type Component, visibleWidth } from "@earendil-works/pi-tui";
 import { registerTools, type SearchDetails } from "../lib/tools.ts";
 import { resolveBinary } from "../src/binaries.ts";
 import { createSearchRuntime } from "../src/runtime.ts";
-import { DEFAULT_MAX_BYTES } from "@earendil-works/pi-coding-agent";
 import { FILE_SIZE_LIMIT_NOTICE, HIDDEN_PATH_NOTICE } from "../lib/prompt.ts";
 
 interface CapturedTool {
@@ -101,7 +100,10 @@ test("empty searches return short model-visible answers", {
     const grep = await tools
       .get("grep")!
       .execute("grep", { pattern: "missing" }, undefined, undefined, { cwd: root });
-    assert.equal(text(grep), `No matches found.\n\n${FILE_SIZE_LIMIT_NOTICE}\n\n${HIDDEN_PATH_NOTICE}`);
+    assert.equal(
+      text(grep),
+      `No matches found.\n\n${FILE_SIZE_LIMIT_NOTICE}\n\n${HIDDEN_PATH_NOTICE}`,
+    );
 
     const find = await tools
       .get("find")!
@@ -173,14 +175,22 @@ test("empty timeout results retain a warning even when collapsed", async () => {
   }
 });
 
-test("registered grep distinguishes files, automatic context, and match-only output", { skip: !hasRg }, async () => {
+test("registered grep distinguishes automatic context and files-only output", {
+  skip: !hasRg,
+}, async () => {
   const root = mkdtempSync(path.join(tmpdir(), "pi-find-modes-"));
   writeFileSync(path.join(root, "a.txt"), "before\ncall(\nafter\n");
   const { runtime, tools } = captureTools();
   try {
     const tool = tools.get("grep")!;
-    for (const options of [{}, { context: 0 }, { output: "files", context: 50 }]) {
-      const result = await tool.execute("grep", { pattern: "call(", literal: true, ...options }, undefined, undefined, { cwd: root });
+    for (const options of [{}, { output: "files" }]) {
+      const result = await tool.execute(
+        "grep",
+        { pattern: "call(", literal: true, ...options },
+        undefined,
+        undefined,
+        { cwd: root },
+      );
       assert.equal(result.details.resultCount, 1);
       assert.equal(result.details.fileCount, 1);
       const auto = Object.keys(options).length === 0;
@@ -188,34 +198,24 @@ test("registered grep distinguishes files, automatic context, and match-only out
       assert.equal(text(result).includes("automatically"), auto);
       if (options.output === "files") {
         assert.equal(text(result), "1 file\n\na.txt");
-        assert.match(tool.renderResult!(result, { expanded: false, isPartial: false }, theme, { isError: false }).render(80).join("\n"), /1 file/);
+        assert.match(
+          tool.renderResult!(result, { expanded: false, isPartial: false }, theme, {
+            isError: false,
+          })
+            .render(80)
+            .join("\n"),
+          /1 file/,
+        );
       }
       for (const expanded of [false, true]) {
-        const component = tool.renderResult!(result, { expanded, isPartial: false }, theme, { isError: false });
+        const component = tool.renderResult!(result, { expanded, isPartial: false }, theme, {
+          isError: false,
+        });
         for (const width of [1, 12, 42]) {
           for (const line of component.render(width)) assert.ok(visibleWidth(line) <= width);
         }
       }
     }
-  } finally {
-    await runtime.dispose();
-    rmSync(root, { recursive: true, force: true });
-  }
-});
-
-test("large explicit context cannot hide matches or exceed the model byte budget", { skip: !hasRg }, async () => {
-  const root = mkdtempSync(path.join(tmpdir(), "pi-find-context-budget-"));
-  const lines = Array.from({ length: 110 }, (_, i) => i === 51 ? "needle" : "中".repeat(400));
-  writeFileSync(path.join(root, "a.txt"), lines.join("\n"));
-  const { runtime, tools } = captureTools();
-  try {
-    const result = await tools.get("grep")!.execute("grep", { pattern: "needle", context: 50 }, undefined, undefined, { cwd: root });
-    assert.match(text(result), /52: needle/);
-    assert.match(text(result), /Context omitted/);
-    assert.match(text(result), /partial results/);
-    assert.equal(result.details.resultCount, 1);
-    assert.equal(result.details.truncated, true);
-    assert.ok(Buffer.byteLength(text(result)) <= DEFAULT_MAX_BYTES);
   } finally {
     await runtime.dispose();
     rmSync(root, { recursive: true, force: true });
@@ -232,7 +232,6 @@ test("custom renderers remain width-safe", () => {
         glob: "**/*.typescript",
         output: "files",
         literal: true,
-        context: 50,
       },
       theme,
     );

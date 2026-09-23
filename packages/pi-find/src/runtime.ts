@@ -8,10 +8,8 @@ import { Minimatch } from "minimatch";
 import {
   AUTO_CONTEXT_LINES,
   AUTO_CONTEXT_MAX_MATCHES,
-  CONTEXT_RANGE_ERROR,
   EMPTY_PATTERN_ERROR,
   GREP_FILE_LIMIT,
-  MAX_CONTEXT_LINES,
   FIND_RESULT_LIMIT,
   findPathNotDirectoryError,
   GREP_RESULT_LIMIT,
@@ -32,7 +30,6 @@ export interface GrepRequest {
   readonly glob?: string;
   readonly output?: GrepOutput;
   readonly literal?: boolean;
-  readonly context?: number;
   readonly cwd: string;
   readonly signal?: AbortSignal;
 }
@@ -55,16 +52,24 @@ export interface GrepOutcome {
 }
 
 /** Only enrich sparse, completed searches; never retain orphan context windows. */
-export function finalizeGrep(outcome: GrepOutcome, requestedContext: number | undefined): GrepOutcome {
-  const auto = requestedContext === undefined;
+export function finalizeGrep(outcome: GrepOutcome): GrepOutcome {
   const complete = !outcome.truncated && !outcome.timedOut && outcome.skippedRecords === 0;
-  const lines = requestedContext ?? AUTO_CONTEXT_LINES;
-  const include = outcome.output === "content" && lines > 0 &&
-    (!auto || (complete && outcome.matches.length >= 1 && outcome.matches.length <= AUTO_CONTEXT_MAX_MATCHES));
+  const include =
+    outcome.output === "content" &&
+    complete &&
+    outcome.matches.length >= 1 &&
+    outcome.matches.length <= AUTO_CONTEXT_MAX_MATCHES;
   return {
     ...outcome,
-    context: include ? outcome.context.filter((row) => outcome.matches.some((match) =>
-      match.path === row.path && Math.abs(match.lineNumber - row.lineNumber) <= lines)) : [],
+    context: include
+      ? outcome.context.filter((row) =>
+          outcome.matches.some(
+            (match) =>
+              match.path === row.path &&
+              Math.abs(match.lineNumber - row.lineNumber) <= AUTO_CONTEXT_LINES,
+          ),
+        )
+      : [],
   };
 }
 
@@ -101,7 +106,9 @@ function normalizeResultPath(filePath: string): string {
 export function clipLine(text: string, matchStart = 0, matchEnd = matchStart): string {
   if (text.length <= MAX_LINE_LENGTH) return text;
   // Keep the first match visible, with balanced surrounding text when it fits.
-  const padding = Math.floor((MAX_LINE_LENGTH - Math.min(matchEnd - matchStart, MAX_LINE_LENGTH)) / 2);
+  const padding = Math.floor(
+    (MAX_LINE_LENGTH - Math.min(matchEnd - matchStart, MAX_LINE_LENGTH)) / 2,
+  );
   let start = Math.max(0, Math.min(matchStart - padding, text.length - MAX_LINE_LENGTH));
   let end = start + MAX_LINE_LENGTH;
   // Never split a Unicode surrogate pair at either edge of the excerpt.
@@ -198,9 +205,7 @@ export function buildRgArgs(request: GrepRequest, searchRoot: string): string[] 
   if (request.output === "files") {
     args.push("--files-with-matches", "--null");
   } else {
-    args.push("--json", "--line-number");
-    const context = request.context ?? AUTO_CONTEXT_LINES;
-    if (context > 0) args.push("--context", String(context));
+    args.push("--json", "--line-number", "--context", String(AUTO_CONTEXT_LINES));
   }
   if (request.literal) args.push("--fixed-strings");
   if (!isInsideGitRepository(searchRoot)) args.push("--no-require-git");
@@ -264,16 +269,11 @@ const makeSearchRuntime = Effect.gen(function* () {
       if (request.glob !== undefined && globBody(request.glob).length === 0) {
         return Effect.fail(new SearchInputError({ message: EMPTY_PATTERN_ERROR }));
       }
-      if (request.context !== undefined &&
-        (!Number.isInteger(request.context) || request.context < 0 || request.context > MAX_CONTEXT_LINES)) {
-        return Effect.fail(new SearchInputError({ message: CONTEXT_RANGE_ERROR }));
-      }
       const target = searchTarget(request.cwd, request.path, false);
       if (target instanceof SearchInputError) return Effect.fail(target);
 
       const accepts = pathMatcher(request.glob, target.root, request.cwd, false);
       const output = request.output ?? "content";
-      const autoContext = request.context === undefined;
       const matches: GrepMatch[] = [];
       const context: GrepMatch[] = [];
       const files = new Set<string>();
@@ -302,7 +302,11 @@ const makeSearchRuntime = Effect.gen(function* () {
           if (event === undefined || !accepts(event.path)) return true;
           // Once any record was dropped, do not accumulate context for unseen
           // matches. Together with the match/context caps this bounds memory.
-          if (event.isContext && (skippedRecords > 0 || (autoContext && matches.length > AUTO_CONTEXT_MAX_MATCHES))) return true;
+          if (
+            event.isContext &&
+            (skippedRecords > 0 || matches.length > AUTO_CONTEXT_MAX_MATCHES)
+          )
+            return true;
           if (!event.isContext && matches.length >= GREP_RESULT_LIMIT) return false;
           const row = {
             path: normalizeResultPath(event.path),
@@ -316,20 +320,22 @@ const makeSearchRuntime = Effect.gen(function* () {
             files.add(row.path);
             // One pass, no rereads: keep a small speculative context buffer,
             // then discard it as soon as this is no longer a sparse search.
-            if (autoContext && matches.length > AUTO_CONTEXT_MAX_MATCHES) context.length = 0;
+            if (matches.length > AUTO_CONTEXT_MAX_MATCHES) context.length = 0;
           }
           return true;
         },
       }).pipe(
-        Effect.map((result) => finalizeGrep({
-          output,
-          matches,
-          context,
-          files: [...files].sort(),
-          truncated: result.stoppedEarly,
-          timedOut: result.timedOut,
-          skippedRecords,
-        }, request.context)),
+        Effect.map((result) =>
+          finalizeGrep({
+            output,
+            matches,
+            context,
+            files: [...files].sort(),
+            truncated: result.stoppedEarly,
+            timedOut: result.timedOut,
+            skippedRecords,
+          }),
+        ),
       );
     });
 
