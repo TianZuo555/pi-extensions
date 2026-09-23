@@ -107,13 +107,9 @@ test("grep path is one file or directory and glob filters file names", {
   );
 });
 
-test("a slash glob matches from the search root or the cwd", { skip: !hasRg }, async () => {
-  // `path` scopes the search; the glob may still be written from the cwd.
+test("a slash glob matches only from the search root", { skip: !hasRg }, async () => {
   const scoped = await grep({ pattern: "needle", path: "src", glob: "src/*.ts" });
-  assert.deepEqual(
-    scoped.matches.map((match) => match.path),
-    ["src/main.ts"],
-  );
+  assert.deepEqual(scoped.matches, []);
 
   const nested = await grep({ pattern: "needle", path: "src", glob: "deep/*.ts" });
   assert.deepEqual(
@@ -130,12 +126,12 @@ test("a leading ! excludes like ripgrep's own globs", { skip: !hasRg }, async ()
   );
   assert.ok(excluded.matches.some((match) => match.path === "src/main.ts"));
 
-  const excludedFromCwd = await grep({ pattern: "needle", path: "src", glob: "!src/*.ts" });
+  const excludedFromRoot = await grep({ pattern: "needle", path: "src", glob: "!*.ts" });
   assert.equal(
-    excludedFromCwd.matches.some((match) => match.path === "src/main.ts"),
+    excludedFromRoot.matches.some((match) => match.path === "src/main.ts"),
     false,
   );
-  assert.ok(excludedFromCwd.matches.some((match) => match.path === "src/other.js"));
+  assert.ok(excludedFromRoot.matches.some((match) => match.path === "src/other.js"));
 
   await assert.rejects(() => grep({ pattern: "needle", glob: "!" }), /cannot be empty/);
 });
@@ -255,7 +251,7 @@ test("find uses one glob under one directory", { skip: !hasFd }, async () => {
   assert.deepEqual([...outcome.files].sort(), ["src/deep/test.ts", "src/main.ts"]);
 
   const fromCwd = await find({ pattern: "src/*.ts", path: "src" });
-  assert.deepEqual(fromCwd.files, ["src/main.ts"]);
+  assert.deepEqual(fromCwd.files, []);
 
   const excluded = await find({ pattern: "!*.ts" });
   assert.equal(
@@ -343,7 +339,8 @@ test("engine arguments contain only the fixed simple behavior", () => {
   assert.ok(!rg.includes("--hidden"));
   assert.ok(!rg.includes("--smart-case"));
   assert.ok(!rg.includes("--fixed-strings"));
-  assert.ok(!rg.includes("--context"));
+  assert.ok(rg.includes("--context"));
+  assert.equal(rg[rg.indexOf("--context") + 1], "5");
   assert.ok(rg.includes("!.*"));
 
   const fd = buildFdArgs({ pattern: "*.ts", path: "src", cwd: root }, root);

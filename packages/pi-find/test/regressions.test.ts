@@ -7,7 +7,7 @@ import { test } from "node:test";
 import { resolveBinary } from "../src/binaries.ts";
 import { createSearchRuntime, runSearch, SearchRuntime } from "../src/runtime.ts";
 import { streamLines } from "../src/stream.ts";
-import { displayPath } from "../lib/tools.ts";
+import { displayPath } from "../lib/results.ts";
 
 const hasBoth = resolveBinary("rg") !== null && resolveBinary("fd") !== null;
 

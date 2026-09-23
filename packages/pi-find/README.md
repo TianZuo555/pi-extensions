@@ -5,27 +5,54 @@ Release notes: [changelog](https://github.com/TianZuo555/pi-extensions/blob/main
 Simple, bounded `grep` and `find` tools for the [pi coding agent](https://pi.dev),
 backed by ripgrep and fd.
 
-Install: `npm:@tian.zuo/pi-find` · npm package `@tian.zuo/pi-find` · workspace
-`packages/pi-find`
-
 The extension reuses pi's built-in tool names, so the model sees one search
 surface instead of competing built-in and extension tools.
+
+## highlight 
+
+Minimal description and tool schemas for saving context
 
 ## Tools
 
 ### `grep`
 
 ```text
-grep(pattern, path?, glob?)
+grep(pattern, path?, glob?, output?, literal?, context?)
 ```
 
-- `pattern` is a case-sensitive ripgrep regular expression.
+- `pattern` is a case-sensitive ripgrep regular expression. Set `literal: true`
+  to search exact text instead, without escaping metacharacters.
 - `path` is one file or directory and defaults to the current directory.
 - `glob` optionally limits file names, for example `*.ts` or `**/*.test.ts`.
+- `output` is `"content"` (default) or `"files"`. File mode uses `rg -l` to
+  return unique paths without collecting every matching line in each file.
+- `context` is the number of surrounding lines, from 0 to 50. Omit it to
+  automatically include up to **5 lines before and after** when a complete
+  search has **1–3 matching lines**. Set `context: 0` for matches only, or a
+  positive number to request context explicitly. File mode ignores context.
 
 ```jsonc
 { "pattern": "TODO|FIXME", "path": "src", "glob": "*.ts" }
+{ "pattern": "registerTool(", "literal": true, "output": "files" }
+{ "pattern": "SearchRuntime", "path": "src", "context": 0 }
 ```
+
+Content is grouped by file, with `:` for matching lines and `-` for context:
+
+```text
+1 match in 1 file
+
+src/main.ts
+11- // Register the tool
+12: pi.registerTool(tool);
+13- }
+```
+
+Overlapping context windows are merged and context is not counted as matches.
+Automatic context is collected in the same search, not by rereading files. It
+is omitted for incomplete searches (limits, timeout, or skipped records), or
+if it would exceed the output budget. Explicit context that cannot fit is
+omitted with a notice so it never crowds out the matching lines.
 
 ### `find`
 
@@ -45,11 +72,12 @@ find(pattern, path?)
 - Both tools respect `.gitignore` and always skip `.git`. Explicit `.git`
   roots, files inside them, and symlink aliases to them are rejected.
 - Globs without `/` match basenames at any depth. Globs containing `/` match
-  paths relative to the search directory (or the parent of an explicit grep
-  file) *or* to the working directory, so both `{ "path": "src", "glob":
-  "src/*.ts" }` and `{ "path": "src", "glob": "deep/*.ts" }` select files
-  under `src`. `src/*.ts` matches direct children of `src`, while
-  `src/**/*.ts` includes descendants. Use `/` in globs on every platform.
+  **only relative to the search directory** (or the parent of an explicit
+  grep file), never also relative to cwd. For example, `{ "path": "src",
+  "pattern": "deep/*.ts" }` finds direct children of `src/deep`, whereas
+  `{ "path": "src", "pattern": "src/*.ts" }` searches `src/src`.
+  From cwd, `src/*.ts` matches direct children of `src` and `src/**/*.ts`
+  includes descendants. Use `/` in globs on every platform.
   Glob filtering never re-includes ignored files.
 - A leading `!` excludes instead of includes, like ripgrep's own `--glob`: for
   example `glob: "!*.test.ts"` or `pattern: "!**/*.generated.ts"`.
@@ -57,12 +85,21 @@ find(pattern, path?)
   home directory. Ripgrep user configuration is ignored so it cannot change
   the tool's case sensitivity or ignore behavior.
 - Hidden files and directories are not searched by default. An explicitly
-  named hidden path still works, for example `path: ".github"`.
-- Grep stops after 100 matches; find stops after 200 files. A result says when
-  the fixed limit was reached so the caller can narrow the search.
+  named hidden path still works, for example `path: ".github"`. A glob such
+  as `.github/**/*.yml` alone does not enable hidden traversal; use
+  `{ "path": ".github", "pattern": "*.yml" }`. Empty results include this hint.
+- Grep returns up to 100 matching lines or 200 files; find returns up to 200
+  files. One extra result distinguishes overflow from an exact fit, then the
+  process is stopped. Partial results are labelled, and summary counts refer
+  to the results actually displayed, not an assumed total.
+- Returned files are sorted by path, and content within each file by line.
+  This sorts the collected batch, not the whole search before limiting;
+  truncated batches are not guaranteed to contain the globally first paths.
 - Grep skips files larger than 4 MiB during directory traversal. Explicitly
   named files follow ripgrep's explicit-file behavior and can exceed that limit.
-- Grep lines longer than 400 characters are clipped.
+- Grep lines longer than 400 UTF-16 code units are clipped around the first
+  match, keeping late matches visible without splitting surrogate pairs.
+  Context lines are clipped from the start. Ellipses mark omitted text.
 - A single match or path record larger than 8 MiB is skipped instead of being
   buffered, and the result says so. Explicitly named files bypass
   ripgrep's traversal size cap, so this is what keeps a search of a
@@ -76,9 +113,9 @@ find(pattern, path?)
 - Timeouts are marked as partial, including when no results were gathered.
   Unexpected process termination is an error, not a completed empty search.
 
-For uncommon searches involving several roots, exclusions, multiline matching,
-counts, sorting, or pipelines, use `rg` or `fd` through the shell rather than
-expanding these tool schemas.
+For uncommon searches involving several roots, complex exclusions, multiline
+matching, counts, global sorting, pagination, or pipelines, use `rg` or `fd`
+through the shell rather than expanding these tool schemas.
 
 ## Hidden files and secrets
 

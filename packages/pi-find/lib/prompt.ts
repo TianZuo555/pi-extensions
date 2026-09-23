@@ -1,32 +1,46 @@
 /** Model-facing text for the intentionally small grep/find surface. */
 
 export const GREP_RESULT_LIMIT = 100;
+export const GREP_FILE_LIMIT = 200;
 export const FIND_RESULT_LIMIT = 200;
+export const AUTO_CONTEXT_LINES = 5;
+export const AUTO_CONTEXT_MAX_MATCHES = 3;
+export const MAX_CONTEXT_LINES = 50;
 
 /** Wall-clock budget for one rg/fd run; a search should finish well under it. */
 export const SEARCH_TIMEOUT_MS = 30_000;
 
 export const GREP_TOOL_DESCRIPTION =
-  "Search file contents with a case-sensitive regex; respects .gitignore; skips hidden paths by default.";
+  "Search file contents with a case-sensitive regex; respects .gitignore; skips hidden paths by default. Up to 100 matching lines or 200 files.";
 export const GREP_PROMPT_SNIPPET = "Search file contents with a regex";
 
 export const GREP_PARAMETER_DESCRIPTIONS = {
-  pattern: "Case-sensitive ripgrep regex.",
-  path: "Search file or directory; defaults to cwd.",
-  glob: "Case-sensitive glob: basename ('*.ts') or path ('src/*.ts'); prefix ! to exclude.",
+  pattern: "Case-sensitive ripgrep regex, or exact text when literal is true.",
+  path: "Search file or directory; defaults to cwd. Name hidden paths explicitly (e.g. '.github').",
+  glob: "Case-sensitive glob: basename at any depth, or path relative to the search root; prefix ! to exclude.",
+  output: "content (default): matching lines. files: paths only; context is ignored.",
+  literal: "Treat pattern as exact text instead of regex; defaults to false.",
+  context: "Surrounding lines (0–50). Omit for ±5 on 1–3 complete matches; 0 disables. Context does not count as matches.",
 };
 
 export const FIND_TOOL_DESCRIPTION =
-  "Find files with a case-insensitive glob; respects .gitignore; skips hidden paths by default.";
+  "Find files with a case-insensitive glob; respects .gitignore; skips hidden paths by default. Up to 200 files.";
 export const FIND_PROMPT_SNIPPET = "Find files with a glob";
 
 export const FIND_PARAMETER_DESCRIPTIONS = {
-  pattern: "Case-insensitive glob: basename ('*.ts') or path ('src/*.ts'); prefix ! to exclude.",
-  path: "Search directory; defaults to cwd.",
+  pattern: "Case-insensitive glob: basename at any depth, or path relative to the search root; prefix ! to exclude.",
+  path: "Search directory; defaults to cwd. Name hidden paths explicitly (e.g. '.github').",
 };
 
 export const QUOTED_PATH_NOTICE = "[JSON-decode quoted paths before read/edit.]";
 export const FILE_SIZE_LIMIT_NOTICE = "[Files >4 MiB are skipped during traversal.]";
+export const HIDDEN_PATH_NOTICE =
+  '[Default searches skip hidden paths; set path explicitly to search one (e.g. ".github").]';
+export const AUTO_CONTEXT_NOTICE =
+  "[Added up to 5 surrounding lines automatically; context: 0 shows only matches.]";
+export const CONTEXT_OMITTED_NOTICE =
+  "[Context omitted to fit the output budget; matching lines take priority. Narrow the search for context.]";
+export const CONTEXT_RANGE_ERROR = "Context must be an integer between 0 and 50.";
 export const NO_GREP_MATCHES = "No matches found.";
 export const NO_FILES_FOUND = "No files found.";
 export const EMPTY_PATTERN_ERROR = "Search pattern cannot be empty.";
@@ -40,14 +54,16 @@ export function findPathNotDirectoryError(searchPath: string): string {
   return `Find path is not a directory: ${searchPath}.`;
 }
 
-export function grepResultHeader(matchCount: number, fileCount: number): string {
-  return `${matchCount} match${matchCount === 1 ? "" : "es"} in ${fileCount} file${
+export function grepResultHeader(matchCount: number, fileCount: number, partial = false): string {
+  const counts = `${matchCount} match${matchCount === 1 ? "" : "es"} in ${fileCount} file${
     fileCount === 1 ? "" : "s"
   }`;
+  return partial ? `Showing ${counts} (partial results)` : counts;
 }
 
-export function findResultHeader(fileCount: number): string {
-  return `${fileCount} file${fileCount === 1 ? "" : "s"}`;
+export function findResultHeader(fileCount: number, partial = false): string {
+  const count = `${fileCount} file${fileCount === 1 ? "" : "s"}`;
+  return partial ? `Showing ${count} (partial results)` : count;
 }
 
 export function resultLimitNotice(kind: "matches" | "files", limit: number): string {

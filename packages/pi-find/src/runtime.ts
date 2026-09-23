@@ -6,7 +6,12 @@ import * as nodePath from "node:path";
 import { Cause, Context, Effect, Exit, Layer, ManagedRuntime, Result } from "effect";
 import { Minimatch } from "minimatch";
 import {
+  AUTO_CONTEXT_LINES,
+  AUTO_CONTEXT_MAX_MATCHES,
+  CONTEXT_RANGE_ERROR,
   EMPTY_PATTERN_ERROR,
+  GREP_FILE_LIMIT,
+  MAX_CONTEXT_LINES,
   FIND_RESULT_LIMIT,
   findPathNotDirectoryError,
   GREP_RESULT_LIMIT,
@@ -19,10 +24,15 @@ import { streamLines } from "./stream.ts";
 
 export const MAX_LINE_LENGTH = 400;
 
+export type GrepOutput = "content" | "files";
+
 export interface GrepRequest {
   readonly pattern: string;
   readonly path?: string;
   readonly glob?: string;
+  readonly output?: GrepOutput;
+  readonly literal?: boolean;
+  readonly context?: number;
   readonly cwd: string;
   readonly signal?: AbortSignal;
 }
@@ -34,11 +44,28 @@ export interface GrepMatch {
 }
 
 export interface GrepOutcome {
+  readonly output: GrepOutput;
   readonly matches: readonly GrepMatch[];
+  readonly context: readonly GrepMatch[];
+  readonly files: readonly string[];
   readonly truncated: boolean;
   readonly timedOut: boolean;
   /** Records too large to buffer; the whole record is dropped because a partial one cannot be decoded. */
   readonly skippedRecords: number;
+}
+
+/** Only enrich sparse, completed searches; never retain orphan context windows. */
+export function finalizeGrep(outcome: GrepOutcome, requestedContext: number | undefined): GrepOutcome {
+  const auto = requestedContext === undefined;
+  const complete = !outcome.truncated && !outcome.timedOut && outcome.skippedRecords === 0;
+  const lines = requestedContext ?? AUTO_CONTEXT_LINES;
+  const include = outcome.output === "content" && lines > 0 &&
+    (!auto || (complete && outcome.matches.length >= 1 && outcome.matches.length <= AUTO_CONTEXT_MAX_MATCHES));
+  return {
+    ...outcome,
+    context: include ? outcome.context.filter((row) => outcome.matches.some((match) =>
+      match.path === row.path && Math.abs(match.lineNumber - row.lineNumber) <= lines)) : [],
+  };
 }
 
 export interface FindRequest {
@@ -71,9 +98,16 @@ function normalizeResultPath(filePath: string): string {
   return normalized.replace(/^\.\//, "");
 }
 
-function clipLine(text: string): string {
+export function clipLine(text: string, matchStart = 0, matchEnd = matchStart): string {
   if (text.length <= MAX_LINE_LENGTH) return text;
-  return `${text.slice(0, MAX_LINE_LENGTH)}… (${text.length} chars)`;
+  // Keep the first match visible, with balanced surrounding text when it fits.
+  const padding = Math.floor((MAX_LINE_LENGTH - Math.min(matchEnd - matchStart, MAX_LINE_LENGTH)) / 2);
+  let start = Math.max(0, Math.min(matchStart - padding, text.length - MAX_LINE_LENGTH));
+  let end = start + MAX_LINE_LENGTH;
+  // Never split a Unicode surrogate pair at either edge of the excerpt.
+  if (/[\uDC00-\uDFFF]/.test(text[start] ?? "")) start += 1;
+  if (/[\uDC00-\uDFFF]/.test(text[end] ?? "")) end -= 1;
+  return `${start > 0 ? "… " : ""}${text.slice(start, end)}${end < text.length ? "…" : ""} (${text.length} chars)`;
 }
 
 function searchTarget(
@@ -157,12 +191,18 @@ export function buildRgArgs(request: GrepRequest, searchRoot: string): string[] 
   const args = [
     "--no-config",
     "--case-sensitive",
-    "--json",
-    "--line-number",
     "--color=never",
     "--max-filesize",
     GREP_MAX_FILESIZE,
   ];
+  if (request.output === "files") {
+    args.push("--files-with-matches", "--null");
+  } else {
+    args.push("--json", "--line-number");
+    const context = request.context ?? AUTO_CONTEXT_LINES;
+    if (context > 0) args.push("--context", String(context));
+  }
+  if (request.literal) args.push("--fixed-strings");
   if (!isInsideGitRepository(searchRoot)) args.push("--no-require-git");
   const prefilter = basenamePrefilter(request.glob);
   if (prefilter !== "*") args.push("--type-add", `pifind:${prefilter}`, "--type", "pifind");
@@ -190,10 +230,9 @@ export function buildFdArgs(request: FindRequest, searchRoot: string): string[] 
 /**
  * Compile one glob into a result-path predicate.
  *
- * A leading `!` excludes instead of includes, like ripgrep's own globs. Slash
- * globs are matched against both the search root and the cwd: callers pass
- * `path` as the scope and write globs from either place, and both spellings
- * can only ever match results inside that scope.
+ * A leading `!` excludes instead of includes. Slash globs have exactly one
+ * base: the search root (the parent directory for an explicit grep file).
+ * Basename globs match at any depth. cwd is only used to resolve result paths.
  */
 function pathMatcher(pattern: string | undefined, root: string, cwd: string, nocase: boolean) {
   const negated = pattern?.startsWith("!") === true;
@@ -211,9 +250,7 @@ function pathMatcher(pattern: string | undefined, root: string, cwd: string, noc
   return (file: string): boolean => {
     if (matcher === undefined) return true;
     const absolute = nodePath.resolve(cwd, file);
-    const matched =
-      matcher.match(normalizeResultPath(nodePath.relative(root, absolute))) ||
-      matcher.match(normalizeResultPath(nodePath.relative(cwd, absolute)));
+    const matched = matcher.match(normalizeResultPath(nodePath.relative(root, absolute)));
     return negated ? !matched : matched;
   };
 }
@@ -227,47 +264,72 @@ const makeSearchRuntime = Effect.gen(function* () {
       if (request.glob !== undefined && globBody(request.glob).length === 0) {
         return Effect.fail(new SearchInputError({ message: EMPTY_PATTERN_ERROR }));
       }
+      if (request.context !== undefined &&
+        (!Number.isInteger(request.context) || request.context < 0 || request.context > MAX_CONTEXT_LINES)) {
+        return Effect.fail(new SearchInputError({ message: CONTEXT_RANGE_ERROR }));
+      }
       const target = searchTarget(request.cwd, request.path, false);
       if (target instanceof SearchInputError) return Effect.fail(target);
 
       const accepts = pathMatcher(request.glob, target.root, request.cwd, false);
+      const output = request.output ?? "content";
+      const autoContext = request.context === undefined;
       const matches: GrepMatch[] = [];
-      let sawOverflow = false;
+      const context: GrepMatch[] = [];
+      const files = new Set<string>();
       let skippedRecords = 0;
       return streamLines({
         binary: "rg",
         args: buildRgArgs({ ...request, path: target.argument }, target.root),
+        delimiter: output === "files" ? "\0" : "\n",
         cwd: request.cwd,
         signal: request.signal,
         onLine(line, clipped) {
-          // A clipped JSON record cannot be decoded, and its head is not a match.
+          // A partial JSON record or path is not a result.
           if (clipped) {
             skippedRecords += 1;
             return true;
           }
+          if (output === "files") {
+            if (line.length === 0 || !accepts(line)) return true;
+            const file = normalizeResultPath(line);
+            if (files.has(file)) return true;
+            if (files.size >= GREP_FILE_LIMIT) return false;
+            files.add(file);
+            return true;
+          }
           const event = decodeRgEvent(line);
           if (event === undefined || !accepts(event.path)) return true;
-          if (matches.length >= GREP_RESULT_LIMIT) {
-            sawOverflow = true;
-            return false;
-          }
-          matches.push({
+          // Once any record was dropped, do not accumulate context for unseen
+          // matches. Together with the match/context caps this bounds memory.
+          if (event.isContext && (skippedRecords > 0 || (autoContext && matches.length > AUTO_CONTEXT_MAX_MATCHES))) return true;
+          if (!event.isContext && matches.length >= GREP_RESULT_LIMIT) return false;
+          const row = {
             path: normalizeResultPath(event.path),
             lineNumber: event.lineNumber,
-            text: clipLine(event.text),
-          });
+            text: clipLine(event.text, event.matchStart, event.matchEnd),
+          };
+          if (event.isContext) {
+            context.push(row);
+          } else {
+            matches.push(row);
+            files.add(row.path);
+            // One pass, no rereads: keep a small speculative context buffer,
+            // then discard it as soon as this is no longer a sparse search.
+            if (autoContext && matches.length > AUTO_CONTEXT_MAX_MATCHES) context.length = 0;
+          }
           return true;
         },
       }).pipe(
-        Effect.map(
-          (result) =>
-            ({
-              matches,
-              truncated: sawOverflow || result.stoppedEarly,
-              timedOut: result.timedOut,
-              skippedRecords,
-            }) satisfies GrepOutcome,
-        ),
+        Effect.map((result) => finalizeGrep({
+          output,
+          matches,
+          context,
+          files: [...files].sort(),
+          truncated: result.stoppedEarly,
+          timedOut: result.timedOut,
+          skippedRecords,
+        }, request.context)),
       );
     });
 
@@ -308,7 +370,7 @@ const makeSearchRuntime = Effect.gen(function* () {
         Effect.map(
           (result) =>
             ({
-              files,
+              files: files.sort(),
               truncated: sawOverflow || result.stoppedEarly,
               timedOut: result.timedOut,
               skippedRecords,
