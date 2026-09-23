@@ -39,7 +39,22 @@ The runtime cannot know rendered size (clipping, grouping headings, separators a
 
 ### 3. Match-aware, surrogate-safe clipping
 
-Lines longer than 400 UTF-16 units are clipped around the **first match**, not from the start: rg's `submatches` byte offsets are converted to UTF-16 offsets by decoding the raw line prefix (handling `lines.bytes` invalid-UTF-8 payloads and stripped `\r`s), and the excerpt window is centered on the match. Edges that would split a surrogate pair are nudged inward so output is always well-formed. Context lines clip from the start. A late match on a minified 10 KB line now stays visible instead of being clipped away.
+**Problem.** The previous `clipLine` kept only the first 400 units of a long line (`text.slice(0, 400)` + `… (N chars)`). On minified bundles, generated files, or long CJK lines, a match at offset 5000 produced an excerpt that *does not contain the pattern* — worse than "the model can't tell where the cut happened", the hit's content was simply invisible, forcing a `read` round-trip that context lines exist to avoid.
+
+**Offsets: UTF-8 bytes → UTF-16 indices.** rg's `submatches` report `{start, end}` as byte offsets into the raw line; JS strings index UTF-16 units. `decodeRgEvent` converts by decoding the raw byte prefix — `bytes.subarray(0, start).toString("utf8").length` is the UTF-16 index. Using the same lossy decoder that produced `text` means offsets can never diverge from the displayed text. Details that keep the conversion honest:
+
+- For `lines.bytes` payloads (invalid UTF-8 in the line) the raw bytes come from base64; for `lines.text`, re-encoding is exact because rg only emits `text` for valid UTF-8.
+- `\r` is stripped from the decoded prefix exactly as it is from `text` (Windows `CRLF` lines), so offsets do not drift.
+- Only `submatches[0]` is used — one anchor suffices for window placement.
+- Malformed offsets (`end > bytes.length`, non-integer) drop the anchor entirely → head clipping, the previous behavior. Every layer has a benign fallback.
+
+**Window math.** `padding = (400 − min(matchLen, 400)) / 2` centers the match; `start` clamps to `0` near the head and to `len − 400` near the tail so the window is always full-width and in-bounds. A match longer than 400 units clamps the padding to 0 and shows the match head. Defaulted parameters (`matchStart = 0`) make context lines keep the old head-clip behavior — one function, two semantics.
+
+**Surrogate safety.** Only a *low* surrogate (`DC00–DFFF`) at a boundary can split a pair: at `start` it means the high half was already excluded → `start += 1`; at `end` it means the high half at `end−1` would be included → `end −= 1`. A high surrogate at `start` needs no fix (its pair is inside the window). Lone surrogates in tool output break rendering and JSON serialization, so the tests assert `isWellFormed()`.
+
+**Precision philosophy.** If a byte offset lands mid-sequence, lossy decoding reads it as U+FFFD and an astral char may shift the index by one. That is accepted: the offsets steer a display window, not a highlighter — a one-unit drift is a ±0.5-char centering error.
+
+**Markers.** `… ` prefix signals content was cut before, `…` + ` (N chars)` suffix signals content cut after plus the true line length — the model sees it is looking at a middle window, not the whole line. What is no longer reported is the match's absolute offset in the line, which has no decision value for "should I `read` this file".
 
 ### 4. Single-base slash globs (breaking change)
 
@@ -49,5 +64,4 @@ The cost: the common model habit of redundantly prefixing the path (`path: "src"
 
 ## Follow-ups
 
-- **Clipped context counts as skipped:** a >8 MiB context record flips `skippedRecords`, suppressing auto context and marking an otherwise-complete search partial. Conservative and safe, but a clipped *context* record is not a missing *match* — the two could be distinguished.
 - **Empty-result hints don't cover the glob-base change:** an empty result shows file-size and hidden-path notices, but nothing points at a `/`-glob written against the wrong base. A targeted notice when the result is empty and the glob contains `/` would let the model self-correct.

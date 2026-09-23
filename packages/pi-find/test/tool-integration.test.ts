@@ -8,7 +8,11 @@ import { type Component, visibleWidth } from "@earendil-works/pi-tui";
 import { registerTools, type SearchDetails } from "../lib/tools.ts";
 import { resolveBinary } from "../src/binaries.ts";
 import { createSearchRuntime } from "../src/runtime.ts";
-import { FILE_SIZE_LIMIT_NOTICE, HIDDEN_PATH_NOTICE } from "../lib/prompt.ts";
+import {
+  FILE_SIZE_LIMIT_NOTICE,
+  HIDDEN_PATH_NOTICE,
+  SLASH_GLOB_NOTICE,
+} from "../lib/prompt.ts";
 
 interface CapturedTool {
   readonly name: string;
@@ -109,6 +113,65 @@ test("empty searches return short model-visible answers", {
       .get("find")!
       .execute("find", { pattern: "*.ts" }, undefined, undefined, { cwd: root });
     assert.equal(text(find), `No files found.\n\n${HIDDEN_PATH_NOTICE}`);
+  } finally {
+    await runtime.dispose();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("empty results hint at slash-glob bases and name files mode", {
+  skip: !hasRg || !hasFd,
+}, async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "pi-find-slashglob-"));
+  mkdirSync(path.join(root, "src"));
+  writeFileSync(path.join(root, "src", "main.ts"), "needle\n");
+  const { runtime, tools } = captureTools();
+  try {
+    const grep = tools.get("grep")!;
+    // A slash glob under an explicit path scopes relative to the root, so
+    // "src/*.ts" misses everything — the hint names the actual cause.
+    const scoped = await grep.execute(
+      "grep",
+      { pattern: "needle", path: "src", glob: "src/*.ts" },
+      undefined,
+      undefined,
+      { cwd: root },
+    );
+    assert.match(text(scoped), /^No matches found\./);
+    assert.ok(text(scoped).includes(SLASH_GLOB_NOTICE));
+
+    // Without an explicit path the root is the cwd; the glob is written
+    // correctly and the hint would only be noise.
+    const fromCwd = await grep.execute(
+      "grep",
+      { pattern: "needle", glob: "src/*.ts" },
+      undefined,
+      undefined,
+      { cwd: root },
+    );
+    assert.match(text(fromCwd), /^1 match/);
+    assert.ok(!text(fromCwd).includes(SLASH_GLOB_NOTICE));
+
+    // An empty files-mode search reports files, not matches.
+    const filesOnly = await grep.execute(
+      "grep",
+      { pattern: "missing", output: "files" },
+      undefined,
+      undefined,
+      { cwd: root },
+    );
+    assert.match(text(filesOnly), /^No files found\./);
+
+    const find = tools.get("find")!;
+    const scopedFind = await find.execute(
+      "find",
+      { pattern: "src/*.ts", path: "src" },
+      undefined,
+      undefined,
+      { cwd: root },
+    );
+    assert.match(text(scopedFind), /^No files found\./);
+    assert.ok(text(scopedFind).includes(SLASH_GLOB_NOTICE));
   } finally {
     await runtime.dispose();
     rmSync(root, { recursive: true, force: true });

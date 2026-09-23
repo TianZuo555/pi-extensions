@@ -47,7 +47,7 @@ export interface GrepOutcome {
   readonly files: readonly string[];
   readonly truncated: boolean;
   readonly timedOut: boolean;
-  /** Records too large to buffer; the whole record is dropped because a partial one cannot be decoded. */
+  /** Result-carrying records too large to buffer (a clipped context record loses decoration only and is not counted). */
   readonly skippedRecords: number;
 }
 
@@ -285,9 +285,12 @@ const makeSearchRuntime = Effect.gen(function* () {
         cwd: request.cwd,
         signal: request.signal,
         onLine(line, clipped) {
-          // A partial JSON record or path is not a result.
+          // A clipped context record loses decoration only; a clipped match
+          // or path loses a result. The record type is in the retained head.
           if (clipped) {
-            skippedRecords += 1;
+            if (output === "files" || !line.startsWith('{"type":"context"')) {
+              skippedRecords += 1;
+            }
             return true;
           }
           if (output === "files") {

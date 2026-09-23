@@ -27,6 +27,7 @@ import {
   resultLimitNotice,
   SEARCH_TIMEOUT_MS,
   searchTimeoutNotice,
+  SLASH_GLOB_NOTICE,
 } from "./prompt.ts";
 import { runSearch, SearchRuntime, type SearchRuntimeInstance } from "../src/runtime.ts";
 import { MAX_RECORD_BYTES } from "../src/stream.ts";
@@ -95,11 +96,21 @@ export function registerTools(pi: ExtensionAPI, runtime: SearchRuntimeInstance):
         ...(outcome.skippedRecords > 0 ? [oversizedRecordNotice(MAX_RECORD_BYTES)] : []),
         ...(outcome.timedOut ? [searchTimeoutNotice(SEARCH_TIMEOUT_MS)] : []),
         ...(!droppedContext && outcome.context.length > 0 ? [AUTO_CONTEXT_NOTICE] : []),
-        ...(body.resultCount === 0 && !partial ? [FILE_SIZE_LIMIT_NOTICE, HIDDEN_PATH_NOTICE] : []),
+        ...(body.resultCount === 0 && !partial
+          ? [
+              FILE_SIZE_LIMIT_NOTICE,
+              HIDDEN_PATH_NOTICE,
+              ...(params.path !== undefined && params.glob?.includes("/")
+                ? [SLASH_GLOB_NOTICE]
+                : []),
+            ]
+          : []),
       ];
       const header =
         body.resultCount === 0 && !partial
-          ? NO_GREP_MATCHES
+          ? filesOnly
+            ? NO_FILES_FOUND
+            : NO_GREP_MATCHES
           : filesOnly
             ? findResultHeader(body.resultCount, partial)
             : grepResultHeader(body.resultCount, body.fileCount, partial);
@@ -159,7 +170,14 @@ export function registerTools(pi: ExtensionAPI, runtime: SearchRuntimeInstance):
         ...(outcome.truncated ? [resultLimitNotice("files", FIND_RESULT_LIMIT)] : []),
         ...(body.truncated ? [outputLimitNotice("find")] : []),
         ...(outcome.timedOut ? [searchTimeoutNotice(SEARCH_TIMEOUT_MS)] : []),
-        ...(count === 0 && !partial ? [HIDDEN_PATH_NOTICE] : []),
+        ...(count === 0 && !partial
+          ? [
+              HIDDEN_PATH_NOTICE,
+              ...(params.path !== undefined && params.pattern.includes("/")
+                ? [SLASH_GLOB_NOTICE]
+                : []),
+            ]
+          : []),
       ];
       const header = count === 0 && !partial ? NO_FILES_FOUND : findResultHeader(count, partial);
       return {

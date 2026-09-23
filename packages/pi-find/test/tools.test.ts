@@ -119,10 +119,10 @@ test("model-facing metadata stays concise and explains defaults and budgets", ()
   ])
     assert.ok(value.length <= 160, `metadata is too long: ${value}`);
   assert.match(GREP_TOOL_DESCRIPTION, /case-sensitive regex/);
-  assert.match(GREP_TOOL_DESCRIPTION, /100 matching lines or 200 files/);
+  assert.match(GREP_TOOL_DESCRIPTION, /100 lines or 200 files/);
   for (const description of [GREP_TOOL_DESCRIPTION, FIND_TOOL_DESCRIPTION]) {
     assert.match(description, /respects \.gitignore/);
-    assert.match(description, /skips hidden paths by default/);
+    assert.match(description, /skips hidden paths/);
   }
   assert.match(FIND_PARAMETER_DESCRIPTIONS.pattern, /relative to the search root/);
 });

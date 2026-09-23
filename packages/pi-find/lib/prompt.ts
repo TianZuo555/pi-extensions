@@ -10,31 +10,33 @@ export const AUTO_CONTEXT_MAX_MATCHES = 3;
 export const SEARCH_TIMEOUT_MS = 30_000;
 
 export const GREP_TOOL_DESCRIPTION =
-  "Search file contents with a case-sensitive regex; respects .gitignore; skips hidden paths by default. Up to 100 matching lines or 200 files.";
+  "Search file contents by case-sensitive regex; respects .gitignore; skips hidden paths. Up to 100 lines or 200 files.";
 export const GREP_PROMPT_SNIPPET = "Search file contents with a regex";
 
 export const GREP_PARAMETER_DESCRIPTIONS = {
-  pattern: "Case-sensitive ripgrep regex, or exact text when literal is true.",
-  path: "Search file or directory; defaults to cwd. Name hidden paths explicitly (e.g. '.github').",
-  glob: "Case-sensitive glob: basename at any depth, or path relative to the search root; prefix ! to exclude.",
-  output: "content (default): matching lines. files: paths only.",
-  literal: "Treat pattern as exact text instead of regex; defaults to false.",
+  pattern: "Case-sensitive ripgrep regex.",
+  path: "File or directory; defaults to cwd; name hidden paths explicitly ('.github').",
+  glob: "Case-sensitive glob: basename (any depth) or path relative to the search root; ! to exclude.",
+  output: "Matching lines (default), or file paths only.",
+  literal: "Treat pattern as exact text, not regex.",
 };
 
 export const FIND_TOOL_DESCRIPTION =
-  "Find files with a case-insensitive glob; respects .gitignore; skips hidden paths by default. Up to 200 files.";
+  "Find files by case-insensitive glob; respects .gitignore; skips hidden paths. Up to 200 files.";
 export const FIND_PROMPT_SNIPPET = "Find files with a glob";
 
 export const FIND_PARAMETER_DESCRIPTIONS = {
   pattern:
-    "Case-insensitive glob: basename at any depth, or path relative to the search root; prefix ! to exclude.",
-  path: "Search directory; defaults to cwd. Name hidden paths explicitly (e.g. '.github').",
+    "Case-insensitive glob: basename (any depth) or path relative to the search root; ! to exclude.",
+  path: "Directory; defaults to cwd; name hidden paths explicitly ('.github').",
 };
 
 export const QUOTED_PATH_NOTICE = "[JSON-decode quoted paths before read/edit.]";
 export const FILE_SIZE_LIMIT_NOTICE = "[Files >4 MiB are skipped during traversal.]";
 export const HIDDEN_PATH_NOTICE =
   '[Default searches skip hidden paths; set path explicitly to search one (e.g. ".github").]';
+export const SLASH_GLOB_NOTICE =
+  "[Globs containing / are relative to the search root, not the working directory.]";
 export const AUTO_CONTEXT_NOTICE = "[Added up to 5 surrounding lines automatically.]";
 export const NO_GREP_MATCHES = "No matches found.";
 export const NO_FILES_FOUND = "No files found.";

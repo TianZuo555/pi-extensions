@@ -246,6 +246,19 @@ test("grep drops an over-long record and says so", { skip: !hasRg }, async () =>
   rmSync(path.join(root, "huge.txt"));
 });
 
+test("a clipped context record is decoration, not a lost match", { skip: !hasRg }, async () => {
+  // The giant line sits between two matches but never matched itself, so it
+  // arrives as a context record: dropping it must not mark the search partial
+  // or suppress the automatic context around the surviving matches.
+  const lines = ["needle", "x".repeat(9 * 1024 * 1024), "needle"];
+  writeFileSync(path.join(root, "wide-context.txt"), `${lines.join("\n")}\n`);
+  const outcome = await grep({ pattern: "needle", path: "wide-context.txt" });
+  assert.equal(outcome.matches.length, 2);
+  assert.equal(outcome.skippedRecords, 0);
+  assert.equal(outcome.truncated, false);
+  rmSync(path.join(root, "wide-context.txt"));
+});
+
 test("find uses one glob under one directory", { skip: !hasFd }, async () => {
   const outcome = await find({ pattern: "*.ts", path: "src" });
   assert.deepEqual([...outcome.files].sort(), ["src/deep/test.ts", "src/main.ts"]);
