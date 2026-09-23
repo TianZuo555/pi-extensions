@@ -41,6 +41,25 @@ export interface StreamResult {
   /** True when the wall-clock budget killed the child; gathered output is partial. */
   readonly timedOut: boolean;
   readonly exitCode: number | null;
+  /** First unreadable-path message when some paths were skipped; gathered output is partial. */
+  readonly pathError?: string;
+}
+
+/** Per-path OS failures (permission denied, vanished file) end with the OS error code. */
+const PATH_ERROR = /\(os error \d+\)$/;
+const STDERR_LIMIT = 4096;
+
+/**
+ * Stderr made only of per-path OS failures means the walk skipped some paths
+ * but everything else was searched. Anything else (regex or glob syntax,
+ * unknown flags) is a real failure. A line cut by the stderr cap is ignored.
+ */
+export function pathErrorOf(stderr: string): string | undefined {
+  const lines = stderr.split("\n").map((line) => line.trim());
+  if (stderr.length >= STDERR_LIMIT) lines.pop();
+  const messages = lines.filter((line) => line.length > 0);
+  if (messages.length === 0 || !messages.every((line) => PATH_ERROR.test(line))) return undefined;
+  return messages[0]?.replace(/^(rg: |\[fd error\]: )/, "");
 }
 
 /**
@@ -173,7 +192,8 @@ export function streamLines(
     child.stderr?.on("data", (chunk: Buffer) => {
       // Bounded: a pathological glob can make rg complain per file, and the
       // message we surface only ever needs the first few lines.
-      if (stderr.length < 4096) stderr = (stderr + chunk.toString("utf8")).slice(0, 4096);
+      if (stderr.length < STDERR_LIMIT)
+        stderr = (stderr + chunk.toString("utf8")).slice(0, STDERR_LIMIT);
     });
 
     function onLine(line: string, clipped: boolean) {
@@ -272,7 +292,11 @@ export function streamLines(
         );
         return;
       }
-      if (!isBenignExit(request.binary, code, stoppedEarly, timedOut)) {
+      const pathError = pathErrorOf(stderr);
+      // rg exits 2 when any path failed, even though every readable path was
+      // searched; that is a partial result, not a failed search.
+      const partialWalk = request.binary === "rg" && code === 2 && pathError !== undefined;
+      if (!partialWalk && !isBenignExit(request.binary, code, stoppedEarly, timedOut)) {
         const detail = stderr.trim().split("\n")[0] ?? "";
         settle(
           new SearchProcessError({
@@ -288,7 +312,7 @@ export function streamLines(
         );
         return;
       }
-      settle(Effect.succeed({ stoppedEarly, timedOut, exitCode: code }));
+      settle(Effect.succeed({ stoppedEarly, timedOut, exitCode: code, pathError }));
     });
 
     // Interruption path: kill the child so a cancelled turn leaves nothing behind.

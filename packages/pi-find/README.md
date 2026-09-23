@@ -20,8 +20,9 @@ Minimal description and tool schemas for saving context
 grep(pattern, path?, glob?, output?, literal?)
 ```
 
-- `pattern` is a case-sensitive ripgrep regular expression. Set `literal: true`
-  to search exact text instead, without escaping metacharacters.
+- `pattern` is a case-sensitive ripgrep regular expression; prefix `(?i)` to
+  ignore case. Set `literal: true` to search exact text instead, without
+  escaping metacharacters.
 - `path` is one file or directory and defaults to the current directory.
 - `glob` optionally limits file names, for example `*.ts` or `**/*.test.ts`.
 - `output` is `"content"` (default) or `"files"`. File mode uses `rg -l` to
@@ -76,7 +77,9 @@ find(pattern, path?)
   `{ "path": "src", "pattern": "src/*.ts" }` searches `src/src`.
   From cwd, `src/*.ts` matches direct children of `src` and `src/**/*.ts`
   includes descendants. Use `/` in globs on every platform.
-  Glob filtering never re-includes ignored files.
+  Glob filtering never re-includes ignored files. When an empty result comes
+  from a glob that repeats the path, the hint names the corrected glob, for
+  example `[Glob "src/**/*.ts" is relative to path "src"; try "**/*.ts".]`.
 - A leading `!` excludes instead of includes, like ripgrep's own `--glob`: for
   example `glob: "!*.test.ts"` or `pattern: "!**/*.generated.ts"`.
 - A leading `@` is stripped from input paths; `~` and `~/...` expand to the
@@ -85,7 +88,8 @@ find(pattern, path?)
 - Hidden files and directories are not searched by default. An explicitly
   named hidden path still works, for example `path: ".github"`. A glob such
   as `.github/**/*.yml` alone does not enable hidden traversal; use
-  `{ "path": ".github", "pattern": "*.yml" }`. Empty results include this hint.
+  `{ "path": ".github", "pattern": "*.yml" }`. Empty default searches include
+  this hint; it is omitted when the path is already hidden or names a file.
 - Grep returns up to 100 matching lines or 200 files; find returns up to 200
   files. One extra result distinguishes overflow from an exact fit, then the
   process is stopped. Partial results are labelled, and summary counts refer
@@ -110,6 +114,10 @@ find(pattern, path?)
   extra find results.
 - Timeouts are marked as partial, including when no results were gathered.
   Unexpected process termination is an error, not a completed empty search.
+- Directories that cannot be read (for example, permission denied) are
+  skipped. The rest is still searched, and the result is marked partial and
+  names the first unreadable path. A regex or glob syntax error is still an
+  error.
 
 For uncommon searches involving several roots, complex exclusions, multiline
 matching, counts, global sorting, pagination, or pipelines, use `rg` or `fd`
@@ -125,12 +133,44 @@ must be enforced across every filesystem tool, not only grep.
 
 ## Debug logging
 
-Set `PI_FIND_DEBUG=1` to append one JSON object per search to
-`~/.pi/pi-find/debug.jsonl` (override with `PI_FIND_DEBUG_FILE`). Each event
-records the tool, parameters, duration, result counts, truncation/timeout
-flags, skipped oversized records, retained context lines, and which notices
-were shown — enough to study how often searches come back empty or partial
-and which hints actually fire. Logging never fails a search.
+Off by default: nothing is recorded unless you set `PI_FIND_DEBUG=1` (or
+`true`/`on`). Setting `PI_FIND_DEBUG_FILE` alone does not enable it. When
+enabled, each search appends one local JSON object to
+`~/.pi/pi-find/debug.jsonl` (override with `PI_FIND_DEBUG_FILE`); the file
+rotates to `debug.jsonl.1` at 10 MiB and nothing is sent anywhere.
+
+Each event records the parameters, duration, and outcome (`ok`, `error` with
+its error type, or `aborted`), plus internals the transcript does not show:
+
+- which limit bound (`resultLimitHit` for the result cap, `outputLimitHit`
+  for the byte budget), and collected vs displayed counts;
+- `outputBytes` (the text returned to the model) and, for grep,
+  `clippedLines`;
+- `rejectedByGlob` (matches or paths the glob filtered out) and the basename
+  `prefilter` passed to rg/fd (`*` means the whole tree was enumerated);
+- for grep content searches that ran to completion, rg's own
+  `searchedFiles`/`searchedBytes`;
+- `pathError` when unreadable paths were skipped, whether automatic context
+  was dropped for budget, and stable notice IDs (`hidden_path`,
+  `glob_prefix`, …);
+- `sessionId`, `sessionFile`, `toolCallId`, and `model`, so an event can be
+  joined with the pi session to see what the model did next.
+
+Logging never fails a search. Summarize the log (default: the active file
+and its rotated sibling):
+
+```bash
+pnpm --filter @tian.zuo/pi-find debug-stats            # text report
+pnpm --filter @tian.zuo/pi-find debug-stats -- --json  # machine-readable
+```
+
+The report shows empty and partial rates by cause, empty results with glob
+rejections (usually a slash glob against the wrong base), broad scans,
+notices, errors, and the model's next action after empty, partial, or
+failed searches: another grep/find, a shell search, a `read`, or nothing.
+Sections `[A]` (globs with a fixed directory prefix) and `[B]` (output cost)
+track the two open questions in
+[`docs/pi-find-search-decision.md`](../../docs/pi-find-search-decision.md).
 
 ## Binaries
 

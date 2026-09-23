@@ -6,7 +6,7 @@ import { after, before, test } from "node:test";
 import { spawnSync } from "node:child_process";
 import { Effect } from "effect";
 import { resolveBinary } from "../src/binaries.ts";
-import { streamLines } from "../src/stream.ts";
+import { pathErrorOf, streamLines } from "../src/stream.ts";
 import { FIND_RESULT_LIMIT, GREP_RESULT_LIMIT } from "../lib/prompt.ts";
 import {
   buildFdArgs,
@@ -340,6 +340,24 @@ test("searches are abortable", { skip: !hasRg }, async () => {
   );
 });
 
+test("only per-path OS failures count as a partial walk", () => {
+  const denied = "rg: ./locked: Permission denied (os error 13)";
+  assert.equal(pathErrorOf(`${denied}\n`), "./locked: Permission denied (os error 13)");
+  assert.equal(
+    pathErrorOf("[fd error]: ./locked: Permission denied (os error 13)\n"),
+    "./locked: Permission denied (os error 13)",
+  );
+  assert.equal(pathErrorOf(""), undefined);
+  assert.equal(
+    pathErrorOf("rg: regex parse error:\n    (\n    ^\nerror: unclosed group\n"),
+    undefined,
+  );
+  assert.equal(pathErrorOf(`${denied}\nrg: error parsing glob '{'\n`), undefined);
+  // A line cut by the 4 KiB stderr cap is not evidence of another failure kind.
+  const capped = `${`${denied}\n`.repeat(200)}`.slice(0, 4096);
+  assert.equal(pathErrorOf(capped), "./locked: Permission denied (os error 13)");
+});
+
 test("engine arguments contain only the fixed simple behavior", () => {
   const rg = buildRgArgs({ pattern: "needle", path: "src", glob: "*.ts", cwd: root }, root);
   assert.ok(rg.includes("--json"));
@@ -361,6 +379,7 @@ test("engine arguments contain only the fixed simple behavior", () => {
   assert.ok(fd.includes("*.ts"));
   assert.ok(fd.includes("--print0"));
   assert.ok(fd.includes("--ignore-case"));
+  assert.ok(fd.includes("--show-errors"));
   assert.ok(!fd.includes("--case-sensitive"));
   assert.ok(rg.includes("--no-config"));
   assert.ok(rg.includes("--case-sensitive"));

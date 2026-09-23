@@ -1,6 +1,6 @@
 # pi-find grep/find — search tooling decision
 
-**Status:** implemented on `feat/pi-find-search-modes`; tests and `tsc --noEmit` green
+**Status:** implemented on `feat/pi-find-search-modes`; tests and `tsc --noEmit` green. Two open questions (A, B under "Under observation") wait on debug-log data.
 **Package:** `@tian.zuo/pi-find` (`packages/pi-find`)
 
 ## Context
@@ -60,8 +60,63 @@ The runtime cannot know rendered size (clipping, grouping headings, separators a
 
 Slash-containing globs resolve **only** against the search root — the `path` directory, or the parent of an explicit grep file. Previously they were tried against both the root and the cwd, so `{ path: "src", glob: "src/*.ts" }` matched `src/main.ts` via cwd while `{ path: "src", glob: "deep/*.ts" }` matched `src/deep/x.ts` via root — one parameter, two trees, silently mixed. A single base makes results predictable and descriptions truthful ("relative to the search root").
 
-The cost: the common model habit of redundantly prefixing the path (`path: "src"` + `glob: "src/*.ts"`) now returns empty instead of working. See open questions for mitigating the empty-result UX.
+The cost: the common model habit of redundantly prefixing the path (`path: "src"` + `glob: "src/*.ts"`) now returns empty instead of working. Decision 6 mitigates this with a hint that names the corrected glob.
 
-## Follow-ups
+### 5. Unreadable paths make a result partial, never failed or complete
 
-- **Empty-result hints don't cover the glob-base change:** an empty result shows file-size and hidden-path notices, but nothing points at a `/`-glob written against the wrong base. A targeted notice when the result is empty and the glob contains `/` would let the model self-correct.
+A walk that meets a directory it cannot read (permission denied, a file vanishing mid-walk) still searches every readable path. The two binaries misreport this in opposite directions: rg exits 2, which used to fail the whole grep and discard every gathered match, while fd hides the error by default and exits 0, so find looked complete. Both now report the same state: `partial`, plus `[Some paths could not be read (…); results may be incomplete.]` with the first message.
+
+- fd runs with `--show-errors` so the skip is visible on stderr.
+- A run counts as partial only when **every** stderr line is a per-path OS failure (ends in `(os error N)`); a line cut by the 4 KiB stderr cap is ignored. Anything else (regex or glob syntax) is still an error, so the rule cannot hide real failures.
+- Automatic context stays available: an unreadable file does not make the matches that were read any less trustworthy.
+
+### 6. Empty-result hints only where they apply
+
+Every hint on an empty result costs tokens and, when irrelevant, points the model at the wrong cause.
+
+- The slash-glob hint fires only when the glob actually rejected candidates (`rejectedByGlob > 0`) under an explicit path other than `.`. When the glob repeats that path (`path: "src"`, `glob: "src/**/*.ts"`) it names the fix: `[Glob "src/**/*.ts" is relative to path "src"; try "**/*.ts".]`. This keeps the single base (no silent dual matching) while making the most common mistake a one-step correction.
+- The hidden-path hint is omitted when the path itself is hidden, and both traversal hints are omitted for an explicitly named file, where traversal rules never applied.
+- Case sensitivity, the likeliest cause of a surprising miss, is taught in the schema instead of in every empty result: `pattern` says `prefix (?i) to ignore case`.
+
+## Under observation
+
+The opt-in debug log (`PI_FIND_DEBUG=1`, see the package README) records what is needed to decide the two open questions below; `pnpm --filter @tian.zuo/pi-find debug-stats` prints them as sections `[A]` and `[B]`. Neither change is made until the log shows the problem is real.
+
+### A. Narrow the walk to a glob's fixed directory prefix
+
+**Problem.** The rg/fd prefilter only uses the glob's basename, so `find("packages/web/**/*.tsx")` makes fd enumerate every `.tsx` in the repository before Minimatch keeps those under `packages/web`. Results are correct; the cost is time, and timeouts on large trees. A related UX gap: `.github/**/*.yml` returns empty because hidden directories are only walked when named as `path`.
+
+**Candidate change.** When a non-negated glob has a fixed directory prefix that exists under the root, pass it to rg/fd as the search path and match the rest of the glob relative to it. Naming a hidden prefix in the glob would then count as naming the hidden path, which revises the current "a glob alone does not enable hidden traversal" rule.
+
+**Signals** (per tool, ok outcomes, prefix detection by `staticGlobPrefix` in the stats script):
+
+| Question | Measure |
+|---|---|
+| How common are such globs? | share of searches with a fixed prefix |
+| Do they cost more? | their `durationMs` p50/p95/max vs every other search; timeouts among them |
+| How much of the walk is wasted? | `rejectedByGlob` spread (fd: paths enumerated past the prefilter then discarded; grep: matching lines in files outside the prefix) |
+| How many files did grep read? | `searchedFiles` from rg's summary, fixed-prefix vs other searches |
+| Does the hidden-prefix gap bite? | empty results whose prefix is hidden and whose `path` is not; next action afterwards |
+
+**Decide for the change** if fixed-prefix searches are a real share of calls and their p95 duration is well above the baseline (or they account for timeouts), or if hidden-prefix empties recur and are followed by a retry or shell search.
+
+**Known blind spots.** rg's summary only exists for content searches that ran to completion, so truncated or files-mode greps carry no `searchedFiles`; for grep, `rejectedByGlob` counts matching lines, not files scanned, so duration is the primary signal there. fd reports no scan totals at all; `rejectedByGlob` is its proxy.
+
+### B. Output budget vs saving context
+
+**Problem.** One call may return up to ~42 KiB (100 lines of up to 400 units each), roughly 10k tokens. That conflicts with the package's "minimal context" goal unless large results are actually used.
+
+**Candidate changes.** Lower the byte budget, or clip dense results (more than a few matches) to a shorter line width while keeping 400 for sparse ones.
+
+**Signals:**
+
+| Question | Measure |
+|---|---|
+| How big are results in practice? | `outputBytes` p50/p95/max (the full text returned, header and notices included) |
+| How often is a call expensive? | calls at or above 16 KiB; `outputLimitHit` count |
+| Is line width the driver? | grep calls with `clippedLines > 0` |
+| Are large results used? | next action after a large result: `read` suggests it was useful; a narrowing retry or shell search suggests the bulk was wasted |
+
+**Decide for the change** if large results are common and mostly followed by a narrowing retry rather than a `read`, or if clipped lines are frequent in dense results.
+
+**Known blind spots.** `outputBytes` is bytes, not tokens (CJK text costs more tokens per byte than code). The next-action join needs `sessionFile`, which is absent for ephemeral sessions, and it reads the session tree in file order, so an abandoned branch can occasionally be counted.

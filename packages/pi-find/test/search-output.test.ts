@@ -80,6 +80,9 @@ test("auto context never enriches incomplete searches and excludes orphan window
     truncated: false,
     timedOut: false,
     skippedRecords: 0,
+    rejectedByGlob: 0,
+    explicitFile: false,
+    clippedLines: 0,
   };
   assert.deepEqual(finalizeGrep(base).context, [base.context[0]]);
   for (const flags of [

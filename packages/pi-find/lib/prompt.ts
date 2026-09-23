@@ -14,7 +14,7 @@ export const GREP_TOOL_DESCRIPTION =
 export const GREP_PROMPT_SNIPPET = "Search file contents with a regex";
 
 export const GREP_PARAMETER_DESCRIPTIONS = {
-  pattern: "Case-sensitive ripgrep regex.",
+  pattern: "Case-sensitive ripgrep regex; prefix (?i) to ignore case.",
   path: "File or directory; defaults to cwd; name hidden paths explicitly ('.github').",
   glob: "Case-sensitive glob: basename (any depth) or path relative to the search root; ! to exclude.",
   output: "Matching lines (default), or file paths only.",
@@ -75,6 +75,16 @@ export function outputLimitNotice(kind: "grep" | "find"): string {
 export function searchTimeoutNotice(timeoutMs: number): string {
   const seconds = Math.round(timeoutMs / 1000);
   return `[Search timed out after ${seconds}s; results are partial. Narrow the path, pattern, or glob.]`;
+}
+
+/** A slash glob repeated the search path, so it pointed below the root; offer the corrected glob. */
+export function globPrefixNotice(glob: string, path: string, suggestion: string): string {
+  return `[Glob ${JSON.stringify(glob)} is relative to path ${JSON.stringify(path)}; try ${JSON.stringify(suggestion)}.]`;
+}
+
+/** The walk skipped paths it could not read; everything readable was searched. */
+export function unreadablePathNotice(detail: string): string {
+  return `[Some paths could not be read (${detail}); results may be incomplete.]`;
 }
 
 /** A record too large to buffer was dropped instead of read into memory. */

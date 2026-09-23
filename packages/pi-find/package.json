@@ -39,7 +39,8 @@
   },
   "scripts": {
     "check": "tsc --noEmit -p .",
-    "test": "node --test --experimental-strip-types test/*.test.ts"
+    "test": "node --test --experimental-strip-types test/*.test.ts",
+    "debug-stats": "node --experimental-strip-types scripts/debug-stats.ts"
   },
   "dependencies": {
     "effect": "4.0.0-rc.115",

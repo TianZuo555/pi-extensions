@@ -25,6 +25,9 @@ function outcome(matches: ReadonlyArray<[string, number, string]>): GrepOutcome 
     truncated: false,
     timedOut: false,
     skippedRecords: 0,
+    rejectedByGlob: 0,
+    explicitFile: false,
+    clippedLines: 0,
   };
 }
 

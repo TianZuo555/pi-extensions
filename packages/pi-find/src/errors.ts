@@ -29,12 +29,9 @@ export type SearchError =
   | SearchInputError
   | SearchAbortedError;
 
-/** Convert a typed failure into the Error the pi tool contract expects. */
+/** Convert a typed failure into the Error the pi tool contract expects; the typed failure stays on `cause`. */
 export function toThrowable(error: SearchError): Error {
-  if (error._tag === "SearchAbortedError") {
-    const aborted = new Error(error.message);
-    aborted.name = "AbortError";
-    return aborted;
-  }
-  return new Error(error.message);
+  const thrown = new Error(error.message, { cause: error });
+  if (error._tag === "SearchAbortedError") thrown.name = "AbortError";
+  return thrown;
 }

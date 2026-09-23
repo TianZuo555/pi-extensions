@@ -36,6 +36,35 @@ function decodeText(value: RgData | string | undefined): string {
   return "";
 }
 
+export interface RgSummary {
+  readonly searchedFiles: number;
+  readonly searchedBytes: number;
+}
+
+/**
+ * Decode rg's final summary record, emitted only when rg finishes on its own.
+ * It is the only record that serializes `data` before `type`.
+ */
+export function decodeRgSummary(line: string): RgSummary | undefined {
+  if (!line.startsWith('{"data"')) return undefined;
+  try {
+    const event = JSON.parse(line) as {
+      type?: string;
+      data?: { stats?: { searches?: unknown; bytes_searched?: unknown } };
+    };
+    const stats = event.data?.stats;
+    if (
+      event.type !== "summary" ||
+      typeof stats?.searches !== "number" ||
+      typeof stats.bytes_searched !== "number"
+    )
+      return undefined;
+    return { searchedFiles: stats.searches, searchedBytes: stats.bytes_searched };
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Decode one line of rg's JSON stream. Returns undefined for events we do not
  * render (begin/end/summary) and for unparseable lines, so a single malformed

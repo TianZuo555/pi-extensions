@@ -16,7 +16,7 @@ import {
   GIT_PATH_ERROR,
   missingSearchPathError,
 } from "../lib/prompt.ts";
-import { decodeRgEvent } from "../lib/rg-json.ts";
+import { decodeRgEvent, decodeRgSummary, type RgSummary } from "../lib/rg-json.ts";
 import { SearchInputError, toThrowable, type SearchError } from "./errors.ts";
 import { streamLines } from "./stream.ts";
 
@@ -49,6 +49,16 @@ export interface GrepOutcome {
   readonly timedOut: boolean;
   /** Result-carrying records too large to buffer (a clipped context record loses decoration only and is not counted). */
   readonly skippedRecords: number;
+  /** Matches or paths the binary produced that the glob then rejected. */
+  readonly rejectedByGlob: number;
+  /** The search path named one file, so traversal rules (size cap, hidden skip) did not apply. */
+  readonly explicitFile: boolean;
+  /** Returned match lines longer than MAX_LINE_LENGTH that were clipped. */
+  readonly clippedLines: number;
+  /** Some paths could not be read; every readable path was still searched. */
+  readonly pathError?: string;
+  /** rg's own totals, present only for content searches that ran to completion. */
+  readonly searched?: RgSummary;
 }
 
 /** Only enrich sparse, completed searches; never retain orphan context windows. */
@@ -86,6 +96,10 @@ export interface FindOutcome {
   readonly timedOut: boolean;
   /** Records too large to buffer; they are dropped because a partial path is not a path. */
   readonly skippedRecords: number;
+  /** Paths fd produced that the glob then rejected. */
+  readonly rejectedByGlob: number;
+  /** Some paths could not be read; every readable path was still searched. */
+  readonly pathError?: string;
 }
 
 export interface SearchRuntimeShape {
@@ -121,7 +135,9 @@ function searchTarget(
   cwd: string,
   requestedPath: string | undefined,
   requireDirectory: boolean,
-): { readonly argument: string; readonly root: string } | SearchInputError {
+):
+  | { readonly argument: string; readonly root: string; readonly isFile: boolean }
+  | SearchInputError {
   let argument = (requestedPath ?? ".").replace(/^@/, "");
   if (argument === "~") argument = homedir();
   else if (
@@ -154,6 +170,7 @@ function searchTarget(
   return {
     argument,
     root: isDirectory ? absolute : nodePath.dirname(absolute),
+    isFile: !isDirectory,
   };
 }
 
@@ -166,7 +183,7 @@ function isInsideGitRepository(root: string): boolean {
   }
 }
 
-function isExplicitHiddenPath(searchPath: string | undefined): boolean {
+export function isExplicitHiddenPath(searchPath: string | undefined): boolean {
   if (searchPath === undefined) return false;
   return searchPath
     .replaceAll("\\", "/")
@@ -187,7 +204,7 @@ function globBody(pattern: string): string {
  * globs cannot be expressed as a file-type filter, so they scan everything and
  * let Minimatch remove the exclusions.
  */
-function basenamePrefilter(pattern: string | undefined): string {
+export function basenamePrefilter(pattern: string | undefined): string {
   if (pattern === undefined || pattern.startsWith("!")) return "*";
   const basename = pattern.split("/").at(-1);
   // Restrict the entire pattern: a brace/extglob alternative can contain slashes.
@@ -221,6 +238,9 @@ export function buildFdArgs(request: FindRequest, searchRoot: string): string[] 
     "--type",
     "f",
     "--print0",
+    // fd hides unreadable directories by default, which would pass a
+    // partial walk off as a complete one.
+    "--show-errors",
     "--color=never",
     "--ignore-case",
     "--glob",
@@ -278,6 +298,9 @@ const makeSearchRuntime = Effect.gen(function* () {
       const context: GrepMatch[] = [];
       const files = new Set<string>();
       let skippedRecords = 0;
+      let rejectedByGlob = 0;
+      let clippedLines = 0;
+      let searched: RgSummary | undefined;
       return streamLines({
         binary: "rg",
         args: buildRgArgs({ ...request, path: target.argument }, target.root),
@@ -294,7 +317,11 @@ const makeSearchRuntime = Effect.gen(function* () {
             return true;
           }
           if (output === "files") {
-            if (line.length === 0 || !accepts(line)) return true;
+            if (line.length === 0) return true;
+            if (!accepts(line)) {
+              rejectedByGlob += 1;
+              return true;
+            }
             const file = normalizeResultPath(line);
             if (files.has(file)) return true;
             if (files.size >= GREP_FILE_LIMIT) return false;
@@ -302,7 +329,14 @@ const makeSearchRuntime = Effect.gen(function* () {
             return true;
           }
           const event = decodeRgEvent(line);
-          if (event === undefined || !accepts(event.path)) return true;
+          if (event === undefined) {
+            searched = decodeRgSummary(line) ?? searched;
+            return true;
+          }
+          if (!accepts(event.path)) {
+            if (!event.isContext) rejectedByGlob += 1;
+            return true;
+          }
           // Once any record was dropped, do not accumulate context for unseen
           // matches. Together with the match/context caps this bounds memory.
           if (event.isContext && (skippedRecords > 0 || matches.length > AUTO_CONTEXT_MAX_MATCHES))
@@ -318,6 +352,7 @@ const makeSearchRuntime = Effect.gen(function* () {
           } else {
             matches.push(row);
             files.add(row.path);
+            if (event.text.length > MAX_LINE_LENGTH) clippedLines += 1;
             // One pass, no rereads: keep a small speculative context buffer,
             // then discard it as soon as this is no longer a sparse search.
             if (matches.length > AUTO_CONTEXT_MAX_MATCHES) context.length = 0;
@@ -334,6 +369,11 @@ const makeSearchRuntime = Effect.gen(function* () {
             truncated: result.stoppedEarly,
             timedOut: result.timedOut,
             skippedRecords,
+            rejectedByGlob,
+            explicitFile: target.isFile,
+            clippedLines,
+            pathError: result.pathError,
+            searched,
           }),
         ),
       );
@@ -351,6 +391,7 @@ const makeSearchRuntime = Effect.gen(function* () {
       const files: string[] = [];
       let sawOverflow = false;
       let skippedRecords = 0;
+      let rejectedByGlob = 0;
       return streamLines({
         binary: "fd",
         args: buildFdArgs({ ...request, path: target.argument }, target.root),
@@ -364,7 +405,11 @@ const makeSearchRuntime = Effect.gen(function* () {
             return true;
           }
           const file = line;
-          if (file.length === 0 || !accepts(file)) return true;
+          if (file.length === 0) return true;
+          if (!accepts(file)) {
+            rejectedByGlob += 1;
+            return true;
+          }
           if (files.length >= FIND_RESULT_LIMIT) {
             sawOverflow = true;
             return false;
@@ -380,6 +425,8 @@ const makeSearchRuntime = Effect.gen(function* () {
               truncated: sawOverflow || result.stoppedEarly,
               timedOut: result.timedOut,
               skippedRecords,
+              rejectedByGlob,
+              pathError: result.pathError,
             }) satisfies FindOutcome,
         ),
       );
