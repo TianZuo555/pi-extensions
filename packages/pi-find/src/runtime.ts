@@ -305,10 +305,7 @@ const makeSearchRuntime = Effect.gen(function* () {
           if (event === undefined || !accepts(event.path)) return true;
           // Once any record was dropped, do not accumulate context for unseen
           // matches. Together with the match/context caps this bounds memory.
-          if (
-            event.isContext &&
-            (skippedRecords > 0 || matches.length > AUTO_CONTEXT_MAX_MATCHES)
-          )
+          if (event.isContext && (skippedRecords > 0 || matches.length > AUTO_CONTEXT_MAX_MATCHES))
             return true;
           if (!event.isContext && matches.length >= GREP_RESULT_LIMIT) return false;
           const row = {

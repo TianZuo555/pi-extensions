@@ -123,6 +123,15 @@ It is not a complete secret boundary: explicitly named files, ordinary tracked
 files, `read`, and shell tools can still expose secrets. Strong secret isolation
 must be enforced across every filesystem tool, not only grep.
 
+## Debug logging
+
+Set `PI_FIND_DEBUG=1` to append one JSON object per search to
+`~/.pi/pi-find/debug.jsonl` (override with `PI_FIND_DEBUG_FILE`). Each event
+records the tool, parameters, duration, result counts, truncation/timeout
+flags, skipped oversized records, retained context lines, and which notices
+were shown — enough to study how often searches come back empty or partial
+and which hints actually fire. Logging never fails a search.
+
 ## Binaries
 
 The extension first uses pi's managed `~/.pi/agent/bin/{rg,fd}` binaries, then

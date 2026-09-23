@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { test } from "node:test";
@@ -8,11 +8,7 @@ import { type Component, visibleWidth } from "@earendil-works/pi-tui";
 import { registerTools, type SearchDetails } from "../lib/tools.ts";
 import { resolveBinary } from "../src/binaries.ts";
 import { createSearchRuntime } from "../src/runtime.ts";
-import {
-  FILE_SIZE_LIMIT_NOTICE,
-  HIDDEN_PATH_NOTICE,
-  SLASH_GLOB_NOTICE,
-} from "../lib/prompt.ts";
+import { FILE_SIZE_LIMIT_NOTICE, HIDDEN_PATH_NOTICE, SLASH_GLOB_NOTICE } from "../lib/prompt.ts";
 
 interface CapturedTool {
   readonly name: string;
@@ -280,6 +276,55 @@ test("registered grep distinguishes automatic context and files-only output", {
       }
     }
   } finally {
+    await runtime.dispose();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("debug logging records searches only when PI_FIND_DEBUG is set", {
+  skip: !hasRg,
+}, async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "pi-find-debug-"));
+  writeFileSync(path.join(root, "hit.txt"), "needle\n");
+  const logFile = path.join(root, "debug.jsonl");
+  const { runtime, tools } = captureTools();
+  const grep = tools.get("grep")!;
+  try {
+    // Off by default: a search writes nothing.
+    await grep.execute("off", { pattern: "needle" }, undefined, undefined, { cwd: root });
+    assert.equal(existsSync(logFile), false);
+
+    process.env.PI_FIND_DEBUG = "1";
+    process.env.PI_FIND_DEBUG_FILE = logFile;
+    await grep.execute("on", { pattern: "needle" }, undefined, undefined, { cwd: root });
+
+    const events = readFileSync(logFile, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    assert.equal(events.length, 1);
+    assert.equal(events[0]!.tool, "grep");
+    assert.equal(events[0]!.ok, true);
+    assert.equal(events[0]!.resultCount, 1);
+    assert.equal(typeof events[0]!.durationMs, "number");
+    assert.deepEqual(events[0]!.params, { pattern: "needle" });
+
+    // Failures are recorded too, and the error still propagates.
+    await assert.rejects(
+      grep.execute("err", { pattern: "needle", path: "missing" }, undefined, undefined, {
+        cwd: root,
+      }),
+    );
+    const errored = readFileSync(logFile, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as Record<string, unknown>);
+    assert.equal(errored.length, 2);
+    assert.equal(errored[1]!.ok, false);
+    assert.match(String(errored[1]!.error), /does not exist/);
+  } finally {
+    delete process.env.PI_FIND_DEBUG;
+    delete process.env.PI_FIND_DEBUG_FILE;
     await runtime.dispose();
     rmSync(root, { recursive: true, force: true });
   }

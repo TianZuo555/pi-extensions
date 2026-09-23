@@ -31,6 +31,7 @@ import {
 } from "./prompt.ts";
 import { runSearch, SearchRuntime, type SearchRuntimeInstance } from "../src/runtime.ts";
 import { MAX_RECORD_BYTES } from "../src/stream.ts";
+import { recordSearch } from "./debug.ts";
 import { boundedBody, fileRows, grepRows, resultText } from "./results.ts";
 
 export const GrepParams = Type.Object({
@@ -71,61 +72,92 @@ export function registerTools(pi: ExtensionAPI, runtime: SearchRuntimeInstance):
     parameters: GrepParams,
 
     async execute(_toolCallId, params: GrepInput, signal, _onUpdate, ctx) {
-      const service = runtime.runSync(SearchRuntime);
-      const outcome = await runSearch(runtime, service.grep({ ...params, cwd: ctx.cwd, signal }), {
-        signal,
-      });
-      const filesOnly = outcome.output === "files";
-      let body = boundedBody(filesOnly ? fileRows(outcome.files) : grepRows(outcome));
-      const droppedContext = body.truncated && outcome.context.length > 0;
-      // Context is enrichment and must never crowd out the actual matches.
-      if (droppedContext) body = boundedBody(grepRows({ ...outcome, context: [] }));
-      const truncated = outcome.truncated || body.truncated || outcome.skippedRecords > 0;
-      const partial = truncated || outcome.timedOut;
-      const notices = [
-        ...(body.quotedPaths ? [QUOTED_PATH_NOTICE] : []),
-        ...(outcome.truncated
-          ? [
-              resultLimitNotice(
-                filesOnly ? "files" : "matches",
-                filesOnly ? GREP_FILE_LIMIT : GREP_RESULT_LIMIT,
-              ),
-            ]
-          : []),
-        ...(body.truncated ? [outputLimitNotice(filesOnly ? "find" : "grep")] : []),
-        ...(outcome.skippedRecords > 0 ? [oversizedRecordNotice(MAX_RECORD_BYTES)] : []),
-        ...(outcome.timedOut ? [searchTimeoutNotice(SEARCH_TIMEOUT_MS)] : []),
-        ...(!droppedContext && outcome.context.length > 0 ? [AUTO_CONTEXT_NOTICE] : []),
-        ...(body.resultCount === 0 && !partial
-          ? [
-              FILE_SIZE_LIMIT_NOTICE,
-              HIDDEN_PATH_NOTICE,
-              ...(params.path !== undefined && params.glob?.includes("/")
-                ? [SLASH_GLOB_NOTICE]
-                : []),
-            ]
-          : []),
-      ];
-      const header =
-        body.resultCount === 0 && !partial
-          ? filesOnly
-            ? NO_FILES_FOUND
-            : NO_GREP_MATCHES
-          : filesOnly
-            ? findResultHeader(body.resultCount, partial)
-            : grepResultHeader(body.resultCount, body.fileCount, partial);
-      return {
-        content: [{ type: "text" as const, text: resultText(header, body.text, notices) }],
-        details: {
-          kind: "grep",
-          output: outcome.output,
-          query: params.pattern,
+      const startedAt = Date.now();
+      try {
+        const service = runtime.runSync(SearchRuntime);
+        const outcome = await runSearch(
+          runtime,
+          service.grep({ ...params, cwd: ctx.cwd, signal }),
+          { signal },
+        );
+        const filesOnly = outcome.output === "files";
+        let body = boundedBody(filesOnly ? fileRows(outcome.files) : grepRows(outcome));
+        const droppedContext = body.truncated && outcome.context.length > 0;
+        // Context is enrichment and must never crowd out the actual matches.
+        if (droppedContext) body = boundedBody(grepRows({ ...outcome, context: [] }));
+        const truncated = outcome.truncated || body.truncated || outcome.skippedRecords > 0;
+        const partial = truncated || outcome.timedOut;
+        const notices = [
+          ...(body.quotedPaths ? [QUOTED_PATH_NOTICE] : []),
+          ...(outcome.truncated
+            ? [
+                resultLimitNotice(
+                  filesOnly ? "files" : "matches",
+                  filesOnly ? GREP_FILE_LIMIT : GREP_RESULT_LIMIT,
+                ),
+              ]
+            : []),
+          ...(body.truncated ? [outputLimitNotice(filesOnly ? "find" : "grep")] : []),
+          ...(outcome.skippedRecords > 0 ? [oversizedRecordNotice(MAX_RECORD_BYTES)] : []),
+          ...(outcome.timedOut ? [searchTimeoutNotice(SEARCH_TIMEOUT_MS)] : []),
+          ...(!droppedContext && outcome.context.length > 0 ? [AUTO_CONTEXT_NOTICE] : []),
+          ...(body.resultCount === 0 && !partial
+            ? [
+                FILE_SIZE_LIMIT_NOTICE,
+                HIDDEN_PATH_NOTICE,
+                ...(params.path !== undefined && params.glob?.includes("/")
+                  ? [SLASH_GLOB_NOTICE]
+                  : []),
+              ]
+            : []),
+        ];
+        const header =
+          body.resultCount === 0 && !partial
+            ? filesOnly
+              ? NO_FILES_FOUND
+              : NO_GREP_MATCHES
+            : filesOnly
+              ? findResultHeader(body.resultCount, partial)
+              : grepResultHeader(body.resultCount, body.fileCount, partial);
+        recordSearch({
+          ts: new Date(startedAt).toISOString(),
+          tool: "grep",
+          cwd: ctx.cwd,
+          params,
+          durationMs: Date.now() - startedAt,
+          ok: true,
           resultCount: body.resultCount,
           fileCount: body.fileCount,
           truncated,
           timedOut: outcome.timedOut,
-        } satisfies SearchDetails,
-      };
+          skippedRecords: outcome.skippedRecords,
+          contextLines: outcome.context.length,
+          notices,
+        });
+        return {
+          content: [{ type: "text" as const, text: resultText(header, body.text, notices) }],
+          details: {
+            kind: "grep",
+            output: outcome.output,
+            query: params.pattern,
+            resultCount: body.resultCount,
+            fileCount: body.fileCount,
+            truncated,
+            timedOut: outcome.timedOut,
+          } satisfies SearchDetails,
+        };
+      } catch (error) {
+        recordSearch({
+          ts: new Date(startedAt).toISOString(),
+          tool: "grep",
+          cwd: ctx.cwd,
+          params,
+          durationMs: Date.now() - startedAt,
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      }
     },
 
     renderCall(args: Partial<GrepInput> | undefined, theme: Theme) {
@@ -156,41 +188,71 @@ export function registerTools(pi: ExtensionAPI, runtime: SearchRuntimeInstance):
     parameters: FindParams,
 
     async execute(_toolCallId, params: FindInput, signal, _onUpdate, ctx) {
-      const service = runtime.runSync(SearchRuntime);
-      const outcome = await runSearch(runtime, service.find({ ...params, cwd: ctx.cwd, signal }), {
-        signal,
-      });
-      const body = boundedBody(fileRows(outcome.files));
-      const count = body.resultCount;
-      const truncated = outcome.truncated || body.truncated || outcome.skippedRecords > 0;
-      const partial = truncated || outcome.timedOut;
-      const notices = [
-        ...(outcome.skippedRecords > 0 ? [oversizedRecordNotice(MAX_RECORD_BYTES)] : []),
-        ...(body.quotedPaths ? [QUOTED_PATH_NOTICE] : []),
-        ...(outcome.truncated ? [resultLimitNotice("files", FIND_RESULT_LIMIT)] : []),
-        ...(body.truncated ? [outputLimitNotice("find")] : []),
-        ...(outcome.timedOut ? [searchTimeoutNotice(SEARCH_TIMEOUT_MS)] : []),
-        ...(count === 0 && !partial
-          ? [
-              HIDDEN_PATH_NOTICE,
-              ...(params.path !== undefined && params.pattern.includes("/")
-                ? [SLASH_GLOB_NOTICE]
-                : []),
-            ]
-          : []),
-      ];
-      const header = count === 0 && !partial ? NO_FILES_FOUND : findResultHeader(count, partial);
-      return {
-        content: [{ type: "text" as const, text: resultText(header, body.text, notices) }],
-        details: {
-          kind: "find",
-          query: params.pattern,
+      const startedAt = Date.now();
+      try {
+        const service = runtime.runSync(SearchRuntime);
+        const outcome = await runSearch(
+          runtime,
+          service.find({ ...params, cwd: ctx.cwd, signal }),
+          { signal },
+        );
+        const body = boundedBody(fileRows(outcome.files));
+        const count = body.resultCount;
+        const truncated = outcome.truncated || body.truncated || outcome.skippedRecords > 0;
+        const partial = truncated || outcome.timedOut;
+        const notices = [
+          ...(outcome.skippedRecords > 0 ? [oversizedRecordNotice(MAX_RECORD_BYTES)] : []),
+          ...(body.quotedPaths ? [QUOTED_PATH_NOTICE] : []),
+          ...(outcome.truncated ? [resultLimitNotice("files", FIND_RESULT_LIMIT)] : []),
+          ...(body.truncated ? [outputLimitNotice("find")] : []),
+          ...(outcome.timedOut ? [searchTimeoutNotice(SEARCH_TIMEOUT_MS)] : []),
+          ...(count === 0 && !partial
+            ? [
+                HIDDEN_PATH_NOTICE,
+                ...(params.path !== undefined && params.pattern.includes("/")
+                  ? [SLASH_GLOB_NOTICE]
+                  : []),
+              ]
+            : []),
+        ];
+        const header = count === 0 && !partial ? NO_FILES_FOUND : findResultHeader(count, partial);
+        recordSearch({
+          ts: new Date(startedAt).toISOString(),
+          tool: "find",
+          cwd: ctx.cwd,
+          params,
+          durationMs: Date.now() - startedAt,
+          ok: true,
           resultCount: count,
           fileCount: body.fileCount,
           truncated,
           timedOut: outcome.timedOut,
-        } satisfies SearchDetails,
-      };
+          skippedRecords: outcome.skippedRecords,
+          notices,
+        });
+        return {
+          content: [{ type: "text" as const, text: resultText(header, body.text, notices) }],
+          details: {
+            kind: "find",
+            query: params.pattern,
+            resultCount: count,
+            fileCount: body.fileCount,
+            truncated,
+            timedOut: outcome.timedOut,
+          } satisfies SearchDetails,
+        };
+      } catch (error) {
+        recordSearch({
+          ts: new Date(startedAt).toISOString(),
+          tool: "find",
+          cwd: ctx.cwd,
+          params,
+          durationMs: Date.now() - startedAt,
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throw error;
+      }
     },
 
     renderCall(args: Partial<FindInput> | undefined, theme: Theme) {

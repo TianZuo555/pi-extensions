@@ -99,10 +99,7 @@ test("files mode uses NUL-delimited rg -l and bypasses the line limit", {
   await fixture(async (cwd) => {
     writeFileSync(join(cwd, "a.txt"), "needle\n".repeat(500));
     writeFileSync(join(cwd, "b.txt"), "needle\n");
-    const args = buildRgArgs(
-      { cwd, pattern: "needle", output: "files", literal: true },
-      cwd,
-    );
+    const args = buildRgArgs({ cwd, pattern: "needle", output: "files", literal: true }, cwd);
     assert.ok(args.includes("--files-with-matches"));
     assert.ok(args.includes("--null"));
     assert.ok(args.includes("--fixed-strings"));
