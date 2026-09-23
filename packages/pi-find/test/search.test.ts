@@ -6,7 +6,7 @@ import { after, before, test } from "node:test";
 import { spawnSync } from "node:child_process";
 import { Effect } from "effect";
 import { resolveBinary } from "../src/binaries.ts";
-import { streamLines } from "../src/stream.ts";
+import { pathErrorOf, streamLines } from "../src/stream.ts";
 import { FIND_RESULT_LIMIT, GREP_RESULT_LIMIT } from "../lib/prompt.ts";
 import {
   buildFdArgs,
@@ -107,13 +107,9 @@ test("grep path is one file or directory and glob filters file names", {
   );
 });
 
-test("a slash glob matches from the search root or the cwd", { skip: !hasRg }, async () => {
-  // `path` scopes the search; the glob may still be written from the cwd.
+test("a slash glob matches only from the search root", { skip: !hasRg }, async () => {
   const scoped = await grep({ pattern: "needle", path: "src", glob: "src/*.ts" });
-  assert.deepEqual(
-    scoped.matches.map((match) => match.path),
-    ["src/main.ts"],
-  );
+  assert.deepEqual(scoped.matches, []);
 
   const nested = await grep({ pattern: "needle", path: "src", glob: "deep/*.ts" });
   assert.deepEqual(
@@ -130,12 +126,12 @@ test("a leading ! excludes like ripgrep's own globs", { skip: !hasRg }, async ()
   );
   assert.ok(excluded.matches.some((match) => match.path === "src/main.ts"));
 
-  const excludedFromCwd = await grep({ pattern: "needle", path: "src", glob: "!src/*.ts" });
+  const excludedFromRoot = await grep({ pattern: "needle", path: "src", glob: "!*.ts" });
   assert.equal(
-    excludedFromCwd.matches.some((match) => match.path === "src/main.ts"),
+    excludedFromRoot.matches.some((match) => match.path === "src/main.ts"),
     false,
   );
-  assert.ok(excludedFromCwd.matches.some((match) => match.path === "src/other.js"));
+  assert.ok(excludedFromRoot.matches.some((match) => match.path === "src/other.js"));
 
   await assert.rejects(() => grep({ pattern: "needle", glob: "!" }), /cannot be empty/);
 });
@@ -250,12 +246,25 @@ test("grep drops an over-long record and says so", { skip: !hasRg }, async () =>
   rmSync(path.join(root, "huge.txt"));
 });
 
+test("a clipped context record is decoration, not a lost match", { skip: !hasRg }, async () => {
+  // The giant line sits between two matches but never matched itself, so it
+  // arrives as a context record: dropping it must not mark the search partial
+  // or suppress the automatic context around the surviving matches.
+  const lines = ["needle", "x".repeat(9 * 1024 * 1024), "needle"];
+  writeFileSync(path.join(root, "wide-context.txt"), `${lines.join("\n")}\n`);
+  const outcome = await grep({ pattern: "needle", path: "wide-context.txt" });
+  assert.equal(outcome.matches.length, 2);
+  assert.equal(outcome.skippedRecords, 0);
+  assert.equal(outcome.truncated, false);
+  rmSync(path.join(root, "wide-context.txt"));
+});
+
 test("find uses one glob under one directory", { skip: !hasFd }, async () => {
   const outcome = await find({ pattern: "*.ts", path: "src" });
   assert.deepEqual([...outcome.files].sort(), ["src/deep/test.ts", "src/main.ts"]);
 
   const fromCwd = await find({ pattern: "src/*.ts", path: "src" });
-  assert.deepEqual(fromCwd.files, ["src/main.ts"]);
+  assert.deepEqual(fromCwd.files, []);
 
   const excluded = await find({ pattern: "!*.ts" });
   assert.equal(
@@ -331,6 +340,24 @@ test("searches are abortable", { skip: !hasRg }, async () => {
   );
 });
 
+test("only per-path OS failures count as a partial walk", () => {
+  const denied = "rg: ./locked: Permission denied (os error 13)";
+  assert.equal(pathErrorOf(`${denied}\n`), "./locked: Permission denied (os error 13)");
+  assert.equal(
+    pathErrorOf("[fd error]: ./locked: Permission denied (os error 13)\n"),
+    "./locked: Permission denied (os error 13)",
+  );
+  assert.equal(pathErrorOf(""), undefined);
+  assert.equal(
+    pathErrorOf("rg: regex parse error:\n    (\n    ^\nerror: unclosed group\n"),
+    undefined,
+  );
+  assert.equal(pathErrorOf(`${denied}\nrg: error parsing glob '{'\n`), undefined);
+  // A line cut by the 4 KiB stderr cap is not evidence of another failure kind.
+  const capped = `${`${denied}\n`.repeat(200)}`.slice(0, 4096);
+  assert.equal(pathErrorOf(capped), "./locked: Permission denied (os error 13)");
+});
+
 test("engine arguments contain only the fixed simple behavior", () => {
   const rg = buildRgArgs({ pattern: "needle", path: "src", glob: "*.ts", cwd: root }, root);
   assert.ok(rg.includes("--json"));
@@ -343,7 +370,8 @@ test("engine arguments contain only the fixed simple behavior", () => {
   assert.ok(!rg.includes("--hidden"));
   assert.ok(!rg.includes("--smart-case"));
   assert.ok(!rg.includes("--fixed-strings"));
-  assert.ok(!rg.includes("--context"));
+  assert.ok(rg.includes("--context"));
+  assert.equal(rg[rg.indexOf("--context") + 1], "5");
   assert.ok(rg.includes("!.*"));
 
   const fd = buildFdArgs({ pattern: "*.ts", path: "src", cwd: root }, root);
@@ -351,6 +379,7 @@ test("engine arguments contain only the fixed simple behavior", () => {
   assert.ok(fd.includes("*.ts"));
   assert.ok(fd.includes("--print0"));
   assert.ok(fd.includes("--ignore-case"));
+  assert.ok(fd.includes("--show-errors"));
   assert.ok(!fd.includes("--case-sensitive"));
   assert.ok(rg.includes("--no-config"));
   assert.ok(rg.includes("--case-sensitive"));

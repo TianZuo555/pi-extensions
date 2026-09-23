@@ -225,6 +225,9 @@ importers:
 
   packages/pi-find:
     dependencies:
+      '@earendil-works/pi-ai':
+        specifier: ^0.87.0
+        version: 0.87.0(ws@8.21.3)(zod@4.6.5)
       '@earendil-works/pi-coding-agent':
         specifier: ^0.87.0
         version: 0.87.0(ws@8.21.3)(zod@4.6.5)

@@ -1,25 +1,24 @@
 /** Tool registration for the small grep and find interfaces. */
 
-import {
-  DEFAULT_MAX_BYTES,
-  type AgentToolResult,
-  type ExtensionAPI,
-  type Theme,
-} from "@earendil-works/pi-coding-agent";
+import { StringEnum } from "@earendil-works/pi-ai";
+import type { AgentToolResult, ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
 import {
+  AUTO_CONTEXT_NOTICE,
   FILE_SIZE_LIMIT_NOTICE,
   FIND_PARAMETER_DESCRIPTIONS,
   FIND_PROMPT_SNIPPET,
   FIND_RESULT_LIMIT,
   FIND_TOOL_DESCRIPTION,
   findResultHeader,
+  GREP_FILE_LIMIT,
   GREP_PARAMETER_DESCRIPTIONS,
   GREP_PROMPT_SNIPPET,
   GREP_RESULT_LIMIT,
   GREP_TOOL_DESCRIPTION,
   grepResultHeader,
+  HIDDEN_PATH_NOTICE,
   NO_FILES_FOUND,
   NO_GREP_MATCHES,
   outputLimitNotice,
@@ -28,31 +27,79 @@ import {
   resultLimitNotice,
   SEARCH_TIMEOUT_MS,
   searchTimeoutNotice,
+  SLASH_GLOB_NOTICE,
+  globPrefixNotice,
+  unreadablePathNotice,
 } from "./prompt.ts";
 import {
-  type GrepOutcome,
+  basenamePrefilter,
+  isExplicitHiddenPath,
   runSearch,
   SearchRuntime,
   type SearchRuntimeInstance,
 } from "../src/runtime.ts";
 import { MAX_RECORD_BYTES } from "../src/stream.ts";
+import { type Notice, type NoticeId, withSearchLog } from "./debug.ts";
+import { boundedBody, fileRows, grepRows, resultText } from "./results.ts";
+
+const notice = (id: NoticeId, text: string): Notice => ({ id, text });
+const texts = (notices: readonly Notice[]) => notices.map((entry) => entry.text);
+const ids = (notices: readonly Notice[]) => notices.map((entry) => entry.id);
+
+/**
+ * Explain an empty result caused by a slash glob. Only fires when the glob
+ * actually rejected candidates under an explicit, non-cwd path; when the glob
+ * repeats that path as a prefix, offer the corrected glob instead of the rule.
+ */
+function slashGlobNotices(
+  glob: string | undefined,
+  searchPath: string | undefined,
+  rejected: number,
+): Notice[] {
+  if (glob === undefined || searchPath === undefined || rejected === 0 || !glob.includes("/"))
+    return [];
+  const base = searchPath
+    .replace(/^@/, "")
+    .replaceAll("\\", "/")
+    .replace(/^(\.\/)+/, "")
+    .replace(/\/+$/, "");
+  if (base === "" || base === ".") return [];
+  const negation = glob.startsWith("!") ? "!" : "";
+  const body = glob.slice(negation.length).replace(/^(\.\/)+/, "");
+  if (body.startsWith(`${base}/`) && body.length > base.length + 1) {
+    const suggestion = `${negation}${body.slice(base.length + 1)}`;
+    return [notice("glob_prefix", globPrefixNotice(glob, searchPath, suggestion))];
+  }
+  return [notice("slash_glob", SLASH_GLOB_NOTICE)];
+}
+
+/** Hidden paths are only skipped during default traversal, never when named. */
+function hiddenPathNotices(searchPath: string | undefined, explicitFile: boolean): Notice[] {
+  return explicitFile || isExplicitHiddenPath(searchPath?.replace(/^@/, ""))
+    ? []
+    : [notice("hidden_path", HIDDEN_PATH_NOTICE)];
+}
+
+function unreadableNotices(pathError: string | undefined): Notice[] {
+  return pathError === undefined
+    ? []
+    : [notice("unreadable_path", unreadablePathNotice(pathError))];
+}
 
 export const GrepParams = Type.Object({
-  pattern: Type.String({
-    minLength: 1,
-    description: GREP_PARAMETER_DESCRIPTIONS.pattern,
-  }),
+  pattern: Type.String({ minLength: 1, description: GREP_PARAMETER_DESCRIPTIONS.pattern }),
   path: Type.Optional(Type.String({ minLength: 1, description: GREP_PARAMETER_DESCRIPTIONS.path })),
   glob: Type.Optional(Type.String({ minLength: 1, description: GREP_PARAMETER_DESCRIPTIONS.glob })),
+  output: Type.Optional(
+    StringEnum(["content", "files"] as const, { description: GREP_PARAMETER_DESCRIPTIONS.output }),
+  ),
+  literal: Type.Optional(Type.Boolean({ description: GREP_PARAMETER_DESCRIPTIONS.literal })),
 });
 
 export type GrepInput = Static<typeof GrepParams>;
 
 export const FindParams = Type.Object({
-  pattern: Type.String({
-    minLength: 1,
-    description: FIND_PARAMETER_DESCRIPTIONS.pattern,
-  }),
+  pattern: Type.String({ minLength: 1, description: FIND_PARAMETER_DESCRIPTIONS.pattern }),
   path: Type.Optional(Type.String({ minLength: 1, description: FIND_PARAMETER_DESCRIPTIONS.path })),
 });
 
@@ -60,64 +107,14 @@ export type FindInput = Static<typeof FindParams>;
 
 export interface SearchDetails {
   readonly kind: "grep" | "find";
+  readonly output?: "content" | "files";
   readonly query: string;
   readonly resultCount: number;
   readonly fileCount: number;
   readonly truncated: boolean;
   readonly timedOut: boolean;
-}
-
-export function displayPath(path: string): string {
-  return /[\x00-\x1f\x7f\\"]/.test(path) ? JSON.stringify(path) : path;
-}
-
-export function renderGrepLines(outcome: GrepOutcome): string[] {
-  return outcome.matches.map(
-    (match) => `${displayPath(match.path)}:${match.lineNumber}: ${match.text}`,
-  );
-}
-
-function countFiles(outcome: GrepOutcome): number {
-  return new Set(outcome.matches.map((match) => match.path)).size;
-}
-
-interface BoundedBody {
-  readonly text: string;
-  readonly truncated: boolean;
-}
-
-const BODY_MAX_BYTES = DEFAULT_MAX_BYTES - 8 * 1024;
-
-function boundedBody(lines: readonly string[], kind: "grep" | "find"): BoundedBody {
-  const body: string[] = [];
-  let bytes = 0;
-  let consumed = 0;
-
-  for (const line of lines) {
-    const separatorBytes = body.length === 0 ? 0 : 1;
-    const lineBytes = Buffer.byteLength(line, "utf8");
-    if (bytes + separatorBytes + lineBytes > BODY_MAX_BYTES) break;
-    body.push(line);
-    bytes += separatorBytes + lineBytes;
-    consumed += 1;
-  }
-
-  if (consumed === lines.length) {
-    return { text: body.join("\n"), truncated: false };
-  }
-  return {
-    text: [...body, "", outputLimitNotice(kind)].join("\n"),
-    truncated: true,
-  };
-}
-
-/** Join a header, an optional body, and notices with exactly one blank line between sections. */
-export function resultText(header: string, body: string, notices: readonly string[]): string {
-  return [
-    header,
-    ...(body.length === 0 ? [] : ["", body]),
-    ...notices.flatMap((notice) => ["", notice]),
-  ].join("\n");
+  /** Some paths could not be read, so the result may be incomplete. */
+  readonly unreadable?: boolean;
 }
 
 export function registerTools(pi: ExtensionAPI, runtime: SearchRuntimeInstance): void {
@@ -128,79 +125,116 @@ export function registerTools(pi: ExtensionAPI, runtime: SearchRuntimeInstance):
     promptSnippet: GREP_PROMPT_SNIPPET,
     parameters: GrepParams,
 
-    async execute(_toolCallId, params: GrepInput, signal, _onUpdate, ctx) {
-      const service = runtime.runSync(SearchRuntime);
-      const outcome = await runSearch(
-        runtime,
-        service.grep({
-          pattern: params.pattern,
-          path: params.path,
-          glob: params.glob,
-          cwd: ctx.cwd,
-          signal,
-        }),
-        { signal },
-      );
-
-      const matchCount = outcome.matches.length;
-      const notices = [
-        ...(outcome.matches.some((match) => displayPath(match.path) !== match.path)
-          ? [QUOTED_PATH_NOTICE]
-          : []),
-        ...(outcome.truncated ? [resultLimitNotice("matches", GREP_RESULT_LIMIT)] : []),
-        ...(outcome.skippedRecords > 0 ? [oversizedRecordNotice(MAX_RECORD_BYTES)] : []),
-        ...(outcome.timedOut ? [searchTimeoutNotice(SEARCH_TIMEOUT_MS)] : []),
-      ];
-      // A timed-out or truncated search must never read as a completed empty
-      // one: those notices travel even when nothing was gathered.
-      if (matchCount === 0 && notices.length === 0) {
+    execute(toolCallId, params: GrepInput, signal, _onUpdate, ctx) {
+      return withSearchLog({ tool: "grep", toolCallId, params, ctx }, async () => {
+        const service = runtime.runSync(SearchRuntime);
+        const outcome = await runSearch(
+          runtime,
+          service.grep({ ...params, cwd: ctx.cwd, signal }),
+          { signal },
+        );
+        const filesOnly = outcome.output === "files";
+        let body = boundedBody(filesOnly ? fileRows(outcome.files) : grepRows(outcome));
+        const droppedContext = body.truncated && outcome.context.length > 0;
+        // Context is enrichment and must never crowd out the actual matches.
+        if (droppedContext) body = boundedBody(grepRows({ ...outcome, context: [] }));
+        const truncated = outcome.truncated || body.truncated || outcome.skippedRecords > 0;
+        const unreadable = outcome.pathError !== undefined;
+        const partial = truncated || outcome.timedOut || unreadable;
+        const notices: Notice[] = [
+          ...(body.quotedPaths ? [notice("quoted_path", QUOTED_PATH_NOTICE)] : []),
+          ...unreadableNotices(outcome.pathError),
+          ...(outcome.truncated
+            ? [
+                notice(
+                  "result_limit",
+                  resultLimitNotice(
+                    filesOnly ? "files" : "matches",
+                    filesOnly ? GREP_FILE_LIMIT : GREP_RESULT_LIMIT,
+                  ),
+                ),
+              ]
+            : []),
+          ...(body.truncated
+            ? [notice("output_limit", outputLimitNotice(filesOnly ? "find" : "grep"))]
+            : []),
+          ...(outcome.skippedRecords > 0
+            ? [notice("oversized_record", oversizedRecordNotice(MAX_RECORD_BYTES))]
+            : []),
+          ...(outcome.timedOut ? [notice("timeout", searchTimeoutNotice(SEARCH_TIMEOUT_MS))] : []),
+          ...(!droppedContext && outcome.context.length > 0
+            ? [notice("auto_context", AUTO_CONTEXT_NOTICE)]
+            : []),
+          ...(body.resultCount === 0 && !partial
+            ? [
+                ...(outcome.explicitFile
+                  ? []
+                  : [notice("file_size_limit", FILE_SIZE_LIMIT_NOTICE)]),
+                ...hiddenPathNotices(params.path, outcome.explicitFile),
+                ...slashGlobNotices(params.glob, params.path, outcome.rejectedByGlob),
+              ]
+            : []),
+        ];
+        const header =
+          body.resultCount === 0 && !partial
+            ? filesOnly
+              ? NO_FILES_FOUND
+              : NO_GREP_MATCHES
+            : filesOnly
+              ? findResultHeader(body.resultCount, partial)
+              : grepResultHeader(body.resultCount, body.fileCount, partial);
+        const text = resultText(header, body.text, texts(notices));
         return {
-          content: [
-            {
-              type: "text" as const,
-              text: resultText(NO_GREP_MATCHES, "", [FILE_SIZE_LIMIT_NOTICE]),
-            },
-          ],
-          details: {
-            kind: "grep",
-            query: params.pattern,
-            resultCount: 0,
-            fileCount: 0,
-            truncated: false,
-            timedOut: false,
-          } satisfies SearchDetails,
+          result: {
+            content: [{ type: "text" as const, text }],
+            details: {
+              kind: "grep",
+              output: outcome.output,
+              query: params.pattern,
+              resultCount: body.resultCount,
+              fileCount: body.fileCount,
+              truncated,
+              timedOut: outcome.timedOut,
+              unreadable,
+            } satisfies SearchDetails,
+          },
+          stats: {
+            resultCount: body.resultCount,
+            collectedCount: filesOnly ? outcome.files.length : outcome.matches.length,
+            fileCount: body.fileCount,
+            resultLimitHit: outcome.truncated,
+            outputLimitHit: body.truncated,
+            timedOut: outcome.timedOut,
+            skippedRecords: outcome.skippedRecords,
+            rejectedByGlob: outcome.rejectedByGlob,
+            prefilter: basenamePrefilter(params.glob),
+            outputBytes: Buffer.byteLength(text, "utf8"),
+            pathError: outcome.pathError,
+            explicitFile: outcome.explicitFile,
+            clippedLines: outcome.clippedLines,
+            searchedFiles: outcome.searched?.searchedFiles,
+            searchedBytes: outcome.searched?.searchedBytes,
+            contextLines: droppedContext ? 0 : outcome.context.length,
+            droppedContext,
+            notices: ids(notices),
+          },
         };
-      }
-
-      const body = boundedBody(renderGrepLines(outcome), "grep");
-      const fileCount = countFiles(outcome);
-      const text = resultText(
-        matchCount === 0 ? NO_GREP_MATCHES : grepResultHeader(matchCount, fileCount),
-        body.text,
-        notices,
-      );
-
-      return {
-        content: [{ type: "text" as const, text }],
-        details: {
-          kind: "grep",
-          query: params.pattern,
-          resultCount: matchCount,
-          fileCount,
-          truncated: outcome.truncated || body.truncated,
-          timedOut: outcome.timedOut,
-        } satisfies SearchDetails,
-      };
+      });
     },
 
     renderCall(args: Partial<GrepInput> | undefined, theme: Theme) {
       const pattern =
         typeof args?.pattern === "string" && args.pattern.length > 0
-          ? theme.fg("accent", `/${args.pattern}/`)
+          ? theme.fg("accent", args.literal ? JSON.stringify(args.pattern) : `/${args.pattern}/`)
           : theme.fg("muted", "…");
       const scope = typeof args?.path === "string" ? theme.fg("muted", ` in ${args.path}`) : "";
       const filter = typeof args?.glob === "string" ? theme.fg("muted", ` (${args.glob})`) : "";
-      return new Text(theme.fg("toolTitle", theme.bold("grep ")) + pattern + scope + filter, 0, 0);
+      const mode = args?.output === "files" ? theme.fg("muted", " [files]") : "";
+      return new Text(
+        theme.fg("toolTitle", theme.bold("grep ")) + pattern + scope + filter + mode,
+        0,
+        0,
+      );
     },
 
     renderResult(result, options, theme, context) {
@@ -215,59 +249,68 @@ export function registerTools(pi: ExtensionAPI, runtime: SearchRuntimeInstance):
     promptSnippet: FIND_PROMPT_SNIPPET,
     parameters: FindParams,
 
-    async execute(_toolCallId, params: FindInput, signal, _onUpdate, ctx) {
-      const service = runtime.runSync(SearchRuntime);
-      const outcome = await runSearch(
-        runtime,
-        service.find({
-          pattern: params.pattern,
-          path: params.path,
-          cwd: ctx.cwd,
-          signal,
-        }),
-        { signal },
-      );
-
-      if (outcome.files.length === 0 && !outcome.timedOut) {
-        const skipped = outcome.skippedRecords > 0 ? [oversizedRecordNotice(MAX_RECORD_BYTES)] : [];
+    execute(toolCallId, params: FindInput, signal, _onUpdate, ctx) {
+      return withSearchLog({ tool: "find", toolCallId, params, ctx }, async () => {
+        const service = runtime.runSync(SearchRuntime);
+        const outcome = await runSearch(
+          runtime,
+          service.find({ ...params, cwd: ctx.cwd, signal }),
+          { signal },
+        );
+        const body = boundedBody(fileRows(outcome.files));
+        const count = body.resultCount;
+        const truncated = outcome.truncated || body.truncated || outcome.skippedRecords > 0;
+        const unreadable = outcome.pathError !== undefined;
+        const partial = truncated || outcome.timedOut || unreadable;
+        const notices: Notice[] = [
+          ...(outcome.skippedRecords > 0
+            ? [notice("oversized_record", oversizedRecordNotice(MAX_RECORD_BYTES))]
+            : []),
+          ...(body.quotedPaths ? [notice("quoted_path", QUOTED_PATH_NOTICE)] : []),
+          ...unreadableNotices(outcome.pathError),
+          ...(outcome.truncated
+            ? [notice("result_limit", resultLimitNotice("files", FIND_RESULT_LIMIT))]
+            : []),
+          ...(body.truncated ? [notice("output_limit", outputLimitNotice("find"))] : []),
+          ...(outcome.timedOut ? [notice("timeout", searchTimeoutNotice(SEARCH_TIMEOUT_MS))] : []),
+          ...(count === 0 && !partial
+            ? [
+                ...hiddenPathNotices(params.path, false),
+                ...slashGlobNotices(params.pattern, params.path, outcome.rejectedByGlob),
+              ]
+            : []),
+        ];
+        const header = count === 0 && !partial ? NO_FILES_FOUND : findResultHeader(count, partial);
+        const text = resultText(header, body.text, texts(notices));
         return {
-          content: [{ type: "text" as const, text: resultText(NO_FILES_FOUND, "", skipped) }],
-          details: {
-            kind: "find",
-            query: params.pattern,
-            resultCount: 0,
-            fileCount: 0,
-            truncated: false,
-            timedOut: false,
-          } satisfies SearchDetails,
+          result: {
+            content: [{ type: "text" as const, text }],
+            details: {
+              kind: "find",
+              query: params.pattern,
+              resultCount: count,
+              fileCount: body.fileCount,
+              truncated,
+              timedOut: outcome.timedOut,
+              unreadable,
+            } satisfies SearchDetails,
+          },
+          stats: {
+            resultCount: count,
+            collectedCount: outcome.files.length,
+            fileCount: body.fileCount,
+            resultLimitHit: outcome.truncated,
+            outputLimitHit: body.truncated,
+            timedOut: outcome.timedOut,
+            skippedRecords: outcome.skippedRecords,
+            rejectedByGlob: outcome.rejectedByGlob,
+            prefilter: basenamePrefilter(params.pattern),
+            outputBytes: Buffer.byteLength(text, "utf8"),
+            pathError: outcome.pathError,
+            notices: ids(notices),
+          },
         };
-      }
-
-      const body = boundedBody(outcome.files.map(displayPath), "find");
-      const count = outcome.files.length;
-      const notices = [
-        ...(outcome.skippedRecords > 0 ? [oversizedRecordNotice(MAX_RECORD_BYTES)] : []),
-        ...(outcome.files.some((path) => displayPath(path) !== path) ? [QUOTED_PATH_NOTICE] : []),
-        ...(outcome.truncated ? [resultLimitNotice("files", FIND_RESULT_LIMIT)] : []),
-        ...(outcome.timedOut ? [searchTimeoutNotice(SEARCH_TIMEOUT_MS)] : []),
-      ];
-      const text = resultText(
-        count === 0 && !outcome.timedOut ? NO_FILES_FOUND : findResultHeader(count),
-        body.text,
-        notices,
-      );
-
-      return {
-        content: [{ type: "text" as const, text }],
-        details: {
-          kind: "find",
-          query: params.pattern,
-          resultCount: count,
-          fileCount: count,
-          truncated: outcome.truncated || body.truncated,
-          timedOut: outcome.timedOut,
-        } satisfies SearchDetails,
-      };
+      });
     },
 
     renderCall(args: Partial<FindInput> | undefined, theme: Theme) {
@@ -309,9 +352,7 @@ function renderSearchResult(
   isError: boolean,
 ): Text {
   const output = textResult(result);
-  if (options.isPartial) {
-    return new Text(theme.fg("warning", "searching…"), 0, 0);
-  }
+  if (options.isPartial) return new Text(theme.fg("warning", "searching…"), 0, 0);
   if (isError) {
     const firstLine = output.split("\n").find((line) => line.trim().length > 0) ?? "search failed";
     return expandedResult(theme.fg("error", `✗ ${firstLine}`), output, options.expanded, theme);
@@ -331,21 +372,23 @@ function renderSearchResult(
       ? theme.fg("warning", "search timed out (no results gathered)")
       : details.truncated
         ? theme.fg("warning", "no results shown (truncated)")
-        : theme.fg("muted", "no results");
+        : details.unreadable
+          ? theme.fg("warning", "no results (some paths unreadable)")
+          : theme.fg("muted", "no results");
     return expandedResult(summary, output, options.expanded, theme);
   }
 
-  const unit =
-    details.kind === "find"
-      ? `file${details.resultCount === 1 ? "" : "s"}`
-      : `match${details.resultCount === 1 ? "" : "es"}`;
-  const scope =
-    details.kind === "find"
-      ? ""
-      : ` in ${details.fileCount} file${details.fileCount === 1 ? "" : "s"}`;
+  const filesOnly = details.kind === "find" || details.output === "files";
+  const unit = filesOnly
+    ? `file${details.resultCount === 1 ? "" : "s"}`
+    : `match${details.resultCount === 1 ? "" : "es"}`;
+  const scope = filesOnly
+    ? ""
+    : ` in ${details.fileCount} file${details.fileCount === 1 ? "" : "s"}`;
   const more =
     (details.truncated ? theme.fg("warning", " (truncated)") : "") +
-    (details.timedOut ? theme.fg("warning", " (timed out)") : "");
+    (details.timedOut ? theme.fg("warning", " (timed out)") : "") +
+    (details.unreadable ? theme.fg("warning", " (some paths unreadable)") : "");
   const summary =
     theme.fg("success", "✓ ") + theme.fg("muted", `${details.resultCount} ${unit}${scope}`) + more;
   return expandedResult(summary, output, options.expanded, theme);

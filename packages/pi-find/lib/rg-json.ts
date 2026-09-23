@@ -1,8 +1,8 @@
 /**
  * ripgrep `--json` stream decoding.
  *
- * rg emits one JSON object per line. The tool only requests and decodes match
- * events; begin/end/summary and malformed records are ignored.
+ * rg emits one JSON object per line. Decode matches and surrounding context;
+ * begin/end/summary and malformed records are ignored.
  *
  * Text may arrive as `{ text }` or, for invalid UTF-8, as `{ bytes }` (base64).
  */
@@ -11,6 +11,10 @@ export interface RgLine {
   readonly path: string;
   readonly lineNumber: number;
   readonly text: string;
+  readonly isContext: boolean;
+  /** UTF-16 offsets in text, converted from ripgrep's UTF-8 byte offsets. */
+  readonly matchStart?: number;
+  readonly matchEnd?: number;
 }
 
 interface RgData {
@@ -32,6 +36,35 @@ function decodeText(value: RgData | string | undefined): string {
   return "";
 }
 
+export interface RgSummary {
+  readonly searchedFiles: number;
+  readonly searchedBytes: number;
+}
+
+/**
+ * Decode rg's final summary record, emitted only when rg finishes on its own.
+ * It is the only record that serializes `data` before `type`.
+ */
+export function decodeRgSummary(line: string): RgSummary | undefined {
+  if (!line.startsWith('{"data"')) return undefined;
+  try {
+    const event = JSON.parse(line) as {
+      type?: string;
+      data?: { stats?: { searches?: unknown; bytes_searched?: unknown } };
+    };
+    const stats = event.data?.stats;
+    if (
+      event.type !== "summary" ||
+      typeof stats?.searches !== "number" ||
+      typeof stats.bytes_searched !== "number"
+    )
+      return undefined;
+    return { searchedFiles: stats.searches, searchedBytes: stats.bytes_searched };
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Decode one line of rg's JSON stream. Returns undefined for events we do not
  * render (begin/end/summary) and for unparseable lines, so a single malformed
@@ -47,6 +80,7 @@ export function decodeRgEvent(line: string): RgLine | undefined {
       path?: RgData;
       lines?: RgData;
       line_number?: number;
+      submatches?: Array<{ start: number; end: number }>;
     };
   };
   try {
@@ -55,7 +89,7 @@ export function decodeRgEvent(line: string): RgLine | undefined {
     return undefined;
   }
 
-  if (event == null || event.type !== "match") return undefined;
+  if (event == null || (event.type !== "match" && event.type !== "context")) return undefined;
   const data = event.data;
   if (!data || typeof data.line_number !== "number") return undefined;
 
@@ -68,9 +102,38 @@ export function decodeRgEvent(line: string): RgLine | undefined {
     .replace(/\r?\n$/, "")
     .replace(/\r/g, "");
 
+  const first = data.submatches?.[0];
+  let matchStart: number | undefined;
+  let matchEnd: number | undefined;
+  if (
+    first &&
+    Number.isInteger(first.start) &&
+    Number.isInteger(first.end) &&
+    first.start >= 0 &&
+    first.end >= first.start
+  ) {
+    const bytes =
+      typeof data.lines?.bytes === "string"
+        ? Buffer.from(data.lines.bytes, "base64")
+        : Buffer.from(decodeText(data.lines), "utf8");
+    if (first.end <= bytes.length) {
+      matchStart = Math.min(
+        text.length,
+        bytes.subarray(0, first.start).toString("utf8").replace(/\r/g, "").length,
+      );
+      matchEnd = Math.min(
+        text.length,
+        bytes.subarray(0, first.end).toString("utf8").replace(/\r/g, "").length,
+      );
+    }
+  }
+
   return {
     path,
     lineNumber: data.line_number,
     text,
+    isContext: event.type === "context",
+    matchStart,
+    matchEnd,
   };
 }

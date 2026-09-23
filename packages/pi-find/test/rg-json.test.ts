@@ -21,9 +21,12 @@ test("decodes a match event", () => {
   assert.equal(event?.lineNumber, 7);
   // The trailing newline rg includes must not reach the rendered line.
   assert.equal(event?.text, "const x = 1;");
+  assert.equal(event?.matchStart, 6);
+  assert.equal(event?.matchEnd, 7);
+  assert.equal(event?.isContext, false);
 });
 
-test("ignores context events", () => {
+test("decodes context events without marking them as matches", () => {
   const line = JSON.stringify({
     type: "context",
     data: {
@@ -32,7 +35,10 @@ test("ignores context events", () => {
       line_number: 6,
     },
   });
-  assert.equal(decodeRgEvent(line), undefined);
+  const event = decodeRgEvent(line);
+  assert.equal(event?.isContext, true);
+  assert.equal(event?.text, "// before");
+  assert.equal(event?.matchStart, undefined);
 });
 
 test("ignores begin, end, and summary events", () => {
