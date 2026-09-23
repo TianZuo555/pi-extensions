@@ -10,7 +10,7 @@ import {
   DEFAULT_RETRY_COUNT,
   DEFAULT_TIMEOUT_MS,
   fetchProviderJsonEffect,
-  type ProviderQueryError,
+  ProviderQueryError,
 } from "../src/fetch.ts";
 
 export const CODEX_PROVIDER_ID = "openai-codex";
@@ -513,6 +513,18 @@ export function queryXiaomiUsageEffect(
       cookie,
     ),
     normalizeXiaomiReport,
+  ).pipe(
+    Effect.mapError((error) =>
+      (error instanceof ProviderQueryError && error.status === 401) ||
+      (error instanceof ProviderNormalizationError && /returned code 401\b/.test(error.message))
+        ? new ProviderQueryError({
+            message:
+              "MiMo console session expired (401). Sign in at https://platform.xiaomimimo.com/console/balance, then run /usage-mimo-sync to import your browser session or update xiaomi-console manually.",
+            status: 401,
+            retryable: false,
+          })
+        : error,
+    ),
   );
 }
 

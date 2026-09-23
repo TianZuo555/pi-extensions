@@ -53,7 +53,8 @@
     "test": "node --test --experimental-strip-types test/*.test.ts test/*.mjs"
   },
   "dependencies": {
-    "effect": "4.0.0-rc.115"
+    "effect": "4.0.0-rc.115",
+    "playwriter": "0.7.0"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",

@@ -511,7 +511,25 @@ test("Xiaomi usage errors on a non-zero console code", async (t) => {
   });
   globalThis.fetch = async () => jsonResponse({ code: 401, message: "login required" });
 
-  await assert.rejects(queryXiaomiUsage("test-cookie", undefined, 50, 0), /code 401/);
+  await assert.rejects(
+    queryXiaomiUsage("test-cookie", undefined, 50, 0),
+    /MiMo console session expired \(401\).*\/usage-mimo-sync/,
+  );
+});
+
+test("Xiaomi HTTP 401 gives re-login guidance without exposing login URLs", async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => {
+    globalThis.fetch = originalFetch;
+  });
+  globalThis.fetch = async () =>
+    jsonResponse({ code: 401, loginUrl: "https://example.com/?sign=private" }, 401, "Unauthorized");
+
+  await assert.rejects(queryXiaomiUsage("test-cookie", undefined, 50, 0), (error) => {
+    assert.match(error.message, /MiMo console session expired \(401\).*\/usage-mimo-sync/);
+    assert.doesNotMatch(error.message, /private|loginUrl/);
+    return true;
+  });
 });
 
 test("Z.ai usage treats percentage as used and converts ms resets to seconds", async (t) => {
