@@ -440,7 +440,10 @@ export default function usageExtension(pi: ExtensionAPI): void {
         }
         await queryXiaomiUsage(credential.token);
         useXiaomiBrowserToken(credential.token);
-        ctx.ui.notify("MiMo browser session validated. Open /usage and choose Refresh to see the balance.", "info");
+        ctx.ui.notify(
+          "MiMo browser session validated. Open /usage and choose Refresh to see the balance.",
+          "info",
+        );
       } catch {
         ctx.ui.notify(
           "MiMo browser sync failed. Check that Playwriter is connected and the console tab is signed in, then retry.",
