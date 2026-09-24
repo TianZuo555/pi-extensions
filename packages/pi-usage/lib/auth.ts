@@ -244,6 +244,25 @@ export function hasXiaomiLoginInfo(): boolean {
   return resolveXiaomiToken() !== undefined;
 }
 
+/** A MiMo model login is separate from the console cookie needed for balance. */
+export function hasXiaomiModelLoginInfo(): boolean {
+  return Boolean(readPiAuth().xiaomi?.key || process.env.MIMO_API_KEY);
+}
+
+let browserXiaomiCookie: string | undefined;
+
+/** Read browser cookies only after an explicit, confirmed command. */
+export async function importXiaomiToken(): Promise<ResolvedToken | undefined> {
+  const { importXiaomiBrowserCookie } = await import("./mimo-browser.ts");
+  const cookie = await importXiaomiBrowserCookie();
+  return cookie ? { token: cookie, source: "MiMo browser session" } : undefined;
+}
+
+/** Keep only a validated browser session in memory for subsequent usage queries. */
+export function useXiaomiBrowserToken(cookie: string): void {
+  browserXiaomiCookie = cookie;
+}
+
 /**
  * Resolve the Xiaomi console session cookie used for the balance endpoint.
  *
@@ -251,6 +270,7 @@ export function hasXiaomiLoginInfo(): boolean {
  * api_key entry pi manages for model calls), with an env fallback.
  */
 export function resolveXiaomiToken(): ResolvedToken | undefined {
+  if (browserXiaomiCookie) return { token: browserXiaomiCookie, source: "MiMo browser session" };
   const key = readPiAuth()["xiaomi-console"]?.key;
   if (key) return { token: key, source: "~/.pi/agent/auth.json" };
 

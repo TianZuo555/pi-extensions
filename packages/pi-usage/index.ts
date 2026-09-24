@@ -33,14 +33,17 @@ import {
   hasDeepSeekLoginInfo,
   hasProviderLoginInfo,
   hasXiaomiLoginInfo,
+  hasXiaomiModelLoginInfo,
   hasZaiCnLoginInfo,
   hasZaiLoginInfo,
+  importXiaomiToken,
   resolveCodexToken,
   resolveCopilotToken,
   resolveDeepSeekToken,
   resolveXiaomiToken,
   resolveZaiCnToken,
   resolveZaiToken,
+  useXiaomiBrowserToken,
 } from "./lib/auth.ts";
 import {
   dedupeZaiStates,
@@ -68,6 +71,7 @@ import {
   queryCodexUsageEffect,
   queryCopilotUsageEffect,
   queryDeepSeekUsageEffect,
+  queryXiaomiUsage,
   queryXiaomiUsageEffect,
   queryZaiCnUsageEffect,
   queryZaiUsageEffect,
@@ -134,10 +138,11 @@ const PROVIDERS: ProviderQuerySpec[] = [
     id: XIAOMI_PROVIDER_ID,
     name: "Xiaomi MiMo",
     configureHint:
-      "save the platform.xiaomimimo.com console cookie as xiaomi-console in ~/.pi/agent/auth.json or set MIMO_COOKIE",
-    // The `xiaomi` API key pi stores for model calls cannot query balance, so
-    // only the console cookie counts as configured here.
-    hasLoginInfo: () => hasXiaomiLoginInfo(),
+      "sign in to Xiaomi with /login, then run /usage-mimo-sync or configure xiaomi-console in ~/.pi/agent/auth.json",
+    // Never inspect browser cookies during ordinary /usage or status updates.
+    hasLoginInfo: (ctx) =>
+      hasProviderLoginInfo(ctx, XIAOMI_PROVIDER_ID, hasXiaomiModelLoginInfo) &&
+      hasXiaomiLoginInfo(),
     resolve: async () => resolveXiaomiToken(),
     queryEffect: queryXiaomiUsageEffect,
   },
@@ -403,6 +408,50 @@ export default function usageExtension(pi: ExtensionAPI): void {
       safeSetStatus(ctx, undefined);
     }
   };
+
+  pi.registerCommand("usage-mimo-sync", {
+    description: "With consent, import the signed-in Xiaomi MiMo console cookie from Playwriter",
+    handler: async (args, ctx) => {
+      if (args.trim()) {
+        ctx.ui.notify("/usage-mimo-sync takes no arguments.", "warning");
+        return;
+      }
+      if (!hasProviderLoginInfo(ctx, XIAOMI_PROVIDER_ID, hasXiaomiModelLoginInfo)) {
+        ctx.ui.notify("Sign in to Xiaomi with /login before syncing MiMo usage.", "warning");
+        return;
+      }
+      if (!ctx.hasUI) {
+        ctx.ui.notify("MiMo browser sync requires an interactive confirmation.", "warning");
+        return;
+      }
+      const approved = await ctx.ui.confirm(
+        "Read Xiaomi MiMo browser cookies?",
+        "Xiaomi does not provide a balance API that accepts your model API key. To display your balance, this command will read the MiMo console session cookies from a Playwriter-enabled browser tab and send them only to Xiaomi's balance endpoint. The cookie stays in pi's memory for this process. Continue?",
+      );
+      if (!approved) return;
+      try {
+        const credential = await importXiaomiToken();
+        if (!credential) {
+          ctx.ui.notify(
+            "No MiMo console tab or signed-in session found. Open https://platform.xiaomimimo.com/console/balance, sign in, enable Playwriter on that tab, and retry.",
+            "warning",
+          );
+          return;
+        }
+        await queryXiaomiUsage(credential.token);
+        useXiaomiBrowserToken(credential.token);
+        ctx.ui.notify(
+          "MiMo browser session validated. Open /usage and choose Refresh to see the balance.",
+          "info",
+        );
+      } catch {
+        ctx.ui.notify(
+          "MiMo browser sync failed. Check that Playwriter is connected and the console tab is signed in, then retry.",
+          "warning",
+        );
+      }
+    },
+  });
 
   pi.registerCommand("usage", {
     description:

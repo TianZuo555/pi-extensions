@@ -113,7 +113,8 @@ Xiaomi MiMo's balance is only exposed by the web console API
 (`platform.xiaomimimo.com/api/v1/balance`), which authenticates with **Xiaomi
 account session cookies** — the `sk-` model API key you use for `/login` (and
 for model calls) cannot query balance. The cookie is only needed for this
-extension's usage display.
+extension's usage display. First sign in to the Xiaomi model provider with
+pi's `/login`; MiMo usage is not loaded for users without a Xiaomi login.
 
 1. Log in at <https://platform.xiaomimimo.com/#/console/balance> and open the
    balance page (the one showing 账户余额 / Account Balance).
@@ -134,11 +135,25 @@ extension's usage display.
 ```
 
 Alternatively export the same string as `MIMO_COOKIE` (the auth store entry
-wins when both are set).
+wins when both are set). Supplying the cookie manually is an explicit choice
+to let `/usage` query Xiaomi's console balance endpoint with it.
 
-When the cookie expires the balance query starts failing: the statusline goes
-blank and `/usage` shows the query failure for Xiaomi MiMo. Repeat the steps
-above with a fresh `Cookie:` header to recover.
+### Optional browser sync
+
+After signing in to the Xiaomi model provider with `/login`, open the
+[MiMo console](https://platform.xiaomimimo.com/console/balance) in a browser
+and enable the [Playwriter extension](https://playwriter.dev) on that tab.
+Run `/usage-mimo-sync`. Pi explains why the console cookie is needed and asks
+for consent **before reading it**. It validates the cookie with Xiaomi's
+balance endpoint and holds it only in memory for this pi process; it never
+prints or writes the imported cookie to `auth.json`. The command does not
+inspect or navigate unrelated tabs. Ordinary `/usage` and background status
+updates never read browser cookies.
+
+MiMo is queried only when the Xiaomi model provider is logged in **and** a
+console cookie is available. If the session expires, `/usage` reports a
+specific 401 re-login instruction; sign in to the console again and run
+`/usage-mimo-sync`, or repeat the manual steps above with a fresh cookie.
 
 ## Install
 
