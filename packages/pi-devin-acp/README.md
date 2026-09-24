@@ -103,14 +103,14 @@ unavailable.
   pi's session file (`pi-devin-acp-session-state` entries) so reloading pi resumes
   the same Devin session via `session/load`.
 - Streamed `session/update` notifications become pi thinking/text blocks,
-  tool-card placeholders, and usage. Devin's task plan (`todo_write`, ACP
+  tool-card placeholders, and usage. Devin's `todo_write` task list (ACP
   `plan` updates) is not written into the transcript; it renders as a live
-  checklist widget above the editor (`Plan 2/5`, ✓ done / ◉ in progress /
+  checklist widget above the editor (`todo_write 2/5`, ✓ done / ◉ in progress /
   ○ pending) that each update replaces and that clears when the Devin
-  session binding resets. Pi persists the latest plan with its binding, so
+  session binding resets. Pi persists the latest task list with its binding, so
   reopening that Pi session restores the checklist even though Devin's
-  `session/load` does not replay plan updates. Attaching a Devin session
-  from outside the Pi binding starts with no known plan until its next update.
+  `session/load` does not replay ACP `plan` updates. Attaching a Devin session
+  from outside the Pi binding starts with no known tasks until its next update.
   Billable tokens and estimated cost are
   delta-billed: each pi assistant message of a turn (replay segment or
   terminal) persists only the share not already billed, so pi's footer fills

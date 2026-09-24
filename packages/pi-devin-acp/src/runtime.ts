@@ -158,7 +158,7 @@ export interface DevinStateSnapshot {
   configOptions: DevinConfigOption[] | undefined;
   availableCommands: { name: string; description?: string; hint?: string }[] | undefined;
   lastTurnStats: DevinTurnStats | undefined;
-  /** Devin's current task plan (ACP `plan` updates); undefined until the session reports one. */
+  /** Devin's `todo_write` task list (ACP `plan` updates); undefined until reported. */
   plan: DevinPlanEntry[] | undefined;
   /** Devin-side operations still in flight (long execs, detached shells). */
   liveOps: DevinLiveOp[];

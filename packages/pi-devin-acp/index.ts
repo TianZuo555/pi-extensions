@@ -479,7 +479,7 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
     }
   };
 
-  /** Mirror the latest plan snapshot into the checklist widget above the editor. */
+  /** Mirror the latest `todo_write` snapshot into the checklist widget above the editor. */
   const planRefresh = createLatestPlanRefresh(
     () => runDevin(runtime, service.snapshot).then((snapshot) => snapshot.plan),
     (entries) => {

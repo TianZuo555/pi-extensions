@@ -31,7 +31,7 @@ test("renderDevinPlanLines renders header progress and per-status icons", () => 
     80,
   );
   assert.deepEqual(lines, [
-    "<accent> Plan </accent><muted>1/4</muted>",
+    "<accent> todo_write </accent><muted>1/4</muted>",
     "  ✓ <dim>A</dim>",
     "  ◉ <warning>B</warning>",
     "  ○ C",

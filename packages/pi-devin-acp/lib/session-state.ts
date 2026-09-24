@@ -15,7 +15,7 @@ export interface PersistedDevinSession {
   turns: number;
   /** Latest context occupancy (tokens) from usage_update. */
   contextTokens?: number;
-  /** Last plan displayed by this Pi binding; Devin does not replay it on session/load. */
+  /** Last `todo_write` list displayed by this Pi binding; Devin does not replay it on load. */
   plan?: { content: string; status?: string }[];
 }
 

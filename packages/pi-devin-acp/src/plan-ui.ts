@@ -1,5 +1,5 @@
 /**
- * Devin's task plan (ACP `plan` updates — devin's todo_write) rendered as
+ * Devin's `todo_write` task list (sent as ACP `plan` updates) rendered as
  * a checklist widget above pi's editor, in the same shape as pi-todo's
  * list: header with progress, one line per entry.
  */
@@ -19,7 +19,7 @@ export function renderDevinPlanLines(
 ): string[] {
   const completed = entries.filter((entry) => entry.status === "completed").length;
   const lines = [
-    theme.fg("accent", " Plan ") + theme.fg("muted", `${completed}/${entries.length}`),
+    theme.fg("accent", " todo_write ") + theme.fg("muted", `${completed}/${entries.length}`),
     ...entries.map((entry) => {
       const content = sanitizeDevinText(entry.content).replace(/\s+/g, " ").trim();
       const label =
