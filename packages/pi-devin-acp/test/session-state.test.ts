@@ -54,3 +54,31 @@ test("parsePersistedDevinState validates shape", () => {
   assert.equal(parsePersistedDevinState({ version: 2 }), undefined);
   assert.equal(parsePersistedDevinState("nope"), undefined);
 });
+
+test("plan follows only its owning restorable binding", () => {
+  const plan = [
+    { content: "Step one", status: "completed" },
+    { content: "Step two", status: "in_progress" },
+  ];
+  const withPlan = { ...STATE, plan };
+  assert.deepEqual(
+    restorableDevinSession([customEntry(withPlan)], STATE.sessionId, STATE.cwd)?.plan,
+    plan,
+  );
+  assert.equal(
+    restorableDevinSession(
+      [
+        customEntry(withPlan),
+        customEntry({ version: 1, kind: "reset", sessionId: STATE.sessionId, cwd: STATE.cwd }),
+      ],
+      STATE.sessionId,
+      STATE.cwd,
+    ),
+    undefined,
+  );
+  assert.equal(restorableDevinSession([customEntry(withPlan)], "fork", STATE.cwd), undefined);
+  // Invalid or oversized plan data cannot poison an otherwise valid binding.
+  assert.deepEqual(parsePersistedDevinState({ ...STATE, plan: [{ content: 3 }] }), STATE);
+  assert.deepEqual(parsePersistedDevinState({ ...STATE, plan: [{ content: "  " }] }), STATE);
+  assert.deepEqual(parsePersistedDevinState({ ...STATE, plan: Array(101).fill(plan[0]) }), STATE);
+});

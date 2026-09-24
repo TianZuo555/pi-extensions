@@ -45,12 +45,6 @@ export interface DevinUsage {
   totalCreditCost?: number;
   totalAcuCost?: number;
   dimensions?: DevinResponseDimension[];
-  /**
-   * Set when the token fields are the turn's cumulative sums (turn_stats
-   * responseDimensions) rather than a last-request snapshot. Authoritative:
-   * later snapshots must not overwrite them.
-   */
-  cumulative?: boolean;
 }
 
 export interface DevinTurnStats {
@@ -84,6 +78,12 @@ export function mergeDevinUsage(
   return merged;
 }
 
+/** One ACP plan entry (devin's todo_write item). */
+export interface DevinPlanEntry {
+  content: string;
+  status?: string;
+}
+
 export type DevinActivity =
   | { type: "text"; delta: string; messageId?: string }
   | { type: "thought"; delta: string; messageId?: string }
@@ -97,7 +97,7 @@ export type DevinActivity =
       type: "commands";
       commands: { name: string; description?: string; hint?: string }[];
     }
-  | { type: "plan"; entries: { content: string; status?: string }[] }
+  | { type: "plan"; entries: DevinPlanEntry[] }
   | { type: "compaction" }
   /**
    * `_cognition.ai/connection_retry`: devin is retrying its backend stream
@@ -119,12 +119,7 @@ export class DevinTurnController {
   readonly modelCost: Readonly<DevinModelPricing>;
   /** Assigned once the ACP session id is known (session/new or load). */
   sessionId: string;
-  /**
-   * Client-supplied user message id stamped on this turn's session/prompt.
-   * Devin echoes it as turnClientMessageId in `_cognition.ai/turn_stats`,
-   * which lets the cumulative per-turn token sums be matched to exactly
-   * this turn (replayed or superseded-turn stats carry other ids).
-   */
+  /** Client-supplied user message id stamped on this turn's session/prompt. */
   turnClientMessageId?: string;
   #queue: DevinActivity[] = [];
   #waiters: Waiter[] = [];
@@ -133,9 +128,8 @@ export class DevinTurnController {
   #incompleteTools = new Map<string, DevinToolView>();
   /**
    * Billable token totals observed this turn. usage_update and
-   * PromptResponse.usage each report ONE internal request, so they
-   * accumulate; turn_stats' cumulativeMetric sums are authoritative and
-   * replace the accumulated total.
+   * PromptResponse.usage each report ONE internal request, so they accumulate.
+   * turn_stats only covers Devin's main chain, omitting sidekick requests.
    */
   #seenTokens = {
     inputTokens: 0,
@@ -150,7 +144,6 @@ export class DevinTurnController {
     cachedReadTokens: 0,
     cachedWriteTokens: 0,
   };
-  #seenCumulative = false;
   /**
    * Token signature of the last accumulated request snapshot. Devin emits
    * every request's usage_update twice (identical) and PromptResponse.usage
@@ -227,25 +220,13 @@ export class DevinTurnController {
    * prompt response echoes the last request — so request snapshots
    * accumulate after consecutive-identical dedup. Context-only updates carry
    * no token fields and are ignored without touching the dedup baseline.
-   * turn_stats' cumulative sums are authoritative: they replace the
-   * accumulated total, and once they land request-level snapshots stop
-   * accumulating (their tokens are already inside the cumulative sum).
+   * turn_stats cannot replace these totals: its main-chain-only counters
+   * omit sidekick requests (and may arrive before the last usage_update).
    */
   recordUsage(next: DevinUsage | undefined): void {
     if (!next) return;
     if (next.contextUsed !== undefined) this.#contextUsed = next.contextUsed;
     if (next.contextSize !== undefined) this.#contextSize = next.contextSize;
-    if (next.cumulative) {
-      this.#seenTokens.inputTokens = next.inputTokens ?? this.#seenTokens.inputTokens;
-      this.#seenTokens.outputTokens = next.outputTokens ?? this.#seenTokens.outputTokens;
-      this.#seenTokens.cachedReadTokens =
-        next.cachedReadTokens ?? this.#seenTokens.cachedReadTokens;
-      this.#seenTokens.cachedWriteTokens =
-        next.cachedWriteTokens ?? this.#seenTokens.cachedWriteTokens;
-      this.#seenCumulative = true;
-      return;
-    }
-    if (this.#seenCumulative) return;
     if (
       next.inputTokens === undefined &&
       next.outputTokens === undefined &&
@@ -273,11 +254,8 @@ export class DevinTurnController {
   /**
    * The not-yet-persisted share of the turn's billable total. Every pi
    * assistant message of the turn (replay segment or terminal) bills only
-   * what earlier ones did not, so the session log sums to the authoritative
-   * total while the footer fills live. A field whose observed total drops
-   * below what was already billed (e.g. a cumulative set smaller than the
-   * accumulated requests) bills zero rather than a negative correction —
-   * the excess stays in the log.
+   * what earlier ones did not, so the session log sums to the observed
+   * request totals while the footer fills live.
    */
   takeBillableUsage(): DevinUsage {
     const billable: DevinUsage = {};

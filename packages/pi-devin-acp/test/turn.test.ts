@@ -110,25 +110,6 @@ test("context-only usage updates are not billable and keep the dedup baseline", 
   assert.deepEqual(c.takeBillableUsage(), { contextUsed: 15, contextSize: 262000 });
 });
 
-test("cumulative turn_stats usage replaces accumulation and blocks snapshots", () => {
-  const c = new DevinTurnController("p", "s1", ZERO_COST);
-  c.recordUsage({ inputTokens: 10, outputTokens: 5 });
-  // turn_stats' cumulative sums are authoritative — they replace the
-  // accumulated request total.
-  c.recordUsage({ inputTokens: 20, outputTokens: 8, cachedReadTokens: 4, cumulative: true });
-  // Later request snapshots (e.g. the prompt response echo) are already
-  // inside the cumulative sum and must not add to it.
-  c.recordUsage({ inputTokens: 12, outputTokens: 6 });
-  assert.deepEqual(c.takeBillableUsage(), {
-    inputTokens: 20,
-    outputTokens: 8,
-    cachedReadTokens: 4,
-    // The blocked post-cumulative snapshot also can't move the occupancy
-    // estimate, which keeps the last real request's size (10+5).
-    contextUsed: 15,
-  });
-});
-
 test("takeBillableUsage returns the not-yet-billed delta across messages", () => {
   const c = new DevinTurnController("p", "s1", ZERO_COST);
   c.recordUsage({ inputTokens: 100, outputTokens: 20 });
@@ -147,20 +128,6 @@ test("takeBillableUsage returns the not-yet-billed delta across messages", () =>
   });
   // Nothing new observed — the terminal message bills nothing.
   assert.deepEqual(c.takeBillableUsage(), { contextUsed: 185 });
-});
-
-test("a cumulative set below already-billed totals bills no negative correction", () => {
-  const c = new DevinTurnController("p", "s1", ZERO_COST);
-  c.recordUsage({ inputTokens: 100, outputTokens: 20 });
-  assert.deepEqual(c.takeBillableUsage(), {
-    inputTokens: 100,
-    outputTokens: 20,
-    contextUsed: 120,
-  });
-  // The authoritative total arrived lower than what was billed — the
-  // excess stays in the log; nothing is clawed back.
-  c.recordUsage({ inputTokens: 80, outputTokens: 15, cumulative: true });
-  assert.deepEqual(c.takeBillableUsage(), { contextUsed: 120 });
 });
 
 test("reported context occupancy always wins over the request-size fallback", () => {

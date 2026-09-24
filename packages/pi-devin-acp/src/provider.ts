@@ -416,7 +416,7 @@ export function streamDevin(deps: DevinProviderDeps) {
           closeThinking();
           closeText();
           // Segments bill only the turn's not-yet-persisted share: the log
-          // sums to the authoritative total while the footer fills live.
+          // sums to the observed request totals while the footer fills live.
           attachUsage();
           output.stopReason = "toolUse";
           stream.push({ type: "done", reason: "toolUse", message: output });
@@ -619,32 +619,6 @@ export function streamDevin(deps: DevinProviderDeps) {
               }
               break;
             }
-            case "plan": {
-              closeText();
-              closeThinking();
-              const lines = activity.entries
-                .map(
-                  (entry) =>
-                    `  ${entry.status === "completed" ? "☑" : entry.status === "in_progress" ? "◐" : "☐"} ${entry.content}`,
-                )
-                .join("\n");
-              output.content.push({ type: "thinking", thinking: `Plan\n${lines}` });
-              const index = output.content.length - 1;
-              stream.push({ type: "thinking_start", contentIndex: index, partial: output });
-              stream.push({
-                type: "thinking_delta",
-                contentIndex: index,
-                delta: `Plan\n${lines}`,
-                partial: output,
-              });
-              stream.push({
-                type: "thinking_end",
-                contentIndex: index,
-                content: `Plan\n${lines}`,
-                partial: output,
-              });
-              break;
-            }
             case "compaction": {
               closeText();
               closeThinking();
@@ -674,6 +648,7 @@ export function streamDevin(deps: DevinProviderDeps) {
             case "config":
             case "title":
             case "commands":
+            case "plan":
               break;
             case "result": {
               if (sweepIncompleteTools() > 0) {

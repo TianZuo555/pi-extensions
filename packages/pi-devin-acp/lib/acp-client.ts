@@ -279,8 +279,7 @@ export class DevinAcpClient {
       sessionId,
       prompt,
       // Devin adopts this as the user message id and echoes it as
-      // turnClientMessageId in turn_stats / userMessageId in the result —
-      // our correlation key for cumulative turn accounting.
+      // turnClientMessageId in turn_stats / userMessageId in the result.
       ...(opts?.clientMessageId
         ? { _meta: { "cognition.ai/clientMessageId": opts.clientMessageId } }
         : {}),

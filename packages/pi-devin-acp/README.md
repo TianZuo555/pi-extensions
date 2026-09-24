@@ -74,7 +74,7 @@ unavailable.
 - `/devin-fast [on|off]` — standalone command: no argument toggles Devin's
   fast/priority serving tier, `on`/`off` sets it explicitly (the ACP `speed`
   option; persisted in `~/.pi/devin-acp/settings.json`); the footer shows
-  `devin:<model> · fast:on|off|n/a` (n/a when the family has no priority
+  `fast:on|off|n/a` (n/a when the family has no priority
   tier). Changes apply to the next ACP turn; an in-flight turn keeps its
   original serving tier and pricing across all tool-replay segments.
   Also available as `/devin fast [on|off]`
@@ -103,10 +103,23 @@ unavailable.
   pi's session file (`pi-devin-acp-session-state` entries) so reloading pi resumes
   the same Devin session via `session/load`.
 - Streamed `session/update` notifications become pi thinking/text blocks,
-  tool-card placeholders, and usage. Billable tokens and estimated cost are
+  tool-card placeholders, and usage. Devin's task plan (`todo_write`, ACP
+  `plan` updates) is not written into the transcript; it renders as a live
+  checklist widget above the editor (`Plan 2/5`, ✓ done / ◉ in progress /
+  ○ pending) that each update replaces and that clears when the Devin
+  session binding resets. Pi persists the latest plan with its binding, so
+  reopening that Pi session restores the checklist even though Devin's
+  `session/load` does not replay plan updates. Attaching a Devin session
+  from outside the Pi binding starts with no known plan until its next update.
+  Billable tokens and estimated cost are
   delta-billed: each pi assistant message of a turn (replay segment or
   terminal) persists only the share not already billed, so pi's footer fills
-  live while the session log still sums to the authoritative turn total.
+  live while the session log sums to the observed per-request usage. Devin's
+  `turn_stats` dimensions cover only the main chain, not Fusion sidekick
+  requests, so they are displayed but never used to replace billable totals.
+  Pi's `↑` counter excludes cache writes (`W`); Devin's `/session-stats`
+  Input includes them. Without overflow rebucketing, compare `↑ + W`
+  against Devin's Input.
   `usage.totalTokens` separately reports Devin's context occupancy
   (`usage_update.used` scaled into the model window) rather than the billed
   sums, so pi's context gauge and auto-compaction threshold see the real

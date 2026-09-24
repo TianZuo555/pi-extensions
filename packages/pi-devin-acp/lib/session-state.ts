@@ -15,6 +15,8 @@ export interface PersistedDevinSession {
   turns: number;
   /** Latest context occupancy (tokens) from usage_update. */
   contextTokens?: number;
+  /** Last plan displayed by this Pi binding; Devin does not replay it on session/load. */
+  plan?: { content: string; status?: string }[];
 }
 
 export interface PersistedDevinReset {
@@ -57,6 +59,20 @@ export function parsePersistedDevinState(value: unknown): PersistedDevinState | 
   if (record.contextTokens !== undefined && !isNonNegativeNumber(record.contextTokens)) {
     return undefined;
   }
+  const plan =
+    Array.isArray(record.plan) &&
+    record.plan.length <= 100 &&
+    record.plan.every(
+      (entry) =>
+        typeof entry === "object" &&
+        entry !== null &&
+        isBoundedString(entry.content) &&
+        entry.content.trim().length > 0 &&
+        (entry.status === undefined ||
+          (typeof entry.status === "string" && entry.status.length <= 64)),
+    )
+      ? (record.plan as { content: string; status?: string }[])
+      : undefined;
   return {
     version: 1,
     kind: "session",
@@ -66,6 +82,7 @@ export function parsePersistedDevinState(value: unknown): PersistedDevinState | 
     modelId: record.modelId,
     turns: record.turns as number,
     contextTokens: record.contextTokens as number | undefined,
+    ...(plan ? { plan } : {}),
   };
 }
 
