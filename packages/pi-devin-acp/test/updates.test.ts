@@ -5,7 +5,7 @@ import {
   acpUpdateToActivities,
   agentStoppedToActivity,
   connectionRetryToActivity,
-  turnStatsToUsage,
+  turnStatsToDimensions,
 } from "../src/updates.ts";
 
 test("agent_message_chunk maps to text delta with messageId", () => {
@@ -246,68 +246,15 @@ test("connectionRetryToActivity ignores payloads without a numeric attempt", () 
   assert.equal(connectionRetryToActivity("retry"), undefined);
 });
 
-test("turnStatsToUsage maps cumulative dims to cache-inclusive usage", () => {
-  const parsed = turnStatsToUsage({
-    sessionId: "s",
-    turnClientMessageId: "turn-1",
-    responseDimensions: [
-      {
-        uid: "agent_messages",
-        groupTitle: "Response Statistics",
-        label: "Agent messages",
-        kind: { type: "cumulativeMetric", value: 2 },
-      },
-      {
-        uid: "model",
-        groupTitle: "Response Statistics",
-        label: "Model",
-        kind: { type: "metric", value: "SWE-2 Max" },
-      },
-      {
-        uid: "input_tokens",
-        groupTitle: "Token Usage",
-        label: "Input tokens",
-        kind: { type: "cumulativeMetric", value: 22454 },
-      },
-      {
-        uid: "output_tokens",
-        groupTitle: "Token Usage",
-        label: "Output tokens",
-        kind: { type: "cumulativeMetric", value: 80 },
-      },
-      {
-        uid: "cached_input_tokens",
-        groupTitle: "Token Usage",
-        label: "Cached input tokens",
-        kind: { type: "cumulativeMetric", value: 6656 },
-      },
-      {
-        uid: "cache_write_tokens",
-        groupTitle: "Token Usage",
-        label: "Cache write tokens",
-        kind: { type: "cumulativeMetric", value: 100 },
-      },
-    ],
-  });
-  assert.equal(parsed?.clientMessageId, "turn-1");
-  const usage = parsed?.usage;
-  assert.ok(usage);
-  // inputTokens stays cache-inclusive: uncached + cached reads + writes.
-  assert.equal(usage.inputTokens, 22454 + 6656 + 100);
-  assert.equal(usage.outputTokens, 80);
-  assert.equal(usage.cachedReadTokens, 6656);
-  assert.equal(usage.cachedWriteTokens, 100);
-  assert.equal(usage.cumulative, true);
-  assert.equal(usage.dimensions?.length, 6);
-});
-
-test("turnStatsToUsage without token dims yields only the correlation id", () => {
-  const parsed = turnStatsToUsage({
-    turnClientMessageId: "turn-2",
-    responseDimensions: [{ uid: "model", kind: { type: "metric", value: "SWE-2 Max" } }],
-  });
-  assert.equal(parsed?.clientMessageId, "turn-2");
-  assert.equal(parsed?.usage, undefined);
-  assert.deepEqual(turnStatsToUsage("junk"), undefined);
-  assert.deepEqual(turnStatsToUsage({}), { clientMessageId: undefined });
+test("turnStatsToDimensions preserves main-chain stats for display only", () => {
+  const dims = [
+    {
+      uid: "input_tokens",
+      groupTitle: "Token Usage",
+      label: "Input tokens",
+      kind: { type: "cumulativeMetric", value: 195803 },
+    },
+  ];
+  assert.equal(turnStatsToDimensions({ responseDimensions: dims })?.[0]?.kind?.value, 195803);
+  assert.equal(turnStatsToDimensions("junk"), undefined);
 });

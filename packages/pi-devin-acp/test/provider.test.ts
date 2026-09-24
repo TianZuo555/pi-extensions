@@ -738,3 +738,23 @@ test("pi's payload hook sees the ACP prompt and can replace it", async () => {
   assert.deepEqual(seen, [{ sessionId: "sess-1", prompt: [{ type: "text", text: "hi" }] }]);
   assert.deepEqual(replaced, [{ type: "text", text: "rewritten" }]);
 });
+
+test("plan activities never enter the transcript", async () => {
+  const { service, runtime } = fakeRuntime([
+    { type: "text", delta: "draft", messageId: "m1" },
+    { type: "plan", entries: [{ content: "Step", status: "in_progress" }] },
+    { type: "text", delta: " final", messageId: "m1" },
+  ]);
+  const stream = streamDevin({
+    runtime,
+    service,
+    replay: new DevinReplayStore(),
+    families: () => FAMILIES,
+    cwd: () => "/tmp",
+  })(MODEL as never, CONTEXT, undefined);
+  const events = await drain(stream);
+  const done = events.find((e) => e.type === "done");
+  assert.ok(done && done.type === "done");
+  assert.deepEqual(done.message.content, [{ type: "text", text: "draft final" }]);
+  assert.ok(!events.some((e) => e.type === "thinking_start"));
+});

@@ -280,6 +280,15 @@ test("failed session/load falls back to a fresh session with bootstrap", async (
       cwd: "/tmp/proj",
       modelId: "swe-2",
       turns: 2,
+      plan: [{ content: "Old task", status: "in_progress" }],
+    }),
+  );
+  assert.equal((await runDevin(runtime, service.snapshot)).plan?.[0]?.content, "Old task");
+  const planEvents: unknown[] = [];
+  const unsubscribe = await runDevin(
+    runtime,
+    service.onActivity((activity) => {
+      if (activity.type === "plan") planEvents.push(activity.entries);
     }),
   );
   fake.failLoads.add("old-session");
@@ -287,6 +296,9 @@ test("failed session/load falls back to a fresh session with bootstrap", async (
     runtime,
     service.beginStreamTurn(TURN({ historyBootstrap: "user:\nprevious question" })),
   );
+  assert.equal((await runDevin(runtime, service.snapshot)).plan, undefined);
+  assert.deepEqual(planEvents, [[]], "failed load clears the displayed plan");
+  unsubscribe();
   assert.equal(fake.createdSessions.length, 1);
   const sent = fake.prompts[0];
   assert.equal(sent.sessionId, "sess-1");
@@ -298,6 +310,29 @@ test("failed session/load falls back to a fresh session with bootstrap", async (
     if ((await controller.next()) === null) break;
   }
   await runtime.dispose();
+});
+
+test("restored plan survives session/load without a plan replay", async (t) => {
+  const { fake, runtime, service } = await makeRuntime();
+  t.after(() => runtime.dispose());
+  const plan = [{ content: "Pending task", status: "in_progress" }];
+  await runDevin(
+    runtime,
+    service.restoreSession({
+      acpSessionId: "old-session",
+      cwd: "/tmp/proj",
+      modelId: "swe-2",
+      turns: 2,
+      plan,
+    }),
+  );
+  assert.deepEqual((await runDevin(runtime, service.snapshot)).plan, plan);
+  const controller = await runDevin(runtime, service.beginStreamTurn(TURN()));
+  assert.deepEqual(fake.loaded, ["old-session"]);
+  assert.deepEqual((await runDevin(runtime, service.snapshot)).plan, plan);
+  for (;;) {
+    if ((await controller.next()) === null) break;
+  }
 });
 
 test("runSummaryTurn uses a disposable session and cleans up", async () => {
@@ -874,6 +909,10 @@ test("restore removes old listeners and all session-local live state", async (t)
     title: "old shell",
   } as never);
   oldListener({ sessionUpdate: "session_info_update", title: "A title" } as never);
+  oldListener({
+    sessionUpdate: "plan",
+    entries: [{ content: "old step", priority: "low", status: "pending" }],
+  } as never);
   assert.equal((await runDevin(runtime, service.snapshot)).liveOps.length, 1);
   await runDevin(
     runtime,
@@ -890,6 +929,27 @@ test("restore removes old listeners and all session-local live state", async (t)
   assert.equal(snapshot.modeId, undefined);
   assert.equal(snapshot.availableCommands, undefined);
   assert.equal(snapshot.lastTurnStats, undefined);
+  assert.equal(snapshot.plan, undefined);
+});
+
+test("plan updates land in the snapshot and clear with the binding", async (t) => {
+  const { fake, runtime, service } = await makeRuntime();
+  t.after(() => runtime.dispose());
+  await runDevin(runtime, service.beginStreamTurn(TURN()));
+  const listener = fake.sessions.get("sess-1")!;
+  listener({
+    sessionUpdate: "plan",
+    entries: [
+      { content: "Step one", priority: "high", status: "completed" },
+      { content: "Step two", priority: "medium", status: "in_progress" },
+    ],
+  } as never);
+  assert.deepEqual((await runDevin(runtime, service.snapshot)).plan, [
+    { content: "Step one", status: "completed" },
+    { content: "Step two", status: "in_progress" },
+  ]);
+  await runDevin(runtime, service.setSession("/tmp/proj", { rebootstrap: true }));
+  assert.equal((await runDevin(runtime, service.snapshot)).plan, undefined);
 });
 
 test("invalid and server-rejected modes preserve the last accepted preference", async (t) => {
@@ -1454,7 +1514,7 @@ test("pre-prompt straggler usage never seeds the next turn's accounting", async 
   assert.deepEqual(fake.configSets.at(-1), { configId: "model", value: "swe-2-none" });
 });
 
-test("matching turn_stats cumulative sums become the turn's billed usage", async (t) => {
+test("turn_stats main-chain dimensions cannot erase sidekick and final request usage", async (t) => {
   const { fake, runtime, service } = await makeRuntime();
   t.after(async () => {
     await runDevin(runtime, service.close);
@@ -1462,41 +1522,38 @@ test("matching turn_stats cumulative sums become the turn's billed usage", async
   });
   fake.prompt = async (sessionId, blocks, opts) => {
     fake.prompts.push({ sessionId, blocks, clientMessageId: opts?.clientMessageId });
-    // The last-request snapshot usage_update reports mid-turn.
-    fake.sessions.get(sessionId)?.({
-      sessionUpdate: "usage_update",
-      used: 14627,
-      size: 262000,
-      _meta: {
-        "cognition.ai/inputTokens": 14613,
-        "cognition.ai/outputTokens": 14,
-        "cognition.ai/cachedReadTokens": 6656,
-      },
-    } as never);
-    // A stale turn_stats (another turn's clientMessageId) must be ignored.
-    fake.customHandler?.("_cognition.ai/turn_stats", {
-      sessionId,
-      turnClientMessageId: "some-other-turn",
-      responseDimensions: [
-        { uid: "input_tokens", kind: { type: "cumulativeMetric", value: 999999 } },
-      ],
-    });
-    // This turn's own turn_stats: cumulative sums across its internal
-    // requests (input_tokens is the uncached sum; the two internal requests
-    // here totalled 22454 uncached + 6656 cached + 80 output).
+    const update = (input: number, output: number, read: number, write: number) =>
+      fake.sessions.get(sessionId)?.({
+        sessionUpdate: "usage_update",
+        used: input + output,
+        size: 1_000_000,
+        _meta: {
+          "cognition.ai/inputTokens": input,
+          "cognition.ai/outputTokens": output,
+          "cognition.ai/cachedReadTokens": read,
+          "cognition.ai/cachedWriteTokens": write,
+        },
+      } as never);
+    // A sidekick request and two main-chain requests, each emitted twice.
+    update(600_000, 100, 590_000, 1_000);
+    update(600_000, 100, 590_000, 1_000);
+    update(195_171, 255, 194_627, 544);
+    update(195_171, 255, 194_627, 544);
+    update(195_661, 1_169, 195_171, 488);
+    update(195_661, 1_169, 195_171, 488);
+    // Devin's turn_stats contains only main-chain usage. Its input_tokens
+    // also includes cache writes, unlike Pi's uncached input counter.
     fake.customHandler?.("_cognition.ai/turn_stats", {
       sessionId,
       turnClientMessageId: opts?.clientMessageId,
       responseDimensions: [
         { uid: "agent_messages", kind: { type: "cumulativeMetric", value: 2 } },
-        { uid: "input_tokens", kind: { type: "cumulativeMetric", value: 22454 } },
-        { uid: "output_tokens", kind: { type: "cumulativeMetric", value: 80 } },
-        { uid: "cached_input_tokens", kind: { type: "cumulativeMetric", value: 6656 } },
+        { uid: "input_tokens", kind: { type: "cumulativeMetric", value: 1_036 } },
+        { uid: "output_tokens", kind: { type: "cumulativeMetric", value: 1_424 } },
+        { uid: "cached_input_tokens", kind: { type: "cumulativeMetric", value: 389_798 } },
       ],
     });
-    // The prompt response still carries last-request usage; it must not
-    // clobber the cumulative sums that already landed.
-    return { stopReason: "end_turn", usage: { inputTokens: 14613, outputTokens: 14 } };
+    return { stopReason: "end_turn" }; // PromptResponse.usage may be absent.
   };
   const provider = streamDevin({
     runtime,
@@ -1506,20 +1563,18 @@ test("matching turn_stats cumulative sums become the turn's billed usage", async
     cwd: () => "/tmp/proj",
   });
   const message = await provider(
-    LIFECYCLE_MODEL,
+    { ...LIFECYCLE_MODEL, contextWindow: 1_000_000 },
     transcriptContext([{ role: "user", content: "hi", timestamp: 0 }]),
     {},
   ).result();
   assert.equal(message.stopReason, "stop");
-  assert.equal(message.usage.input, 22454);
-  assert.equal(message.usage.output, 80);
-  assert.equal(message.usage.cacheRead, 6656);
-  assert.equal(message.usage.cacheWrite, 0);
-  // totalTokens is the reported context occupancy (used=14627), not the
-  // cumulative billed sum (29190) — pi reads it as context fill, where the
-  // summed internal requests would read as a bogus overflow.
-  assert.equal(message.usage.totalTokens, 14627);
+  assert.equal(message.usage.input, 9_002);
+  assert.equal(message.usage.output, 1_524);
+  assert.equal(message.usage.cacheRead, 979_798);
+  assert.equal(message.usage.cacheWrite, 2_032);
+  assert.equal(message.usage.totalTokens, 196_830);
   assert.ok(fake.prompts[0].clientMessageId, "the turn stamps a correlation id");
+  assert.equal((await runDevin(runtime, service.snapshot)).lastTurnStats?.dimensions?.length, 4);
 });
 
 test("summary usage merges streamed cache metadata with prompt-response totals", async (t) => {
@@ -1590,14 +1645,21 @@ test("deleteSession reports whether it dropped the bound session", async (t) => 
   for (;;) {
     if ((await controller.next()) === null) break;
   }
+  fake.sessions.get("sess-1")?.({
+    sessionUpdate: "plan",
+    entries: [{ content: "Bound task", status: "pending" }],
+  } as never);
   assert.equal(await runDevin(runtime, service.deleteSession("other-session")), false);
   assert.equal(
     (await runDevin(runtime, service.snapshot)).sessionId,
     "sess-1",
     "an unrelated delete keeps the branch binding",
   );
+  assert.equal((await runDevin(runtime, service.snapshot)).plan?.[0]?.content, "Bound task");
   assert.equal(await runDevin(runtime, service.deleteSession("sess-1")), true);
-  assert.equal((await runDevin(runtime, service.snapshot)).sessionId, undefined);
+  const snapshot = await runDevin(runtime, service.snapshot);
+  assert.equal(snapshot.sessionId, undefined);
+  assert.equal(snapshot.plan, undefined);
   assert.deepEqual(fake.deleted, ["other-session", "sess-1"]);
 });
 

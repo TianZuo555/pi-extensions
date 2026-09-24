@@ -28,13 +28,13 @@ import {
   agentStoppedToActivity,
   connectionRetryToActivity,
   turnStatsToDimensions,
-  turnStatsToUsage,
 } from "./updates.ts";
 import {
   DevinTurnController,
   mergeDevinUsage,
   TERMINAL_TOOL_STATUSES,
   type DevinActivity,
+  type DevinPlanEntry,
   type DevinTurnStats,
   type DevinUsage,
 } from "./turn.ts";
@@ -139,6 +139,7 @@ export interface DevinSessionBindingState {
   modelId: string;
   turns: number;
   contextTokens?: number;
+  plan?: DevinPlanEntry[];
 }
 
 export interface DevinStateSnapshot {
@@ -157,6 +158,8 @@ export interface DevinStateSnapshot {
   configOptions: DevinConfigOption[] | undefined;
   availableCommands: { name: string; description?: string; hint?: string }[] | undefined;
   lastTurnStats: DevinTurnStats | undefined;
+  /** Devin's current task plan (ACP `plan` updates); undefined until the session reports one. */
+  plan: DevinPlanEntry[] | undefined;
   /** Devin-side operations still in flight (long execs, detached shells). */
   liveOps: DevinLiveOp[];
   /** Present while devin is retrying its backend stream (fresh only). */
@@ -295,6 +298,7 @@ const makeRuntime = (createClient: DevinClientFactory, options?: DevinRuntimeOpt
     let modeId: string | undefined;
     let desiredModeId: string | undefined;
     let title: string | undefined;
+    let plan: DevinPlanEntry[] | undefined;
     let turns = 0;
     let contextTokens: number | undefined;
     let contextSize: number | undefined;
@@ -392,18 +396,8 @@ const makeRuntime = (createClient: DevinClientFactory, options?: DevinRuntimeOpt
             // merge them into the existing stats instead of replacing.
             const dimensions = turnStatsToDimensions(params);
             if (dimensions) lastTurnStats = { ...(lastTurnStats ?? {}), dimensions };
-            // The cumulative token sums are the turn's authoritative
-            // billable usage (every internal request, not just the last).
-            // turnClientMessageId ties them to the owning turn: replayed
-            // or superseded-turn stats carry other ids and stay state-only.
-            const stats = turnStatsToUsage(params);
-            if (
-              stats?.usage &&
-              stats.clientMessageId !== undefined &&
-              stats.clientMessageId === active?.turnClientMessageId
-            ) {
-              active?.push({ type: "usage", usage: stats.usage });
-            }
+            // These dimensions cover only the main chain, not sidekick
+            // requests. Keep them for the UI, never for billable usage.
           }
         });
       }
@@ -461,6 +455,7 @@ const makeRuntime = (createClient: DevinClientFactory, options?: DevinRuntimeOpt
       contextSize = undefined;
       usage = undefined;
       title = undefined;
+      plan = undefined;
       model = undefined;
       modeId = undefined;
       configOptions = undefined;
@@ -592,7 +587,7 @@ const makeRuntime = (createClient: DevinClientFactory, options?: DevinRuntimeOpt
     };
 
     /**
-     * Apply state-only updates (mode/config/title/commands/usage) arriving
+     * Apply state-only updates (mode/config/title/commands/usage/plan) arriving
      * outside a turn — including the tail of a session/load replay.
      */
     const applyStateUpdate = (activities: ReturnType<typeof acpUpdateToActivities>) => {
@@ -601,6 +596,7 @@ const makeRuntime = (createClient: DevinClientFactory, options?: DevinRuntimeOpt
         else if (activity.type === "config") configOptions = activity.options;
         else if (activity.type === "title") title = activity.title;
         else if (activity.type === "commands") availableCommands = activity.commands;
+        else if (activity.type === "plan") plan = activity.entries;
         else if (activity.type === "usage") {
           usage = mergeDevinUsage(usage, activity.usage);
           contextTokens = usage.contextUsed;
@@ -684,6 +680,9 @@ const makeRuntime = (createClient: DevinClientFactory, options?: DevinRuntimeOpt
           contextSize = undefined;
           usage = undefined;
           title = undefined;
+          const hadPlan = (plan?.length ?? 0) > 0;
+          plan = undefined;
+          if (hadPlan) notifySubscribers({ type: "plan", entries: [] });
         }
       }
       const created = await acp.newSession(cwd);
@@ -751,6 +750,7 @@ const makeRuntime = (createClient: DevinClientFactory, options?: DevinRuntimeOpt
               model = state.modelId;
               turns = state.turns;
               contextTokens = state.contextTokens;
+              plan = state.plan;
               pendingLoadId = state.acpSessionId;
               needsBootstrap = false;
               lastSentSystemPrompt = undefined;
@@ -868,9 +868,8 @@ const makeRuntime = (createClient: DevinClientFactory, options?: DevinRuntimeOpt
                   // arriving earlier (load replay, a superseded turn's tail)
                   // are session state and must not seed the turn's usage.
                   attachSessionListener(liveSessionId, controller);
-                  // Stamped on the prompt so devin echoes it as
-                  // turnClientMessageId — the correlation key that lets the
-                  // turn claim its cumulative turn_stats token sums.
+                  // Stamp the prompt with a stable client message id for
+                  // Devin's turn correlation and diagnostics.
                   controller.turnClientMessageId = randomUUID();
                   const promptPromise = acp.prompt(liveSessionId, outgoing, {
                     clientMessageId: controller.turnClientMessageId,
@@ -1113,6 +1112,7 @@ const makeRuntime = (createClient: DevinClientFactory, options?: DevinRuntimeOpt
             configOptions,
             availableCommands,
             lastTurnStats,
+            plan,
             liveOps: [...liveOps.values()],
             retry: retry && Date.now() - retry.at < RETRY_STALE_MS ? retry : undefined,
             client: client?.stats ?? {

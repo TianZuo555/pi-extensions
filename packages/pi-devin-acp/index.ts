@@ -38,6 +38,7 @@ import {
   restorableDevinSession,
   type PersistedDevinSession,
 } from "./lib/session-state.ts";
+import { createLatestPlanRefresh, devinPlanWidget } from "./src/plan-ui.ts";
 import { streamDevin } from "./src/provider.ts";
 import { createDevinRuntime, DevinRuntime, runDevin } from "./src/runtime.ts";
 import { runDevinSessionsPicker } from "./src/sessions-ui.ts";
@@ -387,7 +388,7 @@ function oneLine(value: string, max = 120): string {
 }
 
 function sessionStateKey(state: PersistedDevinSession): string {
-  return `${state.acpSessionId}:${state.turns}:${state.contextTokens ?? 0}`;
+  return `${state.acpSessionId}:${state.turns}:${state.contextTokens ?? 0}:${JSON.stringify(state.plan)}`;
 }
 
 export default function piDevinAcpExtension(pi: ExtensionAPI): void {
@@ -412,6 +413,7 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
   // --- Status-bar hint for in-flight devin operations -----------------------
 
   const DEVIN_OPS_WIDGET_KEY = "devin-ops";
+  const DEVIN_PLAN_WIDGET_KEY = "devin-plan";
   let opsSubscribed = false;
   let opsTicker: ReturnType<typeof setInterval> | undefined;
 
@@ -477,6 +479,24 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
     }
   };
 
+  /** Mirror the latest plan snapshot into the checklist widget above the editor. */
+  const planRefresh = createLatestPlanRefresh(
+    () => runDevin(runtime, service.snapshot).then((snapshot) => snapshot.plan),
+    (entries) => {
+      const ui = sessionCtx?.hasUI ? sessionCtx.ui : undefined;
+      if (!ui) return;
+      try {
+        ui.setWidget(DEVIN_PLAN_WIDGET_KEY, entries.length ? devinPlanWidget(entries) : undefined);
+      } catch {
+        // UI may be unavailable (print/RPC modes or teardown).
+      }
+    },
+  );
+  const refreshPlanWidget = async () => {
+    if (sessionCtx?.hasUI) await planRefresh.refresh();
+    else planRefresh.invalidate();
+  };
+
   const runtime = createDevinRuntime(() => {
     const client = new DevinAcpClient({
       binary: resolvedBinary ?? process.env.DEVIN_BINARY?.trim() ?? "devin",
@@ -518,6 +538,7 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
       modelId: snapshot.model ?? ctx.model.id,
       turns: snapshot.turns,
       contextTokens: snapshot.contextTokens,
+      plan: snapshot.plan,
     };
     const key = sessionStateKey(state);
     if (!force && key === persistedSessionKey) return;
@@ -701,14 +722,11 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
     return fastEnabled ? "on" : "off";
   };
 
-  /** Footer status, in the `cursor:local · fast:off` shape. */
+  /** Footer status: `fast:on|off|n/a` while a devin model is selected. */
   const refreshDevinStatus = (ctx: ExtensionContext) => {
     if (!ctx.hasUI) return;
     const modelId = ctx.model?.provider === DEVIN_PROVIDER ? ctx.model.id : undefined;
-    ctx.ui.setStatus(
-      "devin",
-      modelId ? `devin:${modelId} · fast:${fastStateFor(modelId)}` : undefined,
-    );
+    ctx.ui.setStatus("devin", modelId ? `fast:${fastStateFor(modelId)}` : undefined);
   };
 
   pi.on("session_start", async (event, ctx: ExtensionContext) => {
@@ -727,6 +745,8 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
             activity.type === "retry"
           ) {
             void refreshOpsWidget();
+          } else if (activity.type === "plan") {
+            void refreshPlanWidget();
           }
         }),
       ).catch(() => {
@@ -752,6 +772,7 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
           modelId: restored.modelId,
           turns: restored.turns,
           contextTokens: restored.contextTokens,
+          plan: restored.plan,
         }),
       );
       persistedSessionKey = sessionStateKey(restored);
@@ -766,6 +787,7 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
     if (ctx.model?.provider === DEVIN_PROVIDER) {
       await refreshModelsWhenSelected();
     }
+    void refreshPlanWidget();
     refreshDevinStatus(ctx);
     publishUsageStatusDetached(ctx);
   });
@@ -788,6 +810,7 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
     if (event.model?.provider === DEVIN_PROVIDER) {
       await refreshModelsWhenSelected();
     }
+    void refreshPlanWidget();
     refreshDevinStatus(ctx);
     publishUsageStatusDetached(ctx);
   });
@@ -800,6 +823,7 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
     // A devin session cannot be rewound to match a different pi branch.
     await runDevin(runtime, service.setSession(ctx.cwd, { rebootstrap: true }));
     appendSessionReset(ctx);
+    void refreshPlanWidget();
   });
 
   pi.on("agent_settled", async (_event, ctx: ExtensionContext) => {
@@ -882,17 +906,20 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("session_shutdown", async (event) => {
+    planRefresh.invalidate();
     if (opsTicker) {
       clearInterval(opsTicker);
       opsTicker = undefined;
     }
     try {
       sessionCtx?.hasUI && sessionCtx.ui.setWidget(DEVIN_OPS_WIDGET_KEY, undefined);
+      sessionCtx?.hasUI && sessionCtx.ui.setWidget(DEVIN_PLAN_WIDGET_KEY, undefined);
       sessionCtx?.hasUI && sessionCtx.ui.setStatus("devin", undefined);
     } catch {
       // UI already gone.
     }
     quotaStatus.clear(sessionCtx);
+    sessionCtx = undefined;
     // Extensions are cached and reused across /new, /resume, and /fork — only
     // quit and /reload replace the instance — so session replacement must
     // suspend the runtime (kill the devin child, drop the binding) instead of
@@ -957,6 +984,7 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
       await runDevin(runtime, service.reset);
       if (yoloEnabled) await runDevin(runtime, service.setMode(YOLO_MODE));
       appendSessionReset(ctx);
+      void refreshPlanWidget();
       ctx.ui.notify("devin: session binding reset; next turn starts fresh.", "info");
       return;
     }
@@ -1005,13 +1033,17 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
                 turns: 0,
               }),
             );
+            await refreshPlanWidget();
             ctx.ui.notify("devin: session attached; it loads into the next turn.", "info");
           },
           deleteSession: async (acpSessionId) => {
             const droppedBinding = await runDevin(runtime, service.deleteSession(acpSessionId));
             // Only a delete that dropped the live binding invalidates the
             // branch's persisted session state.
-            if (droppedBinding) appendSessionReset(ctx);
+            if (droppedBinding) {
+              appendSessionReset(ctx);
+              await refreshPlanWidget();
+            }
           },
         });
       } catch (error) {
