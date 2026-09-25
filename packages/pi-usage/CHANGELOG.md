@@ -1,5 +1,11 @@
 # @tian.zuo/pi-usage
 
+## 0.4.0
+
+### Minor Changes
+
+- [#111](https://github.com/TianZuo555/pi-extensions/pull/111) [`da74b09`](https://github.com/TianZuo555/pi-extensions/commit/da74b09383211616c12d1a56bf050c15769d63b1) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Add a consent-gated `/usage-mimo-sync` command that reads only the Xiaomi MiMo console session from a Playwriter-enabled browser tab after Xiaomi model login. Keep imported cookies in memory, never read browser cookies during background usage queries, and show actionable, redacted 401 guidance.
+
 ## 0.3.0
 
 ### Minor Changes
