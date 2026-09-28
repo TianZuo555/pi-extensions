@@ -49,7 +49,7 @@
   },
   "dependencies": {
     "defuddle": "^0.19.4",
-    "effect": "4.0.0-rc.115",
+    "effect": "4.0.0-rc.117",
     "linkedom": "^0.18.13",
     "unpdf": "^1.8.1"
   },
