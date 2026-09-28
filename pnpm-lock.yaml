@@ -174,8 +174,8 @@ importers:
   packages/pi-devin-acp:
     dependencies:
       '@agentclientprotocol/sdk':
-        specifier: 1.4.0
-        version: 1.4.0(zod@4.6.5)
+        specifier: 1.5.0
+        version: 1.5.0(zod@4.6.5)
       '@earendil-works/pi-ai':
         specifier: ^0.87.0
         version: 0.87.0(@modelcontextprotocol/sdk@1.30.0(zod@4.6.5))(ws@8.21.3)(zod@4.6.5)
@@ -227,7 +227,7 @@ importers:
     dependencies:
       '@earendil-works/pi-ai':
         specifier: ^0.87.0
-        version: 0.87.0(ws@8.21.3)(zod@4.6.5)
+        version: 0.87.0(@modelcontextprotocol/sdk@1.30.0(zod@4.6.5))(ws@8.21.3)(zod@4.6.5)
       '@earendil-works/pi-coding-agent':
         specifier: ^0.87.0
         version: 0.87.0(@modelcontextprotocol/sdk@1.30.0(zod@4.6.5))(ws@8.21.3)(zod@4.6.5)
@@ -412,7 +412,7 @@ importers:
     dependencies:
       '@earendil-works/pi-coding-agent':
         specifier: ^0.87.0
-        version: 0.87.0(ws@8.21.3)(zod@4.6.5)
+        version: 0.87.0(@modelcontextprotocol/sdk@1.30.0(zod@4.6.5))(ws@8.21.3)(zod@4.6.5)
       '@earendil-works/pi-tui':
         specifier: ^0.87.0
         version: 0.87.0
@@ -494,8 +494,8 @@ importers:
 
 packages:
 
-  '@agentclientprotocol/sdk@1.4.0':
-    resolution: {integrity: sha512-/eufudw+aFY1LKLolT6yFE6UMmYRl7fMJ/DEONSIyR6wI3slHWITBsANRGqXEY8FRzqUxwh7QEaGiZHcJPVThg==}
+  '@agentclientprotocol/sdk@1.5.0':
+    resolution: {integrity: sha512-524jwbB2iYWA+kWWyv9fhKbhU89dH/lu9u5EXwVNmfYzopV8BujCDxByBDZhxRUkB7RWIJzISCnwivdDk+bdVg==}
     peerDependencies:
       zod: ^3.25.0 || ^4.0.0
 
@@ -2773,7 +2773,7 @@ packages:
 
 snapshots:
 
-  '@agentclientprotocol/sdk@1.4.0(zod@4.6.5)':
+  '@agentclientprotocol/sdk@1.5.0(zod@4.6.5)':
     dependencies:
       zod: 4.6.5
 
@@ -3205,24 +3205,6 @@ snapshots:
       - ws
       - zod
 
-  '@earendil-works/pi-agent-core@0.87.0(ws@8.21.3)(zod@4.6.5)':
-    dependencies:
-      '@earendil-works/chord': 0.87.0
-      '@earendil-works/pi-ai': 0.87.0(ws@8.21.3)(zod@4.6.5)
-      '@earendil-works/pi-telemetry': 0.87.0
-      diff: 8.0.4
-      ignore: 7.0.8
-      typebox: 1.3.27
-      yaml: 2.9.0
-    transitivePeerDependencies:
-      - '@modelcontextprotocol/sdk'
-      - bufferutil
-      - kerberos
-      - supports-color
-      - utf-8-validate
-      - ws
-      - zod
-
   '@earendil-works/pi-ai@0.87.0(@modelcontextprotocol/sdk@1.30.0(zod@4.6.5))(ws@8.21.3)(zod@4.6.5)':
     dependencies:
       '@anthropic-ai/sdk': 0.124.0(zod@4.6.5)
@@ -3244,62 +3226,11 @@ snapshots:
       - ws
       - zod
 
-  '@earendil-works/pi-ai@0.87.0(ws@8.21.3)(zod@4.6.5)':
-    dependencies:
-      '@anthropic-ai/sdk': 0.124.0(zod@4.6.5)
-      '@aws-sdk/client-bedrock-runtime': 3.1127.0
-      '@earendil-works/pi-telemetry': 0.87.0
-      '@google/genai': 2.21.0
-      '@smithy/node-http-handler': 4.12.1
-      http-proxy-agent: 9.1.0
-      https-proxy-agent: 9.1.0
-      openai: 6.40.0(ws@8.21.3)(zod@4.6.5)
-      partial-json: 0.1.7
-      typebox: 1.3.27
-    transitivePeerDependencies:
-      - '@modelcontextprotocol/sdk'
-      - bufferutil
-      - kerberos
-      - supports-color
-      - utf-8-validate
-      - ws
-      - zod
-
   '@earendil-works/pi-coding-agent@0.87.0(@modelcontextprotocol/sdk@1.30.0(zod@4.6.5))(ws@8.21.3)(zod@4.6.5)':
     dependencies:
       '@earendil-works/chord': 0.87.0
       '@earendil-works/pi-agent-core': 0.87.0(@modelcontextprotocol/sdk@1.30.0(zod@4.6.5))(ws@8.21.3)(zod@4.6.5)
       '@earendil-works/pi-ai': 0.87.0(@modelcontextprotocol/sdk@1.30.0(zod@4.6.5))(ws@8.21.3)(zod@4.6.5)
-      '@earendil-works/pi-tui': 0.87.0
-      '@silvia-odwyer/photon-node': 0.3.4
-      chalk: 6.0.0
-      cross-spawn: 7.0.6
-      diff: 8.0.4
-      grok-mermaid: 0.2.3
-      highlight.js: 10.7.3
-      hosted-git-info: 9.0.3
-      ignore: 7.0.8
-      jiti: 2.7.0
-      minimatch: 10.2.6
-      proper-lockfile: 4.1.2
-      semver: 7.8.5
-      typebox: 1.3.27
-      undici: 8.10.2
-      yaml: 2.9.0
-    transitivePeerDependencies:
-      - '@modelcontextprotocol/sdk'
-      - bufferutil
-      - kerberos
-      - supports-color
-      - utf-8-validate
-      - ws
-      - zod
-
-  '@earendil-works/pi-coding-agent@0.87.0(ws@8.21.3)(zod@4.6.5)':
-    dependencies:
-      '@earendil-works/chord': 0.87.0
-      '@earendil-works/pi-agent-core': 0.87.0(ws@8.21.3)(zod@4.6.5)
-      '@earendil-works/pi-ai': 0.87.0(ws@8.21.3)(zod@4.6.5)
       '@earendil-works/pi-tui': 0.87.0
       '@silvia-odwyer/photon-node': 0.3.4
       chalk: 6.0.0
@@ -3447,17 +3378,6 @@ snapshots:
 
   '@esbuild/win32-x64@0.28.2':
     optional: true
-
-  '@google/genai@2.21.0':
-    dependencies:
-      google-auth-library: 10.9.1
-      p-retry: 4.6.2
-      protobufjs: 7.6.6
-      ws: 8.21.3
-    transitivePeerDependencies:
-      - bufferutil
-      - supports-color
-      - utf-8-validate
 
   '@google/genai@2.21.0(@modelcontextprotocol/sdk@1.30.0(zod@4.6.5))':
     dependencies:

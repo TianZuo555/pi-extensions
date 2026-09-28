@@ -40,7 +40,7 @@
     "test": "node --test --experimental-strip-types test/*.test.ts"
   },
   "dependencies": {
-    "@agentclientprotocol/sdk": "1.4.0",
+    "@agentclientprotocol/sdk": "1.5.0",
     "effect": "4.0.0-rc.115",
     "semver": "^7.8.5",
     "which": "^7.0.0",
