@@ -26,6 +26,9 @@ export async function searchBrave(
   url.searchParams.set("q", scopedQuery);
   url.searchParams.set("count", String(Math.min(options.numResults ?? 8, 20)));
   url.searchParams.set("result_filter", "web");
+  // Brave wraps matched terms in <strong> tags unless told otherwise; the
+  // snippet goes straight to the model, which wants plain text.
+  url.searchParams.set("text_decorations", "false");
 
   const timeout = AbortSignal.timeout(60_000);
   const res = await fetch(url, {

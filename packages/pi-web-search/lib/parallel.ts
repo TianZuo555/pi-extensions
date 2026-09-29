@@ -7,6 +7,13 @@ import type {
   SearchResult,
 } from "./types.ts";
 
+/**
+ * Search mode. `fast` answers within about a second at the lowest price. The
+ * API default, `advanced`, is a slower multi-hop mode meant for background
+ * agents, which is the wrong trade for an interactive search tool.
+ */
+const SEARCH_MODE = "fast";
+
 interface ParallelSearchResponse {
   results?: Array<{ title?: string | null; url: string; excerpts?: string[] }>;
 }
@@ -37,6 +44,7 @@ export async function searchParallel(
     body: JSON.stringify({
       objective: query,
       search_queries: [query],
+      mode: SEARCH_MODE,
       ...(Object.keys(advancedSettings).length ? { advanced_settings: advancedSettings } : {}),
     }),
     signal: options.signal ? AbortSignal.any([options.signal, timeout]) : timeout,
@@ -98,9 +106,9 @@ export async function fetchParallel(
   const data = (await res.json()) as ParallelExtractResponse;
   const error = data.errors?.find((item) => item.url === url);
   if (error) {
-    throw new Error(
-      `Parallel could not extract ${url}: ${error.error_type}${error.http_status_code ? ` (target HTTP ${error.http_status_code})` : ""}`,
-    );
+    // The target's own HTTP status stays out of the message: the runtime reads
+    // 402/403/429 in an error as this provider's quota or rate limit.
+    throw new Error(`Parallel could not extract ${url}: ${error.error_type}`);
   }
   const item = data.results?.find((result) => result.url === url);
   if (!item?.full_content?.trim()) {

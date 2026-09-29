@@ -126,3 +126,43 @@ export function stubPiAuthData(data: Record<string, unknown>): () => void {
     fs.existsSync = originalExistsSync;
   };
 }
+
+export interface RecordedFetch {
+  url: URL;
+  method: string;
+  headers: Record<string, string>;
+  /** Parsed JSON request body, or undefined for bodiless requests. */
+  body: unknown;
+}
+
+export interface FetchStub {
+  calls: RecordedFetch[];
+  restore: () => void;
+}
+
+/**
+ * Replace globalThis.fetch with `respond`, recording every request so a test
+ * can assert on what was sent. Register `stub.restore` with `t.after(...)`.
+ */
+export function stubFetch(
+  respond: (call: RecordedFetch) => Response | Promise<Response>,
+): FetchStub {
+  const original = globalThis.fetch;
+  const calls: RecordedFetch[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const call: RecordedFetch = {
+      url: new URL(input instanceof Request ? input.url : String(input)),
+      method: init?.method ?? "GET",
+      headers: { ...((init?.headers as Record<string, string> | undefined) ?? {}) },
+      body: typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
+    };
+    calls.push(call);
+    return respond(call);
+  }) as typeof fetch;
+  return {
+    calls,
+    restore: () => {
+      globalThis.fetch = original;
+    },
+  };
+}

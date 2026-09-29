@@ -82,6 +82,39 @@ const SCENARIOS: Record<string, Scenario> = {
           ? json({ title: "", content: "" })
           : undefined,
   },
+  parallel: {
+    env: { PARALLEL_API_KEY: "par-key" },
+    api: (u, requested, target) =>
+      u.startsWith("https://api.parallel.ai/v1/extract")
+        ? json({
+            results: [],
+            errors: [
+              {
+                url: requested,
+                error_type: "fetch_error",
+                http_status_code: target,
+                content: null,
+              },
+            ],
+          })
+        : undefined,
+  },
+  tinyfish: {
+    env: { TINYFISH_API_KEY: "tf-key" },
+    api: (u, requested, target) =>
+      u.startsWith("https://api.fetch.tinyfish.ai")
+        ? json({
+            results: [],
+            errors: [
+              {
+                url: requested,
+                error: target === 404 ? "page_not_found" : "target_http_error",
+                status: target,
+              },
+            ],
+          })
+        : undefined,
+  },
   direct: { env: {}, api: () => undefined },
 };
 

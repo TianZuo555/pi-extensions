@@ -7,6 +7,19 @@ import type {
   SearchResult,
 } from "./types.ts";
 
+const DEFAULT_TIMEOUT_MS = 60_000;
+/**
+ * Per-page budget sent to TinyFish. A slower page falls through to the next
+ * provider instead of holding the chain; Monid's TinyFish fetch uses the same.
+ */
+const PER_URL_TIMEOUT_MS = 30_000;
+/**
+ * Oldest cached page, in seconds, TinyFish may return. Omitting `ttl` accepts a
+ * cache entry of any age; two days is Firecrawl's default `maxAge`, so the
+ * fetch chain shares one freshness bound.
+ */
+const CACHE_TTL_SECONDS = 172_800;
+
 interface TinyfishSearchResponse {
   results?: Array<{ title?: string; url?: string; snippet?: string }>;
 }
@@ -56,7 +69,6 @@ interface TinyfishFetchResponse {
     url: string;
     title?: string | null;
     text?: string | null;
-    not_modified?: boolean;
   }>;
   errors?: Array<{ url: string; error: string; status?: number }>;
 }
@@ -69,12 +81,16 @@ export async function fetchTinyfish(
   if (!config)
     throw new Error("TinyFish API key not found. Set TINYFISH_API_KEY or run /websearch-auth");
 
-  // TinyFish allows up to 110s per URL and recommends a 150s client timeout.
-  const timeout = AbortSignal.timeout(options.timeoutMs ?? 150_000);
+  const timeout = AbortSignal.timeout(options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
   const res = await fetch(resolveTinyfishFetchUrl(), {
     method: "POST",
     headers: { "X-API-Key": config.apiKey, "Content-Type": "application/json" },
-    body: JSON.stringify({ urls: [url], format: "markdown", per_url_timeout_ms: 110_000 }),
+    body: JSON.stringify({
+      urls: [url],
+      format: options.raw ? "html" : "markdown",
+      ttl: CACHE_TTL_SECONDS,
+      per_url_timeout_ms: PER_URL_TIMEOUT_MS,
+    }),
     signal: options.signal ? AbortSignal.any([options.signal, timeout]) : timeout,
   });
   if (!res.ok) {
@@ -86,12 +102,13 @@ export async function fetchTinyfish(
   const data = (await res.json()) as TinyfishFetchResponse;
   const error = data.errors?.find((item) => item.url === url);
   if (error) {
-    throw new Error(
-      `TinyFish could not fetch ${url}: ${error.error}${error.status ? ` (target HTTP ${error.status})` : ""}`,
-    );
+    // `error.error` is TinyFish's own code (target_http_error, bot_blocked, ...).
+    // The target's HTTP status stays out of the message: the runtime reads
+    // 402/403/429 in an error as this provider's quota or rate limit.
+    throw new Error(`TinyFish could not fetch ${url}: ${error.error}`);
   }
   const item = data.results?.find((result) => result.url === url);
-  if (!item?.text?.trim() || item.not_modified) {
+  if (!item?.text?.trim()) {
     throw new Error(`TinyFish returned no readable content for ${url}`);
   }
   return {
@@ -99,6 +116,6 @@ export async function fetchTinyfish(
     title: item.title ?? undefined,
     text: item.text,
     provider: "tinyfish",
-    contentType: "text/markdown",
+    contentType: options.raw ? "text/html" : "text/markdown",
   };
 }
