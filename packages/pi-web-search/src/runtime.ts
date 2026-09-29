@@ -357,11 +357,7 @@ const makeWebSearchRuntime = Effect.gen(function* () {
   ): Effect.Effect<FetchResponse, WebSearchError> =>
     runProviderChain(
       "fetch",
-      // Extracted HTML is not the original response body. Raw requests must
-      // skip the new extractors even when explicitly configured first.
-      resolveFetchChainForUrl(url, requestedProvider).filter(
-        (provider) => !options.raw || (provider !== "parallel" && provider !== "tinyfish"),
-      ),
+      resolveFetchChainForUrl(url, requestedProvider),
       (provider: FetchProviderName) =>
         Effect.tryPromise({
           try: async (signal) => {
