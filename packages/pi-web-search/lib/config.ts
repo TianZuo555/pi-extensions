@@ -476,18 +476,19 @@ export function resolveMonidConfig(config = loadStoredConfig()): ResolvedMonidCo
   };
 }
 
-export interface ResolvedKeyedSearchConfig {
+/** Credentials and endpoint of a provider that needs only an API key (Brave, Parallel, TinyFish). */
+export interface ResolvedKeyedConfig {
   apiKey: string;
   baseUrl: string;
   source: string;
 }
 
-function resolveKeyedSearchConfig(
+function resolveKeyedConfig(
   name: "brave" | "parallel" | "tinyfish",
   envName: string,
   defaultBaseUrl: string,
   baseUrl?: string,
-): ResolvedKeyedSearchConfig | null {
+): ResolvedKeyedConfig | null {
   const envKey = process.env[envName]?.trim();
   const authKey = piAuthKey(AUTH_IDS[name]);
   const apiKey = envKey || authKey;
@@ -500,19 +501,12 @@ function resolveKeyedSearchConfig(
   };
 }
 
-export function resolveBraveConfig(config = loadStoredConfig()): ResolvedKeyedSearchConfig | null {
-  return resolveKeyedSearchConfig(
-    "brave",
-    "BRAVE_API_KEY",
-    DEFAULT_BRAVE_API_URL,
-    config.brave?.baseUrl,
-  );
+export function resolveBraveConfig(config = loadStoredConfig()): ResolvedKeyedConfig | null {
+  return resolveKeyedConfig("brave", "BRAVE_API_KEY", DEFAULT_BRAVE_API_URL, config.brave?.baseUrl);
 }
 
-export function resolveParallelConfig(
-  config = loadStoredConfig(),
-): ResolvedKeyedSearchConfig | null {
-  return resolveKeyedSearchConfig(
+export function resolveParallelConfig(config = loadStoredConfig()): ResolvedKeyedConfig | null {
+  return resolveKeyedConfig(
     "parallel",
     "PARALLEL_API_KEY",
     DEFAULT_PARALLEL_API_URL,
@@ -520,10 +514,8 @@ export function resolveParallelConfig(
   );
 }
 
-export function resolveTinyfishConfig(
-  config = loadStoredConfig(),
-): ResolvedKeyedSearchConfig | null {
-  return resolveKeyedSearchConfig(
+export function resolveTinyfishConfig(config = loadStoredConfig()): ResolvedKeyedConfig | null {
+  return resolveKeyedConfig(
     "tinyfish",
     "TINYFISH_API_KEY",
     DEFAULT_TINYFISH_API_URL,
@@ -650,8 +642,9 @@ export function resolveFetchProvider(
 }
 
 /** Canonical fallback order for search providers. Keyless Firecrawl (real
- * browser, never cached) is the zero-config default head; Monid (TinyFish
- * via api.monid.ai, $0/call) is the last credentialed resort. */
+ * browser, never cached) is the zero-config default head; the key-only
+ * providers (Monid, Brave, Parallel, TinyFish) are the credentialed last
+ * resorts, in that order. */
 export const SEARCH_PROVIDER_ORDER: readonly SearchProviderName[] = [
   "firecrawl",
   "openai",
