@@ -62,7 +62,15 @@ export type SearchProviderName =
   | "brave"
   | "parallel"
   | "tinyfish";
-export type FetchProviderName = "firecrawl" | "exa" | "tavily" | "ollama" | "monid" | "direct";
+export type FetchProviderName =
+  | "firecrawl"
+  | "exa"
+  | "tavily"
+  | "ollama"
+  | "monid"
+  | "parallel"
+  | "tinyfish"
+  | "direct";
 
 export interface ProviderStatus {
   name: string;
@@ -127,6 +135,9 @@ export interface WebSearchConfig {
     baseUrl?: string;
   };
   tinyfish?: {
+    /** Search endpoint; fetch uses a separate endpoint. */
     baseUrl?: string;
+    /** Full URL of the TinyFish Fetch endpoint. */
+    fetchUrl?: string;
   };
 }

@@ -353,7 +353,7 @@ test("resolveMonidConfig respects MONID_API_KEY environment variable", () => {
   }
 });
 
-test("getProviderStatuses lists all 8 supported providers", () => {
+test("getProviderStatuses lists all supported providers", () => {
   const statuses = getProviderStatuses();
   const names = statuses.map((s) => s.name);
   assert.deepEqual(names, [
@@ -363,6 +363,9 @@ test("getProviderStatuses lists all 8 supported providers", () => {
     "tavily",
     "firecrawl",
     "monid",
+    "brave",
+    "parallel",
+    "tinyfish",
     "ollama",
     "direct",
   ]);

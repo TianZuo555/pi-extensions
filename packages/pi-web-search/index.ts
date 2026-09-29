@@ -389,7 +389,18 @@ export default function webSearchExtension(pi: ExtensionAPI): void {
       if (!provider) return;
       // Lines may start with an ANSI code; match on the provider name.
       const name = (
-        ["openai", "deepseek", "exa", "firecrawl", "tavily", "monid", "brave", "parallel", "tinyfish", "ollama"] as const
+        [
+          "openai",
+          "deepseek",
+          "exa",
+          "firecrawl",
+          "tavily",
+          "monid",
+          "brave",
+          "parallel",
+          "tinyfish",
+          "ollama",
+        ] as const
       ).find((n) => provider.includes(n));
       if (!name) return;
 

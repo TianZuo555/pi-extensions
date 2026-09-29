@@ -27,6 +27,7 @@ export const DEFAULT_MONID_API_URL = "https://api.monid.ai";
 export const DEFAULT_BRAVE_API_URL = "https://api.search.brave.com/res/v1/web/search";
 export const DEFAULT_PARALLEL_API_URL = "https://api.parallel.ai";
 export const DEFAULT_TINYFISH_API_URL = "https://api.search.tinyfish.ai";
+export const DEFAULT_TINYFISH_FETCH_URL = "https://api.fetch.tinyfish.ai";
 
 interface PiAuthEntry {
   type?: string;
@@ -501,19 +502,40 @@ function resolveKeyedSearchConfig(
 
 export function resolveBraveConfig(config = loadStoredConfig()): ResolvedKeyedSearchConfig | null {
   return resolveKeyedSearchConfig(
-    "brave", "BRAVE_API_KEY", DEFAULT_BRAVE_API_URL, config.brave?.baseUrl,
+    "brave",
+    "BRAVE_API_KEY",
+    DEFAULT_BRAVE_API_URL,
+    config.brave?.baseUrl,
   );
 }
 
-export function resolveParallelConfig(config = loadStoredConfig()): ResolvedKeyedSearchConfig | null {
+export function resolveParallelConfig(
+  config = loadStoredConfig(),
+): ResolvedKeyedSearchConfig | null {
   return resolveKeyedSearchConfig(
-    "parallel", "PARALLEL_API_KEY", DEFAULT_PARALLEL_API_URL, config.parallel?.baseUrl,
+    "parallel",
+    "PARALLEL_API_KEY",
+    DEFAULT_PARALLEL_API_URL,
+    config.parallel?.baseUrl,
   );
 }
 
-export function resolveTinyfishConfig(config = loadStoredConfig()): ResolvedKeyedSearchConfig | null {
+export function resolveTinyfishConfig(
+  config = loadStoredConfig(),
+): ResolvedKeyedSearchConfig | null {
   return resolveKeyedSearchConfig(
-    "tinyfish", "TINYFISH_API_KEY", DEFAULT_TINYFISH_API_URL, config.tinyfish?.baseUrl,
+    "tinyfish",
+    "TINYFISH_API_KEY",
+    DEFAULT_TINYFISH_API_URL,
+    config.tinyfish?.baseUrl,
+  );
+}
+
+export function resolveTinyfishFetchUrl(config = loadStoredConfig()): string {
+  return (
+    process.env.TINYFISH_FETCH_URL?.trim() ||
+    config.tinyfish?.fetchUrl?.trim() ||
+    DEFAULT_TINYFISH_FETCH_URL
   );
 }
 
@@ -651,6 +673,8 @@ export const FETCH_PROVIDER_ORDER: readonly FetchProviderName[] = [
   "tavily",
   "ollama",
   "monid",
+  "parallel",
+  "tinyfish",
   "direct",
 ];
 
@@ -678,6 +702,8 @@ export function availableFetchProviders(config = loadStoredConfig()): FetchProvi
   if (resolveTavilyConfig(config)) list.push("tavily");
   if (config.ollama || process.env.OLLAMA_HOST?.trim()) list.push("ollama");
   if (resolveMonidConfig(config)) list.push("monid");
+  if (resolveParallelConfig(config)) list.push("parallel");
+  if (resolveTinyfishConfig(config)) list.push("tinyfish");
   list.push("direct");
   return list;
 }
