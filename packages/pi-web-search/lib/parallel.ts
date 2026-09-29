@@ -1,4 +1,5 @@
 import { resolveParallelConfig } from "./config.ts";
+import { splitDomainFilter } from "./domain-filter.ts";
 import type {
   FetchOptions,
   FetchResponse,
@@ -26,12 +27,10 @@ export async function searchParallel(
   if (!config)
     throw new Error("Parallel API key not found. Set PARALLEL_API_KEY or run /websearch-auth");
 
-  const includes = options.domainFilter?.filter((d) => !d.startsWith("-")) ?? [];
-  const excludes =
-    options.domainFilter?.filter((d) => d.startsWith("-")).map((d) => d.slice(1).trim()) ?? [];
+  const { include, exclude } = splitDomainFilter(options.domainFilter);
   const sourcePolicy = {
-    ...(includes.length ? { include_domains: includes } : {}),
-    ...(excludes.length ? { exclude_domains: excludes } : {}),
+    ...(include.length ? { include_domains: include } : {}),
+    ...(exclude.length ? { exclude_domains: exclude } : {}),
   };
   const advancedSettings = {
     ...(options.numResults ? { max_results: Math.min(options.numResults, 20) } : {}),

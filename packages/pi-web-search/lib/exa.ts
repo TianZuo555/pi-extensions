@@ -1,4 +1,5 @@
 import { resolveExaConfig } from "./config.ts";
+import { splitDomainFilter } from "./domain-filter.ts";
 import type {
   FetchOptions,
   FetchResponse,
@@ -55,14 +56,9 @@ export async function searchExa(
     },
   };
 
-  if (options.domainFilter?.length) {
-    const includes = options.domainFilter.filter((d) => !d.startsWith("-"));
-    const excludes = options.domainFilter
-      .filter((d) => d.startsWith("-"))
-      .map((d) => d.slice(1).trim());
-    if (includes.length > 0) body.includeDomains = includes;
-    if (excludes.length > 0) body.excludeDomains = excludes;
-  }
+  const { include, exclude } = splitDomainFilter(options.domainFilter);
+  if (include.length > 0) body.includeDomains = include;
+  if (exclude.length > 0) body.excludeDomains = exclude;
 
   const timeoutSignal = AbortSignal.timeout(DEFAULT_TIMEOUT_MS);
   const combinedSignal = options.signal

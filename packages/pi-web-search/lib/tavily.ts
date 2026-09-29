@@ -1,4 +1,5 @@
 import { resolveTavilyConfig } from "./config.ts";
+import { splitDomainFilter } from "./domain-filter.ts";
 import type {
   FetchOptions,
   FetchResponse,
@@ -51,14 +52,9 @@ export async function searchTavily(
     include_answer: true,
   };
 
-  if (options.domainFilter?.length) {
-    const includes = options.domainFilter.filter((d) => !d.startsWith("-"));
-    const excludes = options.domainFilter
-      .filter((d) => d.startsWith("-"))
-      .map((d) => d.slice(1).trim());
-    if (includes.length > 0) body.include_domains = includes;
-    if (excludes.length > 0) body.exclude_domains = excludes;
-  }
+  const { include, exclude } = splitDomainFilter(options.domainFilter);
+  if (include.length > 0) body.include_domains = include;
+  if (exclude.length > 0) body.exclude_domains = exclude;
 
   const timeoutSignal = AbortSignal.timeout(DEFAULT_TIMEOUT_MS);
   const combinedSignal = options.signal

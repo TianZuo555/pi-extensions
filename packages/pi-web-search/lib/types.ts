@@ -6,6 +6,7 @@ export interface SearchResult {
 
 export interface SearchOptions {
   numResults?: number;
+  /** Domains to restrict results to; entries starting with "-" are excluded instead. */
   domainFilter?: string[];
   signal?: AbortSignal;
 }

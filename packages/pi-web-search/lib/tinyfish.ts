@@ -1,4 +1,5 @@
 import { resolveTinyfishConfig, resolveTinyfishFetchUrl } from "./config.ts";
+import { splitDomainFilter } from "./domain-filter.ts";
 import type {
   FetchOptions,
   FetchResponse,
@@ -35,11 +36,9 @@ export async function searchTinyfish(
 
   const url = new URL(config.baseUrl);
   url.searchParams.set("query", query);
-  const includes = options.domainFilter?.filter((d) => !d.startsWith("-")) ?? [];
-  const excludes =
-    options.domainFilter?.filter((d) => d.startsWith("-")).map((d) => d.slice(1).trim()) ?? [];
-  if (includes.length) url.searchParams.set("include_domains", includes.join(","));
-  if (excludes.length) url.searchParams.set("exclude_domains", excludes.join(","));
+  const { include, exclude } = splitDomainFilter(options.domainFilter);
+  if (include.length) url.searchParams.set("include_domains", include.join(","));
+  if (exclude.length) url.searchParams.set("exclude_domains", exclude.join(","));
 
   const timeout = AbortSignal.timeout(60_000);
   const res = await fetch(url, {
