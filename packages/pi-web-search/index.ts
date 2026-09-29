@@ -9,6 +9,7 @@ import {
   inspectOpenAICodexAuth,
   loadProviderKey,
   loadStoredConfig,
+  resolveBraveConfig,
   resolveDeepseekConfig,
   resolveExaConfig,
   resolveFetchChain,
@@ -16,8 +17,10 @@ import {
   resolveMonidConfig,
   resolveOllamaConfig,
   resolveOpenAIConfig,
+  resolveParallelConfig,
   resolveSearchChain,
   resolveTavilyConfig,
+  resolveTinyfishConfig,
   saveStoredConfig,
   writePiAuthKey,
 } from "./lib/config.ts";
@@ -51,6 +54,9 @@ const KEY_PROVIDERS = {
   firecrawl: "FIRECRAWL_API_KEY",
   tavily: "TAVILY_API_KEY",
   monid: "MONID_API_KEY",
+  brave: "BRAVE_API_KEY",
+  parallel: "PARALLEL_API_KEY",
+  tinyfish: "TINYFISH_API_KEY",
 } as const;
 
 type KeyProvider = keyof typeof KEY_PROVIDERS;
@@ -167,6 +173,12 @@ function providerDetail(
       return resolveFirecrawlConfig(config)?.source ?? "unconfigured";
     case "monid":
       return resolveMonidConfig(config)?.source ?? "unconfigured";
+    case "brave":
+      return resolveBraveConfig(config)?.source ?? "unconfigured";
+    case "parallel":
+      return resolveParallelConfig(config)?.source ?? "unconfigured";
+    case "tinyfish":
+      return resolveTinyfishConfig(config)?.source ?? "unconfigured";
     case "ollama":
       return resolveOllamaConfig(config).source;
     case "direct":
@@ -351,11 +363,11 @@ export default function webSearchExtension(pi: ExtensionAPI): void {
 
   pi.registerCommand("websearch-auth", {
     description:
-      "Configure web search providers: DeepSeek / Exa / Firecrawl / Tavily / Monid / Ollama API keys (stored in pi auth); openai is auto-detected — see /web-search",
+      "Configure web search providers: DeepSeek / Exa / Firecrawl / Tavily / Monid / Brave / Parallel / TinyFish / Ollama API keys; openai is auto-detected",
     handler: async (_args, ctx) => {
       if (!ctx.hasUI) {
         ctx.ui.notify(
-          "/websearch-auth needs an interactive session — set DEEPSEEK_API_KEY / EXA_API_KEY / FIRECRAWL_API_KEY / TAVILY_API_KEY / MONID_API_KEY / OLLAMA_API_KEY instead",
+          "/websearch-auth needs an interactive session — set the provider's API key via its environment variable instead",
           "warning",
         );
         return;
@@ -369,12 +381,15 @@ export default function webSearchExtension(pi: ExtensionAPI): void {
         providerLine("firecrawl", config),
         providerLine("tavily", config),
         providerLine("monid", config),
+        providerLine("brave", config),
+        providerLine("parallel", config),
+        providerLine("tinyfish", config),
         providerLine("ollama", config),
       ]);
       if (!provider) return;
       // Lines may start with an ANSI code; match on the provider name.
       const name = (
-        ["openai", "deepseek", "exa", "firecrawl", "tavily", "monid", "ollama"] as const
+        ["openai", "deepseek", "exa", "firecrawl", "tavily", "monid", "brave", "parallel", "tinyfish", "ollama"] as const
       ).find((n) => provider.includes(n));
       if (!name) return;
 

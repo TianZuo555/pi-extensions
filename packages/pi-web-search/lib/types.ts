@@ -58,7 +58,10 @@ export type SearchProviderName =
   | "tavily"
   | "firecrawl"
   | "ollama"
-  | "monid";
+  | "monid"
+  | "brave"
+  | "parallel"
+  | "tinyfish";
 export type FetchProviderName = "firecrawl" | "exa" | "tavily" | "ollama" | "monid" | "direct";
 
 export interface ProviderStatus {
@@ -115,6 +118,15 @@ export interface WebSearchConfig {
     baseUrl?: string;
   };
   monid?: {
+    baseUrl?: string;
+  };
+  brave?: {
+    baseUrl?: string;
+  };
+  parallel?: {
+    baseUrl?: string;
+  };
+  tinyfish?: {
     baseUrl?: string;
   };
 }
