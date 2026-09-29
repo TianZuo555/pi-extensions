@@ -24,6 +24,10 @@ export const DEFAULT_EXA_API_URL = "https://api.exa.ai";
 export const DEFAULT_FIRECRAWL_API_URL = "https://api.firecrawl.dev/v2";
 export const DEFAULT_TAVILY_API_URL = "https://api.tavily.com";
 export const DEFAULT_MONID_API_URL = "https://api.monid.ai";
+export const DEFAULT_BRAVE_API_URL = "https://api.search.brave.com/res/v1/web/search";
+export const DEFAULT_PARALLEL_API_URL = "https://api.parallel.ai";
+export const DEFAULT_TINYFISH_API_URL = "https://api.search.tinyfish.ai";
+export const DEFAULT_TINYFISH_FETCH_URL = "https://api.fetch.tinyfish.ai";
 
 interface PiAuthEntry {
   type?: string;
@@ -79,6 +83,9 @@ export const AUTH_IDS = {
   tavily: "websearch-tavily",
   ollama: "websearch-ollama",
   monid: "websearch-monid",
+  brave: "websearch-brave",
+  parallel: "websearch-parallel",
+  tinyfish: "websearch-tinyfish",
 } as const;
 
 export type AuthProviderId = (typeof AUTH_IDS)[keyof typeof AUTH_IDS];
@@ -89,7 +96,16 @@ function piAuthKey(id: AuthProviderId): string | undefined {
 
 /** Stored API key for a provider, read from pi's auth.json. */
 export function loadProviderKey(
-  name: "deepseek" | "exa" | "firecrawl" | "tavily" | "ollama" | "monid",
+  name:
+    | "deepseek"
+    | "exa"
+    | "firecrawl"
+    | "tavily"
+    | "ollama"
+    | "monid"
+    | "brave"
+    | "parallel"
+    | "tinyfish",
 ): string | undefined {
   return piAuthKey(AUTH_IDS[name]);
 }
@@ -460,6 +476,69 @@ export function resolveMonidConfig(config = loadStoredConfig()): ResolvedMonidCo
   };
 }
 
+export interface ResolvedKeyedSearchConfig {
+  apiKey: string;
+  baseUrl: string;
+  source: string;
+}
+
+function resolveKeyedSearchConfig(
+  name: "brave" | "parallel" | "tinyfish",
+  envName: string,
+  defaultBaseUrl: string,
+  baseUrl?: string,
+): ResolvedKeyedSearchConfig | null {
+  const envKey = process.env[envName]?.trim();
+  const authKey = piAuthKey(AUTH_IDS[name]);
+  const apiKey = envKey || authKey;
+  if (!apiKey) return null;
+  return {
+    apiKey,
+    baseUrl:
+      process.env[`${name.toUpperCase()}_BASE_URL`]?.trim() || baseUrl?.trim() || defaultBaseUrl,
+    source: envKey ? `${envName} env` : "~/.pi/agent/auth.json",
+  };
+}
+
+export function resolveBraveConfig(config = loadStoredConfig()): ResolvedKeyedSearchConfig | null {
+  return resolveKeyedSearchConfig(
+    "brave",
+    "BRAVE_API_KEY",
+    DEFAULT_BRAVE_API_URL,
+    config.brave?.baseUrl,
+  );
+}
+
+export function resolveParallelConfig(
+  config = loadStoredConfig(),
+): ResolvedKeyedSearchConfig | null {
+  return resolveKeyedSearchConfig(
+    "parallel",
+    "PARALLEL_API_KEY",
+    DEFAULT_PARALLEL_API_URL,
+    config.parallel?.baseUrl,
+  );
+}
+
+export function resolveTinyfishConfig(
+  config = loadStoredConfig(),
+): ResolvedKeyedSearchConfig | null {
+  return resolveKeyedSearchConfig(
+    "tinyfish",
+    "TINYFISH_API_KEY",
+    DEFAULT_TINYFISH_API_URL,
+    config.tinyfish?.baseUrl,
+  );
+}
+
+export function resolveTinyfishFetchUrl(config = loadStoredConfig()): string {
+  return (
+    process.env.TINYFISH_FETCH_URL?.trim() ||
+    config.tinyfish?.fetchUrl?.trim() ||
+    DEFAULT_TINYFISH_FETCH_URL
+  );
+}
+
 export function getProviderStatuses(ctx?: ExtensionContext): ProviderStatus[] {
   const config = loadStoredConfig();
   const openai = resolveOpenAIConfig(ctx, config);
@@ -469,6 +548,9 @@ export function getProviderStatuses(ctx?: ExtensionContext): ProviderStatus[] {
   const tavily = resolveTavilyConfig(config);
   const ollama = resolveOllamaConfig(config);
   const monid = resolveMonidConfig(config);
+  const brave = resolveBraveConfig(config);
+  const parallel = resolveParallelConfig(config);
+  const tinyfish = resolveTinyfishConfig(config);
 
   return [
     {
@@ -516,6 +598,27 @@ export function getProviderStatuses(ctx?: ExtensionContext): ProviderStatus[] {
       baseUrl: monid?.baseUrl,
     },
     {
+      name: "brave",
+      label: "Brave Search",
+      configured: !!brave,
+      source: brave?.source,
+      baseUrl: brave?.baseUrl,
+    },
+    {
+      name: "parallel",
+      label: "Parallel Search",
+      configured: !!parallel,
+      source: parallel?.source,
+      baseUrl: parallel?.baseUrl,
+    },
+    {
+      name: "tinyfish",
+      label: "TinyFish Search (direct)",
+      configured: !!tinyfish,
+      source: tinyfish?.source,
+      baseUrl: tinyfish?.baseUrl,
+    },
+    {
       name: "ollama",
       label: "Ollama (Local/Cloud)",
       configured: true,
@@ -557,6 +660,9 @@ export const SEARCH_PROVIDER_ORDER: readonly SearchProviderName[] = [
   "tavily",
   "ollama",
   "monid",
+  "brave",
+  "parallel",
+  "tinyfish",
 ];
 
 /** Canonical fallback order for fetch providers. Keyless Firecrawl leads;
@@ -567,6 +673,8 @@ export const FETCH_PROVIDER_ORDER: readonly FetchProviderName[] = [
   "tavily",
   "ollama",
   "monid",
+  "parallel",
+  "tinyfish",
   "direct",
 ];
 
@@ -580,6 +688,9 @@ export function availableSearchProviders(config = loadStoredConfig()): SearchPro
   if (resolveTavilyConfig(config)) list.push("tavily");
   list.push("ollama");
   if (resolveMonidConfig(config)) list.push("monid");
+  if (resolveBraveConfig(config)) list.push("brave");
+  if (resolveParallelConfig(config)) list.push("parallel");
+  if (resolveTinyfishConfig(config)) list.push("tinyfish");
   return list;
 }
 
@@ -591,6 +702,8 @@ export function availableFetchProviders(config = loadStoredConfig()): FetchProvi
   if (resolveTavilyConfig(config)) list.push("tavily");
   if (config.ollama || process.env.OLLAMA_HOST?.trim()) list.push("ollama");
   if (resolveMonidConfig(config)) list.push("monid");
+  if (resolveParallelConfig(config)) list.push("parallel");
+  if (resolveTinyfishConfig(config)) list.push("tinyfish");
   list.push("direct");
   return list;
 }

@@ -1,7 +1,7 @@
 # @tian.zuo/pi-web-search
 
 Web search and web fetch for the [pi coding agent](https://pi.dev). Two tools,
-seven providers plus a built-in keyless fetcher, automatic fallback — no single
+ten search providers plus a built-in keyless fetcher, automatic fallback — no single
 point of failure. **Works with zero configuration** thanks to Firecrawl's
 keyless tier (search + fetch, no signup).
 
@@ -65,6 +65,9 @@ fallback. The default chains still apply when you do not save a custom order.
 | `FIRECRAWL_API_KEY`              | Firecrawl search + fetch — optional: without a key, the keyless tier is used (1,000 free credits/mo; set `FIRECRAWL_KEYLESS=0` to disable) |
 | `TAVILY_API_KEY`                 | Tavily search **and** fetch — one key unlocks both tools (fetch uses Tavily Extract)                                                       |
 | `MONID_API_KEY`                  | Monid search + fetch — TinyFish endpoints via api.monid.ai, $0/call                                                                        |
+| `BRAVE_API_KEY`                  | Brave (search only)                                                                                                               |
+| `PARALLEL_API_KEY`               | Parallel search + fetch                                                                                                  |
+| `TINYFISH_API_KEY`               | TinyFish search + fetch                                                                      |
 | `OLLAMA_HOST` / `OLLAMA_API_KEY` | Ollama (default `http://localhost:11434`)                                                                                                  |
 
 …or `~/.pi/web-search.json` for non-secret options. Every key is optional — omit
@@ -95,7 +98,13 @@ credentialed):
   "firecrawl": { "baseUrl": "https://api.firecrawl.dev/v2", "keyless": true },
   "tavily": { "baseUrl": "https://api.tavily.com" },
   "ollama": { "baseUrl": "http://localhost:11434" },
-  "monid": { "baseUrl": "https://api.monid.ai" }
+  "monid": { "baseUrl": "https://api.monid.ai" },
+  "brave": { "baseUrl": "https://api.search.brave.com/res/v1/web/search" },
+  "parallel": { "baseUrl": "https://api.parallel.ai" },
+  "tinyfish": {
+    "baseUrl": "https://api.search.tinyfish.ai",
+    "fetchUrl": "https://api.fetch.tinyfish.ai"
+  }
 }
 ```
 
@@ -115,7 +124,7 @@ and `fetchOrder` arrays for you; use `tab` to switch between them.
 | :----------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `/web-search`      | Show provider status: detected credentials (incl. auto-detected OpenAI) and the active search/fetch fallback chains                                                         |
 | `/websearch-order` | Interactively reorder search and fetch fallback chains: tab switch • enter grab • ↑↓ move • enter save • esc cancel (saved as `searchOrder` and `fetchOrder`)                        |
-| `/websearch-auth`  | Interactive credential setup (DeepSeek / Exa / Firecrawl / Tavily / Monid / Ollama). OpenAI is listed read-only — it's auto-detected from your pi `/login` (Codex) or `OPENAI_API_KEY` |
+| `/websearch-auth`  | Interactive credential setup (DeepSeek / Exa / Firecrawl / Tavily / Monid / Brave / Parallel / TinyFish / Ollama). OpenAI is listed read-only — it's auto-detected from your pi `/login` (Codex) or `OPENAI_API_KEY` |
 | `/websearch-usage` | Show this session's per-provider usage (calls, failures, avg latency), providers on cooldown/blocked, and your Monid wallet balance with recent run costs                   |
 
 ## The tools
@@ -135,10 +144,11 @@ as `## Summary`).
   agentic multi-round search with page reads and a synthesized answer. Uses
   your pi DeepSeek login first, then `DEEPSEEK_API_KEY`. Slow (~15–40s) but
   cheap; domain filters are not supported by the upstream tool.
-- **Exa / Tavily / Firecrawl / Monid / Ollama**: native API calls. Exa, Tavily,
-  Firecrawl, and Monid keys each power **both** search and fetch.
+- **Exa / Tavily / Firecrawl / Monid / Ollama / Parallel / TinyFish**: native API calls.
+  Exa, Tavily, Firecrawl, Monid, Parallel, and TinyFish keys each power **both** search and fetch.
 - **Monid** (TinyFish via [api.monid.ai](https://monid.ai), $0/call):
   browser-rendered search — never-cached results with snippets and dates.
+- **Brave**: direct Brave Web Search with ranked URLs and snippets.
 
 ### `web_fetch`
 

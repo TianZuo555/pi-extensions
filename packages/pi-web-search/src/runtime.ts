@@ -23,6 +23,7 @@ import {
   SynchronizedRef,
 } from "effect";
 import { resolveFetchChainForUrl, resolveSearchChain } from "../lib/config.ts";
+import { searchBrave } from "../lib/brave.ts";
 import { searchDeepseek } from "../lib/deepseek.ts";
 import { fetchDirect } from "../lib/direct-fetch.ts";
 import { fetchExa, searchExa } from "../lib/exa.ts";
@@ -30,6 +31,8 @@ import { fetchFirecrawl, searchFirecrawl } from "../lib/firecrawl.ts";
 import { fetchMonid, searchMonid } from "../lib/monid.ts";
 import { fetchOllama, searchOllama } from "../lib/ollama.ts";
 import { searchOpenAI } from "../lib/openai.ts";
+import { fetchParallel, searchParallel } from "../lib/parallel.ts";
+import { fetchTinyfish, searchTinyfish } from "../lib/tinyfish.ts";
 import { fetchTavily, searchTavily } from "../lib/tavily.ts";
 import type {
   FetchOptions,
@@ -329,6 +332,12 @@ const makeWebSearchRuntime = Effect.gen(function* () {
                 return await searchMonid(query, searchOpts);
               case "ollama":
                 return await searchOllama(query, searchOpts);
+              case "brave":
+                return await searchBrave(query, searchOpts);
+              case "parallel":
+                return await searchParallel(query, searchOpts);
+              case "tinyfish":
+                return await searchTinyfish(query, searchOpts);
               default:
                 throw new Error(`Unsupported search provider: ${provider as string}`);
             }
@@ -366,6 +375,10 @@ const makeWebSearchRuntime = Effect.gen(function* () {
                   return fetchTavily(url, fetchOpts);
                 case "monid":
                   return fetchMonid(url, fetchOpts);
+                case "parallel":
+                  return fetchParallel(url, fetchOpts);
+                case "tinyfish":
+                  return fetchTinyfish(url, fetchOpts);
                 case "ollama":
                   return fetchOllama(url, fetchOpts);
                 case "direct":
