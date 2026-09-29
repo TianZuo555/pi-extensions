@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { hidePiAuthFile, stubPiAuthData } from "./helpers.ts";
+import { hidePiAuthFile, isolateProviderEnv, stubPiAuthData } from "./helpers.ts";
 import {
   DEFAULT_MONID_API_URL,
   DEFAULT_OPENAI_SYSTEM_PROMPT,
@@ -16,6 +16,8 @@ import {
   resolveSearchProvider,
   resolveTavilyConfig,
 } from "../lib/config.ts";
+
+isolateProviderEnv();
 
 test("resolveOpenAIConfig prefers pi's openai-codex login over OPENAI_API_KEY", () => {
   const originalEnv = process.env.OPENAI_API_KEY;

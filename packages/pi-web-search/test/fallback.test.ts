@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import test from "node:test";
-import { hidePiAuthFile, hideStoredConfig } from "./helpers.ts";
+import {
+  hidePiAuthFile,
+  hideStoredConfig,
+  isolateProviderEnv,
+  restoreProviderEnv as restoreEnv,
+  snapshotProviderEnv as snapshotEnv,
+} from "./helpers.ts";
 import type { FetchProviderName, SearchProviderName, WebSearchConfig } from "../lib/types.ts";
 import {
   classifyProviderFailure,
@@ -18,33 +24,7 @@ import {
   resolveSearchChain,
 } from "../lib/config.ts";
 
-const ENV_KEYS = [
-  "OPENAI_API_KEY",
-  "DEEPSEEK_API_KEY",
-  "DEEPSEEK_BASE_URL",
-  "EXA_API_KEY",
-  "FIRECRAWL_API_KEY",
-  "FIRECRAWL_KEYLESS",
-  "TAVILY_API_KEY",
-  "MONID_API_KEY",
-  "OLLAMA_HOST",
-  "OPENAI_BASE_URL",
-] as const;
-
-function snapshotEnv(): Record<string, string | undefined> {
-  return Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]));
-}
-
-function restoreEnv(snapshot: Record<string, string | undefined>): void {
-  for (const key of ENV_KEYS) {
-    const value = snapshot[key];
-    if (value === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = value;
-    }
-  }
-}
+isolateProviderEnv();
 
 interface MockControl {
   calls: string[];

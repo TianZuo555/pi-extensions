@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { hidePiAuthFile } from "./helpers.ts";
+import { hidePiAuthFile, isolateProviderEnv } from "./helpers.ts";
 import { searchExa, fetchExa } from "../lib/exa.ts";
 import { resetFirecrawlKeylessState, searchFirecrawl, fetchFirecrawl } from "../lib/firecrawl.ts";
 import { searchMonid, fetchMonid, getMonidWallet, listMonidRuns } from "../lib/monid.ts";
@@ -9,6 +9,8 @@ import { searchOpenAI } from "../lib/openai.ts";
 import { searchDeepseek } from "../lib/deepseek.ts";
 import { resolveOpenAIConfig } from "../lib/config.ts";
 import { searchTavily, fetchTavily } from "../lib/tavily.ts";
+
+isolateProviderEnv();
 
 test("searchOpenAI parses JSON Responses API output with citations", async () => {
   const originalFetch = globalThis.fetch;

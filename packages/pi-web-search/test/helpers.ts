@@ -3,8 +3,69 @@
  * resolution tests stay hermetic on machines with real stored logins
  * (e.g. openai-codex, websearch-exa). config.ts treats a read error as
  * "no auth file" and only reads paths ending in auth.json.
+ *
+ * The same goes for the environment: `isolateProviderEnv()` scrubs every
+ * variable the extension reads, so a developer who exports BRAVE_API_KEY (or
+ * any other provider key) does not change what the tests observe.
  */
 import fs from "node:fs";
+import { afterEach, beforeEach } from "node:test";
+
+/**
+ * Prefixes of every provider whose environment variables the extension reads
+ * (OPENAI_API_KEY, FIRECRAWL_KEYLESS, BRAVE_BASE_URL, TINYFISH_FETCH_URL, ...).
+ * A new provider needs one line here: env-hygiene.test.ts fails when the source
+ * reads a variable whose prefix is missing.
+ */
+export const PROVIDER_ENV_PREFIXES = [
+  "OPENAI_",
+  "DEEPSEEK_",
+  "EXA_",
+  "FIRECRAWL_",
+  "TAVILY_",
+  "MONID_",
+  "OLLAMA_",
+  "BRAVE_",
+  "PARALLEL_",
+  "TINYFISH_",
+] as const;
+
+function isProviderEnvName(name: string): boolean {
+  return PROVIDER_ENV_PREFIXES.some((prefix) => name.startsWith(prefix));
+}
+
+/** Provider variables currently set in the process environment. */
+export function snapshotProviderEnv(): Record<string, string> {
+  const snapshot: Record<string, string> = {};
+  for (const [name, value] of Object.entries(process.env)) {
+    if (value !== undefined && isProviderEnvName(name)) snapshot[name] = value;
+  }
+  return snapshot;
+}
+
+/** Make the provider variables exactly `snapshot`: drop the rest, put these back. */
+export function restoreProviderEnv(snapshot: Record<string, string>): void {
+  for (const name of Object.keys(process.env)) {
+    if (isProviderEnvName(name) && !(name in snapshot)) delete process.env[name];
+  }
+  Object.assign(process.env, snapshot);
+}
+
+/**
+ * Register hooks so every test in the calling file starts with no provider
+ * environment variables and gets the developer's values back afterwards.
+ * Call once at the top of a test file.
+ */
+export function isolateProviderEnv(): void {
+  let saved: Record<string, string> = {};
+  beforeEach(() => {
+    saved = snapshotProviderEnv();
+    restoreProviderEnv({});
+  });
+  afterEach(() => {
+    restoreProviderEnv(saved);
+  });
+}
 
 function isAuthPath(path: fs.PathOrFileDescriptor | fs.PathLike): boolean {
   return String(path).endsWith("auth.json");

@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { hideStoredConfig } from "./helpers.ts";
+import { hideStoredConfig, isolateProviderEnv } from "./helpers.ts";
 import { createWebSearchRuntime, runWebSearch, WebSearchRuntime } from "../src/runtime.ts";
+
+isolateProviderEnv();
 
 test("WebSearchRuntime search dispatches to resolved provider and returns results", async () => {
   const originalFetch = globalThis.fetch;
