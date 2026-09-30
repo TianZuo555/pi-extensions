@@ -96,7 +96,7 @@ const PROVIDERS: ProviderQuerySpec[] = [
   {
     id: CODEX_PROVIDER_ID,
     name: "OpenAI Codex",
-    configureHint: "sign in with /login and select OpenAI Codex",
+    configureHint: "sign in with /login and select OpenAI Codex (legacy)",
     hasLoginInfo: (ctx) => hasProviderLoginInfo(ctx, CODEX_PROVIDER_ID, hasCodexLoginInfo),
     resolve: (ctx) => resolveCodexToken(ctx),
     queryEffect: queryCodexUsageEffect,

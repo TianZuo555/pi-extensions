@@ -13,6 +13,11 @@ token and cost history pi records locally.
 a compact meter is shown in the footer whenever the active model belongs to a
 supported provider.
 
+Codex usage uses the `openai-codex` login — listed as **OpenAI Codex (legacy)**
+in `/login`. The newer **Sign in with ChatGPT** credential on the `openai`
+provider is an api.openai.com token that the ChatGPT usage endpoint does not
+accept, so it cannot report Codex usage.
+
 ```text
 OpenAI Codex · Plus
   5h limit:         [████████████████░░░░] 78% left · resets 14:20 on 27 Jul
