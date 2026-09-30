@@ -1,5 +1,21 @@
 # @tian.zuo/pi-web-search
 
+## 0.10.0
+
+### Minor Changes
+
+- [#122](https://github.com/TianZuo555/pi-extensions/pull/122) [`97ecf3c`](https://github.com/TianZuo555/pi-extensions/commit/97ecf3cd0b3420b83330b293e7bb9f21fbed57e2) Thanks [@justin8ty](https://github.com/justin8ty)! - Add Brave (search), Parallel (search + fetch) and TinyFish (search + fetch) as web providers. Set `BRAVE_API_KEY`, `PARALLEL_API_KEY` or `TINYFISH_API_KEY` (or use `/websearch-auth`); they join the fallback chains after Monid and can be reordered with `/websearch-order`. Brave returns plain-text snippets, Parallel searches in `fast` mode, and TinyFish honours `raw`, accepts cached pages no older than two days (Firecrawl's default) and gives each page 30 s before the chain moves on. `<NAME>_BASE_URL` and `TINYFISH_FETCH_URL` override the endpoints.
+
+### Patch Changes
+
+- [#133](https://github.com/TianZuo555/pi-extensions/pull/133) [`ae1cf78`](https://github.com/TianZuo555/pi-extensions/commit/ae1cf7848c0afe57355ed1641dc346c473d6ecbf) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Return structured results from grep/find, web_search/web_fetch, and terminal_log_read so code-mode scripts can filter matches, search hits, and log pages without parsing tool text. Keep the tools on the model's list; the model still sees the existing compact content.
+
+- [#125](https://github.com/TianZuo555/pi-extensions/pull/125) [`f8cc326`](https://github.com/TianZuo555/pi-extensions/commit/f8cc326b753d885f27c389be49b04413714e893d) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Detect pi's `/login` → "Sign in with ChatGPT" credential on the `openai` provider so OpenAI search works without `OPENAI_API_KEY`. The OAuth entry stores `access` (not `key`) under `openai` in `~/.pi/agent/auth.json`; expired tokens are skipped and the auth dialog now reports which OpenAI login is fresh or expired. Also fix token routing: both ChatGPT OAuth tokens embed the `https://api.openai.com/auth` JWT claim, so Codex-backend routing now keys off `chatgpt_account_id` — the direct OpenAI token correctly uses `api.openai.com/v1/responses` instead of being misrouted to `chatgpt.com`.
+
+- [#123](https://github.com/TianZuo555/pi-extensions/pull/123) [`170922a`](https://github.com/TianZuo555/pi-extensions/commit/170922a10c3b1829d634747f9fcb7b7824736700) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Include the successful provider in model-visible `web_fetch` results, matching `web_search` provider attribution. Previously the provider appeared only in UI details, so the agent could not identify it. Page, raw HTML/text, PDF, and fallback results now name the provider without changing their fetched content.
+
+- [#123](https://github.com/TianZuo555/pi-extensions/pull/123) [`170922a`](https://github.com/TianZuo555/pi-extensions/commit/170922a10c3b1829d634747f9fcb7b7824736700) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Stop the requested URL and target-site statuses from disabling providers. A fetch error that merely repeated the URL (`/issues/403`, `/Status/429`, `/credit-cards`) or the target's own HTTP status was read as a quota or rate-limit failure, so one such page took a provider out of the chain for the rest of the session — for search as well as fetch. The URL is now ignored when a failure is classified, and `direct`, which has no quota of its own, is never skipped.
+
 ## 0.9.0
 
 ### Minor Changes

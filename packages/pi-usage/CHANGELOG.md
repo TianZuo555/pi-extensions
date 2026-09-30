@@ -1,5 +1,13 @@
 # @tian.zuo/pi-usage
 
+## 0.4.1
+
+### Patch Changes
+
+- [#126](https://github.com/TianZuo555/pi-extensions/pull/126) [`d3a1ed0`](https://github.com/TianZuo555/pi-extensions/commit/d3a1ed0cef9a2fa37ef1343d66908a1cb4ae343b) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Point the Codex configure hint at the renamed **OpenAI Codex (legacy)** login and document it in the README: pi's `/login` → "Sign in with ChatGPT" on the `openai` provider issues an api.openai.com token that `chatgpt.com/backend-api/wham/usage` rejects (401), so only the `openai-codex` credential can report Codex usage.
+
+- [#133](https://github.com/TianZuo555/pi-extensions/pull/133) [`ae1cf78`](https://github.com/TianZuo555/pi-extensions/commit/ae1cf7848c0afe57355ed1641dc346c473d6ecbf) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Count nested tool-result usage, standalone usage entries, and compaction/branch-summary usage in `/tokens` so the dashboard matches pi's session totals, including code-mode classifier calls.
+
 ## 0.4.0
 
 ### Minor Changes

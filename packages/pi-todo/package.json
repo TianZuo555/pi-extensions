@@ -1,6 +1,6 @@
 {
   "name": "@tian.zuo/pi-todo",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Deprecated: session-local todo checklist for the pi coding agent. Prefer model-managed plans for simple work and shared task coordination only when needed.",
   "type": "module",
   "keywords": [
