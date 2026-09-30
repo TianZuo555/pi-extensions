@@ -164,9 +164,10 @@ as `## Summary`).
 
 ### `web_fetch`
 
-Reads web pages and PDFs as clean Markdown/text. To customize its fallback
-priority, open `/websearch-order` and press `tab` to switch from Search to
-Fetch.
+Reads web pages and PDFs as clean Markdown/text. Every result starts with
+`Fetched via <provider>.` so the agent can identify the provider that actually
+succeeded, including after a fallback. To customize its fallback priority,
+open `/websearch-order` and press `tab` to switch from Search to Fetch.
 
 - **Firecrawl** (`/v2/scrape`, `onlyMainContent` on): keyed or
   [keyless](https://www.firecrawl.dev/blog/firecrawl-keyless-launch) — a real
