@@ -24,7 +24,7 @@ entirely: keyless Firecrawl is the default, no key needed.
 ```text
  Configure provider:
 
- → openai    ✓ auto: pi login (openai-codex)
+ → openai    ✓ auto: pi login (openai)
    exa       • unconfigured
    firecrawl ✓ keyless (1,000 free credits/mo)
    tavily    • unconfigured
@@ -44,7 +44,7 @@ save both tabs. `esc` cancels all edits.
 
  ↑↓ navigate • enter grab • tab switch • esc cancel
 
- → openai    ✓ ~/.pi/agent/auth.json (openai-codex)
+ → openai    ✓ ~/.pi/agent/auth.json (openai)
    exa       ✓ EXA_API_KEY env
    firecrawl ✓ FIRECRAWL_API_KEY env (overflow after keyless credits)
    ollama    ✓ default localhost
@@ -59,7 +59,7 @@ fallback. The default chains still apply when you do not save a custom order.
 
 | Variable                         | Unlocks                                                                                                                                    |
 | :------------------------------- | :----------------------------------------------------------------------------------------------------------------------------------------- |
-| `OPENAI_API_KEY`                 | OpenAI search — your pi Codex/OpenAI login is used first; this key is only a fallback                                                      |
+| `OPENAI_API_KEY`                 | OpenAI search — your pi OpenAI (`/login` → Sign in with ChatGPT) or OpenAI Codex (legacy) login is used first; this key is only a fallback |
 | `DEEPSEEK_API_KEY`               | DeepSeek search (server-side `web_search`) — your pi DeepSeek login is used first; this key is only a fallback                             |
 | `EXA_API_KEY`                    | Exa search + fetch                                                                                                                         |
 | `FIRECRAWL_API_KEY`              | Firecrawl search + fetch — optional: without a key, the keyless tier is used (1,000 free credits/mo; set `FIRECRAWL_KEYLESS=0` to disable) |
@@ -124,7 +124,7 @@ and `fetchOrder` arrays for you; use `tab` to switch between them.
 | :----------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `/web-search`      | Show provider status: detected credentials (incl. auto-detected OpenAI) and the active search/fetch fallback chains                                                         |
 | `/websearch-order` | Interactively reorder search and fetch fallback chains: tab switch • enter grab • ↑↓ move • enter save • esc cancel (saved as `searchOrder` and `fetchOrder`)                        |
-| `/websearch-auth`  | Interactive credential setup (DeepSeek / Exa / Firecrawl / Tavily / Monid / Brave / Parallel / TinyFish / Ollama). OpenAI is listed read-only — it's auto-detected from your pi `/login` (Codex) or `OPENAI_API_KEY` |
+| `/websearch-auth`  | Interactive credential setup (DeepSeek / Exa / Firecrawl / Tavily / Monid / Brave / Parallel / TinyFish / Ollama). OpenAI is listed read-only — it's auto-detected from your pi `/login` (OpenAI or OpenAI Codex legacy) or `OPENAI_API_KEY` |
 | `/websearch-usage` | Show this session's per-provider usage (calls, failures, avg latency), providers on cooldown/blocked, and your Monid wallet balance with recent run costs                   |
 
 ## The tools

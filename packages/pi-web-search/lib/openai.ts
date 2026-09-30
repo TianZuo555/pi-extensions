@@ -257,7 +257,7 @@ export async function searchOpenAI(
   const auth = resolveOpenAIConfig(ctx);
   if (!auth) {
     throw new Error(
-      "OpenAI credentials not found. Set OPENAI_API_KEY, configure ~/.pi/web-search.json, or log into pi with Codex.",
+      "OpenAI credentials not found. Set OPENAI_API_KEY, configure ~/.pi/web-search.json, or sign in with pi's /login (OpenAI).",
     );
   }
 

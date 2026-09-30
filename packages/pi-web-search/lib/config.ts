@@ -162,9 +162,12 @@ function extractAccountId(token: string): string | undefined {
   return typeof id === "string" && id.trim().length > 0 ? id.trim() : undefined;
 }
 
+// Codex access tokens (the `openai-codex` provider's ChatGPT OAuth login)
+// carry a chatgpt_account_id inside the auth claim; the newer "Sign in with
+// ChatGPT" credential on the `openai` provider embeds the same claim but only
+// salt/metadata — it must hit api.openai.com, not the Codex backend.
 function isCodexJwt(token: string): boolean {
-  const payload = decodeJwtPayload(token);
-  return !!payload?.["https://api.openai.com/auth"];
+  return extractAccountId(token) !== undefined;
 }
 
 /**
@@ -252,6 +255,12 @@ export function resolveOpenAIConfig(
   }
 
   const openaiEntry = authData.openai;
+  // `openai` can be an oauth entry ("/login → Sign in with ChatGPT", stored as
+  // {type:"oauth", access, …}) or a plain api_key. The oauth token is a
+  // direct api.openai.com credential — isCodexJwt correctly excludes it.
+  if (openaiEntry?.access && isFreshTimestamp(openaiEntry.expires)) {
+    return fromKey(openaiEntry.access, "~/.pi/agent/auth.json (openai)");
+  }
   if (openaiEntry?.key?.trim()) {
     return fromKey(openaiEntry.key.trim(), "~/.pi/agent/auth.json (openai)");
   }
@@ -269,16 +278,28 @@ export function resolveOpenAIConfig(
   return null;
 }
 
-/** State of pi's `openai-codex` login entry in ~/.pi/agent/auth.json.
- * `expired` means the access token needs a fresh /login (pi refreshes it
- * lazily, only when a codex model is actually used for chat). */
-export type OpenAICodexAuthState = "fresh" | "expired" | "missing";
+/** State of pi's OpenAI OAuth logins in ~/.pi/agent/auth.json: the Codex
+ * (legacy) `openai-codex` entry and the newer `openai` "Sign in with ChatGPT"
+ * credential. `expired` means the access token needs a fresh /login (pi
+ * refreshes lazily, only when a matching model is actually used for chat). */
+export type OpenAIAuthState = "fresh" | "expired" | "missing";
 
-export function inspectOpenAICodexAuth(): { state: OpenAICodexAuthState; expires?: number } {
-  const entry = readPiAuthData()["openai-codex"];
-  if (!entry?.access) return { state: "missing" };
-  if (!isFreshTimestamp(entry.expires)) return { state: "expired", expires: entry.expires };
-  return { state: "fresh", expires: entry.expires };
+export function inspectOpenAIAuth(): {
+  state: OpenAIAuthState;
+  entry?: "openai-codex" | "openai";
+  expires?: number;
+} {
+  const data = readPiAuthData();
+  let expired: { entry: "openai-codex" | "openai"; expires?: number } | undefined;
+  for (const id of ["openai-codex", "openai"] as const) {
+    const entry = data[id];
+    if (!entry?.access) continue;
+    if (isFreshTimestamp(entry.expires)) {
+      return { state: "fresh", entry: id, expires: entry.expires };
+    }
+    expired ??= { entry: id, expires: entry.expires };
+  }
+  return expired ? { state: "expired", ...expired } : { state: "missing" };
 }
 
 export interface ResolvedDeepseekConfig {
