@@ -41,21 +41,24 @@ export interface PiToolInfo {
   name: string;
   description?: string;
   parameters?: unknown;
-  sourceInfo?: { source?: string };
+  sourceInfo?: { source?: string; path?: string };
 }
 
 /**
- * The only pi tools bridged into agy: those pi got from its MCP adapter
- * (gateway tools like `mcp`/`mcpScript` plus per-server direct tools),
- * identified by their package source. Everything else of pi's surface —
- * builtins and extension tools alike (ask_user, web_search, todo, …) — is
- * pi-session machinery agy must not mutate mid-turn; agy has native
- * equivalents for files, shell, and web. Skills are bridged separately as
- * one dynamic `pi__activate_skill` tool.
+ * The only pi tools bridged into agy: the tools pi's built-in MCP extension
+ * registers (`mcp__<server>__<tool>` plus the MCP resource tools), identified
+ * by their `builtin:mcp` source path. Only direct-exposure tools are active,
+ * so a server reaches agy by setting `"exposure": "direct"` in `mcp.json`;
+ * codemode/deferred tools stay pi-side (the bridge's calls execute as model
+ * tool calls, which pi resolves against the active tool set). Everything else
+ * of pi's surface — builtins and extension tools alike (ask_user, web_search,
+ * todo, …) — is pi-session machinery agy must not mutate mid-turn; agy has
+ * native equivalents for files, shell, and web. Skills are bridged separately
+ * as one dynamic `pi__activate_skill` tool.
  */
-const MCP_ADAPTER_SOURCE = /pi-mcp-adapter/;
+const BUILTIN_MCP_PATH = "builtin:mcp";
 
-/** Select the pi tools eligible for bridging (MCP adapter tools only). */
+/** Select the pi tools eligible for bridging (built-in MCP tools only). */
 export function selectBridgedTools(
   tools: PiToolInfo[],
   activeNames: readonly string[],
@@ -65,7 +68,7 @@ export function selectBridgedTools(
   for (const tool of tools) {
     if (!active.has(tool.name)) continue;
     if (tool.name === WRAPPER_TOOL_NAME) continue; // display-only replay wrapper
-    if (!MCP_ADAPTER_SOURCE.test(tool.sourceInfo?.source ?? "")) continue;
+    if (tool.sourceInfo?.path !== BUILTIN_MCP_PATH) continue;
     bridged.push({
       name: tool.name,
       description: tool.description ?? "",
