@@ -19,6 +19,7 @@ import {
   WEB_SEARCH_PARAMETER_DESCRIPTIONS,
   WEB_SEARCH_PROMPT_SNIPPET,
   WEB_SEARCH_TOOL_DESCRIPTION,
+  formatWebFetchProvider,
 } from "./prompt.ts";
 import type {
   FetchProviderName,
@@ -183,7 +184,7 @@ export async function executeFetch(
     { signal },
   );
 
-  const outputParts: string[] = [];
+  const outputParts: string[] = [formatWebFetchProvider(response.provider), ""];
   if (response.title) {
     outputParts.push(`# ${response.title}\n`);
   }

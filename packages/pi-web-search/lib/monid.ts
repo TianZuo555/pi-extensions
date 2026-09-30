@@ -1,4 +1,5 @@
 import { resolveMonidConfig } from "./config.ts";
+import { splitDomainFilter } from "./domain-filter.ts";
 import type {
   FetchOptions,
   FetchResponse,
@@ -142,14 +143,9 @@ export async function searchMonid(
   }
 
   const queryParams: Record<string, string> = { query };
-  if (options.domainFilter?.length) {
-    const includes = options.domainFilter.filter((d) => !d.startsWith("-"));
-    const excludes = options.domainFilter
-      .filter((d) => d.startsWith("-"))
-      .map((d) => d.slice(1).trim());
-    if (includes.length > 0) queryParams.include_domains = includes.join(",");
-    if (excludes.length > 0) queryParams.exclude_domains = excludes.join(",");
-  }
+  const { include, exclude } = splitDomainFilter(options.domainFilter);
+  if (include.length > 0) queryParams.include_domains = include.join(",");
+  if (exclude.length > 0) queryParams.exclude_domains = exclude.join(",");
 
   const data = await runMonid(
     config.apiKey,

@@ -18,6 +18,10 @@ export const WEB_SEARCH_PARAMETER_DESCRIPTIONS = {
 export const WEB_FETCH_TOOL_DESCRIPTION = "Fetch an HTTP(S) page or PDF as clean Markdown or text.";
 export const WEB_FETCH_PROMPT_SNIPPET = "Fetch a web page or PDF";
 
+export function formatWebFetchProvider(provider: string): string {
+  return `Fetched via ${provider}.`;
+}
+
 export const WEB_FETCH_PARAMETER_DESCRIPTIONS = {
   url: "HTTP(S) URL (web page or PDF).",
   raw: "Return raw HTML/text; default false. Ignored for PDFs.",

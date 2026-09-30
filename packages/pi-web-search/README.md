@@ -65,9 +65,9 @@ fallback. The default chains still apply when you do not save a custom order.
 | `FIRECRAWL_API_KEY`              | Firecrawl search + fetch — optional: without a key, the keyless tier is used (1,000 free credits/mo; set `FIRECRAWL_KEYLESS=0` to disable) |
 | `TAVILY_API_KEY`                 | Tavily search **and** fetch — one key unlocks both tools (fetch uses Tavily Extract)                                                       |
 | `MONID_API_KEY`                  | Monid search + fetch — TinyFish endpoints via api.monid.ai, $0/call                                                                        |
-| `BRAVE_API_KEY`                  | Brave (search only)                                                                                                               |
-| `PARALLEL_API_KEY`               | Parallel search + fetch                                                                                                  |
-| `TINYFISH_API_KEY`               | TinyFish search + fetch                                                                      |
+| `BRAVE_API_KEY`                  | Brave search (search only)                                                                                                                 |
+| `PARALLEL_API_KEY`               | Parallel search + fetch (fetch uses Parallel Extract)                                                                                      |
+| `TINYFISH_API_KEY`               | TinyFish search + fetch — the same backend as Monid, called directly with your own key                                                     |
 | `OLLAMA_HOST` / `OLLAMA_API_KEY` | Ollama (default `http://localhost:11434`)                                                                                                  |
 
 …or `~/.pi/web-search.json` for non-secret options. Every key is optional — omit
@@ -108,6 +108,11 @@ credentialed):
 }
 ```
 
+Every provider's endpoint can also be overridden with `<NAME>_BASE_URL` (for
+example `BRAVE_BASE_URL`; Ollama uses `OLLAMA_HOST`), and TinyFish's separate
+fetch endpoint with `TINYFISH_FETCH_URL`. The environment wins over the config
+file.
+
 `openai.reasoning` is optional: without it the search call follows the
 session's thinking level (via pi's model registry), falling back to the model
 default; set `"low"` to always search ~40% faster. `deepseek.reasoning`
@@ -144,17 +149,25 @@ as `## Summary`).
   agentic multi-round search with page reads and a synthesized answer. Uses
   your pi DeepSeek login first, then `DEEPSEEK_API_KEY`. Slow (~15–40s) but
   cheap; domain filters are not supported by the upstream tool.
-- **Exa / Tavily / Firecrawl / Monid / Ollama / Parallel / TinyFish**: native API calls.
-  Exa, Tavily, Firecrawl, Monid, Parallel, and TinyFish keys each power **both** search and fetch.
+- **Exa / Tavily / Firecrawl / Monid / Ollama**: native API calls. Exa, Tavily,
+  Firecrawl, and Monid keys each power **both** search and fetch.
 - **Monid** (TinyFish via [api.monid.ai](https://monid.ai), $0/call):
   browser-rendered search — never-cached results with snippets and dates.
-- **Brave**: direct Brave Web Search with ranked URLs and snippets.
+- **Brave** ([Brave Search API](https://brave.com/search/api/)): search only —
+  ranked URLs with plain-text snippets.
+- **Parallel** ([Search API](https://docs.parallel.ai/search/search-quickstart),
+  `fast` mode): LLM-optimized excerpts as snippets. One key powers search **and**
+  fetch.
+- **TinyFish** ([Search API](https://docs.tinyfish.ai/search-api)): the same
+  backend as Monid, called directly with your own key. One key powers search
+  **and** fetch.
 
 ### `web_fetch`
 
-Reads web pages and PDFs as clean Markdown/text. To customize its fallback
-priority, open `/websearch-order` and press `tab` to switch from Search to
-Fetch.
+Reads web pages and PDFs as clean Markdown/text. Every result starts with
+`Fetched via <provider>.` so the agent can identify the provider that actually
+succeeded, including after a fallback. To customize its fallback priority,
+open `/websearch-order` and press `tab` to switch from Search to Fetch.
 
 - **Firecrawl** (`/v2/scrape`, `onlyMainContent` on): keyed or
   [keyless](https://www.firecrawl.dev/blog/firecrawl-keyless-launch) — a real
@@ -162,6 +175,10 @@ Fetch.
   bot-blocked or starved of JavaScript. **Exa** (`/contents`), **Tavily**
   (`/extract`, markdown format), **Monid** (TinyFish `/fetch`: real-browser
   rendering, clean Markdown), **Ollama** (`/api/web_fetch`): native scrapers.
+  **Parallel** (`/v1/extract`, full-content Markdown) and **TinyFish**
+  ([Fetch API](https://docs.tinyfish.ai/fetch-api): the rendering Monid uses,
+  called directly; honours `raw` as HTML, and serves cached pages no older than
+  two days like Firecrawl) complete the set.
 - **Direct fetch** (the keyless fallback): plain HTTP GET, then main-content
   extraction with [Defuddle](https://github.com/kepano/defuddle) (the engine
   behind Obsidian Web Clipper) — navigation, sidebars, and cookie banners are
@@ -204,6 +221,11 @@ flowchart TB
     Next1 -- "no" --> Fail["error listing\nall failures"]
     Next2 -- "no" --> Fail
 ```
+
+Only the provider's own errors count. The requested URL is ignored when a
+failure is classified (a page such as `/issues/403` or `/credit-cards` is not a
+billing problem), and `direct`, which has no key or quota, is never skipped: a
+403 from the target site says nothing about whether `direct` works.
 
 ## Release notes
 

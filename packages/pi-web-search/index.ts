@@ -366,8 +366,9 @@ export default function webSearchExtension(pi: ExtensionAPI): void {
       "Configure web search providers: DeepSeek / Exa / Firecrawl / Tavily / Monid / Brave / Parallel / TinyFish / Ollama API keys; openai is auto-detected",
     handler: async (_args, ctx) => {
       if (!ctx.hasUI) {
+        const envNames = [...Object.values(KEY_PROVIDERS), "OLLAMA_API_KEY"].join(" / ");
         ctx.ui.notify(
-          "/websearch-auth needs an interactive session — set the provider's API key via its environment variable instead",
+          `/websearch-auth needs an interactive session — set ${envNames} instead`,
           "warning",
         );
         return;

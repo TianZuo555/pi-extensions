@@ -176,9 +176,15 @@ const makeWebSearchRuntime = Effect.gen(function* () {
       a.kind === b.kind ? a.provider.localeCompare(b.provider) : a.kind.localeCompare(b.kind),
     );
 
-  const recordBlock = (provider: string, failure: ProviderAttemptFailure) =>
+  const recordBlock = (provider: string, failure: ProviderAttemptFailure, echoed?: string) =>
     SynchronizedRef.update(healthRef, (health) => {
-      const failureClass = classifyProviderFailure(failure.message);
+      // `direct` has no key, quota or rate limit of its own: every HTTP status
+      // it reports belongs to the target site, so it never says anything about
+      // whether `direct` itself is usable.
+      if (provider === "direct") return health;
+      const failureClass = classifyProviderFailure(
+        echoed ? failure.message.replaceAll(echoed, " ") : failure.message,
+      );
       if (!failureClass) return health;
       const until =
         failureClass === "session" ? Number.POSITIVE_INFINITY : Date.now() + RATE_LIMIT_COOLDOWN_MS;
@@ -215,11 +221,17 @@ const makeWebSearchRuntime = Effect.gen(function* () {
    * session health map (when they look like quota/rate-limit errors) and the
    * next provider is tried; the first success wins and reports which
    * providers it fell back from.
+   *
+   * `echoed` is text that provider errors merely repeat back (the requested
+   * URL). It is removed before a failure is classified, so a URL such as
+   * `/issues/403` or `/credit-cards` is never mistaken for a 403 or a billing
+   * problem.
    */
   const runProviderChain = <P extends string, R extends { fallbacks?: ProviderFallback[] }>(
     kind: "search" | "fetch",
     chain: readonly P[],
     attempt: (provider: P) => Effect.Effect<R, ProviderAttemptFailure>,
+    echoed?: string,
   ): Effect.Effect<R, WebSearchError> => {
     const go = (
       remaining: readonly P[],
@@ -265,7 +277,7 @@ const makeWebSearchRuntime = Effect.gen(function* () {
               }),
             );
           }
-          return recordBlock(head, failure).pipe(
+          return recordBlock(head, failure, echoed).pipe(
             Effect.flatMap(() => go(tail, [...failures, failure])),
           );
         }),
@@ -402,6 +414,7 @@ const makeWebSearchRuntime = Effect.gen(function* () {
             userAborted: isUserAbort(err, options.signal),
           }),
         }),
+      url,
     );
 
   return WebSearchRuntime.of({

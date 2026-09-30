@@ -1,4 +1,5 @@
 import { resolveParallelConfig } from "./config.ts";
+import { splitDomainFilter } from "./domain-filter.ts";
 import type {
   FetchOptions,
   FetchResponse,
@@ -6,6 +7,13 @@ import type {
   SearchResponse,
   SearchResult,
 } from "./types.ts";
+
+/**
+ * Search mode. `fast` answers within about a second at the lowest price. The
+ * API default, `advanced`, is a slower multi-hop mode meant for background
+ * agents, which is the wrong trade for an interactive search tool.
+ */
+const SEARCH_MODE = "fast";
 
 interface ParallelSearchResponse {
   results?: Array<{ title?: string | null; url: string; excerpts?: string[] }>;
@@ -19,12 +27,10 @@ export async function searchParallel(
   if (!config)
     throw new Error("Parallel API key not found. Set PARALLEL_API_KEY or run /websearch-auth");
 
-  const includes = options.domainFilter?.filter((d) => !d.startsWith("-")) ?? [];
-  const excludes =
-    options.domainFilter?.filter((d) => d.startsWith("-")).map((d) => d.slice(1).trim()) ?? [];
+  const { include, exclude } = splitDomainFilter(options.domainFilter);
   const sourcePolicy = {
-    ...(includes.length ? { include_domains: includes } : {}),
-    ...(excludes.length ? { exclude_domains: excludes } : {}),
+    ...(include.length ? { include_domains: include } : {}),
+    ...(exclude.length ? { exclude_domains: exclude } : {}),
   };
   const advancedSettings = {
     ...(options.numResults ? { max_results: Math.min(options.numResults, 20) } : {}),
@@ -37,6 +43,7 @@ export async function searchParallel(
     body: JSON.stringify({
       objective: query,
       search_queries: [query],
+      mode: SEARCH_MODE,
       ...(Object.keys(advancedSettings).length ? { advanced_settings: advancedSettings } : {}),
     }),
     signal: options.signal ? AbortSignal.any([options.signal, timeout]) : timeout,
@@ -98,9 +105,9 @@ export async function fetchParallel(
   const data = (await res.json()) as ParallelExtractResponse;
   const error = data.errors?.find((item) => item.url === url);
   if (error) {
-    throw new Error(
-      `Parallel could not extract ${url}: ${error.error_type}${error.http_status_code ? ` (target HTTP ${error.http_status_code})` : ""}`,
-    );
+    // The target's own HTTP status stays out of the message: the runtime reads
+    // 402/403/429 in an error as this provider's quota or rate limit.
+    throw new Error(`Parallel could not extract ${url}: ${error.error_type}`);
   }
   const item = data.results?.find((result) => result.url === url);
   if (!item?.full_content?.trim()) {

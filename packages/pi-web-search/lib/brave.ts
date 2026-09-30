@@ -1,4 +1,5 @@
 import { resolveBraveConfig } from "./config.ts";
+import { splitDomainFilter } from "./domain-filter.ts";
 import type { SearchOptions, SearchResponse, SearchResult } from "./types.ts";
 
 interface BraveSearchResponse {
@@ -12,13 +13,11 @@ export async function searchBrave(
   const config = resolveBraveConfig();
   if (!config) throw new Error("Brave API key not found. Set BRAVE_API_KEY or run /websearch-auth");
 
-  const includes = options.domainFilter?.filter((d) => !d.startsWith("-")) ?? [];
-  const excludes =
-    options.domainFilter?.filter((d) => d.startsWith("-")).map((d) => d.slice(1).trim()) ?? [];
+  const { include, exclude } = splitDomainFilter(options.domainFilter);
   const scopedQuery = [
     query,
-    includes.length ? `(${includes.map((d) => `site:${d}`).join(" OR ")})` : "",
-    ...excludes.map((d) => `-site:${d}`),
+    include.length ? `(${include.map((d) => `site:${d}`).join(" OR ")})` : "",
+    ...exclude.map((d) => `-site:${d}`),
   ]
     .filter(Boolean)
     .join(" ");
@@ -26,6 +25,9 @@ export async function searchBrave(
   url.searchParams.set("q", scopedQuery);
   url.searchParams.set("count", String(Math.min(options.numResults ?? 8, 20)));
   url.searchParams.set("result_filter", "web");
+  // Brave wraps matched terms in <strong> tags unless told otherwise; the
+  // snippet goes straight to the model, which wants plain text.
+  url.searchParams.set("text_decorations", "false");
 
   const timeout = AbortSignal.timeout(60_000);
   const res = await fetch(url, {

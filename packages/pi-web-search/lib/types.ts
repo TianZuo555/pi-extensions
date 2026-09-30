@@ -6,6 +6,7 @@ export interface SearchResult {
 
 export interface SearchOptions {
   numResults?: number;
+  /** Domains to restrict results to; entries starting with "-" are excluded instead. */
   domainFilter?: string[];
   signal?: AbortSignal;
 }
@@ -129,13 +130,15 @@ export interface WebSearchConfig {
     baseUrl?: string;
   };
   brave?: {
+    /** Full URL of the Brave Web Search endpoint. */
     baseUrl?: string;
   };
   parallel?: {
+    /** API host; `/v1/search` and `/v1/extract` are appended. */
     baseUrl?: string;
   };
   tinyfish?: {
-    /** Search endpoint; fetch uses a separate endpoint. */
+    /** Full URL of the TinyFish Search endpoint (fetch has its own, see `fetchUrl`). */
     baseUrl?: string;
     /** Full URL of the TinyFish Fetch endpoint. */
     fetchUrl?: string;
