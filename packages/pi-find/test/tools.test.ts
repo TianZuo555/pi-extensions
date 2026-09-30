@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { FindParams, FindOutputSchema, GrepOutputSchema, GrepParams, grepStructuredContent } from "../lib/tools.ts";
+import {
+  FindParams,
+  FindOutputSchema,
+  GrepOutputSchema,
+  GrepParams,
+  grepStructuredContent,
+} from "../lib/tools.ts";
 import { boundedBody, fileRows, grepRows, resultText } from "../lib/results.ts";
 import {
   FIND_PARAMETER_DESCRIPTIONS,

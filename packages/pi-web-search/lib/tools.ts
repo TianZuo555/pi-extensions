@@ -55,9 +55,7 @@ const WebSearchHitSchema = Type.Object({
 export const WebSearchOutputSchema = Type.Object({
   query: Type.String({ description: WEB_SEARCH_OUTPUT_FIELD_DESCRIPTIONS.query }),
   provider: Type.String({ description: WEB_SEARCH_OUTPUT_FIELD_DESCRIPTIONS.provider }),
-  answer: Type.Optional(
-    Type.String({ description: WEB_SEARCH_OUTPUT_FIELD_DESCRIPTIONS.answer }),
-  ),
+  answer: Type.Optional(Type.String({ description: WEB_SEARCH_OUTPUT_FIELD_DESCRIPTIONS.answer })),
   results: Type.Array(WebSearchHitSchema, {
     description: WEB_SEARCH_OUTPUT_FIELD_DESCRIPTIONS.results,
   }),
@@ -88,9 +86,7 @@ export function webSearchStructuredContent(
       url: result.url,
       snippet: result.snippet,
     })),
-    ...(response.internalSources?.length
-      ? { internalSources: response.internalSources }
-      : {}),
+    ...(response.internalSources?.length ? { internalSources: response.internalSources } : {}),
     ...(response.fallbacks?.length
       ? { fallbackFrom: response.fallbacks.map((fallback) => fallback.provider) }
       : {}),
