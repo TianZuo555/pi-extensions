@@ -164,7 +164,7 @@ export class TokensPanel {
     lines.push(clip(` ${t.bold(t.fg("accent", title))}`, renderWidth));
     lines.push(
       clip(
-        ` ${t.fg("muted", `${this.snapshot.filesScanned} session files · dedup by message id`)}`,
+        ` ${t.fg("muted", `${this.snapshot.filesScanned} session files · dedup by entry id`)}`,
         renderWidth,
       ),
     );

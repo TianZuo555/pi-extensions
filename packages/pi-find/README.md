@@ -6,7 +6,9 @@ Simple, bounded `grep` and `find` tools for the [pi coding agent](https://pi.dev
 backed by ripgrep and fd.
 
 The extension reuses pi's built-in tool names, so the model sees one search
-surface instead of competing built-in and extension tools.
+surface instead of competing built-in and extension tools. Results stay compact
+text for the model; code-mode scripts receive structured `matches` / `files`
+arrays (same limits, plus `truncated` / `timedOut` flags) instead of that text.
 
 ## highlight 
 

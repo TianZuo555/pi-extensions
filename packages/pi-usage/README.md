@@ -49,7 +49,7 @@ bar chart, peak breakdown, and scrollable model rankings (up to top 10 models):
 ```text
 ────────────────────────────────────────────────────────────────────
  tokens · local pi usage
- 14 session files · dedup by message id
+ 14 session files · dedup by entry id
 
  1d [7d] 30d MTD
  ←/→ or h/l window · ↑/↓ or j/k scroll · 1-4 jump · Tab · Esc close
@@ -104,13 +104,16 @@ endpoints).
 
 pi records every assistant message's usage (input/output/cache tokens, total,
 and list-price cost) in session files under `~/.pi/agent/sessions/` (or
-`$PI_CODING_AGENT_DIR/sessions`). `/tokens` streams those JSONL files, filters
-assistant messages with usage, and deduplicates by message id so replayed or
-resumed copies (`repro.jsonl`, forks) are counted once. Files whose name-encoded
-start date is more than 7 days older than the window are skipped; non-standard
-names are always scanned. Cost is the model's list price recorded at request
-time — subscription plans (Codex, Copilot, GLM Coding Plan) may cover it, which
-the panel notes as _cost at list prices_.
+`$PI_CODING_AGENT_DIR/sessions`). `/tokens` streams those JSONL files and also
+counts nested model work on tool results (code-mode classifiers, tools that
+call models), standalone `usage` entries such as cache warming, and compaction
+/ branch-summary usage — the same sources pi's session totals use. Entries are
+deduplicated by id so replayed or resumed copies (`repro.jsonl`, forks) are
+counted once. Nested tool usage appears under `Tools/summaries`. Files whose
+name-encoded start date is more than 7 days older than the window are skipped;
+non-standard names are always scanned. Cost is the model's list price recorded
+at request time — subscription plans (Codex, Copilot, GLM Coding Plan) may
+cover it, which the panel notes as _cost at list prices_.
 
 ## Xiaomi MiMo setup
 

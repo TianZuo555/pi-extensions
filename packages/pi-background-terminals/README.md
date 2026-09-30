@@ -61,7 +61,9 @@ Behavior:
 There are no model-facing status, list, kill, polling, or stdin tools. The
 read-only `terminal_log_read` tool only pages an opaque archive ref emitted by
 `bash`; it returns at most 64 KiB per call, and 256 KiB across at most 8 reads
-per agent run. The user still owns terminal inspection and termination through
+per agent run. Code-mode scripts receive the page as structured fields (`text`,
+`offset`, `nextOffset`, …) so they can loop on `next_offset` without parsing the
+header line. The user still owns terminal inspection and termination through
 `/ps`.
 
 Terminal IDs include a random runtime identifier, so archive references from

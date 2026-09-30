@@ -1,5 +1,7 @@
 // Local token-history scan for /tokens: reads pi's session JSONL files under
-// <agentDir>/sessions and aggregates per-message usage records (tokens, cost).
+// <agentDir>/sessions and aggregates usage records (tokens, cost) from assistant
+// messages, nested tool-result usage, standalone usage entries, and compaction
+// / branch-summary usage — the same sources pi's session totals use.
 //
 // Runs inside the package's UsageRuntime ManagedRuntime graph like the provider
 // queries: per-file parsing is wrapped in Effect, files are read concurrently
@@ -10,7 +12,11 @@ import os from "node:os";
 import path from "node:path";
 import readline from "node:readline";
 import { Data, Effect } from "effect";
-import type { UsageRecord } from "../lib/tokens-model.ts";
+import {
+  NESTED_USAGE_MODEL,
+  NESTED_USAGE_PROVIDER,
+  type UsageRecord,
+} from "../lib/tokens-model.ts";
 
 export class LocalScanError extends Data.TaggedError("LocalScanError")<{
   readonly message: string;
@@ -144,15 +150,16 @@ function parseSessionFile(
         stream.destroy();
         return;
       }
-      // Cheap prefilter: usage only appears on assistant message records.
-      if (!line.startsWith('{"type":"message"') || !line.includes('"usage"')) return;
-      const record = parseUsageLine(line);
-      if (!record) {
+      // Cheap prefilter: usage-bearing entries always contain the key.
+      if (!line.includes('"usage"')) return;
+      const parsed = parseUsageLine(line);
+      if (parsed === "invalid") {
         parseErrors += 1;
         return;
       }
-      if (record.ts < options.sinceMs) return;
-      records.push(record);
+      if (parsed === undefined) return;
+      if (parsed.ts < options.sinceMs) return;
+      records.push(parsed);
     });
     rl.on("close", () => settle({ records, parseErrors }));
     rl.on("error", () => settle({ records, parseErrors }));
@@ -168,40 +175,27 @@ interface RawUsage {
   cost?: { total?: unknown };
 }
 
-interface RawMessageRecord {
-  type?: unknown;
-  id?: unknown;
-  timestamp?: unknown; // ISO string on the record envelope
-  message?: {
-    role?: unknown;
-    timestamp?: unknown; // epoch ms on the message
-    provider?: unknown;
-    model?: unknown;
-    usage?: RawUsage;
-  };
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function parseUsageLine(line: string): UsageRecord | undefined {
-  let parsed: RawMessageRecord;
-  try {
-    parsed = JSON.parse(line) as RawMessageRecord;
-  } catch {
-    return undefined;
-  }
-  const message = parsed.message;
-  if (message?.role !== "assistant" || !message.usage) return undefined;
-  const id = typeof parsed.id === "string" ? parsed.id : undefined;
-  if (!id) return undefined;
+function asUsage(value: unknown): RawUsage | undefined {
+  return isRecord(value) ? value : undefined;
+}
 
-  const ts = normalizeTimestamp(parsed.timestamp, message.timestamp);
-  if (ts === undefined) return undefined;
-
-  const usage = message.usage;
+function usageRecord(
+  id: string,
+  ts: number | undefined,
+  provider: string,
+  model: string,
+  usage: RawUsage,
+): UsageRecord | "invalid" {
+  if (ts === undefined) return "invalid";
   return {
     id,
     ts,
-    provider: typeof message.provider === "string" ? message.provider : "unknown",
-    model: typeof message.model === "string" ? message.model : "unknown",
+    provider,
+    model,
     inputTokens: toNumber(usage.input),
     outputTokens: toNumber(usage.output),
     cacheReadTokens: toNumber(usage.cacheRead),
@@ -209,6 +203,84 @@ function parseUsageLine(line: string): UsageRecord | undefined {
     totalTokens: toNumber(usage.totalTokens),
     costUSD: usage.cost ? toNumber(usage.cost.total) : 0,
   };
+}
+
+/**
+ * Countable usage follows pi's session totals: assistant messages, tool-result
+ * nested usage, standalone usage entries, and compaction / branch summaries.
+ * `"invalid"` is broken JSON or a countable entry missing required fields.
+ * `undefined` is a valid line that is not usage (skip without a parse error).
+ */
+function parseUsageLine(line: string): UsageRecord | undefined | "invalid" {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line);
+  } catch {
+    return "invalid";
+  }
+  if (!isRecord(parsed)) return "invalid";
+  const id = typeof parsed.id === "string" ? parsed.id : undefined;
+  const type = parsed.type;
+
+  if (type === "message") {
+    if (!isRecord(parsed.message)) return undefined;
+    const message = parsed.message;
+    const usage = asUsage(message.usage);
+    if (!usage) return undefined;
+    if (id === undefined) return "invalid";
+    if (message.role === "assistant") {
+      const model =
+        typeof message.responseModel === "string"
+          ? message.responseModel
+          : typeof message.model === "string"
+            ? message.model
+            : "unknown";
+      return usageRecord(
+        id,
+        normalizeTimestamp(parsed.timestamp, message.timestamp),
+        typeof message.provider === "string" ? message.provider : "unknown",
+        model,
+        usage,
+      );
+    }
+    if (message.role === "toolResult") {
+      return usageRecord(
+        id,
+        normalizeTimestamp(parsed.timestamp, message.timestamp),
+        NESTED_USAGE_PROVIDER,
+        NESTED_USAGE_MODEL,
+        usage,
+      );
+    }
+    return undefined;
+  }
+
+  if (type === "usage") {
+    const usage = asUsage(parsed.usage);
+    if (!usage || id === undefined) return "invalid";
+    return usageRecord(
+      id,
+      normalizeTimestamp(parsed.timestamp, undefined),
+      typeof parsed.provider === "string" ? parsed.provider : "unknown",
+      typeof parsed.model === "string" ? parsed.model : "unknown",
+      usage,
+    );
+  }
+
+  if (type === "compaction" || type === "branch_summary") {
+    const usage = asUsage(parsed.usage);
+    if (!usage) return undefined;
+    if (id === undefined) return "invalid";
+    return usageRecord(
+      id,
+      normalizeTimestamp(parsed.timestamp, undefined),
+      NESTED_USAGE_PROVIDER,
+      NESTED_USAGE_MODEL,
+      usage,
+    );
+  }
+
+  return undefined;
 }
 
 function normalizeTimestamp(envelope: unknown, message: unknown): number | undefined {

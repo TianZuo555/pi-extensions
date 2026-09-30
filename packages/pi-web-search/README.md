@@ -13,6 +13,9 @@ keyless tier (search + fetch, no signup).
 > 4 tools vs our 2. All the routing intelligence (fallback orders, keyless
 > ladders, quota handling) lives in extension code, not in the prompt, so the
 > model spends its attention on your code instead of reading tool manuals.
+>
+> Code-mode scripts receive structured results (`results[]` with snippets, or
+> fetched `text`) instead of the Markdown `content`.
 
 ## Configuration
 

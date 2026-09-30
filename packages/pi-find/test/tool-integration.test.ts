@@ -20,13 +20,23 @@ import { FILE_SIZE_LIMIT_NOTICE, HIDDEN_PATH_NOTICE, SLASH_GLOB_NOTICE } from ".
 
 interface CapturedTool {
   readonly name: string;
+  readonly outputSchema?: { properties?: Record<string, unknown> };
   readonly execute: (
     toolCallId: string,
     params: Record<string, unknown>,
     signal: AbortSignal | undefined,
     onUpdate: undefined,
     context: { cwd: string },
-  ) => Promise<AgentToolResult<SearchDetails>>;
+  ) => Promise<
+    AgentToolResult<SearchDetails> & {
+      structuredContent?: {
+        kind?: string;
+        resultCount?: number;
+        matches?: Array<{ path: string }>;
+        files?: string[];
+      };
+    }
+  >;
   readonly renderCall?: (args: unknown, theme: Theme) => Component;
   readonly renderResult?: (
     result: AgentToolResult<unknown>,
@@ -77,6 +87,8 @@ test("registered grep and find execute the narrow contracts", {
   const { runtime, tools } = captureTools();
   try {
     assert.deepEqual([...tools.keys()], ["grep", "find"]);
+    assert.ok(tools.get("grep")!.outputSchema);
+    assert.ok(tools.get("find")!.outputSchema);
 
     const grep = await tools
       .get("grep")!
@@ -86,12 +98,20 @@ test("registered grep and find execute the narrow contracts", {
     assert.match(text(grep), /^1 match in 1 file/);
     assert.match(text(grep), /src\/main\.ts\n1:/);
     assert.doesNotMatch(text(grep), /main\.js/);
+    assert.equal(grep.structuredContent?.kind, "grep");
+    assert.equal(grep.structuredContent?.resultCount, 1);
+    assert.deepEqual(
+      grep.structuredContent?.matches?.map((match) => match.path),
+      ["src/main.ts"],
+    );
 
     const find = await tools
       .get("find")!
       .execute("find", { pattern: "*.ts", path: "src" }, undefined, undefined, { cwd: root });
     assert.match(text(find), /^1 file/);
     assert.match(text(find), /src\/main\.ts/);
+    assert.equal(find.structuredContent?.kind, "find");
+    assert.deepEqual(find.structuredContent?.files, ["src/main.ts"]);
   } finally {
     await runtime.dispose();
     rmSync(root, { recursive: true, force: true });

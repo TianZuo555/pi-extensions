@@ -2,7 +2,15 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { AgentToolResult, ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import { type Component, visibleWidth } from "@earendil-works/pi-tui";
-import { registerTools, WebFetchParams, WebSearchParams } from "../lib/tools.ts";
+import {
+  registerTools,
+  WebFetchOutputSchema,
+  WebFetchParams,
+  WebSearchOutputSchema,
+  WebSearchParams,
+  webFetchStructuredContent,
+  webSearchStructuredContent,
+} from "../lib/tools.ts";
 import {
   DEFAULT_OPENAI_SYSTEM_PROMPT,
   WEB_FETCH_PROMPT_SNIPPET,
@@ -40,6 +48,58 @@ test("every web tool parameter has a description", () => {
       assert.ok((property as { description?: string }).description, `${name} has no description`);
     }
   }
+});
+
+test("code-mode output schemas describe every field", () => {
+  for (const schema of [WebSearchOutputSchema, WebFetchOutputSchema]) {
+    for (const [name, property] of Object.entries(schema.properties)) {
+      assert.ok((property as { description?: string }).description, `${name} has no description`);
+    }
+  }
+});
+
+test("web tools register output schemas for code-mode scripts", () => {
+  const tools = new Map<string, { outputSchema?: unknown }>();
+  registerTools({
+    registerTool(tool: { name: string; outputSchema?: unknown }) {
+      tools.set(tool.name, tool);
+    },
+  } as unknown as ExtensionAPI);
+  assert.equal(tools.get("web_search")?.outputSchema, WebSearchOutputSchema);
+  assert.equal(tools.get("web_fetch")?.outputSchema, WebFetchOutputSchema);
+});
+
+test("web search structured content keeps snippets for scripts", () => {
+  const structured = webSearchStructuredContent(
+    { query: "pi coding agent" },
+    {
+      query: "pi coding agent",
+      provider: "exa",
+      answer: "A coding agent.",
+      results: [{ title: "pi", url: "https://pi.dev", snippet: "terminal agent" }],
+      fallbacks: [{ provider: "openai", reason: "quota" }],
+    },
+  );
+  assert.equal(structured.provider, "exa");
+  assert.equal(structured.answer, "A coding agent.");
+  assert.equal(structured.results[0]?.snippet, "terminal agent");
+  assert.deepEqual(structured.fallbackFrom, ["openai"]);
+});
+
+test("web fetch structured content keeps extracted text for scripts", () => {
+  const structured = webFetchStructuredContent(
+    {
+      url: "https://example.com",
+      provider: "direct",
+      title: "Example",
+      text: "# Hello",
+      contentType: "text/html",
+    },
+    12,
+  );
+  assert.equal(structured.text, "# Hello");
+  assert.equal(structured.bytes, 12);
+  assert.equal(structured.contentType, "text/html");
 });
 
 test("model-facing web tool metadata stays concise", () => {

@@ -169,6 +169,7 @@ test("extension overrides bash, adds log reading, and keeps the user /ps command
   try {
     assert.deepEqual([...app.tools.keys()], ["bash", "terminal_log_read"]);
     assert.equal(app.tools.get("terminal_log_read").promptSnippet, "Read a terminal archive page");
+    assert.ok(app.tools.get("terminal_log_read").outputSchema);
     assert.equal(app.tools.get("terminal_log_read").promptGuidelines, undefined);
     assert.deepEqual([...app.commands.keys()], ["ps"]);
   } finally {
@@ -248,6 +249,13 @@ test("terminal_log_read resolves an opaque ref from bash", async () => {
     assert.match(page.content[0].text, /settled: yes/);
     assert.match(page.content[0].text, /complete: yes/);
     assert.match(page.content[0].text, /0123456789/);
+    assert.equal(page.structuredContent.text.slice(0, 10), "0123456789");
+    assert.equal(page.structuredContent.nextOffset, 1024);
+    assert.equal(
+      "text" in page.details && page.details.text !== undefined,
+      false,
+      "page text must not be duplicated into details",
+    );
   } finally {
     await app.shutdown();
   }

@@ -68,6 +68,19 @@ export const TERMINAL_LOG_READ_PARAMETER_DESCRIPTIONS = {
   limit: "Page bytes; default maximum.",
 };
 
+/** Field text on `terminal_log_read` `outputSchema` (code-mode scripts, not the model). */
+export const TERMINAL_LOG_READ_OUTPUT_FIELD_DESCRIPTIONS = {
+  id: "Background terminal id.",
+  stream: "stdout or stderr.",
+  offset: "Start byte of this page.",
+  nextOffset: "Byte to pass as offset for the next page.",
+  bytesRead: "Bytes in this page.",
+  size: "Total archive size in bytes.",
+  settled: "True when the command has exited.",
+  complete: "True when the archive has the full stream.",
+  text: "Page text. Empty when this range has no output.",
+};
+
 export const TERMINAL_ERRORS = {
   emptyCommand: "command must not be empty.",
   invalidTimeout: `timeout must be a finite number of seconds in (0, ${MAX_RUNTIME_TIMEOUT_SECONDS}].`,

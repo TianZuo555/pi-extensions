@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { FindParams, GrepParams } from "../lib/tools.ts";
+import { FindParams, FindOutputSchema, GrepOutputSchema, GrepParams, grepStructuredContent } from "../lib/tools.ts";
 import { boundedBody, fileRows, grepRows, resultText } from "../lib/results.ts";
 import {
   FIND_PARAMETER_DESCRIPTIONS,
@@ -109,6 +109,63 @@ test("every public parameter carries a description", () => {
       assert.ok(JSON.stringify(property).includes("description"), `${name} lacks description`);
     }
   }
+});
+
+test("code-mode output schemas describe every field", () => {
+  for (const schema of [GrepOutputSchema, FindOutputSchema]) {
+    for (const [name, property] of Object.entries(schema.properties)) {
+      assert.ok(JSON.stringify(property).includes("description"), `${name} lacks description`);
+    }
+  }
+  assert.deepEqual(Object.keys(GrepOutputSchema.properties), [
+    "kind",
+    "output",
+    "query",
+    "resultCount",
+    "fileCount",
+    "truncated",
+    "timedOut",
+    "unreadable",
+    "matches",
+    "files",
+    "notices",
+  ]);
+  assert.deepEqual(Object.keys(FindOutputSchema.properties), [
+    "kind",
+    "query",
+    "resultCount",
+    "truncated",
+    "timedOut",
+    "unreadable",
+    "files",
+    "notices",
+  ]);
+});
+
+test("grep structured content lists collected matches for scripts", () => {
+  const structured = grepStructuredContent(
+    { pattern: "needle" },
+    {
+      ...outcome([
+        ["src/a.ts", 1, "needle a"],
+        ["src/b.ts", 4, "needle b"],
+      ]),
+      timedOut: false,
+      truncated: true,
+    },
+    { truncated: true, unreadable: false },
+    [{ id: "result_limit", text: "limit" }],
+  );
+  assert.equal(structured.kind, "grep");
+  assert.equal(structured.output, "content");
+  assert.equal(structured.resultCount, 2);
+  assert.deepEqual(
+    structured.matches.map((match) => match.path),
+    ["src/a.ts", "src/b.ts"],
+  );
+  assert.deepEqual(structured.files, ["src/a.ts", "src/b.ts"]);
+  assert.deepEqual(structured.notices, ["result_limit"]);
+  assert.equal(structured.truncated, true);
 });
 
 test("model-facing metadata stays concise and explains defaults and budgets", () => {

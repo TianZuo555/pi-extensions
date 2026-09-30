@@ -63,6 +63,7 @@ import {
   buildTerminalResultBatchMessage,
   deriveCommandTitle,
   describeTerminal,
+  TERMINAL_LOG_READ_OUTPUT_FIELD_DESCRIPTIONS,
   TERMINAL_LOG_READ_PARAMETER_DESCRIPTIONS,
   TERMINAL_LOG_READ_PROMPT_SNIPPET,
   TERMINAL_LOG_READ_TOOL_DESCRIPTION,
@@ -80,6 +81,20 @@ const SESSION_ENV_KEYS = [
   "PI_MODEL",
   "PI_REASONING_LEVEL",
 ] as const;
+
+const TerminalLogReadOutputSchema = Type.Object({
+  id: Type.String({ description: TERMINAL_LOG_READ_OUTPUT_FIELD_DESCRIPTIONS.id }),
+  stream: Type.Union([Type.Literal("stdout"), Type.Literal("stderr")], {
+    description: TERMINAL_LOG_READ_OUTPUT_FIELD_DESCRIPTIONS.stream,
+  }),
+  offset: Type.Integer({ description: TERMINAL_LOG_READ_OUTPUT_FIELD_DESCRIPTIONS.offset }),
+  nextOffset: Type.Integer({ description: TERMINAL_LOG_READ_OUTPUT_FIELD_DESCRIPTIONS.nextOffset }),
+  bytesRead: Type.Integer({ description: TERMINAL_LOG_READ_OUTPUT_FIELD_DESCRIPTIONS.bytesRead }),
+  size: Type.Integer({ description: TERMINAL_LOG_READ_OUTPUT_FIELD_DESCRIPTIONS.size }),
+  settled: Type.Boolean({ description: TERMINAL_LOG_READ_OUTPUT_FIELD_DESCRIPTIONS.settled }),
+  complete: Type.Boolean({ description: TERMINAL_LOG_READ_OUTPUT_FIELD_DESCRIPTIONS.complete }),
+  text: Type.String({ description: TERMINAL_LOG_READ_OUTPUT_FIELD_DESCRIPTIONS.text }),
+});
 
 type CompactTerminalStatus = TerminalStatus | "starting";
 
@@ -681,6 +696,7 @@ export function createBackgroundTerminalsExtension(
           }),
         ),
       }),
+      outputSchema: TerminalLogReadOutputSchema,
       executionMode: "sequential",
       // One compact row: the page itself is for the model, and /ps remains the
       // human viewer. Rendering a 64 KiB page into the transcript would bury it.
@@ -739,8 +755,20 @@ export function createBackgroundTerminalsExtension(
         return {
           content: [{ type: "text", text: formatTerminalLogRead(result) }],
           // The page text is already in content; repeating it here would store
-          // every read twice in the session file.
+          // every read twice in the session file. Code-mode scripts read
+          // structuredContent instead of content, so the page lives there.
           details: { ...result, text: undefined },
+          structuredContent: {
+            id: result.id,
+            stream: result.stream,
+            offset: result.offset,
+            nextOffset: result.nextOffset,
+            bytesRead: result.bytesRead,
+            size: result.size,
+            settled: result.settled,
+            complete: result.complete,
+            text: result.text,
+          },
         };
       },
     });

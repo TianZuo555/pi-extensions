@@ -94,6 +94,79 @@ test("scanLocalUsage skips files started long before the window but keeps nonsta
   fs.rmSync(root, { recursive: true, force: true });
 });
 
+test("scanLocalUsage includes nested tool, usage-entry, and compaction totals", async () => {
+  const now = Date.now();
+  const iso = new Date(now - HOUR).toISOString();
+  const usage = {
+    input: 10,
+    output: 5,
+    cacheRead: 0,
+    cacheWrite: 0,
+    totalTokens: 15,
+    cost: { total: 0.02 },
+  };
+  const root = fixtureDir({
+    "--project--": [
+      sessionLine("asst", now - HOUR, { responseModel: "gpt-5.6-resolved" }),
+      JSON.stringify({
+        type: "message",
+        id: "nested",
+        timestamp: iso,
+        message: {
+          role: "toolResult",
+          toolCallId: "c1",
+          toolName: "codemode",
+          content: [],
+          usage,
+          timestamp: now - HOUR,
+        },
+      }),
+      JSON.stringify({
+        type: "usage",
+        id: "warm",
+        timestamp: iso,
+        kind: "cache_warm",
+        provider: "anthropic",
+        model: "claude-sonnet-4-5",
+        usage: { ...usage, totalTokens: 50, cacheRead: 50, input: 0, output: 0, cost: { total: 0.03 } },
+      }),
+      JSON.stringify({
+        type: "compaction",
+        id: "comp",
+        timestamp: iso,
+        summary: "earlier work",
+        firstKeptEntryId: "asst",
+        tokensBefore: 8000,
+        usage: { ...usage, totalTokens: 20, cost: { total: 0.01 } },
+      }),
+      JSON.stringify({
+        type: "custom",
+        id: "noise",
+        timestamp: iso,
+        customType: "other",
+        data: { usage: 1 },
+      }),
+    ],
+  });
+
+  const { Effect } = await import("effect");
+  const scan = await Effect.runPromise(
+    scanLocalUsage({ sessionsDir: root, sinceMs: now - 30 * 24 * HOUR }),
+  );
+  fs.rmSync(root, { recursive: true, force: true });
+
+  assert.equal(scan.parseErrors, 0);
+  const byId = Object.fromEntries(scan.records.map((record) => [record.id, record]));
+  assert.equal(byId.asst?.model, "gpt-5.6-resolved");
+  assert.equal(byId.nested?.provider, "Tools");
+  assert.equal(byId.nested?.model, "summaries");
+  assert.equal(byId.nested?.totalTokens, 15);
+  assert.equal(byId.warm?.provider, "anthropic");
+  assert.equal(byId.warm?.totalTokens, 50);
+  assert.equal(byId.comp?.totalTokens, 20);
+  assert.equal(scan.records.length, 4);
+});
+
 test("sessionFileStartMs parses pi session filenames", () => {
   const ms = sessionFileStartMs(
     "2026-08-11T07-15-43-671Z_019fefad-5bb7-712a-919a-a71d64ee97ce.jsonl",

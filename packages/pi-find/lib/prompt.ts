@@ -31,6 +31,32 @@ export const FIND_PARAMETER_DESCRIPTIONS = {
   path: "Directory; defaults to cwd; name hidden paths explicitly ('.github').",
 };
 
+/** Field text on grep/find `outputSchema` (code-mode scripts, not the model). */
+export const GREP_OUTPUT_FIELD_DESCRIPTIONS = {
+  kind: 'Always "grep".',
+  output: "Matching lines, or file paths only.",
+  query: "The search pattern.",
+  resultCount: "Matches (content) or files (files mode) in this result.",
+  fileCount: "Unique file paths in this result.",
+  truncated: "True when a result or output limit bound.",
+  timedOut: "True when the search hit the time budget.",
+  unreadable: "True when some paths could not be read.",
+  matches: "Matching lines; empty in files mode.",
+  files: "Matching file paths. Content mode lists unique match paths.",
+  notices: "Stable notice ids (hidden_path, timeout, …).",
+};
+
+export const FIND_OUTPUT_FIELD_DESCRIPTIONS = {
+  kind: 'Always "find".',
+  query: "The file glob.",
+  resultCount: "Files in this result.",
+  truncated: "True when a result or output limit bound.",
+  timedOut: "True when the search hit the time budget.",
+  unreadable: "True when some paths could not be read.",
+  files: "Matching file paths.",
+  notices: "Stable notice ids (hidden_path, timeout, …).",
+};
+
 export const QUOTED_PATH_NOTICE = "[JSON-decode quoted paths before read/edit.]";
 export const FILE_SIZE_LIMIT_NOTICE = "[Files >4 MiB are skipped during traversal.]";
 export const HIDDEN_PATH_NOTICE =
