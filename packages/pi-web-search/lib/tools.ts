@@ -13,9 +13,11 @@ import {
   type WebSearchRuntimeInstance,
 } from "../src/runtime.ts";
 import {
+  WEB_FETCH_OUTPUT_FIELD_DESCRIPTIONS,
   WEB_FETCH_PARAMETER_DESCRIPTIONS,
   WEB_FETCH_PROMPT_SNIPPET,
   WEB_FETCH_TOOL_DESCRIPTION,
+  WEB_SEARCH_OUTPUT_FIELD_DESCRIPTIONS,
   WEB_SEARCH_PARAMETER_DESCRIPTIONS,
   WEB_SEARCH_PROMPT_SNIPPET,
   WEB_SEARCH_TOOL_DESCRIPTION,
@@ -43,6 +45,53 @@ export const WebSearchParams = Type.Object({
 });
 
 export type WebSearchInput = Static<typeof WebSearchParams>;
+
+const WebSearchHitSchema = Type.Object({
+  title: Type.String({ description: "Result title." }),
+  url: Type.String({ description: "Result URL." }),
+  snippet: Type.String({ description: "Snippet or empty string." }),
+});
+
+export const WebSearchOutputSchema = Type.Object({
+  query: Type.String({ description: WEB_SEARCH_OUTPUT_FIELD_DESCRIPTIONS.query }),
+  provider: Type.String({ description: WEB_SEARCH_OUTPUT_FIELD_DESCRIPTIONS.provider }),
+  answer: Type.Optional(Type.String({ description: WEB_SEARCH_OUTPUT_FIELD_DESCRIPTIONS.answer })),
+  results: Type.Array(WebSearchHitSchema, {
+    description: WEB_SEARCH_OUTPUT_FIELD_DESCRIPTIONS.results,
+  }),
+  internalSources: Type.Optional(
+    Type.Array(Type.String(), {
+      description: WEB_SEARCH_OUTPUT_FIELD_DESCRIPTIONS.internalSources,
+    }),
+  ),
+  fallbackFrom: Type.Optional(
+    Type.Array(Type.String(), {
+      description: WEB_SEARCH_OUTPUT_FIELD_DESCRIPTIONS.fallbackFrom,
+    }),
+  ),
+});
+
+export type WebSearchStructuredContent = Static<typeof WebSearchOutputSchema>;
+
+export function webSearchStructuredContent(
+  params: WebSearchInput,
+  response: SearchResponse,
+): WebSearchStructuredContent {
+  return {
+    query: params.query,
+    provider: response.provider,
+    ...(response.answer ? { answer: response.answer } : {}),
+    results: response.results.map((result) => ({
+      title: result.title,
+      url: result.url,
+      snippet: result.snippet,
+    })),
+    ...(response.internalSources?.length ? { internalSources: response.internalSources } : {}),
+    ...(response.fallbacks?.length
+      ? { fallbackFrom: response.fallbacks.map((fallback) => fallback.provider) }
+      : {}),
+  };
+}
 
 export interface WebSearchDetails {
   query: string;
@@ -74,6 +123,45 @@ export const WebFetchParams = Type.Object({
 });
 
 export type WebFetchInput = Static<typeof WebFetchParams>;
+
+export const WebFetchOutputSchema = Type.Object({
+  url: Type.String({ description: WEB_FETCH_OUTPUT_FIELD_DESCRIPTIONS.url }),
+  provider: Type.String({ description: WEB_FETCH_OUTPUT_FIELD_DESCRIPTIONS.provider }),
+  title: Type.Optional(Type.String({ description: WEB_FETCH_OUTPUT_FIELD_DESCRIPTIONS.title })),
+  text: Type.String({ description: WEB_FETCH_OUTPUT_FIELD_DESCRIPTIONS.text }),
+  contentType: Type.Optional(
+    Type.String({ description: WEB_FETCH_OUTPUT_FIELD_DESCRIPTIONS.contentType }),
+  ),
+  bytes: Type.Integer({ description: WEB_FETCH_OUTPUT_FIELD_DESCRIPTIONS.bytes }),
+  pages: Type.Optional(Type.Integer({ description: WEB_FETCH_OUTPUT_FIELD_DESCRIPTIONS.pages })),
+  savedTo: Type.Optional(Type.String({ description: WEB_FETCH_OUTPUT_FIELD_DESCRIPTIONS.savedTo })),
+  fallbackFrom: Type.Optional(
+    Type.Array(Type.String(), {
+      description: WEB_FETCH_OUTPUT_FIELD_DESCRIPTIONS.fallbackFrom,
+    }),
+  ),
+});
+
+export type WebFetchStructuredContent = Static<typeof WebFetchOutputSchema>;
+
+export function webFetchStructuredContent(
+  response: FetchResponse,
+  bytes: number,
+): WebFetchStructuredContent {
+  return {
+    url: response.url,
+    provider: response.provider,
+    ...(response.title ? { title: response.title } : {}),
+    text: response.text,
+    ...(response.contentType ? { contentType: response.contentType } : {}),
+    bytes,
+    ...(response.pages ? { pages: response.pages } : {}),
+    ...(response.savedTo ? { savedTo: response.savedTo } : {}),
+    ...(response.fallbacks?.length
+      ? { fallbackFrom: response.fallbacks.map((fallback) => fallback.provider) }
+      : {}),
+  };
+}
 
 /**
  * Shared error renderer: failed tool calls carry the error text in content
@@ -113,7 +201,11 @@ export async function executeSearch(
   signal: AbortSignal | undefined,
   ctx: ExtensionContext,
   runtime?: WebSearchRuntimeInstance | (() => WebSearchRuntimeInstance),
-): Promise<{ text: string; details: WebSearchDetails }> {
+): Promise<{
+  text: string;
+  details: WebSearchDetails;
+  structuredContent: WebSearchStructuredContent;
+}> {
   const searchRuntime =
     typeof runtime === "function" ? runtime() : (runtime ?? createWebSearchRuntime());
   const searchService = searchRuntime.runSync(WebSearchRuntime);
@@ -162,14 +254,18 @@ export async function executeSearch(
       : undefined,
   };
 
-  return { text, details };
+  return { text, details, structuredContent: webSearchStructuredContent(params, response) };
 }
 
 export async function executeFetch(
   params: WebFetchInput,
   signal: AbortSignal | undefined,
   runtime?: WebSearchRuntimeInstance | (() => WebSearchRuntimeInstance),
-): Promise<{ text: string; details: WebFetchDetails }> {
+): Promise<{
+  text: string;
+  details: WebFetchDetails;
+  structuredContent: WebFetchStructuredContent;
+}> {
   const searchRuntime =
     typeof runtime === "function" ? runtime() : (runtime ?? createWebSearchRuntime());
   const searchService = searchRuntime.runSync(WebSearchRuntime);
@@ -191,11 +287,12 @@ export async function executeFetch(
   outputParts.push(response.text);
 
   const text = outputParts.join("\n");
+  const bytes = Buffer.byteLength(text, "utf-8");
   const details: WebFetchDetails = {
     url: response.url,
     provider: response.provider,
     title: response.title,
-    bytes: Buffer.byteLength(text, "utf-8"),
+    bytes,
     pages: response.pages,
     savedTo: response.savedTo,
     fallbackFrom: response.fallbacks?.length
@@ -203,7 +300,7 @@ export async function executeFetch(
       : undefined,
   };
 
-  return { text, details };
+  return { text, details, structuredContent: webFetchStructuredContent(response, bytes) };
 }
 
 export function registerTools(
@@ -216,13 +313,20 @@ export function registerTools(
     description: WEB_SEARCH_TOOL_DESCRIPTION,
     promptSnippet: WEB_SEARCH_PROMPT_SNIPPET,
     parameters: WebSearchParams,
+    outputSchema: WebSearchOutputSchema,
 
     async execute(_toolCallId, params: WebSearchInput, signal, _onUpdate, ctx) {
       const activeRuntime = typeof runtime === "function" ? runtime() : runtime;
-      const { text, details } = await executeSearch(params, signal, ctx, activeRuntime);
+      const { text, details, structuredContent } = await executeSearch(
+        params,
+        signal,
+        ctx,
+        activeRuntime,
+      );
       return {
         content: [{ type: "text" as const, text }],
         details,
+        structuredContent,
       };
     },
 
@@ -274,13 +378,19 @@ export function registerTools(
     description: WEB_FETCH_TOOL_DESCRIPTION,
     promptSnippet: WEB_FETCH_PROMPT_SNIPPET,
     parameters: WebFetchParams,
+    outputSchema: WebFetchOutputSchema,
 
     async execute(_toolCallId, params: WebFetchInput, signal) {
       const activeRuntime = typeof runtime === "function" ? runtime() : runtime;
-      const { text, details } = await executeFetch(params, signal, activeRuntime);
+      const { text, details, structuredContent } = await executeFetch(
+        params,
+        signal,
+        activeRuntime,
+      );
       return {
         content: [{ type: "text" as const, text }],
         details,
+        structuredContent,
       };
     },
 

@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { FindParams, GrepParams } from "../lib/tools.ts";
+import {
+  FindParams,
+  FindOutputSchema,
+  GrepOutputSchema,
+  GrepParams,
+  grepStructuredContent,
+  findStructuredContent,
+} from "../lib/tools.ts";
 import { boundedBody, fileRows, grepRows, resultText } from "../lib/results.ts";
 import {
   FIND_PARAMETER_DESCRIPTIONS,
@@ -107,6 +114,105 @@ test("every public parameter carries a description", () => {
   for (const schema of [GrepParams, FindParams]) {
     for (const [name, property] of Object.entries(schema.properties)) {
       assert.ok(JSON.stringify(property).includes("description"), `${name} lacks description`);
+    }
+  }
+});
+
+test("code-mode output schemas describe every field", () => {
+  for (const schema of [GrepOutputSchema, FindOutputSchema]) {
+    for (const [name, property] of Object.entries(schema.properties)) {
+      assert.ok(JSON.stringify(property).includes("description"), `${name} lacks description`);
+    }
+  }
+  assert.deepEqual(Object.keys(GrepOutputSchema.properties), [
+    "kind",
+    "output",
+    "query",
+    "resultCount",
+    "fileCount",
+    "truncated",
+    "timedOut",
+    "unreadable",
+    "matches",
+    "files",
+    "notices",
+  ]);
+  assert.deepEqual(Object.keys(FindOutputSchema.properties), [
+    "kind",
+    "query",
+    "resultCount",
+    "truncated",
+    "timedOut",
+    "unreadable",
+    "files",
+    "notices",
+  ]);
+});
+
+test("structured paths are documented as directly usable cwd-relative or absolute paths", () => {
+  const { description } = GrepOutputSchema.properties.matches.items.properties.path as {
+    description?: string;
+  };
+  assert.ok(description);
+  assert.match(description, /relative to cwd/);
+  assert.match(description, /absolute/);
+  assert.doesNotMatch(description, /relative to the search root/);
+});
+
+test("grep structured content lists collected matches for scripts", () => {
+  const structured = grepStructuredContent(
+    { pattern: "needle" },
+    {
+      ...outcome([
+        ["src/a.ts", 1, "needle a"],
+        ["src/b.ts", 4, "needle b"],
+      ]),
+      timedOut: false,
+      truncated: true,
+    },
+    [{ id: "result_limit", text: "limit" }],
+  );
+  assert.equal(structured.kind, "grep");
+  assert.equal(structured.output, "content");
+  assert.equal(structured.resultCount, 2);
+  assert.deepEqual(
+    structured.matches.map((match) => match.path),
+    ["src/a.ts", "src/b.ts"],
+  );
+  assert.deepEqual(structured.files, ["src/a.ts", "src/b.ts"]);
+  assert.deepEqual(structured.notices, ["result_limit"]);
+  assert.equal(structured.truncated, true);
+});
+
+test("structured search flags preserve result loss, timeout, and unreadable paths", () => {
+  const cases: Array<{
+    patch: Partial<GrepOutcome>;
+    truncated: boolean;
+    timedOut: boolean;
+    unreadable: boolean;
+  }> = [
+    { patch: {}, truncated: false, timedOut: false, unreadable: false },
+    { patch: { truncated: true }, truncated: true, timedOut: false, unreadable: false },
+    { patch: { skippedRecords: 1 }, truncated: true, timedOut: false, unreadable: false },
+    { patch: { timedOut: true }, truncated: false, timedOut: true, unreadable: false },
+    {
+      patch: { pathError: "permission denied" },
+      truncated: false,
+      timedOut: false,
+      unreadable: true,
+    },
+  ];
+  for (const { patch, truncated, timedOut, unreadable } of cases) {
+    const search = { ...outcome([["src/a.ts", 1, "needle"]]), ...patch };
+    const results = [
+      grepStructuredContent({ pattern: "needle" }, search, []),
+      findStructuredContent({ pattern: "*.ts" }, search, []),
+    ];
+    for (const result of results) {
+      assert.equal(result.truncated, truncated);
+      assert.equal(result.timedOut, timedOut);
+      assert.equal(result.unreadable, unreadable);
+      assert.equal(result.resultCount, 1);
     }
   }
 });

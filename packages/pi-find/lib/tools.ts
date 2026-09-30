@@ -7,12 +7,15 @@ import { type Static, Type } from "typebox";
 import {
   AUTO_CONTEXT_NOTICE,
   FILE_SIZE_LIMIT_NOTICE,
+  FIND_OUTPUT_FIELD_DESCRIPTIONS,
   FIND_PARAMETER_DESCRIPTIONS,
   FIND_PROMPT_SNIPPET,
   FIND_RESULT_LIMIT,
   FIND_TOOL_DESCRIPTION,
   findResultHeader,
   GREP_FILE_LIMIT,
+  GREP_MATCH_FIELD_DESCRIPTIONS,
+  GREP_OUTPUT_FIELD_DESCRIPTIONS,
   GREP_PARAMETER_DESCRIPTIONS,
   GREP_PROMPT_SNIPPET,
   GREP_RESULT_LIMIT,
@@ -36,6 +39,9 @@ import {
   isExplicitHiddenPath,
   runSearch,
   SearchRuntime,
+  type FindOutcome,
+  type GrepMatch,
+  type GrepOutcome,
   type SearchRuntimeInstance,
 } from "../src/runtime.ts";
 import { MAX_RECORD_BYTES } from "../src/stream.ts";
@@ -45,6 +51,11 @@ import { boundedBody, fileRows, grepRows, resultText } from "./results.ts";
 const notice = (id: NoticeId, text: string): Notice => ({ id, text });
 const texts = (notices: readonly Notice[]) => notices.map((entry) => entry.text);
 const ids = (notices: readonly Notice[]) => notices.map((entry) => entry.id);
+/** Structured data has no text-output truncation, quoted display paths, or context rows. */
+const structuredNoticeIds = (notices: readonly Notice[]) =>
+  ids(notices).filter(
+    (id) => id !== "output_limit" && id !== "quoted_path" && id !== "auto_context",
+  );
 
 /**
  * Explain an empty result caused by a slash glob. Only fires when the glob
@@ -105,6 +116,95 @@ export const FindParams = Type.Object({
 
 export type FindInput = Static<typeof FindParams>;
 
+const GrepMatchSchema = Type.Object({
+  path: Type.String({ description: GREP_MATCH_FIELD_DESCRIPTIONS.path }),
+  lineNumber: Type.Integer({ description: GREP_MATCH_FIELD_DESCRIPTIONS.lineNumber }),
+  text: Type.String({ description: GREP_MATCH_FIELD_DESCRIPTIONS.text }),
+});
+
+export const GrepOutputSchema = Type.Object({
+  kind: Type.Literal("grep", { description: GREP_OUTPUT_FIELD_DESCRIPTIONS.kind }),
+  output: StringEnum(["content", "files"] as const, {
+    description: GREP_OUTPUT_FIELD_DESCRIPTIONS.output,
+  }),
+  query: Type.String({ description: GREP_OUTPUT_FIELD_DESCRIPTIONS.query }),
+  resultCount: Type.Integer({ description: GREP_OUTPUT_FIELD_DESCRIPTIONS.resultCount }),
+  fileCount: Type.Integer({ description: GREP_OUTPUT_FIELD_DESCRIPTIONS.fileCount }),
+  truncated: Type.Boolean({ description: GREP_OUTPUT_FIELD_DESCRIPTIONS.truncated }),
+  timedOut: Type.Boolean({ description: GREP_OUTPUT_FIELD_DESCRIPTIONS.timedOut }),
+  unreadable: Type.Boolean({ description: GREP_OUTPUT_FIELD_DESCRIPTIONS.unreadable }),
+  matches: Type.Array(GrepMatchSchema, { description: GREP_OUTPUT_FIELD_DESCRIPTIONS.matches }),
+  files: Type.Array(Type.String(), { description: GREP_OUTPUT_FIELD_DESCRIPTIONS.files }),
+  notices: Type.Array(Type.String(), { description: GREP_OUTPUT_FIELD_DESCRIPTIONS.notices }),
+});
+
+export type GrepStructuredContent = Static<typeof GrepOutputSchema>;
+
+export const FindOutputSchema = Type.Object({
+  kind: Type.Literal("find", { description: FIND_OUTPUT_FIELD_DESCRIPTIONS.kind }),
+  query: Type.String({ description: FIND_OUTPUT_FIELD_DESCRIPTIONS.query }),
+  resultCount: Type.Integer({ description: FIND_OUTPUT_FIELD_DESCRIPTIONS.resultCount }),
+  truncated: Type.Boolean({ description: FIND_OUTPUT_FIELD_DESCRIPTIONS.truncated }),
+  timedOut: Type.Boolean({ description: FIND_OUTPUT_FIELD_DESCRIPTIONS.timedOut }),
+  unreadable: Type.Boolean({ description: FIND_OUTPUT_FIELD_DESCRIPTIONS.unreadable }),
+  files: Type.Array(Type.String(), { description: FIND_OUTPUT_FIELD_DESCRIPTIONS.files }),
+  notices: Type.Array(Type.String(), { description: FIND_OUTPUT_FIELD_DESCRIPTIONS.notices }),
+});
+
+export type FindStructuredContent = Static<typeof FindOutputSchema>;
+
+function uniqueMatchPaths(matches: readonly GrepMatch[]): string[] {
+  const files: string[] = [];
+  const seen = new Set<string>();
+  for (const match of matches) {
+    if (seen.has(match.path)) continue;
+    seen.add(match.path);
+    files.push(match.path);
+  }
+  return files;
+}
+
+export function grepStructuredContent(
+  params: GrepInput,
+  outcome: GrepOutcome,
+  notices: readonly Notice[],
+): GrepStructuredContent {
+  const filesOnly = outcome.output === "files";
+  const files = filesOnly ? [...outcome.files] : uniqueMatchPaths(outcome.matches);
+  const matches = filesOnly ? [] : outcome.matches.map((match) => ({ ...match }));
+  return {
+    kind: "grep",
+    output: outcome.output,
+    query: params.pattern,
+    resultCount: filesOnly ? files.length : matches.length,
+    fileCount: files.length,
+    truncated: outcome.truncated || outcome.skippedRecords > 0,
+    timedOut: outcome.timedOut,
+    unreadable: outcome.pathError !== undefined,
+    matches,
+    files,
+    notices: structuredNoticeIds(notices),
+  };
+}
+
+export function findStructuredContent(
+  params: FindInput,
+  outcome: FindOutcome,
+  notices: readonly Notice[],
+): FindStructuredContent {
+  const files = [...outcome.files];
+  return {
+    kind: "find",
+    query: params.pattern,
+    resultCount: files.length,
+    truncated: outcome.truncated || outcome.skippedRecords > 0,
+    timedOut: outcome.timedOut,
+    unreadable: outcome.pathError !== undefined,
+    files,
+    notices: structuredNoticeIds(notices),
+  };
+}
+
 export interface SearchDetails {
   readonly kind: "grep" | "find";
   readonly output?: "content" | "files";
@@ -124,6 +224,7 @@ export function registerTools(pi: ExtensionAPI, runtime: SearchRuntimeInstance):
     description: GREP_TOOL_DESCRIPTION,
     promptSnippet: GREP_PROMPT_SNIPPET,
     parameters: GrepParams,
+    outputSchema: GrepOutputSchema,
 
     execute(toolCallId, params: GrepInput, signal, _onUpdate, ctx) {
       return withSearchLog({ tool: "grep", toolCallId, params, ctx }, async () => {
@@ -197,6 +298,7 @@ export function registerTools(pi: ExtensionAPI, runtime: SearchRuntimeInstance):
               timedOut: outcome.timedOut,
               unreadable,
             } satisfies SearchDetails,
+            structuredContent: grepStructuredContent(params, outcome, notices),
           },
           stats: {
             resultCount: body.resultCount,
@@ -248,6 +350,7 @@ export function registerTools(pi: ExtensionAPI, runtime: SearchRuntimeInstance):
     description: FIND_TOOL_DESCRIPTION,
     promptSnippet: FIND_PROMPT_SNIPPET,
     parameters: FindParams,
+    outputSchema: FindOutputSchema,
 
     execute(toolCallId, params: FindInput, signal, _onUpdate, ctx) {
       return withSearchLog({ tool: "find", toolCallId, params, ctx }, async () => {
@@ -294,6 +397,7 @@ export function registerTools(pi: ExtensionAPI, runtime: SearchRuntimeInstance):
               timedOut: outcome.timedOut,
               unreadable,
             } satisfies SearchDetails,
+            structuredContent: findStructuredContent(params, outcome, notices),
           },
           stats: {
             resultCount: count,

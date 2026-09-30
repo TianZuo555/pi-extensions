@@ -6,7 +6,12 @@ Simple, bounded `grep` and `find` tools for the [pi coding agent](https://pi.dev
 backed by ripgrep and fd.
 
 The extension reuses pi's built-in tool names, so the model sees one search
-surface instead of competing built-in and extension tools.
+surface instead of competing built-in and extension tools. Results stay compact
+text for the model; code-mode scripts receive structured `matches` / `files`
+arrays instead of that text. Structured results keep every collected match/file
+within the same result-count and line-length limits, independently of the compact
+text byte budget. Their flags and notices describe the structured data, so
+text-only truncation does not mark a complete structured search as truncated.
 
 ## highlight 
 
@@ -106,12 +111,15 @@ find(pattern, path?)
   buffered, and the result says so. Explicitly named files bypass
   ripgrep's traversal size cap, so this is what keeps a search of a
   single-line bundle, sourcemap, or lockfile from ballooning memory.
-- Search output also has a hard byte limit, and running searches are
-  cancellable.
-- Relative result paths can be passed directly to pi's `read` and `edit` tools.
-  Paths containing control characters, backslashes, or quotes are JSON-quoted;
-  decode the JSON string before using them. Newlines in filenames do not create
-  extra find results.
+- Model-facing text also has a hard byte limit, and running searches are
+  cancellable. Structured arrays can exceed that text budget; `truncated`
+  reports omitted results from the count cap or skipped oversized records,
+  while `timedOut` and `unreadable` report other incomplete searches.
+- Result paths are relative to cwd, or absolute for an absolute search path,
+  and can be passed directly to pi's `read` and `edit` tools. In text output,
+  paths containing control characters, backslashes, or quotes are JSON-quoted;
+  decode the JSON string before using them. Structured paths are already
+  decoded. Newlines in filenames do not create extra find results.
 - Timeouts are marked as partial, including when no results were gathered.
   Unexpected process termination is an error, not a completed empty search.
 - Directories that cannot be read (for example, permission denied) are

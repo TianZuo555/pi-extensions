@@ -14,7 +14,11 @@ export const WINDOW_LABELS: Record<WindowKey, string> = {
   mtd: "Month to date",
 };
 
-/** One aggregated usage record source: a single assistant message with usage. */
+/** Matches pi's session cost bucket for nested tool and summary usage. */
+export const NESTED_USAGE_PROVIDER = "Tools";
+export const NESTED_USAGE_MODEL = "summaries";
+
+/** One aggregated usage record: an assistant message or other usage-bearing session entry. */
 export interface UsageRecord {
   readonly id: string;
   readonly ts: number;
