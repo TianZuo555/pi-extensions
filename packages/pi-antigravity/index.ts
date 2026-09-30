@@ -409,6 +409,15 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
    * 2026-08-21) — so this runs as soon as an Antigravity model is selected.
    */
   async function ensureBridgeRegistered(ui?: ExtensionUIContext): Promise<void> {
+    // Commands catch adapters that have not registered any server tools yet;
+    // use source metadata rather than tool names, and include inactive tools.
+    const resources = probeCtx(() => [...pi.getAllTools(), ...pi.getCommands()]);
+    if (!resources.stale) {
+      bridgeManager.warnMcpAdapterUnsupported(
+        resources.value,
+        ui ? (warning) => ui.notify(warning, "warning") : undefined,
+      );
+    }
     await bridgeManager.ensureRegistered((warning) => ui?.notify(warning, "warning"));
   }
 

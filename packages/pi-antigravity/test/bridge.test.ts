@@ -509,6 +509,61 @@ test("selectBridgedTools bridges only built-in MCP tools", () => {
   assert.deepEqual(bridged, ["mcp__github__search_issues", "read_mcp_resource"]);
 });
 
+test("adapter migration warning detects package and local sources without matching tool names", () => {
+  const cases = [
+    { source: "npm:pi-mcp-adapter", expected: true },
+    { source: "npm:pi-mcp-adapter@2", expected: true },
+    { source: "git:github.com/nicobailon/pi-mcp-adapter", expected: true },
+    { source: "local", path: "/extensions/pi-mcp-adapter/index.ts", expected: true },
+    { source: "local", path: "C:\\extensions\\pi-mcp-adapter\\index.ts", expected: true },
+    { source: "local", path: "/extensions/pi-mcp-adapter.ts", expected: true },
+    { source: "builtin", path: "builtin:mcp", expected: false },
+    { source: "npm:pi-mcp-adapter-helper", expected: false },
+    { source: "npm:other-pi-mcp-adapter", expected: false },
+    { expected: false },
+  ];
+  for (const { expected, ...sourceInfo } of cases) {
+    const warnings: string[] = [];
+    const manager = createBridgeLifecycleManager({
+      bridge: new AgyPiBridge(),
+      bridgeToken: "test-token",
+      addMcpServer: async () => {},
+      removeMcpServer: async () => {},
+      evictMcpCache: async () => {},
+      notifyWarning: (message) => warnings.push(message),
+    });
+    // An empty snapshot does not consume the one-time warning.
+    manager.warnMcpAdapterUnsupported([]);
+    const resources = [{ name: "mcp", sourceInfo }];
+    manager.warnMcpAdapterUnsupported(resources);
+    manager.warnMcpAdapterUnsupported(resources);
+    assert.equal(warnings.length, expected ? 1 : 0, JSON.stringify(sourceInfo));
+    if (expected) {
+      assert.match(warnings[0], /not bridged to agy/);
+      assert.match(warnings[0], /Remove or disable pi-mcp-adapter/);
+      assert.match(warnings[0], /mcp\.json/);
+      assert.match(warnings[0], /"exposure": "direct"/);
+      assert.match(warnings[0], /\/reload/);
+    }
+  }
+});
+
+test("adapter migration warning waits for a notification sink", () => {
+  const manager = createBridgeLifecycleManager({
+    bridge: new AgyPiBridge(),
+    bridgeToken: "test-token",
+    addMcpServer: async () => {},
+    removeMcpServer: async () => {},
+    evictMcpCache: async () => {},
+  });
+  const resources = [{ sourceInfo: { source: "npm:pi-mcp-adapter" } }];
+  manager.warnMcpAdapterUnsupported(resources);
+  const warnings: string[] = [];
+  manager.warnMcpAdapterUnsupported(resources, (message) => warnings.push(message));
+  manager.warnMcpAdapterUnsupported(resources, (message) => warnings.push(message));
+  assert.equal(warnings.length, 1);
+});
+
 test("createBridgeLifecycleManager handles start-success/add-failure, retry, teardown, and fallback", async () => {
   const bridge = new AgyPiBridge("pi-bridge-lifecycle");
   let mcpAddShouldFail = true;
@@ -625,6 +680,8 @@ test("createBridgeLifecycleManager respects disabled setting", async () => {
   assert.equal(addCalled, false, "did not attempt MCP registration");
   assert.equal(manager.isRunning(), false);
   assert.equal(manager.isRegistered(), false);
+  manager.warnMcpAdapterUnsupported([{ sourceInfo: { source: "npm:pi-mcp-adapter" } }]);
+  assert.equal(warnings.length, 0, "disabled bridges do not suggest migrating MCP servers");
   // Bridge disabled: the user hears about unreachable pi-private skills once.
   manager.warnSkillsUnavailable(skills);
   manager.warnSkillsUnavailable(skills);
