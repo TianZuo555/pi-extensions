@@ -44,9 +44,15 @@ for (const shutdown of [false, true]) {
         manager.start({ command: command(script), cwd: dir, title: "redirected tree" }),
       );
       const deadline = Date.now() + 5_000;
-      while (!fs.existsSync(ready) && Date.now() < deadline)
+      // existsSync can observe the sentinel between O_CREAT and the write
+      // completing — poll until the pid content is actually readable.
+      while (Date.now() < deadline) {
+        try {
+          pid = Number(fs.readFileSync(ready, "utf8"));
+        } catch {}
+        if (Number.isSafeInteger(pid) && pid > 0) break;
         await new Promise((resolve) => setTimeout(resolve, 10));
-      pid = Number(fs.readFileSync(ready, "utf8"));
+      }
       assert.ok(Number.isSafeInteger(pid) && pid > 0);
       if (shutdown) {
         await runtime.dispose();

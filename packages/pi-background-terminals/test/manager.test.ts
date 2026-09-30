@@ -143,14 +143,14 @@ test("process exit safety net kills managed process groups", async () => {
 test("Windows job FFI survives Pi-style module reloads", {
   skip: process.platform !== "win32",
 }, async () => {
-  const firstModuleUrl = new URL(`./src/win32-job.ts?reload=${Date.now()}-first`, import.meta.url);
+  const firstModuleUrl = new URL(`../src/win32-job.ts?reload=${Date.now()}-first`, import.meta.url);
   const first = await import(firstModuleUrl.href);
   const firstJob = await first.createChildJob();
   assert.ok(firstJob, "first module instance created a job");
   firstJob.close();
 
   const secondModuleUrl = new URL(
-    `./src/win32-job.ts?reload=${Date.now()}-second`,
+    `../src/win32-job.ts?reload=${Date.now()}-second`,
     import.meta.url,
   );
   const second = await import(secondModuleUrl.href);
