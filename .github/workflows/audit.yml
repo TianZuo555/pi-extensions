@@ -7,9 +7,10 @@ on:
   schedule:
     - cron: "17 9 * * 1" # Monday 09:17 UTC
   workflow_dispatch:
-  # Post-merge signal when dependencies change, and a PR-time check when a
-  # PR itself introduces a vulnerable resolution. The PR-time check is
-  # advisory: `main` has no required status checks configured.
+  # Post-merge signal when dependencies change. PRs run on every pull request
+  # because `pnpm audit` is a required status check on main — a workflow
+  # skipped by path filtering never reports one, leaving the required status
+  # "Expected" forever; the job below self-skips when deps are unchanged.
   push:
     branches: [main]
     paths:
@@ -17,10 +18,6 @@ on:
       - "pnpm-workspace.yaml"
       - ".github/workflows/audit.yml"
   pull_request:
-    paths:
-      - "pnpm-lock.yaml"
-      - "pnpm-workspace.yaml"
-      - ".github/workflows/audit.yml"
 
 permissions:
   contents: read
@@ -39,11 +36,28 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          # PRs diff against their base to decide whether the audit is needed.
+          fetch-depth: 0
+
+      - name: Detect dependency changes
+        id: changes
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if git diff --name-only "${BASE_SHA}" HEAD | grep -qE '^(pnpm-lock\.yaml|pnpm-workspace\.yaml|\.github/workflows/audit\.yml)$'; then
+            echo "deps=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "deps=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Setup pnpm
+        if: github.event_name != 'pull_request' || steps.changes.outputs.deps == 'true'
         uses: pnpm/action-setup@v6
 
       - name: Setup Node
+        if: github.event_name != 'pull_request' || steps.changes.outputs.deps == 'true'
         uses: actions/setup-node@v7
         with:
           node-version: 26
@@ -53,9 +67,11 @@ jobs:
       # and pushes; this job only reports advisories, so a fresh pin must
       # not surface here as a second, unrelated failure.
       - name: Install dependencies
+        if: github.event_name != 'pull_request' || steps.changes.outputs.deps == 'true'
         run: pnpm install --frozen-lockfile --config.minimumReleaseAge=0
 
       - name: Run pnpm audit
+        if: github.event_name != 'pull_request' || steps.changes.outputs.deps == 'true'
         id: audit
         continue-on-error: true
         run: |
