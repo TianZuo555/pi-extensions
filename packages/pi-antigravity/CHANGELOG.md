@@ -1,5 +1,13 @@
 # @tian.zuo/pi-antigravity
 
+## 0.11.4
+
+### Patch Changes
+
+- [#132](https://github.com/TianZuo555/pi-extensions/pull/132) [`e918b22`](https://github.com/TianZuo555/pi-extensions/commit/e918b228dc913fc0147a2dbdd191a8a9f79588b6) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Warn once per session when an Antigravity model is selected while `pi-mcp-adapter` is loaded. Detect the adapter through tool or command source metadata, including inactive tools and local installs, and explain how to migrate to Pi's built-in `mcp.json` support with direct exposure. Suppress the warning when the Pi-tool bridge is disabled.
+
+- [#132](https://github.com/TianZuo555/pi-extensions/pull/132) [`e918b22`](https://github.com/TianZuo555/pi-extensions/commit/e918b228dc913fc0147a2dbdd191a8a9f79588b6) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Bridge pi's built-in MCP tools instead of `pi-mcp-adapter` tools. `selectBridgedTools` now selects active tools whose source path is `builtin:mcp` (direct-exposure `mcp__<server>__<tool>` tools and the active MCP resource tools), so MCP servers reach agy through pi's native `mcp.json` support by setting `"exposure": "direct"`. Codemode/deferred tools stay pi-side: the bridge executes tools as model tool calls, which pi resolves against the active tool set. The third-party `pi-mcp-adapter` is no longer bridged (it replaces the built-in MCP support anyway). Fixes [#131](https://github.com/TianZuo555/pi-extensions/issues/131).
+
 ## 0.11.3
 
 ### Patch Changes

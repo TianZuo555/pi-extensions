@@ -1,5 +1,13 @@
 # @tian.zuo/pi-find
 
+## 0.6.1
+
+### Patch Changes
+
+- [#133](https://github.com/TianZuo555/pi-extensions/pull/133) [`ae1cf78`](https://github.com/TianZuo555/pi-extensions/commit/ae1cf7848c0afe57355ed1641dc346c473d6ecbf) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Return structured results from grep/find, web_search/web_fetch, and terminal_log_read so code-mode scripts can filter matches, search hits, and log pages without parsing tool text. Keep the tools on the model's list; the model still sees the existing compact content.
+
+- [#133](https://github.com/TianZuo555/pi-extensions/pull/133) [`ae1cf78`](https://github.com/TianZuo555/pi-extensions/commit/ae1cf7848c0afe57355ed1641dc346c473d6ecbf) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Make structured grep/find completeness flags independent of compact text truncation, exclude text-only notices, and document result paths as cwd-relative or absolute. Add regression coverage for Unicode-heavy results, file lists, and scoped paths.
+
 ## 0.6.0
 
 ### Minor Changes

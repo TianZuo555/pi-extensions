@@ -1,5 +1,11 @@
 # @tian.zuo/pi-devin-acp
 
+## 0.5.1
+
+### Patch Changes
+
+- [#130](https://github.com/TianZuo555/pi-extensions/pull/130) [`05c61cd`](https://github.com/TianZuo555/pi-extensions/commit/05c61cd7cde58b0b05b08099a8664670db13d6f4) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Refresh an expired model cache in the background at session startup, even when another provider is selected, so newly shipped families appear in the model picker without running `/devin models` manually. Reuse an in-flight automatic refresh when a Devin model is selected during discovery, and avoid starting CLI processes when Pi only loads extensions.
+
 ## 0.5.0
 
 ### Minor Changes
