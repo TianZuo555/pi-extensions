@@ -1,4 +1,4 @@
-import type { AgyPiBridge } from "./bridge.ts";
+import type { AgyPiBridge, PiToolInfo } from "./bridge.ts";
 import type { SkillLite } from "./skills.ts";
 
 export interface BridgeLifecycleDeps {
@@ -19,6 +19,11 @@ export interface BridgeLifecycleManager {
   readonly teardown: () => Promise<void>;
   readonly registrationGeneration: () => number;
   readonly processRevision: () => string;
+  /** Warn once when the unsupported MCP adapter owns session tools or commands. */
+  readonly warnMcpAdapterUnsupported: (
+    resources: readonly Pick<PiToolInfo, "sourceInfo">[],
+    notify?: (message: string) => void,
+  ) => void;
   /**
    * Warn once that pi-private skills cannot reach agy without the bridge.
    * The skill catalog is never injected into prompts — `activate_skill` is
@@ -33,12 +38,30 @@ export function createBridgeLifecycleManager(deps: BridgeLifecycleDeps): BridgeL
   let registered = false;
   let generation = 0;
   let warnedSkillsUnavailable = false;
+  let warnedMcpAdapterUnsupported = false;
 
   return {
     isRegistered: () => registered,
     isRunning: () => deps.bridge.running,
     registrationGeneration: () => generation,
     processRevision: () => `${generation}:${deps.bridge.catalogRevision}`,
+
+    warnMcpAdapterUnsupported: (resources, notify) => {
+      if (!enabled || warnedMcpAdapterUnsupported) return;
+      const adapterSource = /(?:^|[:/\\])pi-mcp-adapter(?=$|[@/\\.])/;
+      const installed = resources.some(({ sourceInfo }) =>
+        [sourceInfo?.source, sourceInfo?.path].some((value) => adapterSource.test(value ?? "")),
+      );
+      const warn = notify ?? deps.notifyWarning;
+      if (!installed || !warn) return;
+      warnedMcpAdapterUnsupported = true;
+      warn(
+        "antigravity: pi-mcp-adapter is installed, but its MCP tools are not bridged to agy. " +
+          "It also replaces Pi's built-in MCP support. Remove or disable pi-mcp-adapter, " +
+          'move your servers to ~/.pi/agent/mcp.json (or .pi/mcp.json) with "exposure": "direct", ' +
+          "then run /reload.",
+      );
+    },
 
     ensureRegistered: async (notify?: (message: string) => void) => {
       if (!enabled) return false;

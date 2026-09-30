@@ -473,17 +473,22 @@ test("bridge enforces the shared token when configured", async () => {
   }
 });
 
-test("selectBridgedTools bridges only MCP adapter tools", () => {
+test("selectBridgedTools bridges only built-in MCP tools", () => {
   const tools = [
-    { name: "read", sourceInfo: { source: "builtin" } },
+    { name: "read", sourceInfo: { source: "builtin", path: "builtin:read" } },
+    { name: "codemode", sourceInfo: { source: "builtin", path: "builtin:codemode" } },
     { name: "ask_user", sourceInfo: { source: "npm:@tian.zuo/pi-ask-user" } },
-    { name: "web_search", sourceInfo: { source: "npm:@tian.zuo/pi-web-search" } },
-    { name: "todo", sourceInfo: { source: "npm:@tian.zuo/pi-todo" } },
+    { name: "mcp__github__search_issues", sourceInfo: { source: "builtin", path: "builtin:mcp" } },
+    { name: "read_mcp_resource", sourceInfo: { source: "builtin", path: "builtin:mcp" } },
+    // Registered by the built-in MCP extension but codemode-exposed, hence not
+    // active: the bridge executes tools as model tool calls, which pi resolves
+    // against the active tool set, so non-direct tools cannot be bridged.
+    { name: "mcp__docs__deferred_tool", sourceInfo: { source: "builtin", path: "builtin:mcp" } },
     { name: "mcp", sourceInfo: { source: "npm:pi-mcp-adapter" } },
-    { name: "mcpScript", sourceInfo: { source: "npm:pi-mcp-adapter@2" } },
-    { name: "github_search_issues", sourceInfo: { source: "npm:pi-mcp-adapter" } },
-    { name: "antigravity", sourceInfo: { source: "npm:pi-mcp-adapter" } },
     { name: "orphan", sourceInfo: {} },
+    // Hypothetical collision: even a builtin:mcp-registered tool with the
+    // replay wrapper's name stays out (defense-in-depth guard).
+    { name: "antigravity", sourceInfo: { source: "builtin", path: "builtin:mcp" } },
   ].map((tool) => ({
     ...tool,
     description: `${tool.name} description`,
@@ -491,18 +496,72 @@ test("selectBridgedTools bridges only MCP adapter tools", () => {
   }));
   const active = [
     "read",
+    "codemode",
     "ask_user",
-    "web_search",
-    "todo",
+    "mcp__github__search_issues",
+    "read_mcp_resource",
     "mcp",
-    "mcpScript",
-    "github_search_issues",
     "antigravity",
   ];
   const bridged = selectBridgedTools(tools, active).map((tool) => tool.name);
-  // MCP adapter tools only — no builtins, no pi-session extension tools,
-  // no replay wrapper, no inactive tools, no unknown sources.
-  assert.deepEqual(bridged, ["mcp", "mcpScript", "github_search_issues"]);
+  // Built-in MCP tools that are active — no other builtins, no pi-session
+  // extension tools, no replay wrapper, no inactive tools, no adapter tools.
+  assert.deepEqual(bridged, ["mcp__github__search_issues", "read_mcp_resource"]);
+});
+
+test("adapter migration warning detects package and local sources without matching tool names", () => {
+  const cases = [
+    { source: "npm:pi-mcp-adapter", expected: true },
+    { source: "npm:pi-mcp-adapter@2", expected: true },
+    { source: "git:github.com/nicobailon/pi-mcp-adapter", expected: true },
+    { source: "local", path: "/extensions/pi-mcp-adapter/index.ts", expected: true },
+    { source: "local", path: "C:\\extensions\\pi-mcp-adapter\\index.ts", expected: true },
+    { source: "local", path: "/extensions/pi-mcp-adapter.ts", expected: true },
+    { source: "builtin", path: "builtin:mcp", expected: false },
+    { source: "npm:pi-mcp-adapter-helper", expected: false },
+    { source: "npm:other-pi-mcp-adapter", expected: false },
+    { expected: false },
+  ];
+  for (const { expected, ...sourceInfo } of cases) {
+    const warnings: string[] = [];
+    const manager = createBridgeLifecycleManager({
+      bridge: new AgyPiBridge(),
+      bridgeToken: "test-token",
+      addMcpServer: async () => {},
+      removeMcpServer: async () => {},
+      evictMcpCache: async () => {},
+      notifyWarning: (message) => warnings.push(message),
+    });
+    // An empty snapshot does not consume the one-time warning.
+    manager.warnMcpAdapterUnsupported([]);
+    const resources = [{ name: "mcp", sourceInfo }];
+    manager.warnMcpAdapterUnsupported(resources);
+    manager.warnMcpAdapterUnsupported(resources);
+    assert.equal(warnings.length, expected ? 1 : 0, JSON.stringify(sourceInfo));
+    if (expected) {
+      assert.match(warnings[0], /not bridged to agy/);
+      assert.match(warnings[0], /Remove or disable pi-mcp-adapter/);
+      assert.match(warnings[0], /mcp\.json/);
+      assert.match(warnings[0], /"exposure": "direct"/);
+      assert.match(warnings[0], /\/reload/);
+    }
+  }
+});
+
+test("adapter migration warning waits for a notification sink", () => {
+  const manager = createBridgeLifecycleManager({
+    bridge: new AgyPiBridge(),
+    bridgeToken: "test-token",
+    addMcpServer: async () => {},
+    removeMcpServer: async () => {},
+    evictMcpCache: async () => {},
+  });
+  const resources = [{ sourceInfo: { source: "npm:pi-mcp-adapter" } }];
+  manager.warnMcpAdapterUnsupported(resources);
+  const warnings: string[] = [];
+  manager.warnMcpAdapterUnsupported(resources, (message) => warnings.push(message));
+  manager.warnMcpAdapterUnsupported(resources, (message) => warnings.push(message));
+  assert.equal(warnings.length, 1);
 });
 
 test("createBridgeLifecycleManager handles start-success/add-failure, retry, teardown, and fallback", async () => {
@@ -621,6 +680,8 @@ test("createBridgeLifecycleManager respects disabled setting", async () => {
   assert.equal(addCalled, false, "did not attempt MCP registration");
   assert.equal(manager.isRunning(), false);
   assert.equal(manager.isRegistered(), false);
+  manager.warnMcpAdapterUnsupported([{ sourceInfo: { source: "npm:pi-mcp-adapter" } }]);
+  assert.equal(warnings.length, 0, "disabled bridges do not suggest migrating MCP servers");
   // Bridge disabled: the user hears about unreachable pi-private skills once.
   manager.warnSkillsUnavailable(skills);
   manager.warnSkillsUnavailable(skills);
