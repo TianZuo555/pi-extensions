@@ -139,6 +139,27 @@ export class OutputBuffer {
     }
   }
 
+  /** Drop retained chunks down to a smaller cap. Used once the stream's
+   * complete archive is on disk, when the in-memory copy only serves small
+   * result/message views while /ps reads the spill file. */
+  compact(maxRetainedBytes: number) {
+    const target = Math.max(0, maxRetainedBytes);
+    if (this.headBytes + this.tailBytes <= target) return;
+    const headCap = Math.min(this.headBytes, Math.max(0, Math.floor(target / 8)));
+    const tailCap = Math.min(this.tailBytes, target - headCap);
+    // utf8Prefix/utf8Tail copy the bounded slice on a code point boundary, so
+    // compacting cannot split a character or pin the giant source buffers.
+    const head = utf8Prefix(Buffer.concat(this.headChunks, this.headBytes), headCap);
+    const tail = utf8Tail(Buffer.concat(this.tailChunks, this.tailBytes), tailCap);
+    this.headChunks = head.length > 0 ? [head] : [];
+    this.tailChunks = tail.length > 0 ? [tail] : [];
+    this.headBytes = head.length;
+    this.tailBytes = tail.length;
+    this.headSealed = true;
+    this.cachedView = undefined;
+    this.version++;
+  }
+
   view(): OutputView {
     if (this.cachedView) return this.cachedView;
 

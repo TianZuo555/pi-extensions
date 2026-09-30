@@ -63,6 +63,7 @@ import {
   buildTerminalResultBatchMessage,
   deriveCommandTitle,
   describeTerminal,
+  TERMINAL_LOG_READ_OUTPUT_FIELD_DESCRIPTIONS,
   TERMINAL_LOG_READ_PARAMETER_DESCRIPTIONS,
   TERMINAL_LOG_READ_PROMPT_SNIPPET,
   TERMINAL_LOG_READ_TOOL_DESCRIPTION,
@@ -81,7 +82,54 @@ const SESSION_ENV_KEYS = [
   "PI_REASONING_LEVEL",
 ] as const;
 
-type CompactTerminalStatus = TerminalStatus | "starting";
+const TerminalLogReadOutputSchema = Type.Object({
+  id: Type.String({ description: TERMINAL_LOG_READ_OUTPUT_FIELD_DESCRIPTIONS.id }),
+  stream: Type.Union([Type.Literal("stdout"), Type.Literal("stderr")], {
+    description: TERMINAL_LOG_READ_OUTPUT_FIELD_DESCRIPTIONS.stream,
+  }),
+  offset: Type.Integer({ description: TERMINAL_LOG_READ_OUTPUT_FIELD_DESCRIPTIONS.offset }),
+  nextOffset: Type.Integer({ description: TERMINAL_LOG_READ_OUTPUT_FIELD_DESCRIPTIONS.nextOffset }),
+  bytesRead: Type.Integer({ description: TERMINAL_LOG_READ_OUTPUT_FIELD_DESCRIPTIONS.bytesRead }),
+  size: Type.Integer({ description: TERMINAL_LOG_READ_OUTPUT_FIELD_DESCRIPTIONS.size }),
+  settled: Type.Boolean({ description: TERMINAL_LOG_READ_OUTPUT_FIELD_DESCRIPTIONS.settled }),
+  complete: Type.Boolean({ description: TERMINAL_LOG_READ_OUTPUT_FIELD_DESCRIPTIONS.complete }),
+  text: Type.String({ description: TERMINAL_LOG_READ_OUTPUT_FIELD_DESCRIPTIONS.text }),
+});
+
+const TERMINAL_STATUSES: ReadonlySet<string> = new Set([
+  "running",
+  "done",
+  "failed",
+  "timed_out",
+  "killed",
+]);
+
+/** Structured state carried on every managed bash result. The renderer reads
+ * this instead of parsing the model-facing text (which mislabels an Esc-
+ * aborted wait as a failure, or a cwd named "killed" as a kill). */
+interface BashResultDetails {
+  readonly id: string;
+  readonly status: TerminalStatus;
+  /** True once the command outlived its initial wait and became a background
+   * terminal — only then does the result collapse to the compact /ps row. */
+  readonly yielded: boolean;
+}
+
+function bashDetails(value: unknown): BashResultDetails | undefined {
+  const candidate = value as Partial<BashResultDetails> | undefined;
+  if (
+    typeof candidate?.id === "string" &&
+    typeof candidate.status === "string" &&
+    TERMINAL_STATUSES.has(candidate.status)
+  ) {
+    return {
+      id: candidate.id,
+      status: candidate.status as TerminalStatus,
+      yielded: candidate.yielded === true,
+    };
+  }
+  return undefined;
+}
 
 function parseTerminalLogRef(ref: string) {
   const match = /^(bt-[a-f0-9]{16}-\d+):(stdout|stderr)$/.exec(ref);
@@ -92,34 +140,7 @@ function parseTerminalLogRef(ref: string) {
   };
 }
 
-/** Extract manager-owned status from a model-facing Bash result. Output is
- * parsed separately only for the bounded quick-command preview. */
-function compactTerminalState(
-  text: string,
-  isPartial: boolean,
-  isError: boolean,
-): { readonly id?: string; readonly status: CompactTerminalStatus } {
-  const metadata = text.split("\n\nstdout:", 1)[0] ?? "";
-  const described = metadata.match(
-    /\b(bt-[a-f0-9]{16}-\d+) \[(running|done|failed|timed_out|killed)\]/,
-  );
-  const id = described?.[1] ?? metadata.match(/\bterminal (bt-[a-f0-9]{16}-\d+)\b/i)?.[1];
-  const describedStatus = described?.[2] as TerminalStatus | undefined;
-
-  if (describedStatus) return { id, status: describedStatus };
-  if (/timed out/i.test(metadata)) return { id, status: "timed_out" };
-  if (/\b(killed|SIGKILL|SIGTERM)\b/i.test(metadata)) {
-    return { id, status: "killed" };
-  }
-  if (/still running|running as terminal/i.test(metadata)) {
-    return { id, status: "running" };
-  }
-  if (isError) return { id, status: "failed" };
-  if (isPartial) return { id, status: id ? "running" : "starting" };
-  return { id, status: "done" };
-}
-
-function quickOutputPreview(text: string, maxLines: number) {
+function quickOutputPreview(text: string, maxLines: number, full = false) {
   const stdoutAt = text.indexOf("\n\nstdout:");
   const stderrAt = text.indexOf("\n\nstderr:");
   const starts = [stdoutAt, stderrAt].filter((at) => at >= 0);
@@ -133,7 +154,7 @@ function quickOutputPreview(text: string, maxLines: number) {
       (line) =>
         !/^\[(?:stdout|stderr) bounded head\+tail:/i.test(line) && line !== "stdout: (empty)",
     )
-    .map((line) => (line.length <= 240 ? line : `${line.slice(0, 237)}...`));
+    .map((line) => (full || line.length <= 240 ? line : `${line.slice(0, 237)}...`));
   while (lines[0] === "") lines.shift();
   while (lines.at(-1) === "") lines.pop();
   if (lines.length <= maxLines) return lines;
@@ -190,7 +211,9 @@ export function createBackgroundTerminalsExtension(
 
   return function backgroundTerminals(pi: ExtensionAPI) {
     let runtime: TerminalRuntime | undefined;
-    let managerPromise: Promise<TerminalManagerShape> | undefined;
+    let managerPromise:
+      | Promise<{ runtime: TerminalRuntime; manager: TerminalManagerShape }>
+      | undefined;
     let sessionContext: ExtensionContext | undefined;
     let ui: ExtensionUIContext | undefined;
     let unsubStatus: (() => void) | undefined;
@@ -205,21 +228,28 @@ export function createBackgroundTerminalsExtension(
 
     const getRuntime = () => (runtime ??= makeRuntime());
 
-    /** Resolve the manager service once per runtime and wire the extension hooks. */
+    /** Resolve the manager service once per runtime and wire the extension
+     * hooks. Returns the runtime it was built on so callers keep using THAT
+     * instance — a session_shutdown arriving between `await getManager()` and
+     * the next `getRuntime()` must not silently create a runtime that nothing
+     * will ever dispose. */
     const getManager = () => {
-      managerPromise ??= getRuntime()
-        .runPromise(TerminalManager)
-        .then((manager) => {
+      managerPromise ??= (() => {
+        const bound = getRuntime();
+        return bound.runPromise(TerminalManager).then((manager) => {
           manager.view.setOnSettled(onSettled);
           unsubStatus?.();
           unsubStatus = manager.view.subscribe(() => updateWidget(manager));
           updateWidget(manager);
-          return manager;
+          return { runtime: bound, manager };
         });
+      })();
       return managerPromise;
     };
 
-    /** One-line widget directly above the editor, only while ≥1 is running.
+    /** One-line widget directly above the editor, only while ≥1 yielded
+     * terminal runs. A command still inside its initial wait is foreground
+     * work — counting it would flash the widget on every quick bash call.
      * Called on every manager notification (including per-output-chunk), so it
      * only touches setWidget when the running count actually changes —
      * replacing the widget factory hundreds of times a second would churn
@@ -228,7 +258,9 @@ export function createBackgroundTerminalsExtension(
     const updateWidget = (manager: TerminalManagerShape) => {
       if (!ui) return;
       try {
-        const running = manager.view.list().filter((snap) => snap.status === "running").length;
+        const running = manager.view
+          .list()
+          .filter((snap) => snap.status === "running" && snap.yielded === true).length;
         if (running === widgetRunning) return;
         widgetRunning = running;
         if (running === 0) {
@@ -410,42 +442,58 @@ export function createBackgroundTerminalsExtension(
       renderCall(args, theme, context) {
         const command = typeof args?.command === "string" ? args.command : "";
         const explicitTitle = typeof args?.title === "string" ? args.title : undefined;
-        const title = command ? deriveCommandTitle(command, explicitTitle) : "...";
+        // Expanded (Ctrl+O): the full command, wrapping; collapsed: the title.
+        const label = command
+          ? context.expanded === true
+            ? command
+            : deriveCommandTitle(command, explicitTitle)
+          : "...";
         const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-        text.setText(theme.fg("toolTitle", theme.bold(`$ ${title}`)));
+        text.setText(theme.fg("toolTitle", theme.bold(`$ ${label}`)));
         return text;
       },
-      renderResult(result, { isPartial }, theme, context) {
+      renderResult(result, { isPartial, expanded }, theme, context) {
         const rawText = result.content
           .filter((part) => part.type === "text")
           .map((part) => part.text)
           .join("\n");
-        const summary = compactTerminalState(rawText, isPartial, context.isError);
-        const word = summary.status === "timed_out" ? "timed out" : summary.status;
+        // Status comes from structured details, never from parsing the text:
+        // an aborted wait reads as a live running terminal, and content like a
+        // "killed" directory name cannot masquerade as a status.
+        const details = bashDetails(result.details);
+        const status =
+          details?.status ?? (context.isError ? "failed" : isPartial ? "starting" : "done");
+        const terminalRow = details?.yielded === true;
+        const word = status === "timed_out" ? "timed out" : status;
         const icon =
-          summary.status === "failed" || summary.status === "timed_out"
+          status === "failed" || status === "timed_out"
             ? theme.fg("error", "x")
-            : summary.status === "done"
+            : status === "done"
               ? theme.fg("success", "■")
-              : summary.status === "killed"
+              : status === "killed"
                 ? theme.fg("muted", "■")
                 : theme.fg("warning", "■");
         const statusColor =
-          summary.status === "failed" || summary.status === "timed_out"
+          status === "failed" || status === "timed_out"
             ? "error"
-            : summary.status === "done"
+            : status === "done"
               ? "success"
-              : summary.status === "killed"
+              : status === "killed"
                 ? "muted"
                 : "warning";
-        let body = summary.id
-          ? `${icon} ${theme.fg("accent", theme.bold(`terminal ${summary.id}`))} ${theme.fg(statusColor, word)}${theme.fg("dim", " · ")}${theme.fg("accent", "/ps")}${theme.fg("dim", " to inspect")}`
-          : `${icon} ${theme.fg(statusColor, `bash ${word}`)}${theme.fg("dim", " · ")}${theme.fg("accent", "/ps")}${theme.fg("dim", " for details")}`;
+        let body =
+          terminalRow && details
+            ? `${icon} ${theme.fg("accent", theme.bold(`terminal ${details.id}`))} ${theme.fg(statusColor, word)}${theme.fg("dim", " · ")}${theme.fg("accent", "/ps")}${theme.fg("dim", " to inspect")}`
+            : `${icon} ${theme.fg(statusColor, `bash ${word}`)}${theme.fg("dim", " · ")}${theme.fg("accent", "/ps")}${theme.fg("dim", " for details")}`;
         // Quick foreground completions and initial-wait progress show a small
-        // human-facing preview. Once a command actually yields, its transcript
-        // row returns to one compact /ps-owned background-terminal line.
-        if (!summary.id) {
-          const preview = quickOutputPreview(rawText, isPartial ? 4 : 6);
+        // human-facing preview (everything when expanded). Once a command
+        // actually yields, its row returns to one compact /ps-owned line.
+        if (!terminalRow) {
+          const preview = quickOutputPreview(
+            rawText,
+            expanded ? Number.MAX_SAFE_INTEGER : isPartial ? 4 : 6,
+            expanded,
+          );
           if (preview.length > 0) {
             body += `\n${preview.map((line) => theme.fg("toolOutput", line)).join("\n")}`;
           }
@@ -529,8 +577,13 @@ export function createBackgroundTerminalsExtension(
         };
 
         let manager: TerminalManagerShape;
+        let toolRuntime: TerminalRuntime;
         try {
-          manager = await getManager();
+          const bound = await getManager();
+          manager = bound.manager;
+          // Use the runtime the manager was built on — never a fresh
+          // getRuntime() after an interleaved session_shutdown.
+          toolRuntime = bound.runtime;
         } catch (managerError) {
           // Manager resolution precedes start(), so no child can exist yet.
           return await runForegroundFallback(managerError, true);
@@ -560,7 +613,7 @@ export function createBackgroundTerminalsExtension(
         signal?.throwIfAborted();
         try {
           started = await runTool(
-            getRuntime(),
+            toolRuntime,
             manager.start({
               command,
               executionCommand,
@@ -593,7 +646,7 @@ export function createBackgroundTerminalsExtension(
           try {
             onUpdate({
               content: [{ type: "text", text: buildBashProgress(snap) }],
-              details: undefined,
+              details: { id: snap.id, status: "running", yielded: false },
             });
           } catch {
             // A display update must never affect command execution.
@@ -627,10 +680,25 @@ export function createBackgroundTerminalsExtension(
           manager.waitForSettlement(started.id, params.yield_time_ms ?? DEFAULT_YIELD_TIME_MS);
         let waited: SettlementWaitResult | undefined;
         try {
-          waited = await runTool(getRuntime(), waitForSettlement(), {
+          waited = await runTool(toolRuntime, waitForSettlement(), {
             signal,
             interruptMessage: TERMINAL_ERRORS.initialWaitAborted(started.id),
           });
+        } catch (error) {
+          // The user interrupted the initial wait (Esc): the process keeps
+          // running and now counts as a yielded background terminal — return
+          // that truth instead of a bare failure row.
+          if (!signal?.aborted) throw error;
+          const live = manager.view.get(started.id);
+          return {
+            content: [{ type: "text", text: TERMINAL_ERRORS.initialWaitAborted(started.id) }],
+            details: {
+              id: started.id,
+              status: live?.status ?? "running",
+              yielded: live?.yielded ?? (live === undefined || live.status === "running"),
+            },
+            isError: true,
+          };
         } finally {
           unsubscribe();
           if (updateTimer) clearTimeout(updateTimer);
@@ -644,17 +712,19 @@ export function createBackgroundTerminalsExtension(
         }
 
         const text = buildBashResult(snap);
+        const details: BashResultDetails = {
+          id: snap.id,
+          status: snap.status,
+          yielded: snap.yielded === true,
+        };
         if (snap.status === "failed" || snap.status === "timed_out" || snap.status === "killed") {
           // Match Pi's built-in bash contract: unsuccessful foreground results
-          // are tool errors. Yielded failures arrive later as completion messages.
-          throw new Error(text);
+          // are tool errors. Returned rather than thrown so the structured
+          // status reaches the renderer. Yielded failures arrive later as
+          // completion messages.
+          return { content: [{ type: "text", text }], details, isError: true };
         }
-        return {
-          content: [{ type: "text", text }],
-          // Exact BashToolDetails-compatible shape. Model-facing output uses
-          // opaque archive references rather than private spill paths.
-          details: undefined,
-        };
+        return { content: [{ type: "text", text }], details };
       },
     });
 
@@ -681,6 +751,7 @@ export function createBackgroundTerminalsExtension(
           }),
         ),
       }),
+      outputSchema: TerminalLogReadOutputSchema,
       executionMode: "sequential",
       // One compact row: the page itself is for the model, and /ps remains the
       // human viewer. Rendering a 64 KiB page into the transcript would bury it.
@@ -697,7 +768,17 @@ export function createBackgroundTerminalsExtension(
         const details = result.details as TerminalLogReadResult | undefined;
         const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
         if (!details) {
-          text.setText(`${theme.fg("error", "x")} ${theme.fg("error", "archive unavailable")}`);
+          // Show the actual failure (budget exhausted, unknown ref, expired
+          // archive), not a blanket "archive unavailable".
+          const message = result.content
+            .filter((part) => part.type === "text")
+            .map((part) => part.text)
+            .join("\n")
+            .split("\n")[0]
+            ?.trim();
+          text.setText(
+            `${theme.fg("error", "x")} ${theme.fg("error", message || "archive unavailable")}`,
+          );
           return text;
         }
         text.setText(
@@ -713,22 +794,26 @@ export function createBackgroundTerminalsExtension(
         if (!parsed) {
           throw new Error(TERMINAL_ERRORS.invalidRef(params.ref));
         }
-        const limit = Math.min(
-          MAX_TERMINAL_LOG_READ_BYTES,
-          Math.max(1, Math.floor(params.limit ?? MAX_TERMINAL_LOG_READ_BYTES)),
-        );
         // Two budgets, because either one alone is escapable: bytes bound a
         // firehose of full pages, calls bound a tiny-limit polling loop.
         if (terminalLogReadCalls >= TERMINAL_LOG_READ_RUN_CALLS) {
           throw new Error(TERMINAL_ERRORS.readCalls);
         }
-        if (terminalLogReadBytes + limit > TERMINAL_LOG_READ_RUN_BUDGET) {
+        const remainingBytes = TERMINAL_LOG_READ_RUN_BUDGET - terminalLogReadBytes;
+        if (remainingBytes <= 0) {
           throw new Error(TERMINAL_ERRORS.readBytes);
         }
+        // Clamp to what is left rather than rejecting a request that exceeds
+        // it — a page read short of the cap is still useful to the model.
+        const limit = Math.min(
+          MAX_TERMINAL_LOG_READ_BYTES,
+          remainingBytes,
+          Math.max(1, Math.floor(params.limit ?? MAX_TERMINAL_LOG_READ_BYTES)),
+        );
         terminalLogReadCalls++;
-        const manager = await getManager();
+        const { runtime: toolRuntime, manager } = await getManager();
         const result = await runTool(
-          getRuntime(),
+          toolRuntime,
           manager.readLog({
             ...parsed,
             offset: params.offset ?? 0,
@@ -739,8 +824,20 @@ export function createBackgroundTerminalsExtension(
         return {
           content: [{ type: "text", text: formatTerminalLogRead(result) }],
           // The page text is already in content; repeating it here would store
-          // every read twice in the session file.
+          // every read twice in the session file. Code-mode scripts read
+          // structuredContent instead of content, so the page lives there.
           details: { ...result, text: undefined },
+          structuredContent: {
+            id: result.id,
+            stream: result.stream,
+            offset: result.offset,
+            nextOffset: result.nextOffset,
+            bytesRead: result.bytesRead,
+            size: result.size,
+            settled: result.settled,
+            complete: result.complete,
+            text: result.text,
+          },
         };
       },
     });
@@ -805,7 +902,7 @@ export function createBackgroundTerminalsExtension(
     pi.registerCommand("ps", {
       description: "List and inspect background terminals",
       handler: async (_args, ctx) => {
-        const manager = await getManager();
+        const { manager } = await getManager();
         if (ctx.mode !== "tui") {
           if (ctx.hasUI) {
             const terminals = manager.view.list();
@@ -819,7 +916,7 @@ export function createBackgroundTerminalsExtension(
           return;
         }
         if (manager.view.size() === 0) {
-          ctx.ui.notify("No background terminals yet. Long bash runs appear here.", "info");
+          ctx.ui.notify("No terminals yet — every bash call in this session appears here.", "info");
           return;
         }
         const { openTerminalPicker } = await import("./src/ui/ps.ts");

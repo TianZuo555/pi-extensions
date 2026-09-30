@@ -4,9 +4,9 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
-import { TerminalManager } from "./src/manager.ts";
-import { SpawnError } from "./src/domain.ts";
-import { createTerminalRuntime, runTool } from "./src/runtime.ts";
+import { TerminalManager } from "../src/manager.ts";
+import { SpawnError } from "../src/domain.ts";
+import { createTerminalRuntime, runTool } from "../src/runtime.ts";
 
 function command(script: string) {
   return `node -e "eval(Buffer.from('${Buffer.from(script).toString("base64")}','base64').toString())"`;

@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
-import { createSpillSource } from "./src/ui/spill-source.ts";
+import { createSpillSource } from "../src/ui/spill-source.ts";
 
 const OPTIONS = { tailBytes: 1024, windowBytes: 4096, chunkBytes: 1024 };
 

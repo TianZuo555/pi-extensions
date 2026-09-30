@@ -10,8 +10,8 @@ import {
   DEFAULT_TERMINAL_DETAIL_TAB,
   reconcileDashboardSelection,
   type DashboardSelection,
-} from "./src/ui/ps.ts";
-import { buildOutputLines, createOutputLineCache, sanitizeText } from "./src/ui/output-view.ts";
+} from "../src/ui/ps.ts";
+import { buildOutputLines, createOutputLineCache, sanitizeText } from "../src/ui/output-view.ts";
 
 for (const diskBacked of [false, true]) {
   test(`detail scrolling freezes ${diskBacked ? "spill" : "retained"} output until G`, async () => {

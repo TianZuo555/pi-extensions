@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { OutputBuffer } from "./src/output.ts";
+import { OutputBuffer } from "../src/output.ts";
 
 test("push/view roundtrip preserves complete text and counts bytes", () => {
   const buf = new OutputBuffer(1024);

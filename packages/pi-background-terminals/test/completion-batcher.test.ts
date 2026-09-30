@@ -5,7 +5,7 @@ import {
   COMPLETION_BATCH_QUIET_MS,
   type CompletionBatchTimers,
   createCompletionBatchScheduler,
-} from "./src/completion-batcher.ts";
+} from "../src/completion-batcher.ts";
 
 interface ScheduledTimer {
   readonly id: number;

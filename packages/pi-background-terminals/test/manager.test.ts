@@ -14,16 +14,15 @@ import * as path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { Effect } from "effect";
-import { TerminalLogUnavailableError, type TerminalSnapshot } from "./src/domain.ts";
-import { buildTerminalResultMessage } from "./src/prompt.ts";
+import { TerminalLogUnavailableError, type TerminalSnapshot } from "../src/domain.ts";
+import { buildTerminalResultMessage } from "../src/prompt.ts";
+import { MAX_RUNNING, MAX_TRACKED, SETTLED_RETAINED_PER_STREAM } from "../src/constants.ts";
 import {
-  HEAD_RETAINED_PER_STREAM,
-  MAX_RUNNING,
-  MAX_TRACKED,
-  RETAINED_PER_STREAM,
-} from "./src/constants.ts";
-import { TerminalManager, type TerminalManagerShape } from "./src/manager.ts";
-import { createTerminalRuntime, runTool } from "./src/runtime.ts";
+  TerminalManager,
+  type TerminalManagerShape,
+  type TerminalManagerTimings,
+} from "../src/manager.ts";
+import { createTerminalRuntime, runTool } from "../src/runtime.ts";
 
 const cwd = process.cwd();
 const crashExitFixture = fileURLToPath(new URL("./crash-exit.fixture.ts", import.meta.url));
@@ -33,13 +32,25 @@ function nodeCmd(script: string) {
   return `node -e '${script}'`;
 }
 
+/** Tests run the same lifecycle on compressed timings — the production
+ * defaults spend ~1s on settle grace and 2s on kill escalation each. The
+ * invariants under test (escalation order, bounded waits) do not depend on
+ * the absolute values. */
+const FAST_TIMINGS: TerminalManagerTimings = {
+  stopTimeoutMs: 2_000,
+  forceKillAfterMs: 250,
+  settleGraceMs: 150,
+  spillFlushTimeoutMs: 750,
+};
+
 async function withManager(
   run: (
     manager: TerminalManagerShape,
     runtime: ReturnType<typeof createTerminalRuntime>,
   ) => Promise<void>,
+  timings: Partial<TerminalManagerTimings> = FAST_TIMINGS,
 ) {
-  const runtime = createTerminalRuntime();
+  const runtime = createTerminalRuntime({ timings });
   try {
     const manager = await runtime.runPromise(TerminalManager);
     await run(manager, runtime);
@@ -213,10 +224,6 @@ test("lists the newest terminals first", async () => {
       manager.view.list().map((snap) => snap.id),
       expected,
     );
-    assert.deepEqual(
-      (await runTool(runtime, manager.list)).map((snap) => snap.id),
-      expected,
-    );
   });
 });
 
@@ -237,6 +244,8 @@ test("initial wait returns a quick settlement and marks its follow-up consumed",
 
     assert.equal(result.settled, true);
     assert.equal(result.snapshot.status, "done");
+    // Settling inside the wait never makes the entry a background terminal.
+    assert.notEqual(result.snapshot.yielded, true);
     assert.match(result.snapshot.stdout.text, /done/);
     assert.deepEqual(settled, [{ id: started.id, consumed: true }]);
   });
@@ -259,8 +268,11 @@ test("initial wait yields a live process whose later settlement is unconsumed", 
 
     assert.equal(result.settled, false);
     assert.equal(result.snapshot.status, "running");
+    // Outliving the initial wait is what makes it a background terminal.
+    assert.equal(result.snapshot.yielded, true);
     const { snap: done } = await settlement(manager, started.id);
     assert.equal(done.status, "done");
+    assert.equal(done.yielded, true);
     assert.deepEqual(settled, [{ id: started.id, consumed: false }]);
   });
 });
@@ -286,6 +298,8 @@ test("aborting the initial wait leaves the process running and its completion de
     controller.abort();
     await assert.rejects(waiting, /wait aborted/);
     assert.equal(manager.view.get(started.id)?.status, "running");
+    // Esc ends the initial wait: from here it counts as a background terminal.
+    assert.equal(manager.view.get(started.id)?.yielded, true);
 
     const { snap: done } = await settlement(manager, started.id);
     assert.equal(done.status, "done");
@@ -397,8 +411,10 @@ test("non-zero exit settles as failed with the exit code", async () => {
   });
 });
 
-test("kill settles a never-exiting process as killed and resolves after settle; repeat kill is a no-op", async () => {
+test("requestKill settles a never-exiting process as killed; a repeat request is a no-op", async () => {
   await withManager(async (manager, runtime) => {
+    const settled: Array<{ id: string; consumed: boolean }> = [];
+    manager.view.setOnSettled((snap, consumed) => settled.push({ id: snap.id, consumed }));
     const snap = await runTool(
       runtime,
       manager.start({
@@ -409,29 +425,23 @@ test("kill settles a never-exiting process as killed and resolves after settle; 
     );
     assert.equal(snap.status, "running");
 
-    const report = await runTool(runtime, manager.kill([snap.id]));
-    assert.equal(report.length, 1);
-    assert.equal(report[0].id, snap.id);
-    assert.equal(report[0].title, "immortal");
-    assert.equal(report[0].status, "killed");
-    assert.equal(report[0].killed, true);
-    assert.equal(report[0].wasRunning, true);
-    const after = manager.view.get(snap.id);
-    assert.equal(after?.status, "killed");
+    manager.view.requestKill(snap.id);
+    const { snap: after } = await settlement(manager, snap.id);
+    assert.equal(after.status, "killed");
     if (process.platform === "win32") {
       // Windows TerminateProcess reports an exit code instead of a POSIX signal.
-      assert.equal(report[0].exit, "exit 1");
-      assert.equal(after?.exitCode, 1);
-      assert.equal(after?.signal, undefined);
+      assert.equal(after.exitCode, 1);
+      assert.equal(after.signal, undefined);
     } else {
-      assert.match(report[0].exit, /^SIG/);
-      assert.ok(after?.signal);
+      assert.match(after.signal ?? "", /^SIG/);
     }
+    assert.deepEqual(settled, [{ id: snap.id, consumed: false }]);
 
-    const second = await runTool(runtime, manager.kill([snap.id]));
-    assert.equal(second[0].killed, false);
-    assert.equal(second[0].wasRunning, false);
-    assert.equal(second[0].status, "killed");
+    // A second request against a settled entry settles nothing new.
+    manager.view.requestKill(snap.id);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(settled.length, 1);
+    assert.equal(manager.view.get(snap.id)?.status, "killed");
   });
 });
 
@@ -455,18 +465,21 @@ test("a SIGTERM-resistant child is escalated to SIGKILL within the teardown boun
     );
 
     const startedAt = Date.now();
-    const [result] = await runTool(runtime, manager.kill([snap.id]));
+    manager.view.requestKill(snap.id);
+    const { snap: after } = await settlement(manager, snap.id);
     const elapsed = Date.now() - startedAt;
 
-    assert.equal(result.status, "killed");
+    assert.equal(after.status, "killed");
     assert.equal(manager.view.get(snap.id)?.signal, "SIGKILL");
     assert.match(manager.view.get(snap.id)?.stdout.text ?? "", /term/);
-    assert.ok(elapsed >= 1_500, `SIGKILL was not immediate (${elapsed}ms)`);
-    assert.ok(elapsed < 4_500, `termination exceeded its bound (${elapsed}ms)`);
+    // Injected forceKillAfterMs=250: SIGTERM gets its grace window, then the
+    // wedged child is escalated to SIGKILL well inside the stop bound.
+    assert.ok(elapsed >= 200, `SIGKILL was not immediate (${elapsed}ms)`);
+    assert.ok(elapsed < 4_000, `termination exceeded its bound (${elapsed}ms)`);
   });
 });
 
-test("concurrent overlapping multi-id kills observe each settlement exactly once", async () => {
+test("overlapping requestKill calls observe each settlement exactly once", async () => {
   await withManager(async (manager, runtime) => {
     const settled: Array<{ id: string; consumed: boolean }> = [];
     manager.view.setOnSettled((snap, consumed) => settled.push({ id: snap.id, consumed }));
@@ -484,33 +497,29 @@ test("concurrent overlapping multi-id kills observe each settlement exactly once
       ),
     );
 
-    const reports = await runTool(
-      runtime,
-      Effect.all(
-        [manager.kill([first.id, second.id, first.id]), manager.kill([second.id, first.id])],
-        { concurrency: "unbounded" },
-      ),
-    );
+    // Interleaved duplicate requests: the detached teardown is idempotent.
+    manager.view.requestKill(first.id);
+    manager.view.requestKill(second.id);
+    manager.view.requestKill(first.id);
+    manager.view.requestKill(second.id);
+    const [firstDone, secondDone] = await Promise.all([
+      settlement(manager, first.id),
+      settlement(manager, second.id),
+    ]);
 
-    assert.deepEqual(
-      reports.map((report) => report.map((entry) => entry.id)),
-      [
-        [first.id, second.id],
-        [second.id, first.id],
-      ],
-    );
-    assert.ok(reports.flat().every((entry) => entry.status === "killed"));
+    assert.equal(firstDone.snap.status, "killed");
+    assert.equal(secondDone.snap.status, "killed");
     assert.deepEqual(
       settled.sort((a, b) => a.id.localeCompare(b.id)),
       [
-        { id: first.id, consumed: true },
-        { id: second.id, consumed: true },
+        { id: first.id, consumed: false },
+        { id: second.id, consumed: false },
       ].sort((a, b) => a.id.localeCompare(b.id)),
     );
   });
 });
 
-test("kill terminates the whole process tree (grandchildren die)", async () => {
+test("requestKill terminates the whole process tree (grandchildren die)", async () => {
   await withManager(async (manager, runtime) => {
     const sentinelDir = fs.mkdtempSync(path.join(os.tmpdir(), "bt-tree-test-"));
     const sentinel = path.join(sentinelDir, "heartbeat");
@@ -544,7 +553,8 @@ test("kill terminates the whole process tree (grandchildren die)", async () => {
       "heartbeat belongs to the live grandchild",
     );
 
-    await runTool(runtime, manager.kill([snap.id]));
+    manager.view.requestKill(snap.id);
+    await settlement(manager, snap.id);
     assert.ok(
       await pollUntil(() => processGone(grandchild)),
       "grandchild process is gone after group kill",
@@ -598,7 +608,7 @@ test("a shell exit with inherited pipes open settles naturally and reaps descend
   });
 });
 
-test("kill preserves a natural exit observed before the signal point", async (t) => {
+test("requestKill preserves a natural exit observed before the signal point", async (t) => {
   await withManager(async (manager, runtime) => {
     if (process.platform === "win32" && !manager.windowsJobSupport.available) {
       t.skip(manager.windowsJobSupport.reason);
@@ -622,11 +632,12 @@ test("kill preserves a natural exit observed before the signal point", async (t)
     assert.ok(await pollUntil(() => processGone(snap.pid!)));
     assert.equal(manager.view.get(snap.id)?.status, "running");
 
-    const [result] = await runTool(runtime, manager.kill([snap.id]));
-    assert.equal(result.wasRunning, true);
-    assert.equal(result.killed, false);
-    assert.equal(result.status, "done");
-    assert.equal(result.exit, "exit 0");
+    manager.view.requestKill(snap.id);
+    const { snap: after } = await settlement(manager, snap.id);
+    // The shell's own exit was already observed, so the result stays a
+    // natural exit even though teardown now reaps the surviving grandchild.
+    assert.equal(after.status, "done");
+    assert.equal(after.exitCode, 0);
     assert.ok(await pollUntil(() => processGone(grandchild)));
   });
 });
@@ -654,7 +665,8 @@ test("concurrency cap rejects an extra start; a failed spawn releases its slot",
 
     // Free one slot; a bogus binary settles as failed near-instantly (the
     // 'error'/'exit' path), leaving the slot free again.
-    await runTool(runtime, manager.kill([spawns[0].id]));
+    manager.view.requestKill(spawns[0].id);
+    await settlement(manager, spawns[0].id);
     const bogus = await runTool(
       runtime,
       manager.start({
@@ -675,23 +687,6 @@ test("concurrency cap rejects an extra start; a failed spawn releases its slot",
       }),
     );
     assert.equal(again.status, "running");
-  });
-});
-
-test("a settle during an in-flight kill reports consumed: true", async () => {
-  await withManager(async (manager, runtime) => {
-    const settled: Array<{ id: string; consumed: boolean }> = [];
-    manager.view.setOnSettled((snap, consumed) => settled.push({ id: snap.id, consumed }));
-    const snap = await runTool(
-      runtime,
-      manager.start({
-        command: nodeCmd("setInterval(() => {}, 1000)"),
-        title: "consumed",
-        cwd,
-      }),
-    );
-    await runTool(runtime, manager.kill([snap.id]));
-    assert.deepEqual(settled, [{ id: snap.id, consumed: true }]);
   });
 });
 
@@ -835,12 +830,6 @@ test("pruning drops the oldest settled entries past MAX_TRACKED, never running o
         "still-tracked terminal spill files remain available",
       );
     }
-
-    const [historical] = await runTool(runtime, manager.kill([settledIds[0]]));
-    assert.equal(historical.title, "quick-0");
-    assert.equal(historical.status, "done");
-    assert.equal(historical.wasRunning, false);
-    assert.equal(historical.killed, false);
   });
 });
 
@@ -933,15 +922,17 @@ test("the spill file holds the complete capture when the settle hook fires, beyo
     assert.equal(done.id, snap.id);
     assert.equal(done.status, "done");
     assert.equal(done.stdout.totalBytes, totalBytes);
-    // In-memory retention is bounded; startup head and recent tail survive.
+    // After settle the complete capture lives on disk, so the in-memory copy
+    // is compacted to the settled retention: a short startup head prefix and
+    // a bounded recent tail.
     assert.ok(done.stdout.truncatedBytes > 0, "middle was omitted in memory");
     assert.ok(
       Buffer.byteLength(done.stdout.head) + Buffer.byteLength(done.stdout.tail) <=
-        RETAINED_PER_STREAM,
-      "retained head and tail stay within the cap",
+        SETTLED_RETAINED_PER_STREAM,
+      "settled head and tail stay within the compacted cap",
     );
-    assert.equal(done.stdout.head, "x".repeat(HEAD_RETAINED_PER_STREAM));
-    assert.ok(done.stdout.tail.endsWith("x".repeat(64 * 1024)));
+    assert.equal(done.stdout.head, "x".repeat(Math.floor(SETTLED_RETAINED_PER_STREAM / 8)));
+    assert.ok(done.stdout.tail.endsWith("x".repeat(32 * 1024)));
     if (done.stdout.spillPath) {
       assert.equal(
         spillSizeAtSettle,
@@ -1077,7 +1068,7 @@ test("terminal_log_read pages a multi-byte archive without corrupting it", async
   });
 });
 
-test("aborting the kill wait does not cancel the termination", async () => {
+test("requestKill teardown is detached from any caller", async () => {
   await withManager(async (manager, runtime) => {
     const snap = await runTool(
       runtime,
@@ -1088,7 +1079,7 @@ test("aborting the kill wait does not cancel the termination", async () => {
             : `exec ${nodeCmd(
                 'process.on("SIGTERM", () => process.stdout.write("term\\n")); process.stdout.write("ready\\n"); setInterval(() => {}, 1000);',
               )}`,
-        title: "abort-race",
+        title: "detached-kill",
         cwd,
       }),
     );
@@ -1101,15 +1092,9 @@ test("aborting the kill wait does not cancel the termination", async () => {
       );
     }
 
-    // Abort the tool call immediately: the kill wait is interrupted, but the
-    // SIGTERM→SIGKILL teardown must continue detached in the background.
-    const controller = new AbortController();
-    const killPromise = runTool(runtime, manager.kill([snap.id]), {
-      signal: controller.signal,
-      interruptMessage: "aborted",
-    });
-    controller.abort();
-    await assert.rejects(killPromise, /aborted/);
+    // requestKill returns synchronously: the SIGTERM→SIGKILL teardown runs
+    // detached in a scoped fiber, so nothing the caller does can cancel it.
+    manager.view.requestKill(snap.id);
 
     const { snap: after } = await settlement(manager, snap.id);
     assert.equal(after.status, "killed");
@@ -1118,14 +1103,104 @@ test("aborting the kill wait does not cancel the termination", async () => {
   });
 });
 
-test("status returns the snapshot and rejects unknown ids with the known list", async () => {
+test("view.get returns the snapshot and undefined for unknown ids", async () => {
   await withManager(async (manager, runtime) => {
     const snap = await runTool(runtime, manager.start({ command: "true", title: "status", cwd }));
-    const seen = await runTool(runtime, manager.status(snap.id));
-    assert.equal(seen.id, snap.id);
-    await assert.rejects(
-      runTool(runtime, manager.status("bt-999")),
-      /Unknown terminal id "bt-999"\. Known: bt-[a-f0-9]{16}-1\./,
-    );
+    assert.equal(manager.view.get(snap.id)?.id, snap.id);
+    assert.equal(manager.view.get("bt-999"), undefined);
   });
+});
+
+test("pruning evicts quick non-yielded entries before yielded terminals", async () => {
+  await withManager(async (manager, runtime) => {
+    // One real background terminal — outlives its initial wait, then settles
+    // EARLY so its settledAt is the oldest in the map.
+    const keeper = await runTool(
+      runtime,
+      manager.start({
+        command: nodeCmd("setTimeout(() => {}, 400)"),
+        title: "yielded-keeper",
+        cwd,
+      }),
+    );
+    const yielded = await runTool(runtime, manager.waitForSettlement(keeper.id, 250));
+    assert.equal(yielded.settled, false);
+    const { snap: keeperDone } = await settlement(manager, keeper.id);
+    assert.equal(keeperDone.yielded, true);
+
+    // Fill the retention cap with quick commands; none ever yields.
+    const quickIds: string[] = [];
+    for (let index = 0; index < MAX_TRACKED; index++) {
+      const snap = await runTool(
+        runtime,
+        manager.start({ command: "true", title: `quick-${index}`, cwd }),
+      );
+      quickIds.push(snap.id);
+      await settlement(manager, snap.id);
+    }
+
+    // 1 yielded + 32 quick > 32: the overflow comes out of the quick entries
+    // even though they all settled *later* than the background terminal.
+    const remaining = new Set(manager.view.list().map((snap) => snap.id));
+    assert.equal(remaining.size, MAX_TRACKED);
+    assert.equal(remaining.has(keeper.id), true, "yielded terminal survived pruning");
+    const evicted = quickIds.filter((id) => !remaining.has(id));
+    assert.deepEqual(evicted, [quickIds[0]]);
+  });
+});
+
+test("settled entries compact their buffers once the archive is complete", async () => {
+  await withManager(async (manager, runtime) => {
+    // Larger than the settled retention cap but smaller than the live cap:
+    // fully retained while running, shrunk after settle + flush.
+    const snap = await runTool(
+      runtime,
+      manager.start({
+        command: nodeCmd(`process.stdout.write("x".repeat(${256 * 1024}))`),
+        title: "compaction",
+        cwd,
+      }),
+    );
+    const { snap: done } = await settlement(manager, snap.id);
+    assert.equal(done.stdout.archiveComplete, true);
+    assert.ok(done.stdout.spillPath);
+    const retained = Buffer.byteLength(done.stdout.head) + Buffer.byteLength(done.stdout.tail);
+    assert.ok(
+      retained <= SETTLED_RETAINED_PER_STREAM,
+      `settled view retains ${retained} bytes > ${SETTLED_RETAINED_PER_STREAM}`,
+    );
+    assert.ok(done.stdout.truncatedBytes > 0, "compaction is reflected in the view");
+    // The complete capture remains on disk for terminal_log_read.
+    assert.equal(fs.statSync(done.stdout.spillPath).size, 256 * 1024);
+  });
+});
+
+test("manager startup sweeps session dirs whose owner pid is gone", async () => {
+  const agentDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-bt-agent-"));
+  const previous = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  try {
+    const base = path.join(agentDir, "background-terminals");
+    fs.mkdirSync(base, { recursive: true });
+    // A stale dir from a crashed pi: owned by a pid we know just exited.
+    const dead = spawnSync(process.execPath, ["-e", ""], { stdio: "ignore" });
+    const stale = path.join(base, `session-${dead.pid}-crashed`);
+    fs.mkdirSync(stale);
+    fs.writeFileSync(path.join(stale, "bt-old.stdout.log"), "old");
+    // A dir owned by a live process (this one) must be kept.
+    const live = path.join(base, `session-${process.pid}-live`);
+    fs.mkdirSync(live);
+
+    await withManager(async (manager, runtime) => {
+      const snap = await runTool(runtime, manager.start({ command: "true", title: "sweep", cwd }));
+      await settlement(manager, snap.id);
+    });
+
+    assert.equal(fs.existsSync(stale), false, "dead-pid session dir swept");
+    assert.equal(fs.existsSync(live), true, "live-pid session dir preserved");
+  } finally {
+    if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previous;
+    fs.rmSync(agentDir, { recursive: true, force: true });
+  }
 });
