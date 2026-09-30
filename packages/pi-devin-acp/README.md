@@ -46,7 +46,11 @@ concrete row ids directly keep the single-write behavior.
 
 Model discovery runs `devin models list`, caches the parsed catalog in
 `~/.pi/devin-acp/models.json`, and falls back to a bundled snapshot when the CLI is
-unavailable.
+unavailable. Live catalogs are cached for 24 hours (fallback catalogs for 5
+minutes). An expired cache refreshes in the background at session startup,
+even when another provider is selected, so newly shipped families appear in the
+model picker without running `/devin models` by hand. Selecting a Devin model
+also refreshes an expired cache, reusing any automatic refresh already in flight.
 
 ## Commands
 

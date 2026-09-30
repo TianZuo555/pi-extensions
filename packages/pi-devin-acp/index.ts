@@ -693,16 +693,23 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
     });
   };
 
-  async function refreshModelsWhenSelected(): Promise<void> {
+  let modelRefresh: Promise<void> | undefined;
+  function refreshModelsIfExpired(): Promise<void> {
+    if (modelRefresh) return modelRefresh;
     if (catalog.fetchedAt && Date.now() - catalog.fetchedAt < modelCacheTtlMs(catalog.source)) {
-      return;
+      return Promise.resolve();
     }
-    try {
-      const next = await discoverModels(true);
-      registerDevinProvider(next.families);
-    } catch {
-      // Discovery failure keeps the cached/fallback catalog.
-    }
+    modelRefresh = (async () => {
+      try {
+        const next = await discoverModels(true);
+        registerDevinProvider(next.families);
+      } catch {
+        // Discovery failure keeps the cached/fallback catalog.
+      } finally {
+        modelRefresh = undefined;
+      }
+    })();
+    return modelRefresh;
   }
 
   const syncWrapperToolActivation = (provider: string | undefined) => {
@@ -734,6 +741,9 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
     sessionCtx = ctx;
     cwd = ctx.cwd;
     piSessionId = ctx.sessionManager.getSessionId();
+    // Discover new families even when another provider is selected. Keep CLI
+    // processes out of the factory: some invocations only load extensions.
+    void refreshModelsIfExpired();
     if (!opsSubscribed && ctx.hasUI) {
       opsSubscribed = true;
       void runDevin(
@@ -785,7 +795,7 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
       await runDevin(runtime, service.setMode(YOLO_MODE));
     }
     if (ctx.model?.provider === DEVIN_PROVIDER) {
-      await refreshModelsWhenSelected();
+      await refreshModelsIfExpired();
     }
     void refreshPlanWidget();
     refreshDevinStatus(ctx);
@@ -808,7 +818,7 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
     }
     selectedModelKey = nextKey;
     if (event.model?.provider === DEVIN_PROVIDER) {
-      await refreshModelsWhenSelected();
+      await refreshModelsIfExpired();
     }
     void refreshPlanWidget();
     refreshDevinStatus(ctx);
