@@ -46,14 +46,14 @@ for (const shutdown of [false, true]) {
       const deadline = Date.now() + 5_000;
       // existsSync can observe the sentinel between O_CREAT and the write
       // completing — poll until the pid content is actually readable.
-      while (Date.now() < deadline) {
+      while (pid === undefined && Date.now() < deadline) {
         try {
-          pid = Number(fs.readFileSync(ready, "utf8"));
+          const read = Number(fs.readFileSync(ready, "utf8"));
+          if (Number.isSafeInteger(read) && read > 0) pid = read;
         } catch {}
-        if (Number.isSafeInteger(pid) && pid > 0) break;
-        await new Promise((resolve) => setTimeout(resolve, 10));
+        if (pid === undefined) await new Promise((resolve) => setTimeout(resolve, 10));
       }
-      assert.ok(Number.isSafeInteger(pid) && pid > 0);
+      assert.ok(pid !== undefined, "sentinel did not yield a readable pid");
       if (shutdown) {
         await runtime.dispose();
       } else {
