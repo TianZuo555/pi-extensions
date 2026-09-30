@@ -18,7 +18,8 @@ Every model shell command goes through `bash`:
    the Bash result. A non-zero exit, kill, or timeout is a tool error.
 6. Otherwise return a terminal id and leave the process running.
 7. When a yielded process settles, admit its final result exactly once. Results
-   that settle close together share one bounded follow-up that wakes the model.
+   that settle close together share one bounded message, steered into the
+   running agent at its next tool boundary or waking an idle one.
 
 The model-facing tool result and completion message retain bounded stdout/stderr.
 Quick and initial-wait TUI rows show a sanitized bounded output preview plus a
@@ -63,10 +64,11 @@ supplies one prompt snippet too, keeping its bounded read-only capability
 discoverable without expanding the global prompt.
 
 The custom call/result renderers show a useful bounded title and preview for
-quick work, then switch to compact id/status rendering only after a real yield.
+quick work, then switch to compact id/status rendering only after a real yield
+(the `yielded` flag on the result's `details`). The collapsed render truncates;
+Ctrl+O `expanded` shows the full command and the complete captured preview.
 Rendering changes presentation only: the textual result still reaches the model.
-Successful Bash results use `details: undefined`, which is a valid
-`BashToolDetails` shape. Private full-log paths never reach model-facing output;
+Private full-log paths never reach model-facing output;
 settled archives are addressed through opaque refs and `terminal_log_read`.
 
 ## 3. Safe fallback boundary
@@ -210,8 +212,9 @@ spawn boundary (after any asynchronous Windows job setup). A pre-spawn abort
 never runs the command or invokes foreground fallback. Abort-related spawn
 errors carry `fallbackSafe: false`, independently of the tool boundary's own
 cancellation checks. Once spawned, the initial
-wait is abortible. Aborting it does not kill the process. The error
-identifies the terminal id, and eventual settlement remains eligible for an
+wait is abortible. Aborting it does not kill the process. The result reports
+the abort, marks the tool call unsuccessful (`isError`), and carries the live
+`running` status in `details`; eventual settlement remains eligible for an
 automatic follow-up.
 
 The returned result has two forms:
@@ -219,9 +222,15 @@ The returned result has two forms:
 - **Final:** status/output are returned directly, without presenting the
   manager's internal terminal identity as background work, and any deferred
   completion for the tiny start→wait race is consumed. Failed, killed, and
-  timed-out final states throw so Pi marks the Bash result as an error.
+  timed-out final states return `isError: true` so Pi marks the Bash result as
+  an error while the structured status still reaches the renderer.
 - **Yielded:** status is `running`, the id and captured startup output are
   returned, and later settlement becomes a follow-up.
+
+Every managed Bash result also carries `details: { id, status, yielded }`.
+The renderer reads that structured state instead of parsing the model-facing
+text — result text can contain status-looking words (a `killed` directory in
+the cwd, an aborted wait) that would corrupt a regex-derived status.
 
 ### Pre-spawn shape guards
 
@@ -272,8 +281,8 @@ initial yield wins  <──►  process settlement wins
 Returning both the Bash result and an automatic follow-up would duplicate the
 same completion. Returning neither would lose it.
 
-`waitForSettlement` registers a waiter token in `settlementWaiters` before
-racing the terminal's `Deferred` against `Effect.sleep(yield_time_ms)`.
+`waitForSettlement` registers a waiter token in `settlementWaiters`, then
+awaits the terminal's `Deferred` under `Effect.timeoutOrElse(yield_time_ms)`.
 
 When settlement wins:
 
@@ -286,18 +295,22 @@ When settlement wins:
 When yield wins:
 
 1. The timeout branch synchronously removes its waiter token.
-2. It returns the still-running snapshot.
-3. A later settlement sees no waiter and therefore queues a follow-up.
+2. It marks the snapshot `yielded` — the entry is now a background terminal
+   (the widget counts only these, so a quick command's initial wait never
+   flashes it; pruning also prefers evicting entries that never yielded).
+3. It returns the still-running snapshot.
+4. A later settlement sees no waiter and therefore queues a follow-up.
 
 The synchronous token removal is the linearization point. Cleanup is also an
 Effect finalizer, so an interrupted wait cannot leave stale interest that
-suppresses a future completion.
+suppresses a future completion — the interrupt path marks `yielded` the same
+way, since the process genuinely became background work.
 
 There is a second defensive layer in `index.ts`: when a final snapshot is
 returned, `resultDelivery.consume(id)` removes any result deferred during the
 small gap between `start` and waiter registration.
 
-## 10. Exactly-once follow-up delivery
+## 10. Exactly-once completion delivery
 
 The settle hook receives `(snapshot, consumed)`:
 
@@ -312,12 +325,14 @@ not write that failure through `console.error`, which would corrupt the active
 TUI frame; non-TUI modes retain the diagnostic.
 
 Every unconsumed settlement starts or slides a 1,000 ms quiet deadline while the
-first result keeps one fixed 3,000 ms maximum deadline. If quiet expires while
-the agent is busy, the scheduler holds that expiry without cancelling the
-maximum. `agent_settled` flushes the held group when no later result arrived. A
-later result instead clears the held expiry and starts its own full quiet window;
-settling the agent cannot flush that newer result early. Session shutdown
-cancels both deadlines before clearing the map.
+first result keeps one fixed 3,000 ms maximum deadline. Either deadline flushes
+whether or not the agent is busy: delivery is a steer, so holding a busy
+agent's result back would only delay it. `agent_before_settle` (outcome
+`completed`) flushes a group still inside its window immediately, so the run
+that is about to end continues with the result instead of settling and waking a
+separate run — which print/json mode would never do, since it exits on
+settlement. Aborted or failed runs are not continued. Session shutdown cancels
+both deadlines before clearing the map.
 
 The timer group detaches before delivery, so a settlement triggered during a
 synchronous delivery callback starts a new group. Generation tokens make stale
@@ -329,17 +344,22 @@ Delivery uses:
 
 ```ts
 pi.sendMessage(message, {
-  deliverAs: "followUp",
+  deliverAs: "steer",
   triggerTurn: true,
 });
 ```
+
+`followUp` would only be drained once the model stops calling tools, so a model
+that keeps working would act without the result and write a final answer before
+seeing it. A steer is drained after every tool batch — at a turn boundary, never
+mid-stream.
 
 A singleton keeps the existing message content and detail shape. A batch carries
 all compact terminal details in settlement order and allocates its 32 KiB
 content budget across results so every terminal summary survives truncation. Its
 message renderer shows one status line with the terminal count, aggregate
 outcomes, and a `/ps` hint. A busy agent receives the message after its current
-run settles. An idle agent is woken when the quiet window closes. No model-driven
+tool batch. An idle agent is woken when the quiet window closes. No model-driven
 polling is required.
 
 ## 11. Head+tail output retention
@@ -364,6 +384,13 @@ rolling tail:  remaining 1.75 MiB
 Bounded slices are copied so a small retained head/tail cannot pin a giant
 source Buffer. Once sealed, the head never changes. This preserves startup
 configuration and first errors while the tail tracks recent logs.
+
+Once an entry settles AND its archive flushed completely, `OutputBuffer.compact`
+shrinks the in-memory copy to 64 KiB (head capped at one eighth) — the spill
+file is the durable record at that point, and a settled buffer only serves the
+small result/UI views. 32 retained entries therefore cannot hold hundreds of
+MiB of process output hostage. Entries without a complete archive keep their
+full 2 MiB view; it is the only copy.
 
 `OutputView.text` inserts an explicit marker when the middle was omitted:
 
@@ -405,8 +432,14 @@ a child is a firehose.
 ## 12. Spill files and backpressure
 
 Before spawning output consumers, the manager creates a private per-session
-temporary directory (`0700`). Each stream writes to a separate `0600` file from
-its first byte.
+directory (`0700`) under the agent state directory —
+`<agent-dir>/background-terminals/session-<pid>-<random>` via `mkdtemp`. This
+deliberately avoids a shared `/tmp`: a same-named directory owned by another
+user would silently disable spilling, and private command output does not
+belong in a world-readable location. When the spill base is (re)created, any
+`session-<pid>-*` directory whose owner pid no longer exists is swept — a
+crashed Pi leaves its archives behind otherwise. Each stream writes to a
+separate `0600` file from its first byte.
 
 Spills are capped at 256 MiB per stream. If the cap or an I/O error is reached,
 the full-log pointer is cleared and a bounded `errorText` note is attached.
@@ -507,12 +540,13 @@ cap. Reaching the cap is an explicit error; it does not bypass management via
 the foreground fallback.
 
 The registry retains at most 32 live/settled entries for `/ps` and exposes them
-newest first. When over the limit, it removes the oldest settled entries and
-their spill files; running entries are never pruned. Small tombstones retain
-final kill-report facts across pruning races, and a separate bounded tombstone
-records that an archive ref expired so a later `terminal_log_read` reports
-expiry rather than an unknown id. Tombstones hold no path and keep no file
-alive; both are cleared on disposal.
+newest first. When over the limit it prunes settled entries oldest first —
+preferring entries that never yielded (quick commands that settled inside their
+initial wait) so a `ls`-heavy session cannot evict a real background terminal's
+archive. Running entries are never pruned. A bounded tombstone records that an
+archive ref expired so a later `terminal_log_read` reports expiry rather than
+an unknown id. Tombstones hold no path and keep no file alive; they are cleared
+on disposal.
 
 ## 15. `/ps` UI
 
@@ -591,7 +625,8 @@ The package test suite covers:
 - quick completion without a duplicate follow-up;
 - yielded completion with exactly one automatic delivery;
 - sliding quiet and maximum-hold batching deadlines, including cancellation;
-- busy-held quiet expiry, later-arrival rearming, and maximum-hold delivery;
+- quiet-window flushes independent of agent activity, fresh groups after a flush,
+  and before-settle delivery of a result still inside its quiet window;
 - synchronized yielded completions sharing one follow-up;
 - unchanged singleton messages and strict UTF-8 aggregate and marker budgets;
 - safe pre-spawn foreground fallback;

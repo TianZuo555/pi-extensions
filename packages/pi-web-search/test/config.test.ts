@@ -5,7 +5,7 @@ import {
   DEFAULT_MONID_API_URL,
   DEFAULT_OPENAI_SYSTEM_PROMPT,
   getProviderStatuses,
-  inspectOpenAICodexAuth,
+  inspectOpenAIAuth,
   resolveDeepseekConfig,
   resolveExaConfig,
   resolveFetchProvider,
@@ -40,10 +40,15 @@ test("resolveOpenAIConfig prefers pi's openai-codex login over OPENAI_API_KEY", 
   }
 });
 
-test("inspectOpenAICodexAuth reports fresh / expired / missing states", () => {
-  const cases: Array<[Record<string, unknown>, string]> = [
-    [{}, "missing"],
-    [{ "openai-codex": { type: "oauth", access: "tok", expires: Date.now() + 60_000 } }, "fresh"],
+test("inspectOpenAIAuth reports fresh / expired / missing states", () => {
+  const cases: Array<[Record<string, unknown>, string, string | undefined]> = [
+    [{}, "missing", undefined],
+    [
+      { "openai-codex": { type: "oauth", access: "tok", expires: Date.now() + 60_000 } },
+      "fresh",
+      "openai-codex",
+    ],
+    [{ openai: { type: "oauth", access: "tok", expires: Date.now() + 60_000 } }, "fresh", "openai"],
     [
       {
         "openai-codex": {
@@ -53,15 +58,128 @@ test("inspectOpenAICodexAuth reports fresh / expired / missing states", () => {
         },
       },
       "expired",
+      "openai-codex",
+    ],
+    [
+      { openai: { type: "oauth", access: "tok", expires: Date.now() - 1_000 } },
+      "expired",
+      "openai",
+    ],
+    // A fresh openai login wins over an expired codex entry.
+    [
+      {
+        "openai-codex": { type: "oauth", access: "old", expires: Date.now() - 1_000 },
+        openai: { type: "oauth", access: "tok", expires: Date.now() + 60_000 },
+      },
+      "fresh",
+      "openai",
     ],
   ];
-  for (const [data, expected] of cases) {
+  for (const [data, expected, expectedEntry] of cases) {
     const restoreFs = stubPiAuthData(data);
     try {
-      assert.equal(inspectOpenAICodexAuth().state, expected);
+      const res = inspectOpenAIAuth();
+      assert.equal(res.state, expected);
+      assert.equal(res.entry, expectedEntry);
     } finally {
       restoreFs();
     }
+  }
+});
+
+function fakeJwt(authClaim: Record<string, unknown>): string {
+  const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString("base64url");
+  return `${b64({ alg: "none" })}.${b64({ "https://api.openai.com/auth": authClaim })}.sig`;
+}
+
+test("resolveOpenAIConfig detects pi's openai ChatGPT login (oauth access token)", () => {
+  const originalEnv = process.env.OPENAI_API_KEY;
+  const restoreFs = stubPiAuthData({
+    openai: {
+      type: "oauth",
+      access: "openai-access-token",
+      expires: Date.now() + 60_000,
+      clientId: "oaiapp_test",
+    },
+  });
+  try {
+    delete process.env.OPENAI_API_KEY;
+    const res = resolveOpenAIConfig(undefined, {});
+    assert.ok(res);
+    assert.equal(res.apiKey, "openai-access-token");
+    assert.equal(res.source, "~/.pi/agent/auth.json (openai)");
+  } finally {
+    restoreFs();
+    if (originalEnv !== undefined) process.env.OPENAI_API_KEY = originalEnv;
+  }
+});
+
+test("resolveOpenAIConfig skips an expired openai login", () => {
+  const originalEnv = process.env.OPENAI_API_KEY;
+  const restoreFs = stubPiAuthData({
+    openai: { type: "oauth", access: "openai-access-token", expires: Date.now() - 1_000 },
+  });
+  try {
+    process.env.OPENAI_API_KEY = "sk-fallback-key";
+    const res = resolveOpenAIConfig(undefined, {});
+    assert.ok(res);
+    assert.equal(res.apiKey, "sk-fallback-key");
+    assert.equal(res.source, "OPENAI_API_KEY env");
+  } finally {
+    restoreFs();
+    if (originalEnv !== undefined) {
+      process.env.OPENAI_API_KEY = originalEnv;
+    } else {
+      delete process.env.OPENAI_API_KEY;
+    }
+  }
+});
+
+test("resolveOpenAIConfig routes codex vs openai oauth tokens to the right endpoint", () => {
+  // Both ChatGPT OAuth tokens embed the https://api.openai.com/auth claim, but
+  // only the codex token carries chatgpt_account_id. The openai "Sign in with
+  // ChatGPT" token must hit api.openai.com, not the Codex backend.
+  const codexJwt = fakeJwt({ chatgpt_account_id: "acct-1" });
+  const directJwt = fakeJwt({ per_user_salt: "x", encrypted_auth_metadata: "y" });
+
+  const restoreFs = stubPiAuthData({
+    "openai-codex": { type: "oauth", access: codexJwt, expires: Date.now() + 60_000 },
+  });
+  try {
+    const res = resolveOpenAIConfig(undefined, {});
+    assert.ok(res);
+    assert.equal(res.isCodexOAuth, true);
+    assert.equal(res.accountId, "acct-1");
+    assert.equal(res.baseUrl, "https://chatgpt.com/backend-api/codex/responses");
+  } finally {
+    restoreFs();
+  }
+
+  const restoreFs2 = stubPiAuthData({
+    openai: { type: "oauth", access: directJwt, expires: Date.now() + 60_000 },
+  });
+  try {
+    const res = resolveOpenAIConfig(undefined, {});
+    assert.ok(res);
+    assert.equal(res.isCodexOAuth, false);
+    assert.equal(res.accountId, undefined);
+    assert.equal(res.baseUrl, "https://api.openai.com/v1/responses");
+  } finally {
+    restoreFs2();
+  }
+});
+
+test("resolveOpenAIConfig prefers pi's openai-codex login over the openai login", () => {
+  const restoreFs = stubPiAuthData({
+    "openai-codex": { type: "oauth", access: "codex-access-token" },
+    openai: { type: "oauth", access: "openai-access-token" },
+  });
+  try {
+    const res = resolveOpenAIConfig(undefined, {});
+    assert.ok(res);
+    assert.equal(res.apiKey, "codex-access-token");
+  } finally {
+    restoreFs();
   }
 });
 

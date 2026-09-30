@@ -4,9 +4,9 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
-import { TerminalManager } from "./src/manager.ts";
-import { SpawnError } from "./src/domain.ts";
-import { createTerminalRuntime, runTool } from "./src/runtime.ts";
+import { TerminalManager } from "../src/manager.ts";
+import { SpawnError } from "../src/domain.ts";
+import { createTerminalRuntime, runTool } from "../src/runtime.ts";
 
 function command(script: string) {
   return `node -e "eval(Buffer.from('${Buffer.from(script).toString("base64")}','base64').toString())"`;
@@ -44,10 +44,16 @@ for (const shutdown of [false, true]) {
         manager.start({ command: command(script), cwd: dir, title: "redirected tree" }),
       );
       const deadline = Date.now() + 5_000;
-      while (!fs.existsSync(ready) && Date.now() < deadline)
-        await new Promise((resolve) => setTimeout(resolve, 10));
-      pid = Number(fs.readFileSync(ready, "utf8"));
-      assert.ok(Number.isSafeInteger(pid) && pid > 0);
+      // existsSync can observe the sentinel between O_CREAT and the write
+      // completing — poll until the pid content is actually readable.
+      while (pid === undefined && Date.now() < deadline) {
+        try {
+          const read = Number(fs.readFileSync(ready, "utf8"));
+          if (Number.isSafeInteger(read) && read > 0) pid = read;
+        } catch {}
+        if (pid === undefined) await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      assert.ok(pid !== undefined, "sentinel did not yield a readable pid");
       if (shutdown) {
         await runtime.dispose();
       } else {

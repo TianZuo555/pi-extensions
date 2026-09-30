@@ -5,11 +5,13 @@
  */
 
 import { Cause, Exit, ManagedRuntime, Result, type Effect } from "effect";
-import { TerminalManagerLive } from "./manager.ts";
+import { terminalManagerLive, type TerminalManagerTimings } from "./manager.ts";
 import { TERMINAL_ERRORS } from "./prompt.ts";
 
-export function createTerminalRuntime() {
-  return ManagedRuntime.make(TerminalManagerLive);
+export function createTerminalRuntime(
+  options: { readonly timings?: Partial<TerminalManagerTimings> } = {},
+) {
+  return ManagedRuntime.make(terminalManagerLive(options.timings));
 }
 
 export type TerminalRuntime = ReturnType<typeof createTerminalRuntime>;

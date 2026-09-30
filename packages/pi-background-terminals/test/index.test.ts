@@ -5,7 +5,7 @@ import * as path from "node:path";
 import test from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Check } from "typebox/value";
-import backgroundTerminals, { createBackgroundTerminalsExtension } from "./index.ts";
+import backgroundTerminals, { createBackgroundTerminalsExtension } from "../index.ts";
 
 function command(script: string) {
   const encoded = Buffer.from(script).toString("base64");
@@ -121,8 +121,8 @@ test("a pre-aborted Bash call does not initialize or spawn", async () => {
 });
 
 test("cancellation during manager initialization prevents spawn and fallback", async () => {
-  const { createTerminalRuntime } = await import("./src/runtime.ts");
-  const { TerminalManager } = await import("./src/manager.ts");
+  const { createTerminalRuntime } = await import("../src/runtime.ts");
+  const { TerminalManager } = await import("../src/manager.ts");
   const runtime = createTerminalRuntime();
   const controller = new AbortController();
   const manager = await runtime.runPromise(TerminalManager);
@@ -320,6 +320,20 @@ test("renderers distinguish quick bash from actually yielded terminals", async (
     const call = tool.renderCall({ command: "printf visible-command" }, theme, {});
     assert.equal(call.render(120).join("\n").trimEnd(), "$ printf visible-command");
 
+    // Ctrl+O expansion shows the full command text instead of the title
+    // (render pads each line to width — compare trimmed lines).
+    const expandedCall = tool.renderCall({ command: "printf first\nprintf second" }, theme, {
+      expanded: true,
+    });
+    assert.deepEqual(
+      expandedCall.render(120).map((line: string) => line.trimEnd()),
+      ["$ printf first", "printf second"],
+    );
+    const collapsedCall = tool.renderCall({ command: "printf first\nprintf second" }, theme, {
+      expanded: false,
+    });
+    assert.equal(collapsedCall.render(120).join("\n").trimEnd(), "$ printf first printf second");
+
     const quick = tool.renderResult(
       {
         content: [
@@ -328,6 +342,8 @@ test("renderers distinguish quick bash from actually yielded terminals", async (
             text: ["Command finished in 0s (exit 0).", "", "stdout:", "visible-output"].join("\n"),
           },
         ],
+        // Structured details — not the text — decide the row shape.
+        details: { id: "bt-1111111111111111-1", status: "done", yielded: false },
       },
       { isPartial: false, expanded: false },
       theme,
@@ -352,6 +368,11 @@ test("renderers distinguish quick bash from actually yielded terminals", async (
             ].join("\n"),
           },
         ],
+        details: {
+          id: "bt-0123456789abcdef-9",
+          status: "running",
+          yielded: true,
+        },
       },
       { isPartial: false, expanded: true },
       theme,
@@ -360,6 +381,43 @@ test("renderers distinguish quick bash from actually yielded terminals", async (
     const renderedYielded = yielded.render(120).join("\n").trimEnd();
     assert.match(renderedYielded, /terminal bt-0123456789abcdef-9 running.*\/ps to inspect/);
     assert.doesNotMatch(renderedYielded, /stdout|startup-output|server"/);
+
+    // Text that merely *looks* like a status word cannot mislabel the row:
+    // a cwd named "killed" is content, not state.
+    const cwdCoincidence = tool.renderResult(
+      {
+        content: [
+          {
+            type: "text",
+            text: "Command finished in 0s (exit 0) in /repo/killed-jobs.\n\nstdout:\nok",
+          },
+        ],
+        details: { id: "bt-2222222222222222-2", status: "done", yielded: false },
+      },
+      { isPartial: false, expanded: false },
+      theme,
+      { isError: false },
+    );
+    assert.match(cwdCoincidence.render(120).join("\n").trimEnd(), /bash done.*\/ps for details/);
+    // An Esc-aborted initial wait carries the *live* status, not a failure.
+    const abortedWait = tool.renderResult(
+      {
+        content: [
+          {
+            type: "text",
+            text: "Initial wait aborted; bt-3333333333333333-3 continues in the background and will report when it exits.",
+          },
+        ],
+        details: { id: "bt-3333333333333333-3", status: "running", yielded: true },
+      },
+      { isPartial: false, expanded: false },
+      theme,
+      { isError: true },
+    );
+    assert.match(
+      abortedWait.render(120).join("\n").trimEnd(),
+      /terminal bt-3333333333333333-3 running/,
+    );
 
     const completionRenderer = app.messageRenderers.get("background-terminal-result");
     const completion = completionRenderer(
@@ -491,7 +549,11 @@ test("quick command returns final output without a duplicate follow-up", async (
       app.ctx,
     );
 
-    assert.equal(result.details, undefined);
+    // Structured details carry the terminal identity even when the
+    // model-facing text does not mention it (quick completions have no id).
+    assert.match(result.details?.id ?? "", /^bt-[a-f0-9]{16}-\d+$/);
+    assert.equal(result.details?.status, "done");
+    assert.equal(result.details?.yielded, false);
     assert.match(result.content[0].text, /stdout:\nquick/);
     assert.equal(app.messages.length, 0);
   } finally {
@@ -718,18 +780,18 @@ test("a failed command is never retried through the fallback", async () => {
   const marker = path.join(dir, "marker");
   try {
     const script = `require("fs").appendFileSync(${JSON.stringify(marker)}, "once\\n"); process.exit(7)`;
-    await assert.rejects(
-      app.tools
-        .get("bash")
-        .execute(
-          "call-failed",
-          { command: command(script), yield_time_ms: 30_000 },
-          undefined,
-          undefined,
-          app.ctx,
-        ),
-      /exit 7/,
-    );
+    const result = await app.tools
+      .get("bash")
+      .execute(
+        "call-failed",
+        { command: command(script), yield_time_ms: 30_000 },
+        undefined,
+        undefined,
+        app.ctx,
+      );
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, /exit 7/);
+    assert.equal(result.details?.status, "failed");
     assert.equal(fs.readFileSync(marker, "utf8"), "once\n");
   } finally {
     await app.shutdown();
@@ -740,19 +802,19 @@ test("a failed command is never retried through the fallback", async () => {
 test("a hard timeout is reported as an unsuccessful bash call", async () => {
   const app = harness();
   try {
-    await assert.rejects(
-      app.tools.get("bash").execute(
-        "call-timeout",
-        {
-          command: command("setInterval(() => {}, 1000)"),
-          timeout: 0.1,
-        },
-        undefined,
-        undefined,
-        app.ctx,
-      ),
-      /timed out/i,
+    const result = await app.tools.get("bash").execute(
+      "call-timeout",
+      {
+        command: command("setInterval(() => {}, 1000)"),
+        timeout: 0.1,
+      },
+      undefined,
+      undefined,
+      app.ctx,
     );
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, /timed out/i);
+    assert.equal(result.details?.status, "timed_out");
   } finally {
     await app.shutdown();
   }
@@ -836,9 +898,14 @@ test("yielded command returns an id then sends exactly one completion", async ()
       app.ctx,
     );
 
-    assert.equal(result.details, undefined);
     assert.match(result.content[0].text, /background terminal bt-[a-f0-9]{16}-\d+/);
     assert.match(result.content[0].text, /do not poll/);
+    assert.equal(
+      result.details?.id,
+      /background terminal (bt-[a-f0-9]{16}-\d+)/.exec(result.content[0].text)?.[1],
+    );
+    assert.equal(result.details?.status, "running");
+    assert.equal(result.details?.yielded, true);
 
     assert.equal(
       await pollUntil(() => app.messages.length === 1),
@@ -850,7 +917,7 @@ test("yielded command returns an id then sends exactly one completion", async ()
     assert.equal(app.messages[0].message.customType, "background-terminal-result");
     assert.match(app.messages[0].message.content, /exited \(exit 0\)/);
     assert.deepEqual(app.messages[0].options, {
-      deliverAs: "followUp",
+      deliverAs: "steer",
       triggerTurn: true,
     });
   } finally {
@@ -899,9 +966,204 @@ test("near-simultaneous yielded completions share one follow-up", async () => {
     assert.equal(app.messages[0].message.details.count, 3);
     assert.deepEqual([...app.messages[0].message.details.ids].sort(), [...ids].sort());
     assert.deepEqual(app.messages[0].options, {
-      deliverAs: "followUp",
+      deliverAs: "steer",
       triggerTurn: true,
     });
+  } finally {
+    await app.shutdown();
+  }
+});
+
+test("the widget counts only yielded terminals, not commands inside their initial wait", async () => {
+  const app = harness();
+  const widgets: unknown[] = [];
+  app.ctx.hasUI = true;
+  app.ctx.ui = {
+    setWidget: (_key: string, factory: unknown) => widgets.push(factory),
+    notify: () => {},
+  };
+  // Re-fire session_start so the extension picks up the injected ui.
+  for (const handler of app.handlers.get("session_start") ?? []) {
+    handler({}, app.ctx);
+  }
+  try {
+    // A quick command's initial wait must never raise the widget.
+    await app.tools
+      .get("bash")
+      .execute(
+        "call-quick-widget",
+        { command: command('process.stdout.write("quick\\n")'), yield_time_ms: 30_000 },
+        undefined,
+        undefined,
+        app.ctx,
+      );
+    assert.equal(widgets.length, 0, "widget flashed for a command still inside its initial wait");
+
+    // A command that outlives its wait raises the widget...
+    await app.tools
+      .get("bash")
+      .execute(
+        "call-long-widget",
+        { command: command("setTimeout(() => {}, 600)"), yield_time_ms: 250 },
+        undefined,
+        undefined,
+        app.ctx,
+      );
+    assert.ok(
+      await pollUntil(() => widgets.some((factory) => typeof factory === "function")),
+      "widget appeared once the command yielded",
+    );
+    // ...and clears when the terminal settles.
+    assert.ok(await pollUntil(() => widgets.at(-1) === undefined), "widget cleared on settle");
+  } finally {
+    await app.shutdown();
+  }
+});
+
+test("Esc during the initial wait returns a running-terminal error result, not a failure", async () => {
+  const app = harness();
+  const theme = {
+    fg: (_color: string, text: string) => text,
+    bold: (text: string) => text,
+  } as any;
+  try {
+    const tool = app.tools.get("bash");
+    const controller = new AbortController();
+    // Abort on the first live update — provably inside the initial wait,
+    // after the process spawned (an earlier abort would hit the
+    // pre-spawn throwIfAborted check instead).
+    const executing = tool.execute(
+      "call-esc",
+      {
+        command: command(
+          'process.stdout.write("up\\n"); setTimeout(() => console.log("still ran"), 400)',
+        ),
+        yield_time_ms: 30_000,
+      },
+      controller.signal,
+      () => controller.abort(),
+      app.ctx,
+    );
+
+    const result = await executing;
+    assert.equal(result.isError, true);
+    assert.match(result.content[0].text, /continues in the background/);
+    assert.equal(result.details?.status, "running");
+    assert.equal(result.details?.yielded, true);
+    const id = result.details?.id as string;
+    assert.match(id, /^bt-/);
+
+    // The row renders as a live terminal — not the misleading "bash failed"
+    // the old text-parsing renderer produced for this exact case.
+    const rendered = tool.renderResult(result, { isPartial: false, expanded: false }, theme, {
+      isError: true,
+    });
+    assert.match(rendered.render(120).join("\n"), new RegExp(`terminal ${id} running`));
+
+    // The process really kept running: its completion arrives as a follow-up.
+    assert.equal(await pollUntil(() => app.messages.length === 1), true);
+    assert.match(app.messages[0].message.content, /exited \(exit 0\)/);
+    assert.match(app.messages[0].message.content, /still ran/);
+  } finally {
+    await app.shutdown();
+  }
+});
+
+test("an Esc that lands as the command settles returns the final result exactly once", async () => {
+  const { createTerminalRuntime } = await import("../src/runtime.ts");
+  const { Exit } = await import("effect");
+  const runtime = createTerminalRuntime();
+  const controller = new AbortController();
+  let calls = 0;
+  // The second runPromiseExit is the initial wait. Let it observe the real
+  // settlement (its waiter consumes it), then report the Esc as having won:
+  // the exact interleaving where no follow-up would ever be delivered.
+  const racingRuntime = new Proxy(runtime, {
+    get(target, property, receiver) {
+      if (property !== "runPromiseExit") return Reflect.get(target, property, receiver);
+      return async (...args: Parameters<typeof runtime.runPromiseExit>) => {
+        const exit = await runtime.runPromiseExit(...args);
+        if (++calls !== 2) return exit;
+        controller.abort();
+        return Exit.interrupt();
+      };
+    },
+  });
+  const app = harness(
+    createBackgroundTerminalsExtension({
+      resolveShellSettings: () => ({}),
+      createRuntime: () => racingRuntime,
+    }),
+  );
+  try {
+    const result = await app.tools
+      .get("bash")
+      .execute(
+        "call-esc-race",
+        { command: command('console.log("finished")'), yield_time_ms: 30_000 },
+        controller.signal,
+        undefined,
+        app.ctx,
+      );
+    assert.equal(calls, 2);
+    assert.equal(result.isError, undefined);
+    assert.equal(result.details?.status, "done");
+    assert.doesNotMatch(result.content[0].text, /continues in the background/);
+    assert.match(result.content[0].text, /finished/);
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    assert.equal(app.messages.length, 0, "the returned result is not also a follow-up");
+  } finally {
+    await app.shutdown();
+  }
+});
+
+test("a result still in its quiet window is delivered before the run settles", async () => {
+  const app = harness();
+  const listing: string[] = [];
+  const psCtx = { ...app.ctx, hasUI: true, ui: { notify: (text: string) => listing.push(text) } };
+  const status = async () => {
+    listing.length = 0;
+    await app.commands.get("ps").handler("", psCtx);
+    return listing.join("\n");
+  };
+  const beforeSettle = async (outcome: string) => {
+    for (const handler of app.handlers.get("agent_before_settle") ?? []) {
+      await handler({ type: "agent_before_settle", outcome }, app.ctx);
+    }
+  };
+  try {
+    const result = await app.tools
+      .get("bash")
+      .execute(
+        "call-before-settle",
+        { command: command('setTimeout(() => console.log("late"), 300)'), yield_time_ms: 250 },
+        undefined,
+        undefined,
+        app.ctx,
+      );
+    const id = result.details?.id as string;
+    assert.equal(result.details?.yielded, true);
+    // Settled, but still inside the 1s quiet window: nothing sent yet.
+    const deadline = Date.now() + 10_000;
+    while (!(await status()).includes(`${id} [done]`)) {
+      assert.ok(Date.now() < deadline, "terminal settled");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(app.messages.length, 0, "quiet window still open");
+
+    // An aborted run must not be continued with the result.
+    await beforeSettle("aborted");
+    assert.equal(app.messages.length, 0);
+
+    // A run about to complete gets it now, steered into the same run.
+    await beforeSettle("completed");
+    assert.equal(app.messages.length, 1);
+    assert.match(app.messages[0].message.content, /late/);
+    assert.deepEqual(app.messages[0].options, { deliverAs: "steer", triggerTurn: true });
+
+    // The quiet-window timer was cancelled: no duplicate later.
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    assert.equal(app.messages.length, 1);
   } finally {
     await app.shutdown();
   }

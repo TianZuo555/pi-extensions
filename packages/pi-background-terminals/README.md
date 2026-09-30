@@ -52,11 +52,14 @@ Behavior:
    head+tail output to the model. Non-zero exits and hard timeouts are Bash tool
    errors. The TUI keeps the quick command visibly distinct from background work.
 5. If it remains alive, return an id such as `bt-a12b34c56d78ef90-1`. Only then does the row
-   collapse to compact background-terminal status. The model should continue
-   rather than poll. Nearby exits share one compact follow-up after a 1,000 ms
-   sliding quiet window, with a 3,000 ms maximum hold. An isolated exit keeps
-   the original message shape, and every terminal result remains exactly-once.
-   Detailed stdout/stderr remain in `/ps`.
+   collapse to compact background-terminal status. The model should keep
+   working rather than poll: the completion is steered into the run at the next
+   tool boundary, so it arrives mid-task instead of only after a final answer.
+   Nearby exits share one compact message after a 1,000 ms sliding quiet window,
+   with a 3,000 ms maximum hold; a result still in that window when the run is
+   about to settle is delivered immediately, continuing the same run. An
+   isolated exit keeps the original message shape, and every terminal result
+   remains exactly-once. Detailed stdout/stderr remain in `/ps`.
 
 There are no model-facing status, list, kill, polling, or stdin tools. The
 read-only `terminal_log_read` tool only pages an opaque archive ref emitted by
@@ -108,7 +111,8 @@ While at least one terminal runs, a one-line widget renders above the editor.
 
 - **Automatic yielding, no polling.** Quick commands return directly; only
   commands that outlive the initial wait become background work. Completion
-  uses `pi.sendMessage(..., { deliverAs: "followUp", triggerTurn: true })`.
+  uses `pi.sendMessage(..., { deliverAs: "steer", triggerTurn: true })`: a busy
+  agent receives it after its current tool batch, an idle one is woken.
 - **Truthful quick-vs-yielded rendering.** Quick and initial-wait Bash rows show
   a bounded sanitized preview. Only a command that actually yields is rendered
   as a compact background terminal; asynchronous completion rows remain compact.
@@ -178,7 +182,7 @@ Restart Pi or run `/reload` afterwards.
 
 ## Development
 
-This workspace pins Effect `4.0.0-beta.101` and uses TypeScript 7 (`tsgo`), so
+This workspace pins Effect `4.0.0-rc.117` and uses TypeScript 7 (`tsgo`), so
 it is checked in isolation:
 
 ```bash
@@ -190,8 +194,6 @@ pnpm test
 
 Tests run without forced process exit, including lifecycle regressions for
 redirected descendants, pre-spawn cancellation, and runtime-scoped archive IDs.
-
-## Credits
 
 ## License
 

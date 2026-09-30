@@ -3,7 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
-import type { OutputView, TerminalSnapshot } from "./src/domain.ts";
+import type { OutputView, TerminalSnapshot } from "../src/domain.ts";
 import {
   BASH_PARAMETER_DESCRIPTIONS,
   BASH_PROMPT_SNIPPET,
@@ -17,7 +17,7 @@ import {
   TERMINAL_LOG_READ_PROMPT_SNIPPET,
   TERMINAL_LOG_READ_TOOL_DESCRIPTION,
   truncateUtf8WithMarker,
-} from "./src/prompt.ts";
+} from "../src/prompt.ts";
 
 test("bash metadata states the managed-shell contract concisely", () => {
   assert.match(BASH_TOOL_DESCRIPTION, /background terminal/);
@@ -29,6 +29,12 @@ test("bash metadata states the managed-shell contract concisely", () => {
   assert.match(BASH_TOOL_DESCRIPTION, /yield_time_ms sets the wait/);
   assert.match(BASH_TOOL_DESCRIPTION, /timeout kills the process tree/);
   assert.match(BASH_TOOL_DESCRIPTION, /do not poll/i);
+  // Results are steered in at the next tool boundary, so continuing to work
+  // (not sleeping or polling) is what delivers them.
+  assert.match(BASH_TOOL_DESCRIPTION, /result arrives at a later tool call/);
+  // The classic footgun: `cmd &` dies with the shell, so servers need their
+  // own call (which auto-yields).
+  assert.match(BASH_TOOL_DESCRIPTION, /`cmd &` dies with its shell/);
   assert.match(BASH_PARAMETER_DESCRIPTIONS.command, /script/);
   assert.match(BASH_PARAMETER_DESCRIPTIONS.yieldTimeMs, /default 10000, clamped to 250-30000/);
   assert.match(BASH_PARAMETER_DESCRIPTIONS.timeout, /no default/i);
@@ -36,7 +42,7 @@ test("bash metadata states the managed-shell contract concisely", () => {
   // The schema carries exclusiveMinimum/maximum for timeout, so prose must not
   // spend tokens repeating them.
   assert.doesNotMatch(BASH_PARAMETER_DESCRIPTIONS.timeout, /maximum/i);
-  assert.ok(BASH_TOOL_DESCRIPTION.length <= 320);
+  assert.ok(BASH_TOOL_DESCRIPTION.length <= 400);
   assert.ok(BASH_PROMPT_SNIPPET.length <= 50);
   assert.ok(TERMINAL_LOG_READ_TOOL_DESCRIPTION.length <= 120);
   assert.ok(TERMINAL_LOG_READ_PROMPT_SNIPPET.length <= 32);
@@ -96,6 +102,7 @@ test("yielded result tells the model not to poll and points the user to /ps", ()
   );
   assert.match(text, /still running as background terminal bt-1/);
   assert.match(text, /do not poll/);
+  assert.match(text, /injected after your next tool call — keep working/);
   assert.match(text, /user can inspect or stop it with \/ps/);
   // pid and title arrive once, via the metadata line, not twice.
   assert.equal(text.match(/pid 123/g)?.length, 1);
@@ -318,7 +325,52 @@ test("batched completions retain every terminal summary within one bounded messa
   for (const terminal of terminals) {
     assert.match(message, new RegExp(`Background terminal ${terminal.id} `));
   }
-  assert.match(message, /output truncated; use \/ps for complete logs/);
+  // Per-terminal budgeting means every terminal keeps its bounded view line —
+  // end-truncating an assembled batch used to cut exactly these off the last
+  // terminals.
+  assert.equal((message.match(/stdout bounded head\+tail/g) ?? []).length, terminals.length);
+  // The model cannot run /ps; truncation must point at terminal_log_read.
+  assert.doesNotMatch(message, /use \/ps/);
+});
+
+test("a tight batch budget keeps every archive ref and stderr pointer", () => {
+  const spillDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-bt-batch-"));
+  const spillPath = path.join(spillDir, "stdout.log");
+  try {
+    fs.writeFileSync(spillPath, "capture");
+    const output = "x".repeat(40_000);
+    const terminals = Array.from({ length: 8 }, (_, index) =>
+      snap({
+        id: `bt-${index + 1}`,
+        title: `batch ${index + 1}`,
+        status: "failed",
+        exitCode: 1,
+        stdout: view({
+          text: output,
+          head: output.slice(0, 4_096),
+          tail: output.slice(-4_096),
+          totalBytes: Buffer.byteLength(output),
+          truncatedBytes: Buffer.byteLength(output) - 8_192,
+          spillPath,
+          archiveComplete: true,
+        }),
+        stderr: view({ text: "boom\n", head: "boom\n", totalBytes: 5 }),
+      }),
+    );
+
+    const message = buildTerminalResultBatchMessage(terminals);
+    assert.ok(Buffer.byteLength(message) <= MAX_COMPLETION_BATCH_CONTENT_BYTES);
+    for (const terminal of terminals) {
+      assert.match(
+        message,
+        new RegExp(`archive ref ${terminal.id}:stdout`),
+        `${terminal.id} lost its archive ref`,
+      );
+    }
+    assert.match(message, /stderr/);
+  } finally {
+    fs.rmSync(spillDir, { recursive: true, force: true });
+  }
 });
 
 test("failed and timed-out completions keep the diagnostic output budget", () => {

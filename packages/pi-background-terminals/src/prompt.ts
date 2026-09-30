@@ -44,7 +44,8 @@ const RESULT_STDERR_MAX_LINES = 20;
 // explain their own values; runtime errors provide detailed recovery on demand.
 export const BASH_TOOL_DESCRIPTION =
   "Run Bash in a fresh shell — no interactive stdin; use working_dir, not a standalone cd. " +
-  "Returns output if done within the initial wait; otherwise returns a background terminal id and reports once on exit — do not poll it. " +
+  "Returns output within the initial wait, else returns a background terminal id; its result arrives at a later tool call — do not poll. " +
+  "`cmd &` dies with its shell — give a server its own call instead. " +
   `yield_time_ms sets the wait; timeout kills the process tree; max ${MAX_RUNNING} running terminals.`;
 
 export const BASH_PROMPT_SNIPPET = "Run Bash; long commands yield and notify on exit";
@@ -282,6 +283,40 @@ function appendOutput(
   return text;
 }
 
+/** Marker-room estimate: the section's trailing bounded/archive line. */
+const SECTION_OVERHEAD_BYTES = 320;
+/** Below this a section cannot show content; degrade to the archive pointer. */
+const MIN_SECTION_CONTENT_BYTES = 128;
+
+/** One output section hard-capped to a byte budget — degrades to the archive
+ * ref rather than letting batch truncation cut it. */
+function budgetedSection(
+  label: string,
+  terminalId: string,
+  stream: "stdout" | "stderr",
+  view: TerminalSnapshot["stdout"],
+  maxBytes: number,
+  maxLines: number,
+  sectionBudgetBytes: number,
+) {
+  const contentBudget = sectionBudgetBytes - SECTION_OVERHEAD_BYTES;
+  if (contentBudget < MIN_SECTION_CONTENT_BYTES) {
+    const archiveRef = archiveReference(terminalId, stream, view);
+    const pointer = archiveRef
+      ? `archive ref ${archiveRef} (complete: ${view.archiveComplete === true ? "yes" : "no"}); recover via terminal_log_read(ref)`
+      : "complete archive unavailable to the model";
+    return `${label}: (${formatSize(view.totalBytes)} omitted — ${pointer})`;
+  }
+  return outputSection(
+    label,
+    terminalId,
+    stream,
+    view,
+    Math.min(maxBytes, contentBudget),
+    maxLines,
+  );
+}
+
 /** Streaming tool-row update while bash is still in its initial wait. */
 export function buildBashProgress(snap: TerminalSnapshot) {
   return appendOutput(
@@ -302,7 +337,7 @@ export function buildBashResult(snap: TerminalSnapshot) {
   // Running terminals carry it via describeTerminal() instead.
   let text =
     snap.status === "running"
-      ? `Command is still running as background terminal ${snap.id}. Its result will arrive automatically on exit — do not poll; the user can inspect or stop it with /ps.\n${describeTerminal(snap)}`
+      ? `Command is still running as background terminal ${snap.id}. When it exits, its result is injected after your next tool call — keep working; do not poll or sleep. The user can inspect or stop it with /ps.\n${describeTerminal(snap)}`
       : snap.status === "timed_out"
         ? `Command timed out after ${formatElapsed(snap)} in ${snap.cwd}.`
         : `Command finished in ${formatElapsed(snap)} (${formatExit(snap)}) in ${snap.cwd}.`;
@@ -317,8 +352,14 @@ export function buildBashResult(snap: TerminalSnapshot) {
   );
 }
 
-/** Async completion follow-up injected only after bash yielded. */
-export function buildTerminalResultMessage(snap: TerminalSnapshot) {
+/** Async completion follow-up injected only after bash yielded. A finite
+ * `budgetBytes` (batched completions share one message) shrinks the output
+ * windows inside outputSection so the summary and archive refs survive —
+ * truncating a fully assembled message would cut exactly those lines. */
+export function buildTerminalResultMessage(
+  snap: TerminalSnapshot,
+  budgetBytes = Number.POSITIVE_INFINITY,
+) {
   const how =
     snap.status === "killed"
       ? "was killed"
@@ -331,14 +372,34 @@ export function buildTerminalResultMessage(snap: TerminalSnapshot) {
   // outside the compact success follow-up window. A killed process remains
   // intentionally concise because /ps is the user-facing inspection path.
   const diagnostic = snap.status === "failed" || snap.status === "timed_out";
-  return appendOutput(
-    text,
-    snap,
-    diagnostic ? BASH_STDOUT_MAX : RESULT_STDOUT_MAX,
-    diagnostic ? BASH_STDOUT_MAX_LINES : RESULT_STDOUT_MAX_LINES,
-    diagnostic ? BASH_STDERR_MAX : RESULT_STDERR_MAX,
-    diagnostic ? BASH_STDERR_MAX_LINES : RESULT_STDERR_MAX_LINES,
-  );
+  const stdoutBytes = diagnostic ? BASH_STDOUT_MAX : RESULT_STDOUT_MAX;
+  const stdoutLines = diagnostic ? BASH_STDOUT_MAX_LINES : RESULT_STDOUT_MAX_LINES;
+  const stderrBytes = diagnostic ? BASH_STDERR_MAX : RESULT_STDERR_MAX;
+  const stderrLines = diagnostic ? BASH_STDERR_MAX_LINES : RESULT_STDERR_MAX_LINES;
+
+  if (!Number.isFinite(budgetBytes)) {
+    return appendOutput(text, snap, stdoutBytes, stdoutLines, stderrBytes, stderrLines);
+  }
+
+  const remaining = Math.max(0, budgetBytes - Buffer.byteLength(text));
+  const streamCount = 1 + (snap.stderr.totalBytes > 0 ? 1 : 0);
+  if (remaining < SECTION_OVERHEAD_BYTES + MIN_SECTION_CONTENT_BYTES) {
+    // Not enough room for even one bounded window; keep the recovery pointer.
+    const refs = (["stdout", "stderr"] as const)
+      .map((stream) => archiveReference(snap.id, stream, snap[stream]))
+      .filter((ref): ref is string => ref !== undefined);
+    if (refs.length > 0) {
+      text += `\n\nOutput omitted; archive ref ${refs.join(", ")} — recover via terminal_log_read(ref).`;
+    }
+    return truncateUtf8WithMarker(text, budgetBytes);
+  }
+  const perStream = Math.floor(remaining / streamCount);
+  text += `\n\n${budgetedSection("stdout", snap.id, "stdout", snap.stdout, stdoutBytes, stdoutLines, perStream)}`;
+  if (snap.stderr.totalBytes > 0) {
+    text += `\n\n${budgetedSection("stderr", snap.id, "stderr", snap.stderr, stderrBytes, stderrLines, perStream)}`;
+  }
+  // Last-resort guard for accounting drift (marker line length varies).
+  return truncateUtf8WithMarker(text, budgetBytes);
 }
 
 function truncateUtf8(value: string, maximumBytes: number) {
@@ -356,26 +417,29 @@ function truncateUtf8(value: string, maximumBytes: number) {
 export function truncateUtf8WithMarker(value: string, maximumBytes: number) {
   const byteLimit = Math.max(0, maximumBytes);
   if (Buffer.byteLength(value) <= byteLimit) return value;
-  const marker = truncateUtf8("\n[output truncated; use /ps for complete logs]", byteLimit);
+  // The model cannot run /ps — point it at the tool it can call.
+  const marker = truncateUtf8(
+    "\n[output truncated; read the full log via terminal_log_read(ref)]",
+    byteLimit,
+  );
   const contentBudget = byteLimit - Buffer.byteLength(marker);
   return truncateUtf8(value, contentBudget) + marker;
 }
 
-/** One follow-up for terminal completions that settle in the same quiet window. */
+/** One follow-up for terminal completions that settle in the same quiet
+ * window. Each terminal's share of the byte budget is enforced while its
+ * message is built, so summaries and archive refs survive truncation. */
 export function buildTerminalResultBatchMessage(snaps: readonly TerminalSnapshot[]) {
   if (snaps.length === 0) return "";
   if (snaps.length === 1) return buildTerminalResultMessage(snaps[0]);
 
   const header = `${snaps.length} background terminals completed.`;
   const separator = "\n\n";
-  const messages = snaps.map(buildTerminalResultMessage);
-  const fixedBytes = Buffer.byteLength(header) + Buffer.byteLength(separator) * messages.length;
+  const fixedBytes = Buffer.byteLength(header) + Buffer.byteLength(separator) * snaps.length;
   const perMessageBytes = Math.max(
     0,
-    Math.floor((MAX_COMPLETION_BATCH_CONTENT_BYTES - fixedBytes) / messages.length),
+    Math.floor((MAX_COMPLETION_BATCH_CONTENT_BYTES - fixedBytes) / snaps.length),
   );
-  const boundedMessages = messages.map((message) =>
-    truncateUtf8WithMarker(message, perMessageBytes),
-  );
+  const boundedMessages = snaps.map((snap) => buildTerminalResultMessage(snap, perMessageBytes));
   return [header, ...boundedMessages].join(separator);
 }
