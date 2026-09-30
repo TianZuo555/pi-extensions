@@ -6,7 +6,7 @@ import {
   availableFetchProviders,
   availableSearchProviders,
   getProviderStatuses,
-  inspectOpenAICodexAuth,
+  inspectOpenAIAuth,
   loadProviderKey,
   loadStoredConfig,
   resolveBraveConfig,
@@ -111,20 +111,21 @@ function providerLine(name: KeyProvider | "ollama", config: WebSearchConfig): st
   return `${GREEN}${label}✓ auth: ${url}${key}${RESET}`;
 }
 
-/** Read-only openai row: credentials are auto-detected (pi /login codex,
- * OPENAI_API_KEY, config file) and never configured through this command. */
+/** Read-only openai row: credentials are auto-detected (pi /login OpenAI or
+ * Codex, OPENAI_API_KEY, config file) and never configured through this
+ * command. */
 function openaiLine(config: WebSearchConfig): string {
   const label = "openai".padEnd(10);
-  const codex = inspectOpenAICodexAuth();
-  if (codex.state === "fresh") {
-    return `${GREEN}${label}✓ auto: pi login (openai-codex)${RESET}`;
+  const auth = inspectOpenAIAuth();
+  if (auth.state === "fresh") {
+    return `${GREEN}${label}✓ auto: pi login (${auth.entry})${RESET}`;
   }
   const resolved = resolveOpenAIConfig(undefined, config);
   if (resolved) {
     return `${GREEN}${label}✓ auto: ${resolved.source}${RESET}`;
   }
-  if (codex.state === "expired") {
-    return `${YELLOW}${label}• codex login expired — re-run /login${RESET}`;
+  if (auth.state === "expired") {
+    return `${YELLOW}${label}• ${auth.entry} login expired — re-run /login${RESET}`;
   }
   return `${label}• auto: /login with OpenAI or set OPENAI_API_KEY`;
 }
@@ -140,12 +141,13 @@ function deepseekLine(config: WebSearchConfig): string {
   return `${label}• auto: /login with DeepSeek or set DEEPSEEK_API_KEY`;
 }
 
-function codexExpiryHint(): string[] {
-  return inspectOpenAICodexAuth().state === "expired"
+function openaiExpiryHint(): string[] {
+  const auth = inspectOpenAIAuth();
+  return auth.state === "expired"
     ? [
         "",
-        "⚠ your openai-codex token in ~/.pi/agent/auth.json is expired —",
-        "  re-run /login (OpenAI Codex) to refresh it.",
+        `⚠ your ${auth.entry} token in ~/.pi/agent/auth.json is expired —`,
+        "  re-run /login to refresh it.",
       ]
     : [];
 }
@@ -159,8 +161,9 @@ function providerDetail(
     case "openai": {
       const resolved = resolveOpenAIConfig(undefined, config);
       if (resolved) return resolved.source;
-      return inspectOpenAICodexAuth().state === "expired"
-        ? "codex login expired — re-run /login"
+      const auth = inspectOpenAIAuth();
+      return auth.state === "expired"
+        ? `${auth.entry} login expired — re-run /login`
         : "not detected (/login or OPENAI_API_KEY)";
     }
     case "deepseek":
@@ -272,7 +275,7 @@ export default function webSearchExtension(pi: ExtensionAPI): void {
           lines.push(`${label}• unconfigured`);
         }
       }
-      lines.push(...codexExpiryHint());
+      lines.push(...openaiExpiryHint());
       lines.push(
         "",
         "openai and deepseek are auto-detected from your pi /login sessions",
@@ -409,10 +412,11 @@ export default function webSearchExtension(pi: ExtensionAPI): void {
         ctx.ui.notify(
           [
             "openai is auto-detected — there is no key to configure here:",
-            "  1. /login → OpenAI (ChatGPT Plus/Pro Codex) — used automatically",
+            "  1. /login → OpenAI (Sign in with ChatGPT) or OpenAI Codex (legacy) —",
+            "     used automatically",
             '  2. OPENAI_API_KEY env, or "openai": { "apiKey": … } in',
             "     ~/.pi/web-search.json",
-            ...codexExpiryHint(),
+            ...openaiExpiryHint(),
             "",
             "It ranks after keyless Firecrawl by default; reorder with /websearch-order",
             'or set "searchProvider": "openai" in ~/.pi/web-search.json.',
