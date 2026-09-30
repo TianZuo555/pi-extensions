@@ -43,7 +43,7 @@
     "debug-stats": "node --experimental-strip-types scripts/debug-stats.ts"
   },
   "dependencies": {
-    "effect": "4.0.0-rc.115",
+    "effect": "4.0.0-rc.117",
     "minimatch": "^10.2.6"
   },
   "peerDependencies": {

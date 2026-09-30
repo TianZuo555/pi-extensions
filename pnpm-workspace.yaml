@@ -6,12 +6,12 @@ packages:
 shellEmulator: true
 
 overrides:
-  brace-expansion: ^5.0.8
+  brace-expansion: ^5.0.12
   "@xmldom/xmldom": ^0.9.12
-  "@earendil-works/pi-ai": ^0.87.0
-  "@earendil-works/pi-coding-agent": ^0.87.0
-  "@earendil-works/pi-tui": ^0.87.0
-  "@earendil-works/pi-agent-core": ^0.87.0
+  "@earendil-works/pi-ai": ^0.99.1
+  "@earendil-works/pi-coding-agent": ^0.99.1
+  "@earendil-works/pi-tui": ^0.99.1
+  "@earendil-works/pi-agent-core": ^0.99.1
 
 # Don't install package versions published less than 2 days ago (the
 # built-in default is 1 day). Applies to all deps including transitive
@@ -30,15 +30,11 @@ minimumReleaseAge: 2880
 # cannot, so security-update PRs need it added by hand. See AGENTS.md.
 minimumReleaseAgeStrict: false
 
-# 0.87.0 was published <2 days ago; allow the pin until it ages past
-# minimumReleaseAge. Drop these entries once the versions mature.
+# The pi runtime releases in lockstep and we track it closely, so exempt the
+# whole family from minimumReleaseAge rather than listing each fresh pin.
+# Patterns match package names only — name@version entries must be exact.
 minimumReleaseAgeExclude:
-  - '@earendil-works/pi-ai@0.87.0'
-  - '@earendil-works/pi-coding-agent@0.87.0'
-  - '@earendil-works/pi-tui@0.87.0'
-  - '@earendil-works/pi-agent-core@0.87.0'
-  - '@earendil-works/chord@0.87.0'
-  - '@earendil-works/pi-telemetry@0.87.0'
+  - '@earendil-works/*'
 
 # Dependencies of the pi runtime whose install scripts npm ran automatically;
 # pnpm 11 denies dependency build scripts unless explicitly allowed here.
