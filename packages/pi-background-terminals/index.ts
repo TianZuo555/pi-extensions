@@ -308,12 +308,12 @@ export function createBackgroundTerminalsExtension(
                     results,
                   },
           },
-          // followUp: queued until the agent has no more tool calls — never
-          // interrupts a mid-turn stream. triggerTurn: wakes the model
-          // immediately iff idle; if busy, the queued follow-up is delivered
-          // when the current run settles. Either way each terminal is delivered
-          // exactly once, with nearby settlements sharing one follow-up.
-          { deliverAs: "followUp", triggerTurn: true },
+          // steer: delivered at the next turn boundary — after the current tool
+          // batch, never mid-stream — so a model that keeps working sees the
+          // result as soon as it lands instead of only after it writes a final
+          // answer (followUp). triggerTurn wakes an idle model. Each terminal is
+          // still delivered exactly once, nearby settlements sharing a message.
+          { deliverAs: "steer", triggerTurn: true },
         );
         return true;
       } catch (error) {
@@ -332,14 +332,9 @@ export function createBackgroundTerminalsExtension(
         for (const snap of snaps) resultDelivery.defer(snap);
       }
     };
-    const resultBatchScheduler = createCompletionBatchScheduler(flushResults, {
-      isIdle: () => sessionContext?.isIdle() === true,
-    });
+    const resultBatchScheduler = createCompletionBatchScheduler(flushResults);
     const scheduleResultFlush = () => {
       if (resultDelivery.size() > 0) resultBatchScheduler.schedule();
-    };
-    const settleResultFlush = () => {
-      if (!resultBatchScheduler.notifyIdle()) scheduleResultFlush();
     };
 
     const onSettled = (snap: TerminalSnapshot, consumed: boolean) => {
@@ -370,10 +365,18 @@ export function createBackgroundTerminalsExtension(
     // user/follow-up run rather than per turn.
     pi.on("agent_start", resetTerminalLogBudget);
 
-    // Release a quiet expiry held while the agent was busy. A later arrival
-    // rearms quiet first, so settling the agent cannot flush that new result
-    // before its own quiet window. A delivery retry starts a fresh group.
-    pi.on("agent_settled", settleResultFlush);
+    // A result still inside its quiet window when the model ends its turn
+    // would otherwise settle the run and wake a new one moments later — or be
+    // lost when print/json mode exits on settlement. Deliver it now: the steer
+    // is queued before settlement, so pi continues this same run with it.
+    pi.on("agent_before_settle", (event) => {
+      if (event.outcome !== "completed" || resultDelivery.size() === 0) return;
+      resultBatchScheduler.clear();
+      flushResults();
+    });
+
+    // Retry a batch whose delivery failed (results were re-deferred).
+    pi.on("agent_settled", scheduleResultFlush);
 
     // /new, /resume, /fork, /reload, and quit all emit session_shutdown for
     // the old extension instance. Processes never survive a session

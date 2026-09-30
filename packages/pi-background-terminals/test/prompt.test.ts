@@ -29,6 +29,9 @@ test("bash metadata states the managed-shell contract concisely", () => {
   assert.match(BASH_TOOL_DESCRIPTION, /yield_time_ms sets the wait/);
   assert.match(BASH_TOOL_DESCRIPTION, /timeout kills the process tree/);
   assert.match(BASH_TOOL_DESCRIPTION, /do not poll/i);
+  // Results are steered in at the next tool boundary, so continuing to work
+  // (not sleeping or polling) is what delivers them.
+  assert.match(BASH_TOOL_DESCRIPTION, /result arrives at a later tool call/);
   // The classic footgun: `cmd &` dies with the shell, so servers need their
   // own call (which auto-yields).
   assert.match(BASH_TOOL_DESCRIPTION, /`cmd &` dies with its shell/);
@@ -99,6 +102,7 @@ test("yielded result tells the model not to poll and points the user to /ps", ()
   );
   assert.match(text, /still running as background terminal bt-1/);
   assert.match(text, /do not poll/);
+  assert.match(text, /injected after your next tool call — keep working/);
   assert.match(text, /user can inspect or stop it with \/ps/);
   // pid and title arrive once, via the metadata line, not twice.
   assert.equal(text.match(/pid 123/g)?.length, 1);

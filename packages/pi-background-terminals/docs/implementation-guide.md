@@ -18,7 +18,8 @@ Every model shell command goes through `bash`:
    the Bash result. A non-zero exit, kill, or timeout is a tool error.
 6. Otherwise return a terminal id and leave the process running.
 7. When a yielded process settles, admit its final result exactly once. Results
-   that settle close together share one bounded follow-up that wakes the model.
+   that settle close together share one bounded message, steered into the
+   running agent at its next tool boundary or waking an idle one.
 
 The model-facing tool result and completion message retain bounded stdout/stderr.
 Quick and initial-wait TUI rows show a sanitized bounded output preview plus a
@@ -309,7 +310,7 @@ There is a second defensive layer in `index.ts`: when a final snapshot is
 returned, `resultDelivery.consume(id)` removes any result deferred during the
 small gap between `start` and waiter registration.
 
-## 10. Exactly-once follow-up delivery
+## 10. Exactly-once completion delivery
 
 The settle hook receives `(snapshot, consumed)`:
 
@@ -324,12 +325,14 @@ not write that failure through `console.error`, which would corrupt the active
 TUI frame; non-TUI modes retain the diagnostic.
 
 Every unconsumed settlement starts or slides a 1,000 ms quiet deadline while the
-first result keeps one fixed 3,000 ms maximum deadline. If quiet expires while
-the agent is busy, the scheduler holds that expiry without cancelling the
-maximum. `agent_settled` flushes the held group when no later result arrived. A
-later result instead clears the held expiry and starts its own full quiet window;
-settling the agent cannot flush that newer result early. Session shutdown
-cancels both deadlines before clearing the map.
+first result keeps one fixed 3,000 ms maximum deadline. Either deadline flushes
+whether or not the agent is busy: delivery is a steer, so holding a busy
+agent's result back would only delay it. `agent_before_settle` (outcome
+`completed`) flushes a group still inside its window immediately, so the run
+that is about to end continues with the result instead of settling and waking a
+separate run — which print/json mode would never do, since it exits on
+settlement. Aborted or failed runs are not continued. Session shutdown cancels
+both deadlines before clearing the map.
 
 The timer group detaches before delivery, so a settlement triggered during a
 synchronous delivery callback starts a new group. Generation tokens make stale
@@ -341,17 +344,22 @@ Delivery uses:
 
 ```ts
 pi.sendMessage(message, {
-  deliverAs: "followUp",
+  deliverAs: "steer",
   triggerTurn: true,
 });
 ```
+
+`followUp` would only be drained once the model stops calling tools, so a model
+that keeps working would act without the result and write a final answer before
+seeing it. A steer is drained after every tool batch — at a turn boundary, never
+mid-stream.
 
 A singleton keeps the existing message content and detail shape. A batch carries
 all compact terminal details in settlement order and allocates its 32 KiB
 content budget across results so every terminal summary survives truncation. Its
 message renderer shows one status line with the terminal count, aggregate
 outcomes, and a `/ps` hint. A busy agent receives the message after its current
-run settles. An idle agent is woken when the quiet window closes. No model-driven
+tool batch. An idle agent is woken when the quiet window closes. No model-driven
 polling is required.
 
 ## 11. Head+tail output retention
@@ -617,7 +625,8 @@ The package test suite covers:
 - quick completion without a duplicate follow-up;
 - yielded completion with exactly one automatic delivery;
 - sliding quiet and maximum-hold batching deadlines, including cancellation;
-- busy-held quiet expiry, later-arrival rearming, and maximum-hold delivery;
+- quiet-window flushes independent of agent activity, fresh groups after a flush,
+  and before-settle delivery of a result still inside its quiet window;
 - synchronized yielded completions sharing one follow-up;
 - unchanged singleton messages and strict UTF-8 aggregate and marker budgets;
 - safe pre-spawn foreground fallback;

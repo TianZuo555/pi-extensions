@@ -9,8 +9,6 @@ export interface CompletionBatchTimers {
 export interface CompletionBatchScheduler {
   /** Start a batch or slide its quiet deadline without extending its maximum hold. */
   schedule(): void;
-  /** Resolve a quiet expiry held while busy. Returns whether a group was active. */
-  notifyIdle(): boolean;
   /** Cancel every pending deadline. Stale timer callbacks become no-ops. */
   clear(): void;
 }
@@ -30,25 +28,28 @@ const systemTimers: CompletionBatchTimers = {
   },
 };
 
+/**
+ * Group completions that settle close together into one delivery: a sliding
+ * quiet window, capped by a fixed maximum hold from the first arrival. Flushes
+ * regardless of whether the agent is busy — delivery steers the message into
+ * the next turn boundary, so holding it back would only delay the result.
+ */
 export function createCompletionBatchScheduler(
   onFlush: () => void,
   options: {
     readonly timers?: CompletionBatchTimers;
     readonly quietMs?: number;
     readonly maxWaitMs?: number;
-    readonly isIdle?: () => boolean;
   } = {},
 ): CompletionBatchScheduler {
   const timers = options.timers ?? systemTimers;
   const quietMs = options.quietMs ?? COMPLETION_BATCH_QUIET_MS;
   const maxWaitMs = options.maxWaitMs ?? COMPLETION_BATCH_MAX_WAIT_MS;
-  const isIdle = options.isIdle ?? (() => true);
   let nextGroupGeneration = 0;
   let activeGroupGeneration = 0;
   let nextTimerGeneration = 0;
   let quietTimer: TimerRegistration | undefined;
   let maximumTimer: TimerRegistration | undefined;
-  let quietExpiredWhileBusy = false;
 
   const cancelQuietTimer = () => {
     if (!quietTimer) return;
@@ -64,7 +65,6 @@ export function createCompletionBatchScheduler(
 
   const detachGroup = () => {
     activeGroupGeneration = 0;
-    quietExpiredWhileBusy = false;
     cancelQuietTimer();
     cancelMaximumTimer();
   };
@@ -81,11 +81,6 @@ export function createCompletionBatchScheduler(
       registration.groupGeneration !== groupGeneration ||
       registration.timerGeneration !== timerGeneration
     ) {
-      return;
-    }
-    if (kind === "quiet" && !isIdle()) {
-      quietTimer = undefined;
-      quietExpiredWhileBusy = true;
       return;
     }
     // Detach before delivery so a synchronous settlement starts a new group.
@@ -110,18 +105,8 @@ export function createCompletionBatchScheduler(
         activeGroupGeneration = ++nextGroupGeneration;
         armTimer("maximum", activeGroupGeneration, maxWaitMs);
       }
-      // A later arrival supersedes a quiet expiry held while busy.
-      quietExpiredWhileBusy = false;
       cancelQuietTimer();
       armTimer("quiet", activeGroupGeneration, quietMs);
-    },
-    notifyIdle() {
-      const hadActiveGroup = activeGroupGeneration !== 0;
-      if (hadActiveGroup && quietExpiredWhileBusy && isIdle()) {
-        detachGroup();
-        onFlush();
-      }
-      return hadActiveGroup;
     },
     clear() {
       detachGroup();

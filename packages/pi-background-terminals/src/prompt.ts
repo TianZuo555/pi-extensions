@@ -44,7 +44,7 @@ const RESULT_STDERR_MAX_LINES = 20;
 // explain their own values; runtime errors provide detailed recovery on demand.
 export const BASH_TOOL_DESCRIPTION =
   "Run Bash in a fresh shell — no interactive stdin; use working_dir, not a standalone cd. " +
-  "Returns output within the initial wait, else returns a background terminal id; it reports once on exit — do not poll. " +
+  "Returns output within the initial wait, else returns a background terminal id; its result arrives at a later tool call — do not poll. " +
   "`cmd &` dies with its shell — give a server its own call instead. " +
   `yield_time_ms sets the wait; timeout kills the process tree; max ${MAX_RUNNING} running terminals.`;
 
@@ -337,7 +337,7 @@ export function buildBashResult(snap: TerminalSnapshot) {
   // Running terminals carry it via describeTerminal() instead.
   let text =
     snap.status === "running"
-      ? `Command is still running as background terminal ${snap.id}. Its result will arrive automatically on exit — do not poll; the user can inspect or stop it with /ps.\n${describeTerminal(snap)}`
+      ? `Command is still running as background terminal ${snap.id}. When it exits, its result is injected after your next tool call — keep working; do not poll or sleep. The user can inspect or stop it with /ps.\n${describeTerminal(snap)}`
       : snap.status === "timed_out"
         ? `Command timed out after ${formatElapsed(snap)} in ${snap.cwd}.`
         : `Command finished in ${formatElapsed(snap)} (${formatExit(snap)}) in ${snap.cwd}.`;

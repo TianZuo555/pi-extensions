@@ -917,7 +917,7 @@ test("yielded command returns an id then sends exactly one completion", async ()
     assert.equal(app.messages[0].message.customType, "background-terminal-result");
     assert.match(app.messages[0].message.content, /exited \(exit 0\)/);
     assert.deepEqual(app.messages[0].options, {
-      deliverAs: "followUp",
+      deliverAs: "steer",
       triggerTurn: true,
     });
   } finally {
@@ -966,7 +966,7 @@ test("near-simultaneous yielded completions share one follow-up", async () => {
     assert.equal(app.messages[0].message.details.count, 3);
     assert.deepEqual([...app.messages[0].message.details.ids].sort(), [...ids].sort());
     assert.deepEqual(app.messages[0].options, {
-      deliverAs: "followUp",
+      deliverAs: "steer",
       triggerTurn: true,
     });
   } finally {
@@ -1112,6 +1112,58 @@ test("an Esc that lands as the command settles returns the final result exactly 
     assert.match(result.content[0].text, /finished/);
     await new Promise((resolve) => setTimeout(resolve, 1_500));
     assert.equal(app.messages.length, 0, "the returned result is not also a follow-up");
+  } finally {
+    await app.shutdown();
+  }
+});
+
+test("a result still in its quiet window is delivered before the run settles", async () => {
+  const app = harness();
+  const listing: string[] = [];
+  const psCtx = { ...app.ctx, hasUI: true, ui: { notify: (text: string) => listing.push(text) } };
+  const status = async () => {
+    listing.length = 0;
+    await app.commands.get("ps").handler("", psCtx);
+    return listing.join("\n");
+  };
+  const beforeSettle = async (outcome: string) => {
+    for (const handler of app.handlers.get("agent_before_settle") ?? []) {
+      await handler({ type: "agent_before_settle", outcome }, app.ctx);
+    }
+  };
+  try {
+    const result = await app.tools
+      .get("bash")
+      .execute(
+        "call-before-settle",
+        { command: command('setTimeout(() => console.log("late"), 300)'), yield_time_ms: 250 },
+        undefined,
+        undefined,
+        app.ctx,
+      );
+    const id = result.details?.id as string;
+    assert.equal(result.details?.yielded, true);
+    // Settled, but still inside the 1s quiet window: nothing sent yet.
+    const deadline = Date.now() + 10_000;
+    while (!(await status()).includes(`${id} [done]`)) {
+      assert.ok(Date.now() < deadline, "terminal settled");
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(app.messages.length, 0, "quiet window still open");
+
+    // An aborted run must not be continued with the result.
+    await beforeSettle("aborted");
+    assert.equal(app.messages.length, 0);
+
+    // A run about to complete gets it now, steered into the same run.
+    await beforeSettle("completed");
+    assert.equal(app.messages.length, 1);
+    assert.match(app.messages[0].message.content, /late/);
+    assert.deepEqual(app.messages[0].options, { deliverAs: "steer", triggerTurn: true });
+
+    // The quiet-window timer was cancelled: no duplicate later.
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    assert.equal(app.messages.length, 1);
   } finally {
     await app.shutdown();
   }
