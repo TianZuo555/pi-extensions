@@ -36,7 +36,6 @@
       "extensions/subagents.ts",
       "extensions/compact-output.ts",
       "extensions/goal.ts",
-      "extensions/todo.ts",
       "extensions/vscode-bridge.ts",
       "extensions/web-search.ts",
       "extensions/find.ts",

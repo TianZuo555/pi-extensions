@@ -1,7 +1,7 @@
 {
   "name": "@tian.zuo/pi-todo",
   "version": "0.1.0",
-  "description": "A small todo-list tool for the pi coding agent: one call shape, a short prompt, and visible warnings when a write drops unfinished items.",
+  "description": "Deprecated: session-local todo checklist for the pi coding agent. Prefer model-managed plans for simple work and shared task coordination only when needed.",
   "type": "module",
   "keywords": [
     "pi",

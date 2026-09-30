@@ -1,12 +1,44 @@
-# pi-todo
+# pi-todo (deprecated)
 
 Release notes: [changelog](https://github.com/TianZuo555/pi-extensions/blob/main/packages/pi-todo/CHANGELOG.md) · [GitHub releases](https://github.com/TianZuo555/pi-extensions/releases)
 
-A small `todo` tool for the **pi coding agent**.
+> **Deprecated:** no longer recommended or actively developed. Use Pi without
+> this extension for ordinary single-agent work. The source remains here for
+> reference; deprecation does not introduce a replacement tool.
 
-Install: `npm:@tian.zuo/pi-todo` · npm package `@tian.zuo/pi-todo` · workspace `packages/pi-todo`
+npm package `@tian.zuo/pi-todo` · workspace `packages/pi-todo`
 
-## What it does
+## Why it is deprecated
+
+Inspired by [Why Claude Code Dropped Todos and Slash Commands](https://tonylee.im/en/blog/why-claude-code-dropped-todos-slash-commands/)
+by Tony Lee:
+
+- **Remove scaffolding for simple work.** Capable models can track short plans
+  in context. Maintaining a separate checklist adds tool calls, repeated list
+  writes, and prompt overhead without necessarily improving results.
+- **Keep structure where coordination needs it.** Complex, long-running,
+  multi-session or multi-agent work can benefit from durable shared state,
+  dependencies, blockers, and isolated execution context. That is a task
+  coordination layer, not merely a visible todo list.
+
+This extension provides a session-local checklist reconstructed from history,
+not cross-session shared state or dependency-aware coordination. Rather than
+expand that checklist into mandatory scaffolding, the design direction is to
+let the model handle ordinary work and add coordination only when needed.
+
+The article describes Claude Code's Tasks and Skills; those features are not
+implemented by this extension or implied to be available in Pi.
+
+## Remove it
+
+```bash
+pi remove npm:@tian.zuo/pi-todo
+```
+
+Restart Pi or run `/reload` to unload it from an existing session. Remove any
+instructions that require the `todo` tool from your own prompts or `AGENTS.md`.
+
+## Historical behavior
 
 - One tool, `todo`, with `write` (replace the whole list) and `read`.
 - Items are `{ id, title, status }`. There is no per-item prose field: writes
