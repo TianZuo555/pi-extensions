@@ -15,7 +15,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { Effect } from "effect";
 import { TerminalLogUnavailableError, type TerminalSnapshot } from "../src/domain.ts";
-import { buildTerminalResultMessage } from "../src/prompt.ts";
+import { buildBashResult, buildTerminalResultMessage } from "../src/prompt.ts";
 import { MAX_RUNNING, MAX_TRACKED, SETTLED_RETAINED_PER_STREAM } from "../src/constants.ts";
 import {
   TerminalManager,
@@ -1151,12 +1151,13 @@ test("pruning evicts quick non-yielded entries before yielded terminals", async 
 
 test("settled entries compact their buffers once the archive is complete", async () => {
   await withManager(async (manager, runtime) => {
-    // Larger than the settled retention cap but smaller than the live cap:
-    // fully retained while running, shrunk after settle + flush.
+    // Larger than the settled retention cap but smaller than the head budget:
+    // fully retained (entirely in the head) while running, shrunk after settle
+    // + flush. The final line must survive — it is what the result shows.
     const snap = await runTool(
       runtime,
       manager.start({
-        command: nodeCmd(`process.stdout.write("x".repeat(${256 * 1024}))`),
+        command: nodeCmd(`process.stdout.write("x".repeat(${100 * 1024}) + "\\nVERDICT\\n")`),
         title: "compaction",
         cwd,
       }),
@@ -1170,8 +1171,10 @@ test("settled entries compact their buffers once the archive is complete", async
       `settled view retains ${retained} bytes > ${SETTLED_RETAINED_PER_STREAM}`,
     );
     assert.ok(done.stdout.truncatedBytes > 0, "compaction is reflected in the view");
+    assert.ok(done.stdout.tail.endsWith("\nVERDICT\n"), "compaction kept the end of the output");
+    assert.match(buildBashResult(done), /VERDICT/);
     // The complete capture remains on disk for terminal_log_read.
-    assert.equal(fs.statSync(done.stdout.spillPath).size, 256 * 1024);
+    assert.equal(fs.statSync(done.stdout.spillPath).size, 100 * 1024 + "\nVERDICT\n".length);
   });
 });
 

@@ -155,3 +155,44 @@ test("zero retention omits all bytes without growing memory", () => {
     archiveComplete: false,
   });
 });
+
+test("compaction keeps the end of output that still fits in the head", () => {
+  // Nothing omitted yet: every byte sits in the 64-byte head, tail is empty.
+  const buf = new OutputBuffer(128, undefined, 64);
+  buf.push("0123456789".repeat(4));
+  buf.push("VERDICT");
+  assert.equal(buf.view().tail, "");
+
+  buf.compact(16);
+  const view = buf.view();
+  assert.equal(view.head, "01");
+  assert.equal(view.tail, "3456789VERDICT", "the most recent bytes survive compaction");
+  assert.equal(view.totalBytes, 47);
+  assert.equal(view.truncatedBytes, 47 - 2 - 14);
+  assert.ok(view.text.endsWith("VERDICT"));
+});
+
+test("compaction of an already-truncated stream keeps head prefix and recent tail", () => {
+  const buf = new OutputBuffer(10, undefined, 4);
+  buf.push("aaaa");
+  buf.push("bbbb");
+  buf.push("cccc");
+
+  buf.compact(8);
+  const view = buf.view();
+  assert.equal(view.head, "a");
+  assert.equal(view.tail, "bbcccc");
+  assert.equal(view.truncatedBytes, 12 - 1 - 6);
+});
+
+test("compaction never splits a UTF-8 code point", () => {
+  const buf = new OutputBuffer(1024, undefined, 512);
+  buf.push("é".repeat(40)); // 80 bytes, all in the head
+
+  buf.compact(17);
+  const view = buf.view();
+  assert.equal(view.head, "é", "2-byte prefix budget holds one é");
+  assert.equal(view.tail, "é".repeat(7), "15 remaining bytes hold seven é");
+  assert.equal(view.totalBytes, 80);
+  assert.ok(!view.text.includes("\uFFFD"));
+});

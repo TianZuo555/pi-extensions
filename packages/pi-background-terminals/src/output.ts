@@ -145,12 +145,19 @@ export class OutputBuffer {
   compact(maxRetainedBytes: number) {
     const target = Math.max(0, maxRetainedBytes);
     if (this.headBytes + this.tailBytes <= target) return;
-    const headCap = Math.min(this.headBytes, Math.max(0, Math.floor(target / 8)));
-    const tailCap = Math.min(this.tailBytes, target - headCap);
+    const headAll = Buffer.concat(this.headChunks, this.headBytes);
+    const tailAll = Buffer.concat(this.tailChunks, this.tailBytes);
+    // Until a byte is omitted, head and tail are one contiguous stream, and
+    // output smaller than the head budget sits entirely in the head. Compact
+    // that as one source, or the end of the output (usually the verdict)
+    // would be dropped along with the rest of the head.
+    const contiguous = this.totalBytes === this.headBytes + this.tailBytes;
+    const headSource = contiguous ? Buffer.concat([headAll, tailAll]) : headAll;
+    const tailSource = contiguous ? headSource : tailAll;
     // utf8Prefix/utf8Tail copy the bounded slice on a code point boundary, so
     // compacting cannot split a character or pin the giant source buffers.
-    const head = utf8Prefix(Buffer.concat(this.headChunks, this.headBytes), headCap);
-    const tail = utf8Tail(Buffer.concat(this.tailChunks, this.tailBytes), tailCap);
+    const head = utf8Prefix(headSource, Math.floor(target / 8));
+    const tail = utf8Tail(tailSource, target - head.length);
     this.headChunks = head.length > 0 ? [head] : [];
     this.tailChunks = tail.length > 0 ? [tail] : [];
     this.headBytes = head.length;

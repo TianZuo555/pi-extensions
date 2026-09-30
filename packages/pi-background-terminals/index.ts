@@ -690,15 +690,19 @@ export function createBackgroundTerminalsExtension(
           // that truth instead of a bare failure row.
           if (!signal?.aborted) throw error;
           const live = manager.view.get(started.id);
-          return {
-            content: [{ type: "text", text: TERMINAL_ERRORS.initialWaitAborted(started.id) }],
-            details: {
-              id: started.id,
-              status: live?.status ?? "running",
-              yielded: live?.yielded ?? (live === undefined || live.status === "running"),
-            },
-            isError: true,
-          };
+          if (live === undefined || live.status === "running") {
+            return {
+              content: [{ type: "text", text: TERMINAL_ERRORS.initialWaitAborted(started.id) }],
+              details: { id: started.id, status: "running", yielded: true },
+              isError: true,
+            };
+          }
+          // It settled in the same instant as the abort. The waiter may already
+          // have consumed that settlement, so no follow-up would report it and
+          // "continues in the background" would be false: return the final
+          // result here. The path below consumes any deferred copy, keeping
+          // delivery exactly-once.
+          waited = { snapshot: live, settled: true };
         } finally {
           unsubscribe();
           if (updateTimer) clearTimeout(updateTimer);

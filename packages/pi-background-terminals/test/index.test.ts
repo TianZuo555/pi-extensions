@@ -1068,3 +1068,51 @@ test("Esc during the initial wait returns a running-terminal error result, not a
     await app.shutdown();
   }
 });
+
+test("an Esc that lands as the command settles returns the final result exactly once", async () => {
+  const { createTerminalRuntime } = await import("../src/runtime.ts");
+  const { Exit } = await import("effect");
+  const runtime = createTerminalRuntime();
+  const controller = new AbortController();
+  let calls = 0;
+  // The second runPromiseExit is the initial wait. Let it observe the real
+  // settlement (its waiter consumes it), then report the Esc as having won:
+  // the exact interleaving where no follow-up would ever be delivered.
+  const racingRuntime = new Proxy(runtime, {
+    get(target, property, receiver) {
+      if (property !== "runPromiseExit") return Reflect.get(target, property, receiver);
+      return async (...args: Parameters<typeof runtime.runPromiseExit>) => {
+        const exit = await runtime.runPromiseExit(...args);
+        if (++calls !== 2) return exit;
+        controller.abort();
+        return Exit.interrupt();
+      };
+    },
+  });
+  const app = harness(
+    createBackgroundTerminalsExtension({
+      resolveShellSettings: () => ({}),
+      createRuntime: () => racingRuntime,
+    }),
+  );
+  try {
+    const result = await app.tools
+      .get("bash")
+      .execute(
+        "call-esc-race",
+        { command: command('console.log("finished")'), yield_time_ms: 30_000 },
+        controller.signal,
+        undefined,
+        app.ctx,
+      );
+    assert.equal(calls, 2);
+    assert.equal(result.isError, undefined);
+    assert.equal(result.details?.status, "done");
+    assert.doesNotMatch(result.content[0].text, /continues in the background/);
+    assert.match(result.content[0].text, /finished/);
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    assert.equal(app.messages.length, 0, "the returned result is not also a follow-up");
+  } finally {
+    await app.shutdown();
+  }
+});
