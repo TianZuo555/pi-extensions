@@ -34,6 +34,10 @@ interface CapturedTool {
         resultCount?: number;
         matches?: Array<{ path: string }>;
         files?: string[];
+        truncated?: boolean;
+        timedOut?: boolean;
+        unreadable?: boolean;
+        notices?: string[];
       };
     }
   >;
@@ -112,6 +116,95 @@ test("registered grep and find execute the narrow contracts", {
     assert.match(text(find), /src\/main\.ts/);
     assert.equal(find.structuredContent?.kind, "find");
     assert.deepEqual(find.structuredContent?.files, ["src/main.ts"]);
+    assert.ok(existsSync(path.resolve(root, grep.structuredContent!.matches![0]!.path)));
+    assert.ok(existsSync(path.resolve(root, find.structuredContent!.files![0]!)));
+
+    const absoluteScope = path.join(root, "src");
+    const absolutePath = path.join(absoluteScope, "main.ts").replaceAll("\\", "/");
+    const absoluteGrep = await tools
+      .get("grep")!
+      .execute(
+        "absolute-grep",
+        { pattern: "needle", path: absoluteScope, glob: "*.ts" },
+        undefined,
+        undefined,
+        { cwd: root },
+      );
+    assert.deepEqual(
+      absoluteGrep.structuredContent?.matches?.map((match) => match.path),
+      [absolutePath],
+    );
+    const absoluteFind = await tools
+      .get("find")!
+      .execute("absolute-find", { pattern: "*.ts", path: absoluteScope }, undefined, undefined, {
+        cwd: root,
+      });
+    assert.deepEqual(absoluteFind.structuredContent?.files, [absolutePath]);
+  } finally {
+    await runtime.dispose();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("structured grep completeness ignores the compact text byte budget", {
+  skip: !hasRg,
+}, async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "pi-find-structured-wide-"));
+  const { runtime, tools } = captureTools();
+  try {
+    const count = 60;
+    const line = `needle${"中".repeat(380)}`;
+    writeFileSync(
+      path.join(root, "wide.txt"),
+      `${Array.from({ length: count }, () => line).join("\n")}\n`,
+    );
+    const result = await tools
+      .get("grep")!
+      .execute("wide", { pattern: "needle", path: "wide.txt" }, undefined, undefined, {
+        cwd: root,
+      });
+    assert.equal(result.details.truncated, true);
+    assert.ok(result.details.resultCount < count);
+    assert.match(text(result), /Output limit reached/);
+    assert.equal(result.structuredContent?.resultCount, count);
+    assert.equal(result.structuredContent?.matches?.length, count);
+    assert.equal(result.structuredContent?.truncated, false);
+    assert.equal(result.structuredContent?.timedOut, false);
+    assert.equal(result.structuredContent?.unreadable, false);
+    assert.ok(!result.structuredContent?.notices?.includes("output_limit"));
+  } finally {
+    await runtime.dispose();
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("structured file lists ignore the compact text byte budget", {
+  skip: !hasRg || !hasFd,
+}, async () => {
+  const root = mkdtempSync(path.join(tmpdir(), "pi-find-structured-files-"));
+  const { runtime, tools } = captureTools();
+  try {
+    const count = 200;
+    const files = Array.from(
+      { length: count },
+      (_, index) => `${"中".repeat(75)}-${String(index).padStart(3, "0")}.txt`,
+    );
+    for (const file of files) writeFileSync(path.join(root, file), "needle\n");
+    for (const [kind, params] of [
+      ["grep", { pattern: "needle", output: "files" }],
+      ["find", { pattern: "*.txt" }],
+    ] as const) {
+      const result = await tools
+        .get(kind)!
+        .execute(kind, params, undefined, undefined, { cwd: root });
+      assert.equal(result.details.truncated, true);
+      assert.ok(result.details.resultCount < count);
+      assert.match(text(result), /Output limit reached/);
+      assert.equal(result.structuredContent?.resultCount, count);
+      assert.deepEqual(result.structuredContent?.files, files);
+      assert.equal(result.structuredContent?.truncated, false);
+      assert.ok(!result.structuredContent?.notices?.includes("output_limit"));
+    }
   } finally {
     await runtime.dispose();
     rmSync(root, { recursive: true, force: true });
@@ -301,6 +394,8 @@ test("path decoding guidance appears only for quoted paths", {
           text(result).includes("JSON-decode quoted paths before read/edit"),
           filename !== "plain.txt",
         );
+        assert.deepEqual(result.structuredContent?.files, [filename]);
+        assert.ok(!result.structuredContent?.notices?.includes("quoted_path"));
       }
       rmSync(path.join(root, filename));
     }
@@ -364,6 +459,7 @@ test("registered grep distinguishes automatic context and files-only output", {
       const auto = Object.keys(options).length === 0;
       assert.equal(text(result).includes("before"), auto);
       assert.equal(text(result).includes("automatically"), auto);
+      assert.ok(!result.structuredContent?.notices?.includes("auto_context"));
       if (options.output === "files") {
         assert.equal(text(result), "1 file\n\na.txt");
         assert.match(

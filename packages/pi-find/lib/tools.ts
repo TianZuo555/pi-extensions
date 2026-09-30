@@ -14,6 +14,7 @@ import {
   FIND_TOOL_DESCRIPTION,
   findResultHeader,
   GREP_FILE_LIMIT,
+  GREP_MATCH_FIELD_DESCRIPTIONS,
   GREP_OUTPUT_FIELD_DESCRIPTIONS,
   GREP_PARAMETER_DESCRIPTIONS,
   GREP_PROMPT_SNIPPET,
@@ -50,6 +51,11 @@ import { boundedBody, fileRows, grepRows, resultText } from "./results.ts";
 const notice = (id: NoticeId, text: string): Notice => ({ id, text });
 const texts = (notices: readonly Notice[]) => notices.map((entry) => entry.text);
 const ids = (notices: readonly Notice[]) => notices.map((entry) => entry.id);
+/** Structured data has no text-output truncation, quoted display paths, or context rows. */
+const structuredNoticeIds = (notices: readonly Notice[]) =>
+  ids(notices).filter(
+    (id) => id !== "output_limit" && id !== "quoted_path" && id !== "auto_context",
+  );
 
 /**
  * Explain an empty result caused by a slash glob. Only fires when the glob
@@ -111,9 +117,9 @@ export const FindParams = Type.Object({
 export type FindInput = Static<typeof FindParams>;
 
 const GrepMatchSchema = Type.Object({
-  path: Type.String({ description: "File path relative to the search root." }),
-  lineNumber: Type.Integer({ description: "1-based line number." }),
-  text: Type.String({ description: "Line text, already clipped when over the length cap." }),
+  path: Type.String({ description: GREP_MATCH_FIELD_DESCRIPTIONS.path }),
+  lineNumber: Type.Integer({ description: GREP_MATCH_FIELD_DESCRIPTIONS.lineNumber }),
+  text: Type.String({ description: GREP_MATCH_FIELD_DESCRIPTIONS.text }),
 });
 
 export const GrepOutputSchema = Type.Object({
@@ -161,7 +167,6 @@ function uniqueMatchPaths(matches: readonly GrepMatch[]): string[] {
 export function grepStructuredContent(
   params: GrepInput,
   outcome: GrepOutcome,
-  flags: { readonly truncated: boolean; readonly unreadable: boolean },
   notices: readonly Notice[],
 ): GrepStructuredContent {
   const filesOnly = outcome.output === "files";
@@ -173,19 +178,18 @@ export function grepStructuredContent(
     query: params.pattern,
     resultCount: filesOnly ? files.length : matches.length,
     fileCount: files.length,
-    truncated: flags.truncated,
+    truncated: outcome.truncated || outcome.skippedRecords > 0,
     timedOut: outcome.timedOut,
-    unreadable: flags.unreadable,
+    unreadable: outcome.pathError !== undefined,
     matches,
     files,
-    notices: ids(notices),
+    notices: structuredNoticeIds(notices),
   };
 }
 
 export function findStructuredContent(
   params: FindInput,
   outcome: FindOutcome,
-  flags: { readonly truncated: boolean; readonly unreadable: boolean },
   notices: readonly Notice[],
 ): FindStructuredContent {
   const files = [...outcome.files];
@@ -193,11 +197,11 @@ export function findStructuredContent(
     kind: "find",
     query: params.pattern,
     resultCount: files.length,
-    truncated: flags.truncated,
+    truncated: outcome.truncated || outcome.skippedRecords > 0,
     timedOut: outcome.timedOut,
-    unreadable: flags.unreadable,
+    unreadable: outcome.pathError !== undefined,
     files,
-    notices: ids(notices),
+    notices: structuredNoticeIds(notices),
   };
 }
 
@@ -294,12 +298,7 @@ export function registerTools(pi: ExtensionAPI, runtime: SearchRuntimeInstance):
               timedOut: outcome.timedOut,
               unreadable,
             } satisfies SearchDetails,
-            structuredContent: grepStructuredContent(
-              params,
-              outcome,
-              { truncated, unreadable },
-              notices,
-            ),
+            structuredContent: grepStructuredContent(params, outcome, notices),
           },
           stats: {
             resultCount: body.resultCount,
@@ -398,12 +397,7 @@ export function registerTools(pi: ExtensionAPI, runtime: SearchRuntimeInstance):
               timedOut: outcome.timedOut,
               unreadable,
             } satisfies SearchDetails,
-            structuredContent: findStructuredContent(
-              params,
-              outcome,
-              { truncated, unreadable },
-              notices,
-            ),
+            structuredContent: findStructuredContent(params, outcome, notices),
           },
           stats: {
             resultCount: count,
