@@ -139,6 +139,34 @@ export class OutputBuffer {
     }
   }
 
+  /** Drop retained chunks down to a smaller cap. Used once the stream's
+   * complete archive is on disk, when the in-memory copy only serves small
+   * result/message views while /ps reads the spill file. */
+  compact(maxRetainedBytes: number) {
+    const target = Math.max(0, maxRetainedBytes);
+    if (this.headBytes + this.tailBytes <= target) return;
+    const headAll = Buffer.concat(this.headChunks, this.headBytes);
+    const tailAll = Buffer.concat(this.tailChunks, this.tailBytes);
+    // Until a byte is omitted, head and tail are one contiguous stream, and
+    // output smaller than the head budget sits entirely in the head. Compact
+    // that as one source, or the end of the output (usually the verdict)
+    // would be dropped along with the rest of the head.
+    const contiguous = this.totalBytes === this.headBytes + this.tailBytes;
+    const headSource = contiguous ? Buffer.concat([headAll, tailAll]) : headAll;
+    const tailSource = contiguous ? headSource : tailAll;
+    // utf8Prefix/utf8Tail copy the bounded slice on a code point boundary, so
+    // compacting cannot split a character or pin the giant source buffers.
+    const head = utf8Prefix(headSource, Math.floor(target / 8));
+    const tail = utf8Tail(tailSource, target - head.length);
+    this.headChunks = head.length > 0 ? [head] : [];
+    this.tailChunks = tail.length > 0 ? [tail] : [];
+    this.headBytes = head.length;
+    this.tailBytes = tail.length;
+    this.headSealed = true;
+    this.cachedView = undefined;
+    this.version++;
+  }
+
   view(): OutputView {
     if (this.cachedView) return this.cachedView;
 

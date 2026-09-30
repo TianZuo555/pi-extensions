@@ -47,6 +47,10 @@ export interface TerminalSnapshot {
   readonly createdAt: number;
   /** Date.now() at settle (exit/kill). */
   readonly settledAt?: number;
+  /** True once the initial foreground wait ended (timeout or abort) with the
+   * process still running — it is now a background terminal owned by /ps.
+   * Quick commands that settle inside the wait never set this. */
+  readonly yielded?: boolean;
   /** Optional hard runtime deadline requested by the bash call. */
   readonly timeoutMs?: number;
   /** Set when the process exited via exit code (exactly one of exitCode/signal). */

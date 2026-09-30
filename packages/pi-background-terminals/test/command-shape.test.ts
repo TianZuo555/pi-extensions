@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { findDuplicateRunning, isStateOnlyCommand } from "./src/command-shape.ts";
-import { duplicateCommandError, stateOnlyCommandError } from "./src/prompt.ts";
-import type { OutputView, TerminalSnapshot } from "./src/domain.ts";
+import { findDuplicateRunning, isStateOnlyCommand } from "../src/command-shape.ts";
+import { duplicateCommandError, stateOnlyCommandError } from "../src/prompt.ts";
+import type { OutputView, TerminalSnapshot } from "../src/domain.ts";
 
 function view(): OutputView {
   return { text: "", head: "", tail: "", totalBytes: 0, truncatedBytes: 0 };

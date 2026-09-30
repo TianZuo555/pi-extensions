@@ -5,7 +5,7 @@ import {
   COMPLETION_BATCH_QUIET_MS,
   type CompletionBatchTimers,
   createCompletionBatchScheduler,
-} from "./src/completion-batcher.ts";
+} from "../src/completion-batcher.ts";
 
 interface ScheduledTimer {
   readonly id: number;
@@ -82,60 +82,34 @@ test("completion batching keeps sustained arrivals within the maximum hold", () 
   assert.equal(flushes, 1);
 });
 
-test("a quiet expiry held while busy flushes when the agent becomes idle", () => {
+test("a quiet window flushes without waiting for the agent to go idle", () => {
   const timers = new ManualTimers();
-  let idle = false;
   let flushes = 0;
-  const scheduler = createCompletionBatchScheduler(() => flushes++, {
-    timers,
-    isIdle: () => idle,
-  });
+  const scheduler = createCompletionBatchScheduler(() => flushes++, { timers });
 
   scheduler.schedule();
-  timers.advance(COMPLETION_BATCH_QUIET_MS);
-  assert.equal(flushes, 0);
-  idle = true;
-  assert.equal(scheduler.notifyIdle(), true);
-  assert.equal(flushes, 1);
-});
-
-test("arrivals after a busy quiet expiry start a fresh quiet window", () => {
-  const timers = new ManualTimers();
-  let idle = false;
-  let flushes = 0;
-  const scheduler = createCompletionBatchScheduler(() => flushes++, {
-    timers,
-    isIdle: () => idle,
-  });
-
-  scheduler.schedule();
-  timers.advance(COMPLETION_BATCH_QUIET_MS);
-  assert.equal(flushes, 0);
-
-  timers.advance(500);
-  scheduler.schedule();
-  idle = true;
-  assert.equal(scheduler.notifyIdle(), true);
-  assert.equal(flushes, 0);
   timers.advance(COMPLETION_BATCH_QUIET_MS - 1);
   assert.equal(flushes, 0);
   timers.advance(1);
   assert.equal(flushes, 1);
+  // The flushed group is detached: its maximum hold never fires again.
+  timers.advance(COMPLETION_BATCH_MAX_WAIT_MS);
+  assert.equal(flushes, 1);
 });
 
-test("the maximum hold flushes even while the batch remains busy", () => {
+test("an arrival after a flush starts a fresh group", () => {
   const timers = new ManualTimers();
   let flushes = 0;
-  const scheduler = createCompletionBatchScheduler(() => flushes++, {
-    timers,
-    isIdle: () => false,
-  });
+  const scheduler = createCompletionBatchScheduler(() => flushes++, { timers });
 
   scheduler.schedule();
   timers.advance(COMPLETION_BATCH_QUIET_MS);
-  assert.equal(flushes, 0);
-  timers.advance(COMPLETION_BATCH_MAX_WAIT_MS - COMPLETION_BATCH_QUIET_MS);
   assert.equal(flushes, 1);
+  scheduler.schedule();
+  timers.advance(COMPLETION_BATCH_QUIET_MS - 1);
+  assert.equal(flushes, 1);
+  timers.advance(1);
+  assert.equal(flushes, 2);
 });
 
 test("clearing completion batching invalidates every pending deadline", () => {

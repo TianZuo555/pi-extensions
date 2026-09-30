@@ -9,6 +9,9 @@ export const MAX_RUNTIME_TIMEOUT_SECONDS = MAX_RUNTIME_TIMEOUT_MS / 1000;
 /** In-memory retained cap and startup prefix per stream. */
 export const RETAINED_PER_STREAM = 2 * 1024 * 1024;
 export const HEAD_RETAINED_PER_STREAM = 256 * 1024;
+/** Retained cap per stream once settled with a complete on-disk archive — /ps
+ * reads the spill file, so memory only needs enough for a result message. */
+export const SETTLED_RETAINED_PER_STREAM = 64 * 1024;
 export const MAX_SPILL_BYTES_PER_STREAM = 256 * 1024 * 1024;
 export const MAX_TERMINAL_LOG_READ_BYTES = 64 * 1024;
 export const TERMINAL_LOG_READ_RUN_BUDGET = MAX_TERMINAL_LOG_READ_BYTES * 4;

@@ -1,5 +1,5 @@
-import { TerminalManager } from "./src/manager.ts";
-import { createTerminalRuntime, runTool } from "./src/runtime.ts";
+import { TerminalManager } from "../src/manager.ts";
+import { createTerminalRuntime, runTool } from "../src/runtime.ts";
 
 const runtime = createTerminalRuntime();
 const manager = await runtime.runPromise(TerminalManager);
