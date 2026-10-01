@@ -3,10 +3,7 @@ import test from "node:test";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { Api, Model } from "@earendil-works/pi-ai";
 import { hidePiAuthFile, isolateProviderEnv } from "./helpers.ts";
-import {
-  availableSearchProviders,
-  getProviderStatuses,
-} from "../lib/config.ts";
+import { availableSearchProviders, getProviderStatuses } from "../lib/config.ts";
 import {
   isOpenAIResponsesModel,
   resolveGitHubCopilotBaseUrl,
@@ -368,24 +365,23 @@ test("searchOpenAI streams SSE deltas through onUpdate", async (t) => {
   });
 
   const sse = [
-    "data: " + JSON.stringify({ type: "response.web_search_call.searching", item_id: "ws_1" }),
+    `data: ${JSON.stringify({ type: "response.web_search_call.searching", item_id: "ws_1" })}`,
     "",
-    "data: " + JSON.stringify({ type: "response.output_text.delta", delta: "Hello " }),
+    `data: ${JSON.stringify({ type: "response.output_text.delta", delta: "Hello " })}`,
     "",
-    "data: " + JSON.stringify({ type: "response.output_text.delta", delta: "world." }),
+    `data: ${JSON.stringify({ type: "response.output_text.delta", delta: "world." })}`,
     "",
-    "data: " +
-      JSON.stringify({
-        type: "response.completed",
-        response: {
-          output: [
-            {
-              type: "message",
-              content: [{ type: "text", text: "Hello world.", annotations: [] }],
-            },
-          ],
-        },
-      }),
+    `data: ${JSON.stringify({
+      type: "response.completed",
+      response: {
+        output: [
+          {
+            type: "message",
+            content: [{ type: "text", text: "Hello world.", annotations: [] }],
+          },
+        ],
+      },
+    })}`,
     "",
   ].join("\n");
 

@@ -114,7 +114,8 @@ function extractUrlCitation(
   if (isLikelyJunkSearchUrl(cleanUrl)) return undefined;
   return {
     url: cleanUrl,
-    title: typeof titleValue === "string" && titleValue.trim() ? titleValue : titleFromUrl(cleanUrl),
+    title:
+      typeof titleValue === "string" && titleValue.trim() ? titleValue : titleFromUrl(cleanUrl),
     endIndex: typeof endIndexValue === "number" ? endIndexValue : undefined,
     startIndex: typeof startIndexValue === "number" ? startIndexValue : undefined,
   };
@@ -164,7 +165,12 @@ function extractSearchResults(
         if (!isRecord(source)) continue;
         const url = source.url ?? source.source_website_url;
         if (typeof url === "string" && url.trim().length > 0) {
-          addResult(results, seenUrls, url, source.title ?? source.caption ?? source.display_name ?? source.name);
+          addResult(
+            results,
+            seenUrls,
+            url,
+            source.title ?? source.caption ?? source.display_name ?? source.name,
+          );
         } else if (source.type === "api" && typeof source.name === "string" && source.name) {
           internalSources.add(source.name);
         }
@@ -280,7 +286,11 @@ async function parseStreamingResponse(
     if (!isRecord(event) || !type) return;
 
     if (type === "error" || type === "response.failed") {
-      const error = isRecord(event.error) ? event.error : isRecord(event.response) ? event.response.error : undefined;
+      const error = isRecord(event.error)
+        ? event.error
+        : isRecord(event.response)
+          ? event.response.error
+          : undefined;
       const message =
         (typeof event.message === "string" && event.message) ||
         (isRecord(error) && typeof error.message === "string" && error.message) ||
@@ -394,7 +404,12 @@ export async function searchOpenAI(
     const parsed = await parseOpenAIResponse(response);
     output = parsed.output;
   } else if (contentType.includes("event-stream")) {
-    const parsed = await parseStreamingResponse(response, combinedSignal, options.onUpdate, auth.variant);
+    const parsed = await parseStreamingResponse(
+      response,
+      combinedSignal,
+      options.onUpdate,
+      auth.variant,
+    );
     output = parsed.output;
     streamedText = parsed.streamedText;
   } else {

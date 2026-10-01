@@ -32,7 +32,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
-function compactHeaders(headers: Record<string, string | null | undefined>): Record<string, string> {
+function compactHeaders(
+  headers: Record<string, string | null | undefined>,
+): Record<string, string> {
   const compact: Record<string, string> = {};
   for (const [name, value] of Object.entries(headers)) {
     if (typeof value === "string" && value) compact[name] = value;
@@ -85,7 +87,9 @@ function sessionReasoning(
   return effort === "low" || effort === "medium" || effort === "high" ? effort : undefined;
 }
 
-async function trySessionRequest(ctx: ExtensionContext | undefined): Promise<OpenAISearchRequest | null> {
+async function trySessionRequest(
+  ctx: ExtensionContext | undefined,
+): Promise<OpenAISearchRequest | null> {
   const model = ctx?.model;
   if (!model || !isOpenAIResponsesModel(model) || !ctx?.modelRegistry?.getApiKeyAndHeaders) {
     return null;
@@ -114,7 +118,9 @@ async function trySessionRequest(ctx: ExtensionContext | undefined): Promise<Ope
     const authorization = headers.Authorization ?? headers.authorization;
     const hasBearer = typeof authorization === "string" && /^Bearer\s+\S+/i.test(authorization);
     if (!apiKey && !hasBearer) return null;
-    const hasAccount = Object.keys(headers).some((name) => name.toLowerCase() === "chatgpt-account-id");
+    const hasAccount = Object.keys(headers).some(
+      (name) => name.toLowerCase() === "chatgpt-account-id",
+    );
     if (!hasAccount) {
       const accountId = apiKey ? extractCodexAccountId(apiKey) : undefined;
       if (!accountId) return null;

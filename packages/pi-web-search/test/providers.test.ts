@@ -58,10 +58,7 @@ test("searchOpenAI parses JSON Responses API output with citations", async () =>
     globalThis.fetch = async (_input, init) => {
       const body = JSON.parse(String(init?.body)) as { store?: unknown; include?: unknown };
       assert.equal(body.store, false);
-      assert.deepEqual(body.include, [
-        "web_search_call.action.sources",
-        "web_search_call.results",
-      ]);
+      assert.deepEqual(body.include, ["web_search_call.action.sources", "web_search_call.results"]);
       return new Response(JSON.stringify(mockOutput), {
         status: 200,
         headers: { "Content-Type": "application/json" },

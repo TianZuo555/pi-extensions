@@ -4,9 +4,17 @@ export function normalizeSearchUrl(url: string): string {
     const parsed = new URL(url);
     parsed.hash = "";
     const host = parsed.hostname.toLowerCase();
-    const isYouTube = host === "youtu.be" || host === "youtube.com" || host.endsWith(".youtube.com");
+    const isYouTube =
+      host === "youtu.be" || host === "youtube.com" || host.endsWith(".youtube.com");
     if (!isYouTube) {
-      for (const name of ["ref", "referral_type", "openLinerExtension", "_clear", "lang", "api-mode"]) {
+      for (const name of [
+        "ref",
+        "referral_type",
+        "openLinerExtension",
+        "_clear",
+        "lang",
+        "api-mode",
+      ]) {
         parsed.searchParams.delete(name);
       }
       for (const name of [...parsed.searchParams.keys()]) {
@@ -73,7 +81,11 @@ export interface UrlCitation {
 }
 
 /** Insert `[n]` markers at citation end indexes; `n` is 1-based in `urls` order. */
-export function applyIndexCitations(text: string, citations: UrlCitation[], urls: string[]): string {
+export function applyIndexCitations(
+  text: string,
+  citations: UrlCitation[],
+  urls: string[],
+): string {
   const indexByUrl = new Map<string, number>();
   urls.forEach((url, index) => {
     if (!indexByUrl.has(url)) indexByUrl.set(url, index);

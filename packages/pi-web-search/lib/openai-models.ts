@@ -69,9 +69,7 @@ export function resolveGitHubCopilotBaseUrl(
   const proxyHost = proxyEndpoints[0].toLowerCase();
   const labels = proxyHost.split(".");
   const isValidLabel = (label: string) =>
-    label.length > 0 &&
-    label.length <= 63 &&
-    /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label);
+    label.length > 0 && label.length <= 63 && /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label);
   const isCopilotProxyHost =
     proxyHost.length <= 253 &&
     labels.length >= 4 &&
