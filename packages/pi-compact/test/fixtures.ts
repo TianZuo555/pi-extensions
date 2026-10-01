@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { Model } from "@earendil-works/pi-ai";
+import type { Api, Model } from "@earendil-works/pi-ai";
 import { openaiCodexProvider } from "@earendil-works/pi-ai/providers/openai-codex";
+import { openaiProvider } from "@earendil-works/pi-ai/providers/openai";
 import {
   SessionManager,
   type ExtensionAPI,
@@ -38,12 +39,53 @@ export const fakeApiKey = `x.${Buffer.from(
   }),
 ).toString("base64url")}.x`;
 export const provider = openaiCodexProvider();
+export const openai = openaiProvider();
+export const openaiSol: Model<"openai-responses"> = {
+  ...sol,
+  provider: "openai",
+  api: "openai-responses",
+  baseUrl: "https://api.openai.com/v1",
+};
+export const openaiLuna = { ...openaiSol, id: "gpt-6-luna", name: "GPT-6 Luna" };
 export const opaque = { type: "compaction", encrypted_content: "test-opaque" };
 export const userItem = (text: string) => ({
   type: "message",
   role: "user",
   content: [{ type: "input_text", text }],
 });
+
+export function textResponse(text = "Summary: old-user-code is old-123."): Response {
+  const item = {
+    type: "message",
+    id: "msg_summary",
+    role: "assistant",
+    status: "completed",
+    content: [{ type: "output_text", text, annotations: [] }],
+  };
+  const events = [
+    { type: "response.output_item.added", output_index: 0, item: { ...item, content: [] } },
+    {
+      type: "response.content_part.added",
+      output_index: 0,
+      content_index: 0,
+      part: { type: "output_text", text: "", annotations: [] },
+    },
+    { type: "response.output_text.delta", output_index: 0, content_index: 0, delta: text },
+    { type: "response.output_item.done", output_index: 0, item },
+    {
+      type: "response.completed",
+      response: {
+        id: "resp_summary",
+        status: "completed",
+        output: [item],
+        usage: { input_tokens: 10, output_tokens: 1, total_tokens: 11 },
+      },
+    },
+  ];
+  return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""), {
+    headers: { "content-type": "text/event-stream" },
+  });
+}
 
 export function completedResponse(): Response {
   return new Response(
@@ -71,7 +113,13 @@ export function requestPayload(init?: RequestInit): JsonObject {
 type Handler = (event: never, ctx: ExtensionContext) => unknown;
 
 export function harness(
-  options: { prior?: boolean; fetch?: typeof fetch; settings?: Partial<CompactSettings> } = {},
+  options: {
+    prior?: boolean;
+    fetch?: typeof fetch;
+    settings?: Partial<CompactSettings>;
+    model?: Model<Api>;
+    oauth?: boolean;
+  } = {},
 ) {
   const handlers = new Map<string, Handler>();
   const notifications: string[] = [];
@@ -114,10 +162,14 @@ export function harness(
   };
   const fetch: typeof globalThis.fetch = async (input, init) => {
     payloads.push(requestPayload(init));
-    return options.fetch ? options.fetch(input, init) : completedResponse();
+    return options.fetch
+      ? options.fetch(input, init)
+      : options.model?.provider === "openai"
+        ? textResponse()
+        : completedResponse();
   };
   const ctx = {
-    model: sol,
+    model: options.model ?? sol,
     thinkingLevel: "off",
     sessionManager: sm,
     hasUI: true,
@@ -129,9 +181,15 @@ export function harness(
     },
     modelRegistry: {
       find: (providerId: string, id: string) =>
-        [sol, terra].find((m) => m.provider === providerId && m.id === id),
+        [sol, terra, openaiSol, openaiLuna].find((m) => m.provider === providerId && m.id === id),
       getApiKeyAndHeaders: async () => ({ ok: true, apiKey: fakeApiKey }),
-      getProvider: () => provider,
+      getProvider: (id: string) => (id === "openai" ? openai : provider),
+      isUsingOAuth: () => options.oauth ?? true,
+      streamSimple: (
+        model: Parameters<typeof openai.streamSimple>[0],
+        context: Parameters<typeof openai.streamSimple>[1],
+        options: Parameters<typeof openai.streamSimple>[2],
+      ) => openai.streamSimple(model, context, { ...options, apiKey: fakeApiKey }),
     },
     getSystemPrompt: () => "Base system prompt",
   } as unknown as ExtensionContext;

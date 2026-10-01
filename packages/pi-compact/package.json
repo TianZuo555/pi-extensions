@@ -1,7 +1,7 @@
 {
   "name": "@tian.zuo/pi-compact",
   "version": "0.2.2",
-  "description": "Codex Responses remote compaction via a configurable cheaper model (e.g. gpt-5.6-luna).",
+  "description": "GPT-6 Luna compaction: opaque checkpoints for legacy Codex and Pi text summaries for OpenAI ChatGPT OAuth.",
   "type": "module",
   "keywords": [
     "pi",
@@ -26,6 +26,7 @@
   "files": [
     "index.ts",
     "src",
+    "docs",
     "README.md",
     "LICENSE",
     "CHANGELOG.md"

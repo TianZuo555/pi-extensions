@@ -34,6 +34,7 @@ import {
   parseCompactionModelRef,
 } from "./settings.ts";
 import { terminalText } from "./terminal.ts";
+import { requestTextCompaction } from "./text-compact.ts";
 
 const STATUS_KEY = "remote-compact";
 /** Give up on a route for the session after this many consecutive failures of any kind. */
@@ -258,7 +259,9 @@ export function pickCompactionModel(
   const ref = settings.compactionModel.trim();
   if (!ref || !sessionModel) return sessionModel;
   const parsed = parseCompactionModelRef(ref);
-  const found = parsed ? ctx.modelRegistry.find(parsed.provider, parsed.modelId) : undefined;
+  const found = parsed
+    ? ctx.modelRegistry.find(parsed.provider ?? sessionModel.provider, parsed.modelId)
+    : undefined;
   if (found && usesResponsesCompactionApi(found) && sameResponsesBackend(found, sessionModel)) {
     return found;
   }
@@ -283,9 +286,8 @@ async function compactRemotely(
   state: SessionState,
 ) {
   const sessionModel = ctx.model;
-  // Remote compaction is hard-gated to the OpenAI Codex provider; every other
-  // provider (github-copilot's /responses/compact is a verified 404, azure,
-  // generic openai-responses backends) goes straight to Pi native compaction.
+  // New OpenAI OAuth rejects both opaque compaction routes. Only legacy Codex
+  // creates opaque checkpoints; new OAuth uses Pi text summarization on Luna.
   if (event.signal.aborted || ownerSignal.aborted) return { cancel: true };
   if (!settings.enabled) {
     return nativeFallbackOrCancel(
@@ -296,16 +298,57 @@ async function compactRemotely(
       "Enable remote compaction before retrying /compact.",
     );
   }
-  if (sessionModel?.provider !== "openai-codex") {
+  const textSummary =
+    sessionModel?.provider === "openai" &&
+    sessionModel.api === "openai-responses" &&
+    ctx.modelRegistry.isUsingOAuth(sessionModel);
+  if (sessionModel?.provider !== "openai-codex" && !textSummary) {
     return nativeFallbackOrCancel(
       event,
       ctx,
       settings,
       state,
-      "Switch back to the original Codex provider to compact.",
+      "Switch back to the original OpenAI or Codex Responses backend to compact.",
     );
   }
   const model = pickCompactionModel(ctx, sessionModel, settings, state.modelWarnings);
+  if (textSummary && model) {
+    const cancelled = nativeFallbackOrCancel(
+      event,
+      ctx,
+      settings,
+      state,
+      "OpenAI Sign in with ChatGPT cannot read the existing Codex checkpoint for a text summary.",
+    );
+    if (cancelled) return cancelled;
+    notifyOnce(
+      state,
+      ctx,
+      `OpenAI Sign in with ChatGPT does not support remote compaction; using ${terminalText(model.id)} for a Pi text summary. Select the legacy OpenAI Codex provider for opaque checkpoints.`,
+    );
+    const signal = AbortSignal.any([event.signal, ownerSignal]);
+    const sessionId = ctx.sessionManager.getSessionId();
+    ctx.ui.setStatus(STATUS_KEY, `Pi text summary via ${model.id}…`);
+    try {
+      const compaction = await requestTextCompaction(event, ctx, model, settings, signal, fetch);
+      return sessionStillOwned(ctx, sessionId, signal) ? { compaction } : { cancel: true };
+    } catch (error) {
+      if (!sessionStillOwned(ctx, sessionId, signal)) return { cancel: true };
+      const cancelled = nativeFallbackOrCancel(
+        event,
+        ctx,
+        settings,
+        state,
+        error instanceof Error ? error.message : String(error),
+      );
+      if (!cancelled && !allowsLossyFallback(event, settings)) {
+        notifyFailure(ctx, settings, state, error);
+      }
+      return cancelled;
+    } finally {
+      if (ctx.sessionManager.getSessionId() === sessionId) ctx.ui.setStatus(STATUS_KEY, undefined);
+    }
+  }
   const route = resolveCompactionRoute(model, settings);
   if (route.kind === "native" || !usesResponsesCompactionApi(model)) {
     const reason =

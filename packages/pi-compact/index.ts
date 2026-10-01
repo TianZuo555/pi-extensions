@@ -1,9 +1,8 @@
-// pi-compact — Codex remote compaction via a configurable (cheaper) model.
+// pi-compact — compaction via a configurable cheaper model (default: GPT-6 Luna).
 //
 // Fork of @narumitw/pi-codex-compact (MIT) that decouples the compaction model
-// from the session model: the opaque checkpoint produced by e.g. gpt-5.6-luna
-// replays correctly on sol/terra/astra (verified against the Codex backend), so
-// compaction runs at luna prices while the session keeps the expensive model.
+// from the session model. Legacy Codex uses opaque checkpoints; new OpenAI
+// ChatGPT OAuth uses Pi's text summarizer because opaque compaction is forbidden.
 //
 // Quick try:  pi -e ./packages/pi-compact
 
