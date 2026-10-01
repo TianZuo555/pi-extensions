@@ -1,14 +1,29 @@
-# pi-goal
+# pi-goal (deprecated)
 
 Release notes: [changelog](https://github.com/TianZuo555/pi-extensions/blob/main/packages/pi-goal/CHANGELOG.md) · [GitHub releases](https://github.com/TianZuo555/pi-extensions/releases)
+
+> **Deprecated:** no longer recommended or actively developed. The source
+> remains here for historical reference; deprecation does not introduce a
+> replacement tool. The root package no longer loads this extension.
+
+## Remove it
+
+```bash
+pi remove npm:@tian.zuo/pi-goal
+```
+
+Restart Pi or run `/reload` to unload it. Remove any explicit local extension
+paths and instructions requiring the `get_goal`/`update_goal` tools or the
+`/goal` command from your own settings, prompts, or `AGENTS.md`.
+
+## Historical behavior
 
 A Codex-style persistent goal mode for the **pi coding agent**. It turns a
 thread into a bounded work loop: an explicit objective is persisted in the
 session, injected into each model turn, checked against evidence, and continued
 when the thread settles.
 
-Install: `npm:@tian.zuo/pi-goal` · npm package `@tian.zuo/pi-goal` · workspace
-`packages/pi-goal`
+npm package `@tian.zuo/pi-goal` · workspace `packages/pi-goal`
 
 ## Commands
 
@@ -146,8 +161,7 @@ Effect-aware tooling matches the established repository pattern: package-local
 `pi-background-terminals`; duplicating it across workspaces races on the same
 TypeScript binary during `pnpm install`.
 
-## Tests
+## Archived tests
 
-```bash
-pnpm --filter @tian.zuo/pi-goal test
-```
+Tests remain as historical reference, but this package no longer declares a
+`test` script. Local workspace runs and CI skip them.

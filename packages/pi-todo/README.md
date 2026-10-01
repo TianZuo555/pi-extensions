@@ -73,8 +73,7 @@ items.
 State lives in tool-result `details`, so branching, forking, and resuming
 rebuild the list belonging to that point in history.
 
-## Tests
+## Archived tests
 
-```bash
-pnpm --filter @tian.zuo/pi-todo test
-```
+Tests remain as historical reference, but this package no longer declares a
+`test` script. Local workspace runs and CI skip them.

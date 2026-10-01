@@ -1,12 +1,24 @@
-# @tian.zuo/pi-subagents
+# @tian.zuo/pi-subagents (deprecated)
 
 Release notes: [changelog](https://github.com/TianZuo555/pi-extensions/blob/main/packages/pi-subagents/CHANGELOG.md) · [GitHub releases](https://github.com/TianZuo555/pi-extensions/releases)
 
-Delegate bounded tasks to isolated subagent runs from [pi](https://pi.dev). Each profile can run on a **Herdr pane backend** (interactive agent CLIs in dedicated panes) or fall back to the legacy **RPC child backend** (`pi --mode rpc` headless children).
+> **Deprecated:** no longer recommended or actively developed. The source
+> remains here for historical reference; deprecation does not introduce a
+> replacement tool. The root package no longer loads this extension.
+
+## Remove it
 
 ```bash
-pi install npm:@tian.zuo/pi-subagents
+pi remove npm:@tian.zuo/pi-subagents
 ```
+
+Restart Pi or run `/reload` to unload it. Remove any explicit local extension
+paths and instructions requiring the `subagent` tools from your own settings,
+prompts, or `AGENTS.md`.
+
+## Historical behavior
+
+Delegates bounded tasks to isolated subagent runs from [pi](https://pi.dev). Each profile can run on a **Herdr pane backend** (interactive agent CLIs in dedicated panes) or fall back to the legacy **RPC child backend** (`pi --mode rpc` headless children).
 
 Requires a Herdr session (`HERDR_ENV=1` and `herdr` on PATH) for non-`pi` agent kinds and for profiles that pin `backend: herdr`. Built-in profiles default to `kind: pi` and `backend: auto`, so out-of-the-box behavior stays RPC-based when Herdr is not active.
 
@@ -159,8 +171,10 @@ From the monorepo:
 
 ```bash
 pnpm --filter @tian.zuo/pi-subagents run check
-pnpm --filter @tian.zuo/pi-subagents test
 pi -e ./packages/pi-subagents
 ```
+
+Tests remain under `test/` as historical reference, but this package no longer
+declares a `test` script. Local workspace runs and CI skip them.
 
 Set `HERDR_ENV=1` and ensure a fake or real `herdr` binary is on PATH when exercising Herdr-backed profiles locally.

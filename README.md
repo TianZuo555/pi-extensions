@@ -18,11 +18,11 @@ Each extension has its own package and its own README under
 | [pi-ask-user](packages/pi-ask-user/README.md) | tool `ask_user` | Lets the model ask 1–5 single-choice questions in one form. |
 | [pi-usage](packages/pi-usage/README.md) | `/usage`, `/tokens` | Provider account usage (Codex, Copilot, Z.ai, DeepSeek) plus a token/cost dashboard. |
 | [pi-background-terminals](packages/pi-background-terminals/README.md) | `/ps`, overrides tool `bash` | One no-stdin bash path: long commands yield to background and notify once. |
-| [pi-edit-safe](packages/pi-edit-safe/README.md) | overrides tool `edit` | Stricter `edit`: verbatim splice, ambiguity throws, one `edits[]` shape. |
+| [pi-edit-safe (deprecated)](packages/pi-edit-safe/README.md) | overrides tool `edit` | Historical stricter edit override; use Pi’s built-in `edit` tool. |
 | [pi-find](packages/pi-find/README.md) | overrides tools `grep`/`find` | Simple, bounded regex and file-glob search. |
-| [pi-subagents](packages/pi-subagents/README.md) | tool `subagent`, `/agents` | Isolated subagent runs with profiles, Herdr pane backend, and worktrees. |
+| [pi-subagents (deprecated)](packages/pi-subagents/README.md) | tool `subagent`, `/agents` | Historical isolated subagent runs; no longer recommended or actively developed. |
 | [pi-compact-output](packages/pi-compact-output/README.md) | (TUI only) | Compact tool status blocks; Ctrl+O restores full output. |
-| [pi-goal](packages/pi-goal/README.md) | `/goal`, tools `get_goal`/`update_goal` | User-owned, editable objective with evidence-checked bounded continuation. |
+| [pi-goal (deprecated)](packages/pi-goal/README.md) | `/goal`, tools `get_goal`/`update_goal` | Historical goal-mode loop; no longer recommended or actively developed. |
 | [pi-todo (deprecated)](packages/pi-todo/README.md) | tool `todo` | Historical session-local checklist; prefer model-managed plans for simple work. |
 | [pi-web-search](packages/pi-web-search/README.md) | tools `web_search`/`web_fetch`, `/websearch-order` | Web search and fetch with tabbed fallback-order configuration across ten providers plus direct fetch. |
 | [pi-antigravity](packages/pi-antigravity/README.md) | `/agy`, `/agy-tasks`, `/agy-artifacts`, `/agy-usage` | Google Antigravity (`agy`) models inside pi via stream-json RPC. |
@@ -68,8 +68,13 @@ The repository is a pnpm workspace with one package per extension under
 pnpm install
 pnpm run typecheck   # TypeScript across all workspaces
 pnpm run check       # Effect checks
-pnpm test            # all extension test suites
+pnpm test            # extension test suites (deprecated packages excluded)
 ```
+
+The deprecated `pi-todo`, `pi-subagents`, `pi-edit-safe`, and `pi-goal`
+packages declare no `test` script, so both local recursive runs and CI
+(full-suite and changed-package runs) skip their archived tests. These
+deprecated packages are not loaded by the root package.
 
 Try a single extension from a checkout:
 
