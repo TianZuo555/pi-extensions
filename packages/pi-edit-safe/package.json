@@ -1,7 +1,7 @@
 {
   "name": "@tian.zuo/pi-edit-safe",
   "version": "0.1.1",
-  "description": "A stricter edit tool for the pi coding agent with full-span match verification, verbatim replacement, and an array-only edits schema.",
+  "description": "Deprecated: stricter edit tool for the pi coding agent. Use Pi’s built-in edit tool; this source is retained for historical reference.",
   "type": "module",
   "keywords": [
     "pi",
@@ -33,7 +33,6 @@
     ]
   },
   "scripts": {
-    "test": "node --test --experimental-strip-types test/*.test.ts",
     "bench": "node --experimental-strip-types bench/ab.ts"
   },
   "peerDependencies": {

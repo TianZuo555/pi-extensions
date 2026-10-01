@@ -1,7 +1,7 @@
 {
   "name": "@tian.zuo/pi-goal",
   "version": "0.2.0",
-  "description": "Codex-style persistent, evidence-checked goals for the pi coding agent.",
+  "description": "Deprecated: Codex-style persistent, evidence-checked goals for the pi coding agent. Retained for historical reference; no longer recommended or actively developed.",
   "type": "module",
   "keywords": [
     "pi",
@@ -34,8 +34,7 @@
     ]
   },
   "scripts": {
-    "check": "tsc --noEmit -p .",
-    "test": "node --test --experimental-strip-types test/*.test.ts"
+    "check": "tsc --noEmit -p ."
   },
   "dependencies": {
     "effect": "4.0.0-rc.117"

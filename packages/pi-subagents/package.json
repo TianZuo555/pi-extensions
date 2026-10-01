@@ -1,7 +1,7 @@
 {
   "name": "@tian.zuo/pi-subagents",
   "version": "0.1.2",
-  "description": "Isolated subagent runs via Herdr panes or Pi RPC children — profiles, background runs, and git worktrees.",
+  "description": "Deprecated: isolated subagent runs via Herdr panes or Pi RPC children. Retained for historical reference; no longer recommended or actively developed.",
   "type": "module",
   "keywords": [
     "pi",
@@ -36,8 +36,7 @@
     ]
   },
   "scripts": {
-    "check": "tsc --noEmit -p .",
-    "test": "PI_SUBAGENTS_DISABLE_HERDR=1 node --test --experimental-strip-types test/*.test.ts"
+    "check": "tsc --noEmit -p ."
   },
   "dependencies": {
     "effect": "4.0.0-rc.117"

@@ -1,6 +1,22 @@
-# pi-edit-safe
+# pi-edit-safe (deprecated)
 
 Release notes: [changelog](https://github.com/TianZuo555/pi-extensions/blob/main/packages/pi-edit-safe/CHANGELOG.md) · [GitHub releases](https://github.com/TianZuo555/pi-extensions/releases)
+
+> **Deprecated:** no longer recommended or actively developed. Use Pi’s
+> built-in `edit` tool instead. The source remains here for historical reference;
+> the root package no longer loads this extension.
+
+## Remove it
+
+```bash
+pi remove npm:@tian.zuo/pi-edit-safe
+```
+
+Restart Pi or run `/reload` to restore the built-in `edit` tool. Remove any
+explicit local extension paths and extension-specific edit instructions from
+your own settings, prompts, or `AGENTS.md`.
+
+## Historical behavior
 
 A drop-in replacement for the **pi coding agent**'s built-in `edit` tool, with a
 stricter matcher that refuses to silently edit the wrong place — and a call shape
@@ -15,7 +31,7 @@ that weaker models can actually use.
 > validation, so off-contract calls are normalized rather than rejected — they
 > are just not advertised.
 
-Install: `npm:@tian.zuo/pi-edit-safe` · npm package `@tian.zuo/pi-edit-safe` · workspace `packages/pi-edit-safe`
+npm package `@tian.zuo/pi-edit-safe` · workspace `packages/pi-edit-safe`
 
 ## Call shape
 
@@ -97,10 +113,12 @@ mixed-line-ending files (see bench case 11).
 PI_EDIT_SAFE_DISABLE=1 pi   # falls back to the built-in edit
 ```
 
-## Tests and A/B bench
+## Archived tests and A/B bench
+
+Tests remain as historical reference, but this package no longer declares a
+`test` script. Local workspace runs and CI skip them. The bench still runs:
 
 ```bash
-pnpm --filter @tian.zuo/pi-edit-safe test    # 45 unit tests (Node's built-in runner)
 pnpm --filter @tian.zuo/pi-edit-safe run bench
 ```
 
