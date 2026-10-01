@@ -262,7 +262,7 @@ export default function webSearchExtension(pi: ExtensionAPI): void {
       const lines: string[] = [
         "Web search providers",
         "",
-        `search chain: ${resolveSearchChain(undefined, config).join(" → ")}`,
+        `search chain: ${resolveSearchChain(undefined, config, ctx).join(" → ")}`,
         `fetch chain:  ${resolveFetchChain(undefined, config).join(" → ")}`,
         "",
       ];
@@ -301,9 +301,9 @@ export default function webSearchExtension(pi: ExtensionAPI): void {
       }
 
       const config = loadStoredConfig();
-      const searchChain = resolveSearchChain(undefined, config);
+      const searchChain = resolveSearchChain(undefined, config, ctx);
       const fetchChain = resolveFetchChain(undefined, config);
-      const availableSearch = availableSearchProviders(config);
+      const availableSearch = availableSearchProviders(config, ctx);
       const availableFetch = availableFetchProviders(config);
       const searchList = completeProviderOrder(
         SEARCH_PROVIDER_ORDER,

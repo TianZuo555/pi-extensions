@@ -15,10 +15,12 @@ isolateProviderEnv();
 test("searchOpenAI parses JSON Responses API output with citations", async () => {
   const originalFetch = globalThis.fetch;
   const originalKey = process.env.OPENAI_API_KEY;
+  const restoreFs = hidePiAuthFile();
 
   try {
     process.env.OPENAI_API_KEY = "sk-test";
 
+    const answerText = "Here is the documentation about Node 26 features.";
     const mockOutput = {
       output: [
         {
@@ -26,14 +28,14 @@ test("searchOpenAI parses JSON Responses API output with citations", async () =>
           content: [
             {
               type: "text",
-              text: "Here is the documentation about Node 26 features.",
+              text: answerText,
               annotations: [
                 {
                   type: "url_citation",
                   url: "https://nodejs.org/en/blog/release/v26",
                   title: "Node.js v26 Release Notes",
-                  start_index: 26,
-                  end_index: 42,
+                  start_index: 0,
+                  end_index: answerText.length,
                 },
               ],
             },
@@ -54,8 +56,12 @@ test("searchOpenAI parses JSON Responses API output with citations", async () =>
     };
 
     globalThis.fetch = async (_input, init) => {
-      const body = JSON.parse(String(init?.body)) as { store?: unknown };
+      const body = JSON.parse(String(init?.body)) as { store?: unknown; include?: unknown };
       assert.equal(body.store, false);
+      assert.deepEqual(body.include, [
+        "web_search_call.action.sources",
+        "web_search_call.results",
+      ]);
       return new Response(JSON.stringify(mockOutput), {
         status: 200,
         headers: { "Content-Type": "application/json" },
@@ -64,11 +70,12 @@ test("searchOpenAI parses JSON Responses API output with citations", async () =>
 
     const res = await searchOpenAI("node 26 release");
     assert.equal(res.provider, "openai");
-    assert.equal(res.answer, "Here is the documentation about Node 26 features.");
+    assert.equal(res.answer, "Here is the documentation about Node 26 features.[1]");
     assert.equal(res.results.length, 1);
     assert.equal(res.results[0].url, "https://nodejs.org/en/blog/release/v26");
     assert.equal(res.results[0].title, "Node.js v26 Release Notes");
   } finally {
+    restoreFs();
     globalThis.fetch = originalFetch;
     process.env.OPENAI_API_KEY = originalKey;
   }

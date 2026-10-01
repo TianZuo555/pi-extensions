@@ -1,19 +1,19 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { resolveOpenAIConfig } from "./config.ts";
+import { resolveOpenAISearchRequest } from "./openai-session.ts";
+import {
+  applyIndexCitations,
+  isLikelyJunkSearchUrl,
+  normalizeSearchUrl,
+  titleFromUrl,
+  type UrlCitation,
+} from "./openai-urls.ts";
+import { readSseEvents } from "./sse.ts";
 import type { SearchOptions, SearchResponse, SearchResult } from "./types.ts";
 
 const SEARCH_TIMEOUT_MS = 60_000;
 
-function cleanSourceUrl(rawUrl: string): string {
-  try {
-    const url = new URL(rawUrl);
-    if (url.searchParams.get("utm_source") === "openai") {
-      url.searchParams.delete("utm_source");
-    }
-    return url.toString();
-  } catch {
-    return rawUrl.replace(/[?&]utm_source=openai$/, "");
-  }
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
 }
 
 function normalizeDomain(value: string): string | null {
@@ -84,84 +84,94 @@ function addResult(
   snippet = "",
 ): void {
   if (typeof url !== "string" || url.trim().length === 0) return;
-  const cleanUrl = cleanSourceUrl(url);
-  if (seen.has(cleanUrl)) return;
+  const cleanUrl = normalizeSearchUrl(url);
+  if (isLikelyJunkSearchUrl(cleanUrl) || seen.has(cleanUrl)) return;
   seen.add(cleanUrl);
   results.push({
-    title: typeof title === "string" && title.trim().length > 0 ? title : cleanUrl,
+    title: typeof title === "string" && title.trim().length > 0 ? title : titleFromUrl(cleanUrl),
     url: cleanUrl,
     snippet,
   });
 }
 
+function extractUrlCitation(
+  annotation: unknown,
+): (UrlCitation & { startIndex?: number }) | undefined {
+  if (!isRecord(annotation) || annotation.type !== "url_citation") return undefined;
+  const nested = isRecord(annotation.url_citation)
+    ? annotation.url_citation
+    : isRecord(annotation.urlCitation)
+      ? annotation.urlCitation
+      : undefined;
+  const url = annotation.url ?? nested?.url;
+  if (typeof url !== "string" || !url) return undefined;
+  const titleValue = annotation.title ?? nested?.title;
+  const endIndexValue =
+    annotation.end_index ?? annotation.endIndex ?? nested?.end_index ?? nested?.endIndex;
+  const startIndexValue =
+    annotation.start_index ?? annotation.startIndex ?? nested?.start_index ?? nested?.startIndex;
+  const cleanUrl = normalizeSearchUrl(url);
+  if (isLikelyJunkSearchUrl(cleanUrl)) return undefined;
+  return {
+    url: cleanUrl,
+    title: typeof titleValue === "string" && titleValue.trim() ? titleValue : titleFromUrl(cleanUrl),
+    endIndex: typeof endIndexValue === "number" ? endIndexValue : undefined,
+    startIndex: typeof startIndexValue === "number" ? startIndexValue : undefined,
+  };
+}
+
 function extractSearchResults(
   output: unknown[],
   numResults: number | undefined,
-): { results: SearchResult[]; internalSources: string[] } {
+): { results: SearchResult[]; internalSources: string[]; citations: UrlCitation[] } {
   const results: SearchResult[] = [];
   const seenUrls = new Set<string>();
   const internalSources = new Set<string>();
+  const citations: UrlCitation[] = [];
 
   for (const item of output) {
-    if (!item || typeof item !== "object" || (item as { type?: unknown }).type !== "message")
-      continue;
-    const content = (item as { content?: unknown }).content;
+    if (!isRecord(item) || item.type !== "message") continue;
+    const content = item.content;
     if (!Array.isArray(content)) continue;
     for (const part of content) {
-      if (!part || typeof part !== "object") continue;
-      const text =
-        typeof (part as { text?: unknown }).text === "string"
-          ? (part as { text: string }).text
-          : "";
-      const annotations = (part as { annotations?: unknown }).annotations;
+      if (!isRecord(part)) continue;
+      const text = typeof part.text === "string" ? part.text : "";
+      const annotations = part.annotations;
       if (!Array.isArray(annotations)) continue;
       for (const annotation of annotations) {
-        if (
-          !annotation ||
-          typeof annotation !== "object" ||
-          (annotation as { type?: unknown }).type !== "url_citation"
-        )
-          continue;
+        const citation = extractUrlCitation(annotation);
+        if (!citation) continue;
+        citations.push(citation);
         addResult(
           results,
           seenUrls,
-          (annotation as { url?: unknown }).url,
-          (annotation as { title?: unknown }).title,
-          extractSnippetAround(
-            text,
-            (annotation as { start_index?: unknown }).start_index,
-            (annotation as { end_index?: unknown }).end_index,
-          ),
+          citation.url,
+          citation.title,
+          extractSnippetAround(text, citation.startIndex, citation.endIndex),
         );
       }
     }
   }
 
   for (const item of output) {
-    if (
-      !item ||
-      typeof item !== "object" ||
-      (item as { type?: unknown }).type !== "web_search_call"
-    )
-      continue;
-    const value = item as { action?: unknown; sources?: unknown; results?: unknown };
+    if (!isRecord(item) || item.type !== "web_search_call") continue;
     const actionSources =
-      value.action && typeof value.action === "object"
-        ? (value.action as { sources?: unknown }).sources
-        : undefined;
-    const sourceGroups = [actionSources, value.sources, value.results];
+      isRecord(item.action) && Array.isArray(item.action.sources) ? item.action.sources : undefined;
+    const sourceGroups = [actionSources, item.sources, item.results];
     for (const group of sourceGroups) {
       if (!Array.isArray(group)) continue;
       for (const source of group) {
-        if (!source || typeof source !== "object") continue;
-        const record = source as Record<string, unknown>;
-        const url = record.url ?? record.source_website_url;
+        if (!isRecord(source)) continue;
+        const url = source.url ?? source.source_website_url;
         if (typeof url === "string" && url.trim().length > 0) {
-          addResult(results, seenUrls, url, record.title ?? record.caption);
-        } else if (record.type === "api" && typeof record.name === "string" && record.name) {
-          internalSources.add(record.name);
+          addResult(results, seenUrls, url, source.title ?? source.caption ?? source.display_name ?? source.name);
+        } else if (source.type === "api" && typeof source.name === "string" && source.name) {
+          internalSources.add(source.name);
         }
       }
+    }
+    if (isRecord(item.action) && typeof item.action.url === "string") {
+      addResult(results, seenUrls, item.action.url, undefined);
     }
   }
 
@@ -169,7 +179,7 @@ function extractSearchResults(
     typeof numResults === "number" && Number.isFinite(numResults) && numResults > 0
       ? results.slice(0, Math.min(Math.floor(numResults), 20))
       : results;
-  return { results: sliced, internalSources: [...internalSources] };
+  return { results: sliced, internalSources: [...internalSources], citations };
 }
 
 /** Concatenate the assistant message text across output items. Exported for
@@ -177,20 +187,20 @@ function extractSearchResults(
 export function extractAnswer(output: unknown[]): string {
   const parts: string[] = [];
   for (const item of output) {
-    if (!item || typeof item !== "object" || (item as { type?: unknown }).type !== "message")
-      continue;
-    const content = (item as { content?: unknown }).content;
+    if (!isRecord(item) || item.type !== "message") continue;
+    const content = item.content;
     if (!Array.isArray(content)) continue;
     for (const part of content) {
-      if (!part || typeof part !== "object") continue;
-      const text =
-        typeof (part as { text?: unknown }).text === "string"
-          ? (part as { text: string }).text
-          : "";
+      if (!isRecord(part)) continue;
+      const text = typeof part.text === "string" ? part.text : "";
       if (text) parts.push(text);
     }
   }
   return parts.join("\n\n").trim();
+}
+
+function eventType(event: unknown): string | undefined {
+  return isRecord(event) && typeof event.type === "string" ? event.type : undefined;
 }
 
 /** Parse a Responses API reply: either a JSON body or an SSE stream
@@ -249,49 +259,120 @@ export async function parseOpenAIResponse(response: Response): Promise<{ output:
   throw new Error("Responses API returned no parseable response output");
 }
 
+function requestInput(variant: "openai" | "codex" | "xai", query: string): unknown {
+  if (variant === "xai") return [{ role: "user", content: query }];
+  return [{ role: "user", content: [{ type: "input_text", text: query }] }];
+}
+
+async function parseStreamingResponse(
+  response: Response,
+  signal: AbortSignal | undefined,
+  onUpdate: SearchOptions["onUpdate"],
+  variant: "openai" | "codex" | "xai",
+): Promise<{ output: unknown[]; streamedText: string }> {
+  let accumulatedText = "";
+  const outputItems: unknown[] = [];
+  let completedOutput: unknown[] | undefined;
+  const label = variant === "xai" ? "xAI" : "OpenAI";
+
+  await readSseEvents(response, signal, ({ data: event }) => {
+    const type = eventType(event);
+    if (!isRecord(event) || !type) return;
+
+    if (type === "error" || type === "response.failed") {
+      const error = isRecord(event.error) ? event.error : isRecord(event.response) ? event.response.error : undefined;
+      const message =
+        (typeof event.message === "string" && event.message) ||
+        (isRecord(error) && typeof error.message === "string" && error.message) ||
+        JSON.stringify(error ?? event);
+      throw new Error(message);
+    }
+
+    if (type === "response.output_text.delta") {
+      accumulatedText += typeof event.delta === "string" ? event.delta : "";
+      onUpdate?.({
+        content: [{ type: "text", text: accumulatedText }],
+        details: { streaming: true },
+      });
+      return;
+    }
+
+    if (type === "response.output_item.added" || type === "response.output_item.done") {
+      if (event.item) outputItems.push(event.item);
+      return;
+    }
+
+    if (type === "response.web_search_call.searching") {
+      onUpdate?.({
+        content: [{ type: "text", text: accumulatedText || `Searching the web with ${label}...` }],
+        details: { streaming: true, searching: true },
+      });
+      return;
+    }
+
+    if (
+      type === "response.completed" ||
+      type === "response.done" ||
+      type === "response.incomplete" ||
+      (isRecord(event.response) && event.response.status === "incomplete")
+    ) {
+      if (isRecord(event.response) && Array.isArray(event.response.output)) {
+        completedOutput = event.response.output;
+      }
+      if (variant === "codex") return true;
+    }
+  });
+
+  return {
+    output: completedOutput && completedOutput.length > 0 ? completedOutput : outputItems,
+    streamedText: accumulatedText,
+  };
+}
+
 export async function searchOpenAI(
   query: string,
   options: SearchOptions = {},
   ctx?: ExtensionContext,
 ): Promise<SearchResponse> {
-  const auth = resolveOpenAIConfig(ctx);
+  const auth = await resolveOpenAISearchRequest(ctx);
   if (!auth) {
     throw new Error(
-      "OpenAI credentials not found. Set OPENAI_API_KEY, configure ~/.pi/web-search.json, or sign in with pi's /login (OpenAI).",
+      "OpenAI credentials not found. Set OPENAI_API_KEY, configure ~/.pi/web-search.json, sign in with pi's /login (OpenAI), or use an OpenAI Responses session model (Azure, Codex, Copilot, OpenCode, or xAI).",
     );
   }
 
   const headers: Record<string, string> = {
-    Authorization: `Bearer ${auth.apiKey}`,
     "Content-Type": "application/json",
+    Accept: "text/event-stream",
+    ...auth.headers,
   };
-  if (auth.accountId) {
-    headers["ChatGPT-Account-Id"] = auth.accountId;
-  }
+
+  const include = auth.includeResults
+    ? ["web_search_call.action.sources", "web_search_call.results"]
+    : ["web_search_call.action.sources"];
 
   const body: Record<string, unknown> = {
     model: auth.model,
     store: false,
     instructions: auth.systemPrompt,
-    input: [
-      {
-        role: "user",
-        content: [{ type: "input_text", text: query }],
-      },
-    ],
+    input: requestInput(auth.variant, query),
     tools: [buildWebSearchTool(options)],
-    include: ["web_search_call.action.sources"],
+    include,
     stream: true,
     tool_choice: "required",
     ...(auth.reasoning ? { reasoning: { effort: auth.reasoning } } : {}),
   };
+  if (auth.variant === "codex") {
+    body.text = { verbosity: "low" };
+    body.parallel_tool_calls = true;
+  }
 
   const timeoutSignal = AbortSignal.timeout(SEARCH_TIMEOUT_MS);
   const combinedSignal = options.signal
     ? AbortSignal.any([options.signal, timeoutSignal])
     : timeoutSignal;
 
-  const response = await fetch(auth.baseUrl, {
+  const response = await fetch(auth.url, {
     method: "POST",
     headers,
     body: JSON.stringify(body),
@@ -300,19 +381,42 @@ export async function searchOpenAI(
 
   if (!response.ok) {
     const errorText = await response.text().catch(() => "");
+    const label = auth.variant === "xai" ? "xAI" : "OpenAI";
     throw new Error(
-      `OpenAI Responses API error (${response.status} ${response.statusText}): ${errorText.slice(0, 300)}`,
+      `${label} Responses API error (${response.status} ${response.statusText}): ${errorText.slice(0, 300)}`,
     );
   }
 
-  const parsed = await parseOpenAIResponse(response);
-  const answer = extractAnswer(parsed.output);
-  const { results, internalSources } = extractSearchResults(parsed.output, options.numResults);
+  const contentType = response.headers.get("content-type") ?? "";
+  let output: unknown[];
+  let streamedText = "";
+  if (contentType.includes("json") && !contentType.includes("event-stream")) {
+    const parsed = await parseOpenAIResponse(response);
+    output = parsed.output;
+  } else if (contentType.includes("event-stream")) {
+    const parsed = await parseStreamingResponse(response, combinedSignal, options.onUpdate, auth.variant);
+    output = parsed.output;
+    streamedText = parsed.streamedText;
+  } else {
+    const parsed = await parseOpenAIResponse(response);
+    output = parsed.output;
+  }
+
+  const fromOutput = extractAnswer(output);
+  const answer = fromOutput || streamedText;
+  const { results, internalSources, citations } = extractSearchResults(output, options.numResults);
+  const citedAnswer = answer
+    ? applyIndexCitations(
+        answer,
+        citations,
+        results.map((result) => result.url),
+      )
+    : "";
 
   return {
     query,
     results,
-    answer: answer || undefined,
+    answer: citedAnswer || undefined,
     provider: "openai",
     internalSources: internalSources.length > 0 ? internalSources : undefined,
   };

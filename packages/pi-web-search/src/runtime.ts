@@ -321,7 +321,7 @@ const makeWebSearchRuntime = Effect.gen(function* () {
   ): Effect.Effect<SearchResponse, WebSearchError> =>
     runProviderChain(
       "search",
-      resolveSearchChain(requestedProvider),
+      resolveSearchChain(requestedProvider, undefined, ctx),
       (provider: SearchProviderName) =>
         Effect.tryPromise({
           try: async (signal) => {
