@@ -1,5 +1,11 @@
 # @tian.zuo/pi-compact
 
+## 0.3.0
+
+### Minor Changes
+
+- [#137](https://github.com/TianZuo555/pi-extensions/pull/137) [`d14dcca`](https://github.com/TianZuo555/pi-extensions/commit/d14dccaea6983b278ca22a5d1e3fbad58085deb5) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Default compaction to GPT-6 Luna on the session provider. Keep opaque remote compaction for legacy Codex, and use Pi's text summarizer with a once-per-session warning for the new OpenAI Sign in with ChatGPT authentication, which rejects remote compaction. Preserve existing opaque checkpoints instead of silently replacing their history, and document text-summary cache behavior.
+
 ## 0.2.2
 
 ### Patch Changes

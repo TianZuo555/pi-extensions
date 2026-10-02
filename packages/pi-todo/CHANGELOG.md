@@ -1,5 +1,13 @@
 # @tian.zuo/pi-todo
 
+## 0.1.2
+
+### Patch Changes
+
+- [#135](https://github.com/TianZuo555/pi-extensions/pull/135) [`13a214e`](https://github.com/TianZuo555/pi-extensions/commit/13a214e070e011709c642b2ee9d36f45e6915535) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Mark pi-subagents deprecated and document how to remove it. Keep its source for historical reference and stop loading it from the root extension bundle.
+  
+  Remove the pi-subagents and pi-todo test scripts and root test shortcuts so local workspace runs and CI skip their archived tests.
+
 ## 0.1.1
 
 ### Patch Changes
