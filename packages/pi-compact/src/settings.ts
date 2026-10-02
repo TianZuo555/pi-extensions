@@ -11,7 +11,7 @@ export const MAX_SETTINGS_BYTES = 64 * 1024;
 export interface CompactSettings {
   enabled: boolean;
   protocol: RemoteCompactionProtocolSetting;
-  /** "provider/modelId" used for the remote compaction call. Empty = the session model. */
+  /** Model ID on the session provider, or "provider/modelId". Empty = the session model. */
   compactionModel: string;
   requestTimeoutMs: number;
   maxRetries: number;
@@ -21,7 +21,7 @@ export interface CompactSettings {
   allowLossyNativeFallback: boolean;
 }
 
-export const DEFAULT_COMPACTION_MODEL = "openai-codex/gpt-5.6-luna";
+export const DEFAULT_COMPACTION_MODEL = "gpt-6-luna";
 
 export const DEFAULT_CODEX_COMPACT_SETTINGS: Readonly<CompactSettings> = Object.freeze({
   enabled: true,
@@ -36,12 +36,14 @@ export const DEFAULT_CODEX_COMPACT_SETTINGS: Readonly<CompactSettings> = Object.
 
 const MAX_MODEL_REF_LENGTH = 768;
 
-/** Parses "provider/modelId". Returns undefined for anything else. */
+/** A bare model ID uses the session provider; qualified refs split on the first slash. */
 export function parseCompactionModelRef(
   value: string,
-): { provider: string; modelId: string } | undefined {
+): { provider?: string; modelId: string } | undefined {
+  if (!value || value.trim() !== value) return undefined;
   const slash = value.indexOf("/");
-  if (slash <= 0 || slash === value.length - 1) return undefined;
+  if (slash < 0) return { modelId: value };
+  if (slash === 0 || slash === value.length - 1) return undefined;
   return { provider: value.slice(0, slash), modelId: value.slice(slash + 1) };
 }
 
