@@ -21,6 +21,7 @@ test("WebSearchRuntime search dispatches to resolved provider and returns result
     delete process.env.FIRECRAWL_API_KEY;
     process.env.FIRECRAWL_KEYLESS = "0";
 
+    const answerText = "Search answer summary.";
     const mockOutput = {
       output: [
         {
@@ -28,14 +29,14 @@ test("WebSearchRuntime search dispatches to resolved provider and returns result
           content: [
             {
               type: "text",
-              text: "Search answer summary.",
+              text: answerText,
               annotations: [
                 {
                   type: "url_citation",
                   url: "https://example.com/result",
                   title: "Example Result",
                   start_index: 0,
-                  end_index: 20,
+                  end_index: answerText.length,
                 },
               ],
             },
@@ -55,7 +56,7 @@ test("WebSearchRuntime search dispatches to resolved provider and returns result
 
     const res = await runWebSearch(runtime, service.search("effect v4 guide"));
     assert.equal(res.provider, "openai");
-    assert.equal(res.answer, "Search answer summary.");
+    assert.equal(res.answer, "Search answer summary.[1]");
     assert.equal(res.results.length, 1);
     assert.equal(res.results[0].url, "https://example.com/result");
 

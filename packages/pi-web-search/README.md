@@ -145,9 +145,13 @@ as `## Summary`).
 
 - **Firecrawl** (default): live SERP results, keyed or keyless (1,000 free
   credits/mo without a key; `FIRECRAWL_KEYLESS=0` to opt out).
-- **OpenAI**: server-side web search via the Responses API with a simple prompt;
-  uses your active pi login (`openai-codex` / `openai`) first, falling back to
-  `OPENAI_API_KEY`.
+- **OpenAI**: server-side web search via the Responses API with a simple prompt.
+  When the current conversation model already speaks Responses (`openai`, Azure,
+  Codex, GitHub Copilot, OpenCode Zen/Go, or xAI Grok), search uses that model
+  and its session credentials — Copilot Business/Enterprise endpoints, OpenCode
+  session headers, and Codex account headers included. Otherwise it falls back
+  to your pi `/login` (`openai-codex` / `openai`) or `OPENAI_API_KEY`. Answers
+  stream into the tool card and cite sources with `[n]` markers.
 - **DeepSeek**: server-side `web_search` tool on DeepSeek's Responses API —
   agentic multi-round search with page reads and a synthesized answer. Uses
   your pi DeepSeek login first, then `DEEPSEEK_API_KEY`. Slow (~15–40s) but

@@ -4,11 +4,18 @@ export interface SearchResult {
   snippet: string;
 }
 
+export interface SearchProgressUpdate {
+  content: Array<{ type: "text"; text: string }>;
+  details: Record<string, unknown>;
+}
+
 export interface SearchOptions {
   numResults?: number;
   /** Domains to restrict results to; entries starting with "-" are excluded instead. */
   domainFilter?: string[];
   signal?: AbortSignal;
+  /** Partial OpenAI/xAI answer text while the Responses API is still streaming. */
+  onUpdate?: (update: SearchProgressUpdate) => void;
 }
 
 export interface ProviderFallback {

@@ -8,6 +8,7 @@ import type {
   SearchProviderName,
   WebSearchConfig,
 } from "./types.ts";
+import { isOpenAIResponsesModel } from "./openai-models.ts";
 import { DEFAULT_OPENAI_SYSTEM_PROMPT } from "./prompt.ts";
 
 export { DEFAULT_OPENAI_SYSTEM_PROMPT } from "./prompt.ts";
@@ -554,6 +555,7 @@ export function resolveTinyfishFetchUrl(config = loadStoredConfig()): string {
 
 export function getProviderStatuses(ctx?: ExtensionContext): ProviderStatus[] {
   const config = loadStoredConfig();
+  const sessionModel = isOpenAIResponsesModel(ctx?.model) ? ctx?.model : undefined;
   const openai = resolveOpenAIConfig(ctx, config);
   const deepseek = resolveDeepseekConfig(config);
   const exa = resolveExaConfig(config);
@@ -569,10 +571,12 @@ export function getProviderStatuses(ctx?: ExtensionContext): ProviderStatus[] {
     {
       name: "openai",
       label: "OpenAI Responses",
-      configured: !!openai,
-      source: openai?.source,
-      baseUrl: openai?.baseUrl,
-      model: openai?.model,
+      configured: !!openai || !!sessionModel,
+      source: sessionModel
+        ? `session model (${sessionModel.provider}/${sessionModel.id})`
+        : openai?.source,
+      baseUrl: sessionModel?.baseUrl ?? openai?.baseUrl,
+      model: sessionModel?.id ?? openai?.model,
     },
     {
       name: "deepseek",
@@ -648,11 +652,11 @@ export function getProviderStatuses(ctx?: ExtensionContext): ProviderStatus[] {
 }
 
 export function resolveSearchProvider(
-  _ctx?: ExtensionContext,
+  ctx?: ExtensionContext,
   requested?: SearchProviderName,
   config = loadStoredConfig(),
 ): SearchProviderName {
-  return resolveSearchChain(requested, config)[0];
+  return resolveSearchChain(requested, config, ctx)[0];
 }
 
 export function resolveFetchProvider(
@@ -693,10 +697,15 @@ export const FETCH_PROVIDER_ORDER: readonly FetchProviderName[] = [
 ];
 
 /** Search providers that currently have resolvable credentials, in preference order. */
-export function availableSearchProviders(config = loadStoredConfig()): SearchProviderName[] {
+export function availableSearchProviders(
+  config = loadStoredConfig(),
+  ctx?: ExtensionContext,
+): SearchProviderName[] {
   const list: SearchProviderName[] = [];
   if (resolveFirecrawlConfig(config)) list.push("firecrawl");
-  if (resolveOpenAIConfig(undefined, config)) list.push("openai");
+  if (resolveOpenAIConfig(undefined, config) || isOpenAIResponsesModel(ctx?.model)) {
+    list.push("openai");
+  }
   if (resolveDeepseekConfig(config)) list.push("deepseek");
   if (resolveExaConfig(config)) list.push("exa");
   if (resolveTavilyConfig(config)) list.push("tavily");
@@ -740,8 +749,9 @@ function filterOrder<P extends string>(order: readonly P[] | undefined, valid: r
 export function resolveSearchChain(
   requested?: SearchProviderName,
   config = loadStoredConfig(),
+  ctx?: ExtensionContext,
 ): SearchProviderName[] {
-  const available = availableSearchProviders(config);
+  const available = availableSearchProviders(config, ctx);
   const configuredHead =
     config.searchProvider && available.includes(config.searchProvider)
       ? config.searchProvider

@@ -201,6 +201,7 @@ export async function executeSearch(
   signal: AbortSignal | undefined,
   ctx: ExtensionContext,
   runtime?: WebSearchRuntimeInstance | (() => WebSearchRuntimeInstance),
+  onUpdate?: SearchOptions["onUpdate"],
 ): Promise<{
   text: string;
   details: WebSearchDetails;
@@ -213,6 +214,7 @@ export async function executeSearch(
   const searchOptions: SearchOptions = {
     numResults: params.numResults,
     signal,
+    onUpdate,
   };
 
   const response: SearchResponse = await runWebSearch(
@@ -315,13 +317,14 @@ export function registerTools(
     parameters: WebSearchParams,
     outputSchema: WebSearchOutputSchema,
 
-    async execute(_toolCallId, params: WebSearchInput, signal, _onUpdate, ctx) {
+    async execute(_toolCallId, params: WebSearchInput, signal, onUpdate, ctx) {
       const activeRuntime = typeof runtime === "function" ? runtime() : runtime;
       const { text, details, structuredContent } = await executeSearch(
         params,
         signal,
         ctx,
         activeRuntime,
+        onUpdate,
       );
       return {
         content: [{ type: "text" as const, text }],
