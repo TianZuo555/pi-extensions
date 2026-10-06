@@ -40,7 +40,7 @@
     ]
   },
   "scripts": {
-    "postinstall": "lefthook install",
+    "postinstall": "lefthook install --force",
     "typecheck": "tsc --noEmit",
     "check": "pnpm -r run check",
     "lint": "biome check .",
