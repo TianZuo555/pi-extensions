@@ -52,7 +52,7 @@
   },
   "devDependencies": {
     "@effect/language-service": "^0.87.2",
-    "@effect/tsgo": "^0.45.0",
+    "@effect/tsgo": "^0.48.0",
     "typescript": "^7.0.2"
   },
   "publishConfig": {
