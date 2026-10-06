@@ -63,7 +63,7 @@
     "typebox": "*"
   },
   "devDependencies": {
-    "@effect/language-service": "^0.87.2",
+    "@effect/language-service": "^0.87.3",
     "typescript": "^7.0.2"
   },
   "publishConfig": {
