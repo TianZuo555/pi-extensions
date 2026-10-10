@@ -1,6 +1,6 @@
 {
   "name": "@tian.zuo/pi-subagents",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Deprecated: isolated subagent runs via Herdr panes or Pi RPC children. Retained for historical reference; no longer recommended or actively developed.",
   "type": "module",
   "keywords": [

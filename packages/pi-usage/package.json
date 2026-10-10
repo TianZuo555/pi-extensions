@@ -1,6 +1,6 @@
 {
   "name": "@tian.zuo/pi-usage",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Show OpenAI Codex, GitHub Copilot, Z.ai GLM Coding Plan (global and China), DeepSeek, and Xiaomi MiMo balance usage in the pi coding agent.",
   "type": "module",
   "keywords": [
