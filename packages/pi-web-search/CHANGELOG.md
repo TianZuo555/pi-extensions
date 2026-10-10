@@ -1,5 +1,11 @@
 # @tian.zuo/pi-web-search
 
+## 0.11.0
+
+### Minor Changes
+
+- [#144](https://github.com/TianZuo555/pi-extensions/pull/144) [`dcc5f0d`](https://github.com/TianZuo555/pi-extensions/commit/dcc5f0db8b1d1e53fa70a5d363ac2d2457eefd22) Thanks [@TianZuo555](https://github.com/TianZuo555)! - When the current model already speaks OpenAI Responses (Azure, Codex, Copilot, OpenCode, xAI), web_search uses that session instead of a dedicated OpenAI key. Stream the answer into the tool card, insert [n] citations, and strip tracking/junk result URLs.
+
 ## 0.10.0
 
 ### Minor Changes

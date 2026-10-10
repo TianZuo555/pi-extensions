@@ -1,5 +1,11 @@
 # @tian.zuo/pi-usage
 
+## 0.4.2
+
+### Patch Changes
+
+- [#148](https://github.com/TianZuo555/pi-extensions/pull/148) [`f320be5`](https://github.com/TianZuo555/pi-extensions/commit/f320be5c57413aeb4e1243d3a9adb1b8e77b4148) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Read saved usage credentials from Pi’s configured agent directory, honoring `PI_CODING_AGENT_DIR` for DeepSeek and all other providers that share the auth reader. Report the actual auth file path in credential-source diagnostics.
+
 ## 0.4.1
 
 ### Patch Changes

@@ -1,6 +1,6 @@
 {
   "name": "@tian.zuo/pi-web-search",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "description": "Web search and fetch with configurable fallback order across OpenAI, DeepSeek, Exa, Tavily, Firecrawl, Monid, Brave, Parallel, TinyFish, Ollama, and direct HTTP.",
   "type": "module",
   "keywords": [

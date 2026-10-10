@@ -1,6 +1,6 @@
 {
   "name": "@tian.zuo/pi-edit-safe",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Deprecated: stricter edit tool for the pi coding agent. Use Pi’s built-in edit tool; this source is retained for historical reference.",
   "type": "module",
   "keywords": [
