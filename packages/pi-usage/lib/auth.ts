@@ -12,8 +12,9 @@
 // odd one out: it is the web console API and only accepts Xiaomi account
 // session cookies — the `sk-` model API key cannot query balance.
 //
-// Pi persists both under ~/.pi/agent/auth.json. We read that file directly (it is
-// the same store pi itself writes) so `/usage` reports every configured provider
+// Pi persists credentials in auth.json under getAgentDir() (by default
+// ~/.pi/agent, overridden by PI_CODING_AGENT_DIR). We read that same store
+// directly so `/usage` reports every configured provider
 // regardless of which provider the active model belongs to. For Codex we fall
 // back to pi's registry only to refresh an expired access token; for Copilot we
 // fall back to standard GitHub token environment variables and the VS Code
@@ -22,9 +23,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { type ExtensionContext, getAgentDir } from "@earendil-works/pi-coding-agent";
 
-const AUTH_FILE = path.join(os.homedir(), ".pi", "agent", "auth.json");
+const AUTH_FILE = path.join(getAgentDir(), "auth.json");
 const COPILOT_APPS_FILE = path.join(os.homedir(), ".config", "github-copilot", "apps.json");
 const COPILOT_TOKEN_ENV = [
   "GH_TOKEN",
@@ -173,7 +174,7 @@ export async function resolveCodexToken(ctx: ExtensionContext): Promise<Resolved
   const now = Date.now();
 
   if (entry?.access && (entry.expires === undefined || entry.expires > now + 60_000)) {
-    return { token: entry.access, source: "~/.pi/agent/auth.json" };
+    return { token: entry.access, source: AUTH_FILE };
   }
 
   const refreshed = await bearerFromRegistry(ctx, "openai-codex");
@@ -183,7 +184,7 @@ export async function resolveCodexToken(ctx: ExtensionContext): Promise<Resolved
   // the real refresh failure. Keep a still-valid near-expiry token as a final
   // fallback, but never send one whose recorded expiry has passed.
   if (entry?.access && (entry.expires === undefined || entry.expires > now)) {
-    return { token: entry.access, source: "~/.pi/agent/auth.json (expires soon)" };
+    return { token: entry.access, source: `${AUTH_FILE} (expires soon)` };
   }
   return undefined;
 }
@@ -196,7 +197,7 @@ export function hasZaiLoginInfo(): boolean {
 /** Resolve the Z.ai API key used for the GLM Coding Plan usage endpoint. */
 export function resolveZaiToken(): ResolvedToken | undefined {
   const key = readPiAuth().zai?.key;
-  if (key) return { token: key, source: "~/.pi/agent/auth.json" };
+  if (key) return { token: key, source: AUTH_FILE };
 
   for (const name of ZAI_TOKEN_ENV) {
     const value = process.env[name];
@@ -213,7 +214,7 @@ export function hasZaiCnLoginInfo(): boolean {
 /** Resolve the API key used for the domestic BigModel.cn quota endpoint. */
 export function resolveZaiCnToken(): ResolvedToken | undefined {
   const key = readPiAuth()["zai-coding-cn"]?.key;
-  if (key) return { token: key, source: "~/.pi/agent/auth.json" };
+  if (key) return { token: key, source: AUTH_FILE };
 
   for (const name of ZAI_CN_TOKEN_ENV) {
     const value = process.env[name];
@@ -230,7 +231,7 @@ export function hasDeepSeekLoginInfo(): boolean {
 /** Resolve the DeepSeek API key used for the balance endpoint. */
 export function resolveDeepSeekToken(): ResolvedToken | undefined {
   const key = readPiAuth().deepseek?.key;
-  if (key) return { token: key, source: "~/.pi/agent/auth.json" };
+  if (key) return { token: key, source: AUTH_FILE };
 
   for (const name of DEEPSEEK_TOKEN_ENV) {
     const value = process.env[name];
@@ -272,7 +273,7 @@ export function useXiaomiBrowserToken(cookie: string): void {
 export function resolveXiaomiToken(): ResolvedToken | undefined {
   if (browserXiaomiCookie) return { token: browserXiaomiCookie, source: "MiMo browser session" };
   const key = readPiAuth()["xiaomi-console"]?.key;
-  if (key) return { token: key, source: "~/.pi/agent/auth.json" };
+  if (key) return { token: key, source: AUTH_FILE };
 
   for (const name of XIAOMI_TOKEN_ENV) {
     const value = process.env[name];
@@ -289,7 +290,7 @@ export function hasCopilotLoginInfo(): boolean {
 /** Resolve the GitHub OAuth token used for Copilot usage. */
 export function resolveCopilotToken(): ResolvedToken | undefined {
   const refresh = readPiAuth()["github-copilot"]?.refresh;
-  if (refresh) return { token: refresh, source: "~/.pi/agent/auth.json" };
+  if (refresh) return { token: refresh, source: AUTH_FILE };
 
   for (const name of COPILOT_TOKEN_ENV) {
     const value = process.env[name];

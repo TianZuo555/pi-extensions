@@ -100,6 +100,13 @@ such as `codex 60% wk`, `copilot 31% credits`, `copilot 49% premium`,
 refreshed at most every five minutes (results are cached to avoid hammering the
 endpoints).
 
+## Credentials
+
+Usage reads saved credentials from Pi’s agent directory via `getAgentDir()`:
+`~/.pi/agent/auth.json` by default, or `$PI_CODING_AGENT_DIR/auth.json` when
+configured. This applies to all supported providers; provider-specific
+environment variables remain fallback credential sources.
+
 ## How /tokens works
 
 pi records every assistant message's usage (input/output/cache tokens, total,
@@ -134,8 +141,9 @@ pi's `/login`; MiMo usage is not loaded for users without a Xiaomi login.
    the value → **Copy value** (on older Chrome: select the whole line and copy).
    The parts that matter are `api-platform_serviceToken`, `api-platform_ph`,
    `api-platform_slh`, and `userId`; copying the entire header is fine.
-6. Store it in pi's auth store, `~/.pi/agent/auth.json`, under the
-   `xiaomi-console` entry (kept separate from the `xiaomi` api_key entry so
+6. Store it in pi's auth store, `<agent-dir>/auth.json` (see **Credentials**
+   above), under the `xiaomi-console` entry (kept separate from the `xiaomi`
+   api_key entry so
    `/login` never clobbers it):
 
 ```json
