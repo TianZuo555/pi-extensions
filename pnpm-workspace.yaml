@@ -10,10 +10,10 @@ overrides:
   "@xmldom/xmldom": ^0.9.12
   shell-quote: ^1.12.0
   sharp: ^0.35.5
-  "@earendil-works/pi-ai": ^0.99.1
-  "@earendil-works/pi-coding-agent": ^0.99.1
-  "@earendil-works/pi-tui": ^0.99.1
-  "@earendil-works/pi-agent-core": ^0.99.1
+  "@earendil-works/pi-ai": ^1.2.0
+  "@earendil-works/pi-coding-agent": ^1.2.0
+  "@earendil-works/pi-tui": ^1.2.0
+  "@earendil-works/pi-agent-core": ^1.2.0
 
 # Don't install package versions published less than 2 days ago (the
 # built-in default is 1 day). Applies to all deps including transitive
