@@ -1,5 +1,15 @@
 # @tian.zuo/pi-usage
 
+## 0.5.0
+
+### Minor Changes
+
+- [#160](https://github.com/TianZuo555/pi-extensions/pull/160) [`90e8815`](https://github.com/TianZuo555/pi-extensions/commit/90e8815e864760f3dd61d934070d60d5c8db42e8) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Read provider usage from `magpie quota --json` first when magpie is installed, falling back to pi's own credentials per provider. magpie discovers the machine's agent sign-ins itself (Codex's auth.json, Copilot's keychain item, vendor API keys), so `/usage` keeps reporting Codex, Copilot, Z.ai/GLM and DeepSeek even when pi's stored credential is a magpie gateway placeholder or missing. `PI_USAGE_MAGPIE_BIN` overrides binary discovery.
+
+### Patch Changes
+
+- [#156](https://github.com/TianZuo555/pi-extensions/pull/156) [`9cba1b6`](https://github.com/TianZuo555/pi-extensions/commit/9cba1b6a9bb558e89e68ac65f52259084a25b8b8) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Display the legacy Codex quota meter for OpenAI models, assuming both logins use the same account. Reuse the Codex credential and cache, and show a legacy login hint when it is not configured.
+
 ## 0.4.2
 
 ### Patch Changes
