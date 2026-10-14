@@ -51,7 +51,7 @@
     "@earendil-works/pi-tui": "*"
   },
   "devDependencies": {
-    "@effect/language-service": "^0.87.3",
+    "@effect/language-service": "^0.87.4",
     "@types/node": "^26.6.4",
     "@types/vscode": "^1.140.0",
     "typescript": "^7.0.2"
