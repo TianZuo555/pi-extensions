@@ -35,7 +35,7 @@ export interface ProviderQuerySpec {
   hasLoginInfo: (ctx: ExtensionContext) => boolean;
   resolve: (ctx: ExtensionContext) => Promise<ResolvedToken | undefined>;
   queryEffect: (
-    token: string,
+    credential: ResolvedToken,
     signal?: AbortSignal,
   ) => Effect.Effect<ProviderReport, ProviderQueryError | Error>;
 }
@@ -116,7 +116,7 @@ const makeUsageRuntime = Effect.gen(function* () {
     Effect.gen(function* () {
       const resolved = yield* resolveToken(ctx, provider);
       if (!resolved) return unconfiguredState(provider);
-      const report = yield* provider.queryEffect(resolved.token);
+      const report = yield* provider.queryEffect(resolved);
       return readyState(provider, report);
     }).pipe(
       Effect.catch((error) => Effect.succeed(errorState(provider, errorMessage(error)))),

@@ -189,23 +189,53 @@ const COPILOT_SNAPSHOT_ORDER = ["premium_interactions"];
 // every paid plan and pi never spends them).
 const COPILOT_HIDDEN_SNAPSHOTS = new Set(["chat", "completions"]);
 
+/** Only public GitHub and GitHub Enterprise Cloud data-residency login domains. */
+function copilotUsageUrl(enterpriseUrl?: string): string {
+  if (enterpriseUrl === undefined) return COPILOT_USAGE_URL;
+  const domain =
+    typeof enterpriseUrl === "string"
+      ? /^(?:https:\/\/)?(github\.com|[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.ghe\.com)\/?$/i.exec(
+          enterpriseUrl.trim(),
+        )?.[1]
+      : undefined;
+  if (!domain) {
+    throw new Error(
+      "Unsupported GitHub Enterprise login domain for Copilot usage; expected github.com or <tenant>.ghe.com.",
+    );
+  }
+  return `https://api.${domain.toLowerCase()}/copilot_internal/user`;
+}
+
 export function queryCopilotUsageEffect(
   token: string,
   signal?: AbortSignal,
   timeoutMs = DEFAULT_TIMEOUT_MS,
   retryCount = DEFAULT_RETRY_COUNT,
+  enterpriseUrl?: string,
 ): Effect.Effect<ProviderReport, ProviderQueryFailure> {
-  return queryFromFetch(
-    fetchProviderJsonEffect(
-      COPILOT_USAGE_URL,
-      token,
-      { ...COPILOT_HEADERS, "User-Agent": "GitHubCopilotChat/0.30.0" },
-      signal,
-      timeoutMs,
-      retryCount,
-      token,
+  return Effect.try({
+    try: () => copilotUsageUrl(enterpriseUrl),
+    catch: (cause) =>
+      new ProviderQueryError({
+        message: cause instanceof Error ? cause.message : "Invalid GitHub Enterprise login domain.",
+        retryable: false,
+      }),
+  }).pipe(
+    Effect.flatMap((url) =>
+      queryFromFetch(
+        fetchProviderJsonEffect(
+          url,
+          token,
+          { ...COPILOT_HEADERS, "User-Agent": "GitHubCopilotChat/0.30.0" },
+          signal,
+          timeoutMs,
+          retryCount,
+          token,
+          "manual",
+        ),
+        normalizeCopilotReport,
+      ),
     ),
-    normalizeCopilotReport,
   );
 }
 
@@ -214,8 +244,12 @@ export async function queryCopilotUsage(
   signal?: AbortSignal,
   timeoutMs = DEFAULT_TIMEOUT_MS,
   retryCount = DEFAULT_RETRY_COUNT,
+  enterpriseUrl?: string,
 ): Promise<ProviderReport> {
-  return runQueryPromise(queryCopilotUsageEffect(token, signal, timeoutMs, retryCount), signal);
+  return runQueryPromise(
+    queryCopilotUsageEffect(token, signal, timeoutMs, retryCount, enterpriseUrl),
+    signal,
+  );
 }
 
 function normalizeCopilotReport(data: Record<string, unknown>): ProviderReport {

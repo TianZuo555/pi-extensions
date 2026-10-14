@@ -115,6 +115,27 @@ Usage reads saved credentials from Pi’s agent directory via `getAgentDir()`:
 configured. This applies to all supported providers; provider-specific
 environment variables remain fallback credential sources.
 
+### GitHub Copilot Enterprise Cloud
+
+For GitHub Enterprise Cloud with data residency, sign in using Pi's
+`/login → GitHub Copilot` and enter your `<tenant>.ghe.com` login domain.
+Usage keeps the `enterpriseUrl` saved alongside that login's GitHub OAuth
+credential and queries `https://api.<tenant>.ghe.com/copilot_internal/user`.
+It uses the stored GitHub OAuth token, not the short-lived Copilot chat token.
+The normal `github.com` login continues to use `api.github.com`.
+
+An invalid or unsupported login domain fails before any request; redirects and
+fallback requests to another account domain are not followed. Custom GitHub
+Enterprise Server domains are not supported. The Enterprise API must return
+`quota_snapshots` for a remaining allowance to be shown: a working model login
+alone does not guarantee that your enterprise exposes quota data.
+
+The environment-token and VS Code credential fallbacks are for public GitHub
+accounts only; use Pi's saved OAuth login for Enterprise. An incomplete saved
+Enterprise login does not borrow a token from those fallbacks. When VS Code's
+credential file contains multiple accounts, only `github.com` entries are
+eligible for the public fallback.
+
 ## How /tokens works
 
 pi records every assistant message's usage (input/output/cache tokens, total,

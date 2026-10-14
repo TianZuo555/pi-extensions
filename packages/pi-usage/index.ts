@@ -103,7 +103,7 @@ const PROVIDERS: ProviderQuerySpec[] = [
     configureHint: "sign in with /login and select OpenAI Codex (legacy)",
     hasLoginInfo: (ctx) => hasProviderLoginInfo(ctx, CODEX_PROVIDER_ID, hasCodexLoginInfo),
     resolve: (ctx) => resolveCodexToken(ctx),
-    queryEffect: queryCodexUsageEffect,
+    queryEffect: ({ token }, signal) => queryCodexUsageEffect(token, signal),
   },
   {
     id: COPILOT_PROVIDER_ID,
@@ -111,7 +111,8 @@ const PROVIDERS: ProviderQuerySpec[] = [
     configureHint: "sign in with /login and select GitHub Copilot",
     hasLoginInfo: (ctx) => hasProviderLoginInfo(ctx, COPILOT_PROVIDER_ID, hasCopilotLoginInfo),
     resolve: async () => resolveCopilotToken(),
-    queryEffect: queryCopilotUsageEffect,
+    queryEffect: ({ token, enterpriseUrl }, signal) =>
+      queryCopilotUsageEffect(token, signal, undefined, undefined, enterpriseUrl),
   },
   {
     id: ZAI_PROVIDER_ID,
@@ -119,7 +120,7 @@ const PROVIDERS: ProviderQuerySpec[] = [
     configureHint: "set ZAI_API_KEY or sign in with /login and select Z.ai",
     hasLoginInfo: (ctx) => hasProviderLoginInfo(ctx, ZAI_PROVIDER_ID, hasZaiLoginInfo),
     resolve: async () => resolveZaiToken(),
-    queryEffect: queryZaiUsageEffect,
+    queryEffect: ({ token }, signal) => queryZaiUsageEffect(token, signal),
   },
   {
     id: ZAI_CN_PROVIDER_ID,
@@ -128,7 +129,7 @@ const PROVIDERS: ProviderQuerySpec[] = [
       "set ZAI_CODING_CN_API_KEY or sign in with /login and select ZAI Coding Plan (China)",
     hasLoginInfo: (ctx) => hasProviderLoginInfo(ctx, ZAI_CN_PROVIDER_ID, hasZaiCnLoginInfo),
     resolve: async () => resolveZaiCnToken(),
-    queryEffect: queryZaiCnUsageEffect,
+    queryEffect: ({ token }, signal) => queryZaiCnUsageEffect(token, signal),
   },
   {
     id: DEEPSEEK_PROVIDER_ID,
@@ -136,7 +137,7 @@ const PROVIDERS: ProviderQuerySpec[] = [
     configureHint: "set DEEPSEEK_API_KEY or sign in with /login and select DeepSeek",
     hasLoginInfo: (ctx) => hasProviderLoginInfo(ctx, DEEPSEEK_PROVIDER_ID, hasDeepSeekLoginInfo),
     resolve: async () => resolveDeepSeekToken(),
-    queryEffect: queryDeepSeekUsageEffect,
+    queryEffect: ({ token }, signal) => queryDeepSeekUsageEffect(token, signal),
   },
   {
     id: XIAOMI_PROVIDER_ID,
@@ -148,7 +149,7 @@ const PROVIDERS: ProviderQuerySpec[] = [
       hasProviderLoginInfo(ctx, XIAOMI_PROVIDER_ID, hasXiaomiModelLoginInfo) &&
       hasXiaomiLoginInfo(),
     resolve: async () => resolveXiaomiToken(),
-    queryEffect: queryXiaomiUsageEffect,
+    queryEffect: ({ token }, signal) => queryXiaomiUsageEffect(token, signal),
   },
 ];
 
