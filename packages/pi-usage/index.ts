@@ -15,11 +15,15 @@
 //   published to the footer (e.g. `codex 40% wk`, `copilot 49% premium`, or
 //   `deepseek ¥110.00`, `xiaomi ¥21.66`) and refreshed at most every 5 minutes.
 //
-// Credentials are resolved from the same store pi writes (~/.pi/agent/auth.json).
-// Codex uses the ChatGPT OAuth access token; Copilot uses the GitHub OAuth token;
-// Z.ai, Z.ai China, and DeepSeek use their API keys. Xiaomi MiMo uses the
-// console session cookie (its API key cannot query balance). Inspired by
-// @narumitw/pi-usage, trimmed to Codex, Copilot, Z.ai, DeepSeek, and Xiaomi MiMo.
+// Usage is read from magpie (`magpie quota --json`) first when it is
+// installed — it discovers the machine's agent sign-ins (Codex's auth.json,
+// Copilot's keychain item, vendor API keys) itself — and falls back to pi's
+// own credential store (~/.pi/agent/auth.json) per provider when magpie has
+// no entry for it. For the direct path: Codex uses the ChatGPT OAuth access
+// token; Copilot uses the GitHub OAuth token; Z.ai, Z.ai China, and DeepSeek
+// use their API keys. Xiaomi MiMo uses the console session cookie (its API
+// key cannot query balance). Inspired by @narumitw/pi-usage, trimmed to
+// Codex, Copilot, Z.ai, DeepSeek, and Xiaomi MiMo.
 
 import {
   BorderedLoader,
@@ -100,6 +104,7 @@ const PROVIDERS: ProviderQuerySpec[] = [
   {
     id: CODEX_PROVIDER_ID,
     name: "OpenAI Codex",
+    magpieId: "codex",
     configureHint: "sign in with /login and select OpenAI Codex (legacy)",
     hasLoginInfo: (ctx) => hasProviderLoginInfo(ctx, CODEX_PROVIDER_ID, hasCodexLoginInfo),
     resolve: (ctx) => resolveCodexToken(ctx),
@@ -108,6 +113,7 @@ const PROVIDERS: ProviderQuerySpec[] = [
   {
     id: COPILOT_PROVIDER_ID,
     name: "GitHub Copilot",
+    magpieId: "copilot",
     configureHint: "sign in with /login and select GitHub Copilot",
     hasLoginInfo: (ctx) => hasProviderLoginInfo(ctx, COPILOT_PROVIDER_ID, hasCopilotLoginInfo),
     resolve: async () => resolveCopilotToken(),
@@ -116,6 +122,7 @@ const PROVIDERS: ProviderQuerySpec[] = [
   {
     id: ZAI_PROVIDER_ID,
     name: "GLM Coding Plan",
+    magpieId: "zai",
     configureHint: "set ZAI_API_KEY or sign in with /login and select Z.ai",
     hasLoginInfo: (ctx) => hasProviderLoginInfo(ctx, ZAI_PROVIDER_ID, hasZaiLoginInfo),
     resolve: async () => resolveZaiToken(),
@@ -124,6 +131,7 @@ const PROVIDERS: ProviderQuerySpec[] = [
   {
     id: ZAI_CN_PROVIDER_ID,
     name: "GLM Coding Plan (China)",
+    magpieId: "zhipu",
     configureHint:
       "set ZAI_CODING_CN_API_KEY or sign in with /login and select ZAI Coding Plan (China)",
     hasLoginInfo: (ctx) => hasProviderLoginInfo(ctx, ZAI_CN_PROVIDER_ID, hasZaiCnLoginInfo),
@@ -133,6 +141,7 @@ const PROVIDERS: ProviderQuerySpec[] = [
   {
     id: DEEPSEEK_PROVIDER_ID,
     name: "DeepSeek",
+    magpieId: "deepseek",
     configureHint: "set DEEPSEEK_API_KEY or sign in with /login and select DeepSeek",
     hasLoginInfo: (ctx) => hasProviderLoginInfo(ctx, DEEPSEEK_PROVIDER_ID, hasDeepSeekLoginInfo),
     resolve: async () => resolveDeepSeekToken(),

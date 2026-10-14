@@ -125,8 +125,9 @@ export function formatStatusline(report: ProviderReport): string | undefined {
     return undefined;
   }
   if (report.id === ZAI_PROVIDER_ID || report.id === ZAI_CN_PROVIDER_ID) {
-    // Both GLM Coding Plan regions surface the 5-hour token pool.
-    const tokens = report.windows.find((window) => /5h/.test(window.label));
+    // Both GLM Coding Plan regions surface the 5-hour token pool ("5h …" from
+    // the direct query, "5 hours" from magpie).
+    const tokens = report.windows.find((window) => /5\s*h/i.test(window.label));
     if (tokens?.remainingPercent !== undefined) {
       const label = report.id === ZAI_CN_PROVIDER_ID ? "zai-cn" : "zai";
       return `${label} ${Math.round(tokens.remainingPercent)}% 5h`;
@@ -157,7 +158,12 @@ function bar(remainingPercent: number): string {
 function shortWindow(label: string): string {
   const normalized = label.toLowerCase();
   if (normalized.includes("week")) return "wk";
-  return label.replace(/\s*limit$/i, "").trim() || label;
+  const compact = label
+    .replace(/\s*limit$/i, "")
+    .replace(/\s*hours?/i, "h")
+    .replace(/\s*days?/i, "d")
+    .trim();
+  return compact || label;
 }
 
 function formatCount(value: number): string {
