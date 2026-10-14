@@ -51,6 +51,9 @@ minutes). An expired cache refreshes in the background at session startup,
 even when another provider is selected, so newly shipped families appear in the
 model picker without running `/devin models` by hand. Selecting a Devin model
 also refreshes an expired cache, reusing any automatic refresh already in flight.
+Rows without pricing or context metadata are still registered (with zero cost
+and the default context window). A catalog cached by an older release is
+refreshed on the next session start.
 
 ## Commands
 

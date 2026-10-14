@@ -1,0 +1,10 @@
+Available models (2 families)
+
+SWE-2 (swe-2)
+  aliases: swe
+  swe-2-high                                                                SWE-2 High
+  swe-2-medium                                                              SWE-2 Medium
+  swe-2-max                                                                 SWE-2 Max
+
+SWE-1.7 Lightning (swe-1.7-lightning)
+  swe-1-7-lightning                                                         SWE-1.7 Lightning Max  [$2.5 / 1M Input · $1 / 1M Cached input · $12.5 / 1M Output]
