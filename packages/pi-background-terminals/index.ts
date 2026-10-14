@@ -41,10 +41,15 @@ import { Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { createCompletionBatchScheduler } from "./src/completion-batcher.ts";
 import { SpawnError, type TerminalSnapshot, type TerminalStatus } from "./src/domain.ts";
-import { findDuplicateRunning, isPlainSleep, isStateOnlyCommand } from "./src/command-shape.ts";
+import {
+  findDuplicateRunning,
+  plainSleepSeconds,
+  isStateOnlyCommand,
+} from "./src/command-shape.ts";
 import {
   DEFAULT_YIELD_TIME_MS,
   MAX_RUNTIME_TIMEOUT_SECONDS,
+  PLAIN_SLEEP_GUARD_MIN_SECONDS,
   DEFAULT_TERMINAL_WAIT_SECONDS,
   MAX_TERMINAL_WAIT_SECONDS,
   DEFAULT_TERMINAL_LOG_READ_BYTES,
@@ -83,6 +88,7 @@ import {
   TERMINAL_STOP_PROMPT_SNIPPET,
   TERMINAL_STOP_TEXT,
   TERMINAL_STOP_TOOL_DESCRIPTION,
+  TERMINAL_WAIT_OUTPUT_FIELD_DESCRIPTIONS,
   TERMINAL_WAIT_PARAMETER_DESCRIPTIONS,
   TERMINAL_WAIT_PROMPT_SNIPPET,
   TERMINAL_WAIT_TOOL_DESCRIPTION,
@@ -138,6 +144,30 @@ const TerminalLogReadOutputSchema = Type.Object({
   pattern: Type.Optional(
     Type.String({ description: TERMINAL_LOG_READ_OUTPUT_FIELD_DESCRIPTIONS.pattern }),
   ),
+});
+
+const TERMINAL_WAIT_OUTPUT_SCHEMA = Type.Object({
+  settled: Type.Array(
+    Type.Object({
+      id: Type.String(),
+      status: Type.Union([
+        Type.Literal("done"),
+        Type.Literal("failed"),
+        Type.Literal("timed_out"),
+        Type.Literal("killed"),
+      ]),
+      exitCode: Type.Optional(Type.Integer()),
+      signal: Type.Optional(Type.String()),
+    }),
+    { description: TERMINAL_WAIT_OUTPUT_FIELD_DESCRIPTIONS.settled },
+  ),
+  running: Type.Array(Type.String(), {
+    description: TERMINAL_WAIT_OUTPUT_FIELD_DESCRIPTIONS.running,
+  }),
+  alreadyReported: Type.Array(Type.String(), {
+    description: TERMINAL_WAIT_OUTPUT_FIELD_DESCRIPTIONS.alreadyReported,
+  }),
+  text: Type.String({ description: TERMINAL_WAIT_OUTPUT_FIELD_DESCRIPTIONS.text }),
 });
 
 const TERMINAL_STATUSES: ReadonlySet<string> = new Set([
@@ -270,6 +300,12 @@ export function createBackgroundTerminalsExtension(
     let terminalLogReadBytes = 0;
     let terminalLogReadCalls = 0;
     const resultDelivery = createDeferredResultDelivery<TerminalSnapshot>();
+    /** Ids of tool calls made by a Code Mode script (any call whose
+     * `tool_call` event carried a `parentToolCallId`). Nested results reach
+     * the script, not the model — budgets and result text adapt accordingly. */
+    const nestedCallIds = new Set<string>();
+    /** Consumes the nested marker so a stale id can never mark a later call. */
+    const takeNested = (toolCallId: string) => nestedCallIds.delete(toolCallId);
 
     const resetTerminalLogBudget = () => {
       terminalLogReadBytes = 0;
@@ -410,10 +446,20 @@ export function createBackgroundTerminalsExtension(
       if (ctx.hasUI) ui = ctx.ui;
     });
 
+    // Code Mode scripts call tools via ctx.executeTool; those calls fire
+    // tool_call with parentToolCallId and get ids like "<parent>/<n>".
+    // Returning nothing — detection must never block a call.
+    pi.on("tool_call", (event) => {
+      if (event.parentToolCallId) nestedCallIds.add(event.toolCallId);
+    });
+
     // One agent run can contain many model/tool turns. The terminal_log_read
     // byte/call budget spans the whole run, then resets for the next
     // user/follow-up run rather than per turn.
-    pi.on("agent_start", resetTerminalLogBudget);
+    pi.on("agent_start", () => {
+      resetTerminalLogBudget();
+      nestedCallIds.clear();
+    });
 
     // A result still inside its quiet window when the model ends its turn
     // would otherwise settle the run and wake a new one moments later — or be
@@ -436,6 +482,7 @@ export function createBackgroundTerminalsExtension(
     pi.on("session_shutdown", async () => {
       sessionContext = undefined;
       resetTerminalLogBudget();
+      nestedCallIds.clear();
       resultBatchScheduler.clear();
       resultDelivery.clear();
       unsubStatus?.();
@@ -557,6 +604,7 @@ export function createBackgroundTerminalsExtension(
       },
       async execute(toolCallId, params, signal, onUpdate, ctx) {
         signal?.throwIfAborted();
+        const nested = takeNested(toolCallId);
         // Preserve the exact command text. Trimming here can break heredocs and
         // multiline scripts; trim only for validation and the display title.
         const command = params.command;
@@ -650,11 +698,13 @@ export function createBackgroundTerminalsExtension(
         const duplicate = findDuplicateRunning(manager.view.list(), command, cwd);
         if (duplicate) throw new Error(duplicateCommandError(duplicate));
 
-        // A bare `sleep N` while a background terminal runs is the model
+        // A long bare `sleep N` while a background terminal runs is the model
         // re-inventing polling: results are pushed, so the sleep only wastes a
-        // turn. Point it at terminal_wait instead. With nothing running the
-        // sleep is legitimate work and runs normally.
-        if (isPlainSleep(command)) {
+        // turn. Point it at terminal_wait instead. Short sleeps are legitimate
+        // work (readiness polls, pacing) and run normally, as does any sleep
+        // while nothing runs.
+        const sleepSeconds = plainSleepSeconds(command);
+        if (sleepSeconds !== undefined && sleepSeconds >= PLAIN_SLEEP_GUARD_MIN_SECONDS) {
           const blocking = manager.view
             .list()
             .filter((snap) => snap.status === "running" && snap.yielded === true);
@@ -779,7 +829,7 @@ export function createBackgroundTerminalsExtension(
           resultDelivery.consume([snap.id]);
         }
 
-        const text = buildBashResult(snap);
+        const text = buildBashResult(snap, { nested });
         const details: BashResultDetails = {
           id: snap.id,
           status: snap.status,
@@ -877,7 +927,10 @@ export function createBackgroundTerminalsExtension(
         );
         return text;
       },
-      async execute(_toolCallId, params, signal) {
+      async execute(toolCallId, params, signal) {
+        // Nested (Code Mode) calls are exempt: their output reaches the
+        // script, not the model context, so the run budgets do not apply.
+        const nested = takeNested(toolCallId);
         const parsed = parseTerminalLogRef(params.ref);
         if (!parsed) {
           throw new Error(TERMINAL_ERRORS.invalidRef(params.ref));
@@ -901,21 +954,21 @@ export function createBackgroundTerminalsExtension(
         }
         // Two budgets, because either one alone is escapable: bytes bound a
         // firehose of full pages, calls bound a tiny-limit polling loop.
-        if (terminalLogReadCalls >= TERMINAL_LOG_READ_RUN_CALLS) {
+        if (!nested && terminalLogReadCalls >= TERMINAL_LOG_READ_RUN_CALLS) {
           throw new Error(TERMINAL_ERRORS.readCalls);
         }
         const remainingBytes = TERMINAL_LOG_READ_RUN_BUDGET - terminalLogReadBytes;
-        if (remainingBytes <= 0) {
+        if (!nested && remainingBytes <= 0) {
           throw new Error(TERMINAL_ERRORS.readBytes);
         }
         // Clamp to what is left rather than rejecting a request that exceeds
         // it — a page read short of the cap is still useful to the model.
         const limit = Math.min(
           MAX_TERMINAL_LOG_READ_BYTES,
-          remainingBytes,
+          nested ? Number.POSITIVE_INFINITY : remainingBytes,
           Math.max(1, Math.floor(params.limit ?? DEFAULT_TERMINAL_LOG_READ_BYTES)),
         );
-        terminalLogReadCalls++;
+        if (!nested) terminalLogReadCalls++;
         const { runtime: toolRuntime, manager } = await getManager();
         const request = pattern
           ? { ...parsed, mode: "search" as const, pattern, offset: params.offset ?? 0, limit }
@@ -925,7 +978,7 @@ export function createBackgroundTerminalsExtension(
               ? { ...parsed, mode: "page" as const, offset: params.offset, limit }
               : { ...parsed, mode: "auto" as const, limit };
         const result = await runTool(toolRuntime, manager.readLog(request), { signal });
-        terminalLogReadBytes += result.bytesRead;
+        if (!nested) terminalLogReadBytes += result.bytesRead;
         return {
           content: [{ type: "text", text: formatTerminalLogRead(result) }],
           // The page text is already in content; repeating it here would store
@@ -977,6 +1030,9 @@ export function createBackgroundTerminalsExtension(
           }),
         ),
       }),
+      // Code Mode scripts resolve this schema to structured fields — including
+      // on isError, where a text-only tool result would reject instead.
+      outputSchema: TERMINAL_WAIT_OUTPUT_SCHEMA,
       renderCall(args, theme, context) {
         const ids = Array.isArray(args?.ids)
           ? (args.ids as unknown[]).filter((id) => typeof id === "string")
@@ -1052,27 +1108,39 @@ export function createBackgroundTerminalsExtension(
           settled: TerminalSnapshot[],
           alreadyReported: TerminalSnapshot[],
           running: TerminalSnapshot[],
-        ) => ({
-          content: [
-            {
-              type: "text" as const,
-              text: buildTerminalWaitResult({ settled, alreadyReported, running, timeoutSeconds }),
+        ) => {
+          const text = buildTerminalWaitResult({
+            settled,
+            alreadyReported,
+            running,
+            timeoutSeconds,
+          });
+          // Absent rather than undefined: structuredContent must be strict
+          // JSON for code-mode consumers.
+          const settledFields = settled.map((snap) => ({
+            id: snap.id,
+            status: snap.status,
+            ...(snap.exitCode !== undefined ? { exitCode: snap.exitCode } : {}),
+            ...(snap.signal !== undefined ? { signal: snap.signal } : {}),
+          }));
+          return {
+            content: [{ type: "text" as const, text }],
+            details: {
+              settled: settledFields,
+              running: running.map((snap) => snap.id),
+              alreadyReported: alreadyReported.map((snap) => snap.id),
             },
-          ],
-          details: {
-            settled: settled.map((snap) => ({
-              id: snap.id,
-              status: snap.status,
-              exitCode: snap.exitCode,
-              signal: snap.signal,
-            })),
-            running: running.map((snap) => snap.id),
-            alreadyReported: alreadyReported.map((snap) => snap.id),
-          },
-          isError:
-            settled.some((snap) => snap.status === "failed" || snap.status === "timed_out") ||
-            undefined,
-        });
+            structuredContent: {
+              settled: settledFields,
+              running: running.map((snap) => snap.id),
+              alreadyReported: alreadyReported.map((snap) => snap.id),
+              text,
+            },
+            isError:
+              settled.some((snap) => snap.status === "failed" || snap.status === "timed_out") ||
+              undefined,
+          };
+        };
 
         const dedupedIds =
           params.ids === undefined
@@ -1118,7 +1186,12 @@ export function createBackgroundTerminalsExtension(
           .map((id) => seen.find((snap) => snap.id === id))
           .filter((snap): snap is TerminalSnapshot => snap !== undefined);
         const running = targets.filter((snap) => snap.status === "running");
-        const alreadyReported = targets.filter((snap) => snap.status !== "running");
+        // A target returned from the pending queue is "settled", not
+        // "already reported" — don't classify it twice.
+        const pendingIds = new Set(pendingTaken.map((snap) => snap.id));
+        const alreadyReported = targets.filter(
+          (snap) => snap.status !== "running" && !pendingIds.has(snap.id),
+        );
         if (pendingTaken.length > 0) {
           return respond(pendingTaken, alreadyReported, running);
         }

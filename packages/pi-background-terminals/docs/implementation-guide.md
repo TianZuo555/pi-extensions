@@ -253,11 +253,13 @@ invisible to the model, since neither produces an error it could learn from:
   is already tracked as `running`. Checked after manager resolution and before
   spawn, so the second copy never starts. A settled twin or another directory is
   a legitimate new run.
-- **Plain sleeps while background work runs.** A lone `sleep N` (optionally
-  followed by an `echo`) while any terminal is `running && yielded` is refused
-  with a pointer to `terminal_wait`: results are pushed, so the sleep cannot
-  make one arrive sooner and only wastes a turn. With nothing running the same
-  command executes normally.
+- **Long plain sleeps while background work runs.** A lone `sleep N` of
+  10 s or more (optionally followed by an `echo`) while any terminal is
+  `running && yielded` is refused with a pointer to `terminal_wait`: results
+  are pushed, so the sleep cannot make one arrive sooner and only wastes a
+  turn. The error also shows the single-command readiness poll
+  (`until curl -fs <url>; do sleep 1; done`) for the other reason models reach
+  for sleep. Shorter sleeps, and sleeps while nothing runs, execute normally.
 
 Segments split on `&&`, `||`, `;`, `|`, and newlines.
 Redirects and command substitution fail open: they can escape the shell, so
@@ -334,6 +336,28 @@ interrupted wait cannot suppress a later completion. A settle that lands after
 removal flows to the normal follow-up path. A `stop` wait interrupted by Esc
 does not cancel the kill: the teardown fiber is detached, so "termination
 continues in the background" stays truthful.
+
+`terminal_wait` also declares an `outputSchema` and returns
+`structuredContent` (`settled` entries with status/exitCode/signal, `running`,
+`alreadyReported`, plus `text`). Text-only tool results reject on `isError`
+inside Code Mode, so a failed terminal would otherwise be unreadable to a
+script; structured output resolves to fields even when `isError` is set.
+
+### Code Mode nesting
+
+Pi's Code Mode runs tools inside a script via `ctx.executeTool`; every such
+nested call fires the `tool_call` event with `parentToolCallId` set and gets an
+id like `<parent>/<n>`. The extension listens for that event (never blocking
+the call) into a consume-once `nestedCallIds` set, cleared on `agent_start` and
+`session_shutdown`; `bash` and `terminal_log_read` consume it at the top of
+`execute`. Two behaviors adapt:
+
+- A nested `bash` call that yields gets different text: its completion
+  follow-up can only arrive after the calling script ends, so the result says
+  so and tells the script to collect it with `terminal_wait({ ids: [id] })`.
+- Nested `terminal_log_read` calls skip the per-run call/byte budgets —
+  their output reaches the script, not the model context, so the context-
+  protection budgets do not apply. Per-call `limit` bounds still hold.
 
 ## 10. Exactly-once completion delivery
 
@@ -678,7 +702,8 @@ The package test suite covers:
   Bash/completion rows;
 - fresh-shell/`working_dir` guidance and work-bearing default titles;
 - pre-spawn blocking and next-run reset for state-only and duplicate commands,
-  plus the plain-sleep guard while a background terminal runs;
+  plus the ≥10 s plain-sleep guard while a background terminal runs and the
+  readiness-poll pointer in its error;
 - hard timeout status and tree termination;
 - Bash-specific syntax on the resolved shell;
 - pre-spawn cancellation preventing execution and fallback, including during initialization;
@@ -697,7 +722,11 @@ The package test suite covers:
   per-run read budgets, and expired-entry errors;
 - `terminal_wait` returning a consumed settlement once (no follow-up),
   first-of-two races, timeout still-running results whose later exit IS
-  delivered, queued pending results, and the nothing-to-wait-for error;
+  delivered, queued pending results, the nothing-to-wait-for error (including
+  `ids: []`), and `structuredContent` on both success and failed terminals;
+- Code Mode nesting: `tool_call`/`parentToolCallId` detection, nested yield
+  text pointing at `terminal_wait`, and nested log reads exempt from the
+  per-run budgets;
 - `terminal_stop` consuming its settlement (one-line result, no completion
   message), already-exited and unknown-id errors, and `/ps` kills delivered
   with `deliverAs: "nextTurn"`;

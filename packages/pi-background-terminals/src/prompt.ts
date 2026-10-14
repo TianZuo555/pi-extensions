@@ -17,6 +17,7 @@ import {
   MAX_TRACKED,
   MAX_RUNTIME_TIMEOUT_SECONDS,
   MAX_SPILL_BYTES_PER_STREAM,
+  PLAIN_SLEEP_GUARD_MIN_SECONDS,
   DEFAULT_TERMINAL_WAIT_SECONDS,
   MAX_TERMINAL_WAIT_SECONDS,
   DEFAULT_TERMINAL_LOG_READ_BYTES,
@@ -99,7 +100,16 @@ export const TERMINAL_LOG_READ_OUTPUT_FIELD_DESCRIPTIONS = {
 
 export const TERMINAL_WAIT_TOOL_DESCRIPTION =
   "Block until a background terminal exits and return its result (it is not delivered again). Use instead of sleep when nothing else is left to do. " +
+  "In codemode, call it instead of sleep to use a yielded command's result in the same script. " +
   "Returns as soon as any listed terminal exits; the timeout or Esc ends the wait without stopping anything.";
+
+/** Field text on `terminal_wait` `outputSchema` (code-mode scripts, not the model). */
+export const TERMINAL_WAIT_OUTPUT_FIELD_DESCRIPTIONS = {
+  settled: "Terminals that exited, with status and exit code; their results are in text.",
+  running: "Ids still running.",
+  alreadyReported: "Ids whose results were delivered earlier.",
+  text: "The same result text the model sees.",
+};
 export const TERMINAL_WAIT_PROMPT_SNIPPET = "Wait for a background terminal instead of sleeping";
 export const TERMINAL_WAIT_PARAMETER_DESCRIPTIONS = {
   ids: "Terminal ids; default all running background terminals.",
@@ -205,9 +215,10 @@ export function duplicateCommandError(snap: TerminalSnapshot) {
 export function sleepWhileRunningError(snaps: readonly TerminalSnapshot[]) {
   const ids = snaps.map((snap) => snap.id).join(", ");
   return (
-    "Not executed: a plain sleep does not make background results arrive sooner. " +
-    `Call terminal_wait to block until ${ids} exits; it returns as soon as one does, ` +
-    "with its result. A plain sleep runs normally when no background terminal is running."
+    `Not executed: a sleep of ${PLAIN_SLEEP_GUARD_MIN_SECONDS}s or more does not make background results arrive sooner. ` +
+    `To get the result of ${ids}, call terminal_wait; it returns as soon as one exits. ` +
+    "To wait until a server is ready, poll it in one command: `until curl -fs <url>; do sleep 1; done`. " +
+    "Shorter sleeps, and sleeps while no background terminal runs, are allowed."
   );
 }
 
@@ -394,15 +405,19 @@ export function buildBashProgress(snap: TerminalSnapshot) {
   );
 }
 
-/** Result of the initial bash wait, whether final or yielded. */
-export function buildBashResult(snap: TerminalSnapshot) {
+/** Result of the initial bash wait, whether final or yielded. `nested` marks a
+ * call made by a Code Mode script: its follow-up cannot interrupt the script,
+ * so the guidance points at collecting the result inside the script. */
+export function buildBashResult(snap: TerminalSnapshot, options?: { nested?: boolean }) {
   // Always name the directory. A command sent to the wrong one usually still
   // exits 0, and the common mistake is assuming a cwd that was never set, so
   // the model must see where it actually ran even when that is the session cwd.
   // Running terminals carry it via describeTerminal() instead.
   let text =
     snap.status === "running"
-      ? `Command is still running as background terminal ${snap.id}. Its result arrives automatically after a later tool call — keep working. If nothing else is left to do, call terminal_wait; never sleep or poll. Stop it with terminal_stop.\n${describeTerminal(snap)}`
+      ? options?.nested === true
+        ? `Command is still running as background terminal ${snap.id}. Its result arrives after the calling script ends. To use it inside the script, call terminal_wait({ ids: ["${snap.id}"] }). Stop it with terminal_stop.\n${describeTerminal(snap)}`
+        : `Command is still running as background terminal ${snap.id}. Its result arrives automatically after a later tool call — keep working. If nothing else is left to do, call terminal_wait; never sleep or poll. Stop it with terminal_stop.\n${describeTerminal(snap)}`
       : snap.status === "timed_out"
         ? `Command timed out after ${formatElapsed(snap)} in ${snap.cwd}.`
         : `Command finished in ${formatElapsed(snap)} (${formatExit(snap)}) in ${snap.cwd}.`;

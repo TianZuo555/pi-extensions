@@ -19,3 +19,6 @@ export const DEFAULT_TERMINAL_LOG_READ_BYTES = 8 * 1024;
 export const MAX_TERMINAL_LOG_READ_BYTES = 64 * 1024;
 export const TERMINAL_LOG_READ_RUN_BUDGET = MAX_TERMINAL_LOG_READ_BYTES * 4;
 export const TERMINAL_LOG_READ_RUN_CALLS = 8;
+/** Sleeps shorter than this are legitimate work; longer ones while a
+ * background terminal runs are refused in favor of terminal_wait. */
+export const PLAIN_SLEEP_GUARD_MIN_SECONDS = 10;

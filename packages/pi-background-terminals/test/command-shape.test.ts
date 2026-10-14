@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { findDuplicateRunning, isPlainSleep, isStateOnlyCommand } from "../src/command-shape.ts";
+import {
+  findDuplicateRunning,
+  plainSleepSeconds,
+  isStateOnlyCommand,
+} from "../src/command-shape.ts";
 import { duplicateCommandError, stateOnlyCommandError } from "../src/prompt.ts";
 import type { OutputView, TerminalSnapshot } from "../src/domain.ts";
 
@@ -62,16 +66,18 @@ test("the state-only error names the fix instead of only the rule", () => {
   assert.match(message, /cd packages\/x && npm test/);
 });
 
-test("a lone sleep with an optional echo is a plain sleep", () => {
-  for (const command of [
-    "sleep 60",
-    "  sleep 5 ",
-    "sleep 1.5",
-    "sleep 2m",
-    "sleep 60; echo done",
-    "sleep 60 && echo waited-for-tests",
-  ]) {
-    assert.equal(isPlainSleep(command), true, command);
+test("a lone sleep with an optional echo yields its seconds", () => {
+  const cases: Array<[string, number]> = [
+    ["sleep 60", 60],
+    ["  sleep 5 ", 5],
+    ["sleep 1.5", 1.5],
+    ["sleep 2m", 120],
+    ["sleep 1h", 3_600],
+    ["sleep 60; echo done", 60],
+    ["sleep 60 && echo waited-for-tests", 60],
+  ];
+  for (const [command, seconds] of cases) {
+    assert.equal(plainSleepSeconds(command), seconds, command);
   }
 });
 
@@ -84,7 +90,7 @@ test("a sleep carrying real work is not a plain sleep", () => {
     "sleep 5 > /tmp/x",
     "sleep 5 | cat",
   ]) {
-    assert.equal(isPlainSleep(command), false, command);
+    assert.equal(plainSleepSeconds(command), undefined, command);
   }
 });
 

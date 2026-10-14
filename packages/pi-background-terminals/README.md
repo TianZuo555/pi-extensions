@@ -2,210 +2,319 @@
 
 Release notes: [changelog](https://github.com/TianZuo555/pi-extensions/blob/main/packages/pi-background-terminals/CHANGELOG.md) · [GitHub releases](https://github.com/TianZuo555/pi-extensions/releases)
 
-A managed replacement for Pi's built-in `bash` tool.
-
-Every model shell command follows one path: start it, wait briefly, and return
-its final output if it finishes. If it outlives the initial wait, return control
-to the model while the command continues as a session-scoped background
-terminal. Its final result is delivered automatically exactly once. Results
-that settle close together share one bounded follow-up; an isolated result keeps
-its existing message shape. Quick Bash calls show a bounded command/output
-preview in the main transcript; only calls that actually yield collapse to
-compact terminal rows. `/ps` retains complete invocation metadata and the
-detailed stdout/stderr viewer.
+This extension replaces the built-in `bash` tool of Pi. Long commands move to
+the background. The model can continue its work while these commands run.
 
 ```text
 ■ 2 background terminals running • /ps to view
 ```
 
-## Canonical `bash` override
+## Overview
 
-Pi officially supports replacing a built-in tool by registering the same name.
-This extension registers `bash`, so the model no longer chooses between normal
-Bash and a separate background tool. Pi may display an expected startup warning
-that the built-in has been overridden.
+- Each command starts in a new shell. The tool waits a short time for the
+  command to stop.
+- If the command stops in that time, the tool returns the output.
+- If the command continues after that time, the tool returns a terminal ID.
+  The command continues in the background.
+- When a background command stops, the extension sends the result to the model
+  one time only.
+- The `/ps` command shows all terminals and their full output.
 
-Parameters:
+The model has four tools:
 
-- `command` — Bash script to execute.
-- `timeout` — optional hard total runtime timeout in seconds. When reached, the
-  whole process tree is terminated. There is no default runtime timeout.
-- `working_dir` — optional working directory for this fresh shell invocation;
-  defaults to the session directory. A standalone `cd` never affects later calls.
-- `title` — optional short `/ps` label. The default strips common leading
-  `D=/path;` or `cd /path &&` setup and preserves both ends when bounding a long
-  command, so repeated setup prefixes do not hide the actual work.
-- `yield_time_ms` — optional initial wait, default **10 seconds**. Integer values
-  are clamped to **250–300,000 ms** rather than rejected when out of range.
+| Tool | Function |
+| --- | --- |
+| `bash` | Runs a command. Moves a long command to the background. |
+| `terminal_wait` | Waits until a background terminal stops. Returns the result. |
+| `terminal_stop` | Stops a background terminal and all of its child processes. |
+| `terminal_log_read` | Reads or searches the full log of a terminal. |
 
-Behavior:
+## The `bash` tool
 
-1. Resolve Bash using Pi's normal platform logic and preserve Pi's configured
-   `shellPath` and `shellCommandPrefix` settings.
-2. Preserve Pi's managed `PATH` (`<agent-dir>/bin` is prepended unless already
-   present) and inject the same `PI_SESSION_ID`, `PI_SESSION_FILE`, `PI_PROVIDER`,
-   `PI_MODEL`, and `PI_REASONING_LEVEL` values as built-in Bash.
-3. Start the command in a fresh shell with no interactive stdin and capture
-   stdout/stderr. During the initial wait, the main Bash row shows the useful
-   command title and a small sanitized output preview.
-4. If it exits during `yield_time_ms`, return its final status and bounded
-   head+tail output to the model. Non-zero exits and hard timeouts are Bash tool
-   errors. The TUI keeps the quick command visibly distinct from background work.
-5. If it remains alive, return an id such as `bt-a12b34c56d78ef90-1`. Only then does the row
-   collapse to compact background-terminal status. The model should keep
-   working rather than poll: the completion is steered into the run at the next
-   tool boundary, so it arrives mid-task instead of only after a final answer.
-   Nearby exits share one compact message after a 1,000 ms sliding quiet window,
-   with a 3,000 ms maximum hold; a result still in that window when the run is
-   about to settle is delivered immediately, continuing the same run. An
-   isolated exit keeps the original message shape, and every terminal result
-   remains exactly-once. Detailed stdout/stderr remain in `/ps`.
+Pi lets an extension replace a built-in tool that has the same name. This
+extension registers `bash`. The model does not have to select between two
+shell tools. At startup, Pi can show a warning about the replaced tool. This
+warning is expected.
 
-Alongside `bash`, the model gets three more tools:
+### Parameters
 
-- `terminal_wait` — blocks until a background terminal exits and returns its
-  result in place of the later completion message (that settlement is consumed,
-  never delivered twice). With no `ids` it waits on all running terminals and
-  returns as soon as the first exits; `timeout` (default 300 s, clamped to
-  1–3,600 s) or Esc ends the wait without stopping anything. A plain `sleep`
-  command is refused while a background terminal runs and points here; it runs
-  normally when none does.
-- `terminal_stop` — stops a running terminal's process tree with a one-line
-  result; its settlement is consumed so no completion message follows. A stop
-  the user issues from `/ps` is still reported to the model, delivered with the
-  next user turn instead of waking an idle agent.
-- `terminal_log_read` — read-only access to a terminal's complete log by bare
-  id (stdout, or `id:stderr`). With no `offset` it returns the whole log when it
-  fits `limit` (default 8 KiB), otherwise a head+tail view with the omitted
-  byte range; `offset` pages exactly (`next_offset` continues), `tail` returns
-  the newest bytes, and `pattern` runs a case-insensitive line search over the
-  whole log with byte offsets. Per call it returns at most 64 KiB, and 256 KiB
-  across at most 8 reads per agent run. Code-mode scripts receive the result as
-  structured fields (`text`, `offset`, `nextOffset`, `mode`, `matches`, …).
+| Parameter | Description |
+| --- | --- |
+| `command` | The Bash script to run. This parameter is necessary. |
+| `timeout` | The maximum run time in seconds. At this time, the extension stops the full process tree. There is no default limit. |
+| `working_dir` | The directory for the command. The default is the session directory. A `cd` command alone has no effect on later calls. |
+| `title` | A short label for `/ps`. The default label comes from the command, without a `D=/path;` or `cd /path &&` prefix. |
+| `yield_time_ms` | The initial wait in milliseconds. The default is 10,000 ms. A value below 250 ms or above 300,000 ms changes to the nearest limit. |
 
-The user still owns full terminal inspection and termination through `/ps`.
+### Sequence for each call
 
-Terminal IDs include a random runtime identifier, so archive references from
-before `/reload` or `/resume` cannot resolve to a different command's output.
-Old references become unavailable rather than being reused. The read budgets
-apply only to `terminal_log_read`, not to Bash inspection commands.
+1. The extension finds Bash with the usual Pi procedure. It keeps the Pi
+   settings `shellPath` and `shellCommandPrefix`.
+2. The extension adds `<agent-dir>/bin` to `PATH` if it is not there. It sets
+   `PI_SESSION_ID`, `PI_SESSION_FILE`, `PI_PROVIDER`, `PI_MODEL`, and
+   `PI_REASONING_LEVEL`, as the built-in tool does.
+3. The extension starts the command in a new shell. The command has no
+   interactive input. The extension records stdout and stderr separately.
+4. If the command stops during the initial wait, the tool returns the exit
+   status and the output. For a large output, the tool shows only the start
+   and the end. A non-zero exit or a timeout is a tool error.
+5. If the command continues after the initial wait, the tool returns a
+   terminal ID, for example `bt-a12b34c56d78ef90-1`.
 
-Cancellation before spawn prevents execution (including foreground fallback).
-Once a command has started, cancellation only ends the initial wait; the command
-continues in the background and remains eligible for its completion message.
+### Results of background commands
 
-### Safe foreground fallback
+When a background command stops, the extension sends the result to the model.
+The model receives the result after its next tool call. This lets the model
+continue its work. If no agent run is active, the result starts a new run.
 
-If the managed Effect runtime cannot initialize—or `start()` returns a typed
-spawn error proving no child was created—the extension falls back to Pi's
-standard foreground Bash implementation. The result includes a warning that
-automatic yielding and `/ps` tracking were unavailable.
+The extension sends each result one time only. If commands stop at almost the
+same time, the extension sends one message for all of them:
 
-The extension deliberately never retries through fallback after a spawn,
-non-zero exit, timeout, or abort. Re-executing an arbitrary shell command could
-duplicate destructive side effects.
+- It waits until no new result comes for 1,000 ms.
+- It does not wait more than 3,000 ms in total.
+- One message contains a maximum of 32 KiB.
 
-## `/ps` viewer
+If the model ends its run while a result waits, the extension sends that
+result immediately. The model then continues in the same run.
 
-While at least one terminal runs, a one-line widget renders above the editor.
-`/ps` opens a two-stage full-screen overlay:
+### Limits
 
-1. **List** — every tracked terminal, newest first; `↑/↓`/`j`/`k` select,
-   `Enter` inspect, `x` stop the selected running terminal, `Esc` close.
-2. **Detail** — three tabs ordered **Info** (default), **stdout**, **stderr**.
-   Info shows the complete invocation metadata (command, cwd, PID, status,
-   timing/timeout, exit state, stream sizes, spill paths, and errors). `t`,
-   `←/→`, or `h`/`l` switches tabs. Output tabs support live tailing, scrolling
-   (`↑/↓`, `PgUp/PgDn`, `g`/`G`), and `x` to stop. Once a stream outgrows its
-   in-memory retention the viewer reads the **complete on-disk log** instead:
-   scrolling up immediately pauses live following and freezes the reading
-   position (including retained output). Scrolling past the top of the loaded
-   window pulls in earlier bytes; `G` returns to the live tail. The note row
-   shows how much is loaded, how much lies on either side, and the log's path.
+- A maximum of 8 terminals can run at the same time.
+- The extension keeps the data of the last 32 terminals.
+- The maximum `timeout` is approximately 2,147,483 seconds. This is the limit
+  of a Node.js timer.
+
+### Cancellation
+
+- If you cancel a call before the command starts, the command does not start.
+  This rule also applies to the fallback.
+- If you push Esc after the command starts, only the initial wait stops. The
+  command continues in the background. The result comes later, as usual.
+
+### Fallback to the built-in tool
+
+The extension uses the standard foreground `bash` tool of Pi in two
+conditions:
+
+- The managed runtime cannot start.
+- A start error shows that no child process exists.
+
+The result then contains a warning. The warning tells that the background
+function and `/ps` are not available for this call.
+
+The extension does not use the fallback after a command starts. It also does
+not use the fallback after an exit error, a timeout, or a cancellation. A
+second run of a command can cause its side effects two times.
+
+## The `terminal_wait` tool
+
+Use this tool when the model has no other work to do. Do not use `sleep` for
+this purpose.
+
+| Parameter | Description |
+| --- | --- |
+| `ids` | The terminal IDs. The default is all background terminals that run. |
+| `timeout` | The maximum wait in seconds. The default is 300 s. A value below 1 s or above 3,600 s changes to the nearest limit. |
+
+- The tool returns when one of the terminals stops.
+- If a result waits for delivery, the tool returns that result immediately.
+- The tool returns the result in place of the later message. The extension
+  does not send that result again.
+- The timeout or Esc stops the wait. They do not stop a terminal.
+- If a terminal failed or had a timeout, the result is a tool error.
+
+## The `terminal_stop` tool
+
+| Parameter | Description |
+| --- | --- |
+| `id` | The terminal ID. |
+
+- The tool stops the full process tree. On POSIX systems, it sends SIGTERM
+  first and SIGKILL after 2 seconds. On Windows, it stops the tree
+  immediately.
+- The tool returns one line of status. The extension does not send a later
+  message for this terminal.
+- Use this tool to restart a server, or to stop work that is not necessary.
+
+If the user stops a terminal in `/ps`, the model receives a message about it.
+This message comes with the next user prompt. It does not start a new agent
+run.
+
+## The `terminal_log_read` tool
+
+This tool reads the full log of a terminal. It does not control the process.
+
+| Parameter | Description |
+| --- | --- |
+| `ref` | The terminal ID. The default stream is stdout. Add `:stderr` to read stderr. |
+| `limit` | The maximum number of bytes to return. The default is 8 KiB. The maximum is 64 KiB. |
+| `offset` | The start byte of an exact page. To read the next page, use the returned `next_offset`. |
+| `tail` | Returns the last `limit` bytes. You cannot use `tail` with `offset` or `pattern`. |
+| `pattern` | A regular expression. The search ignores case. The tool returns each line that matches, with its byte offset. |
+
+- If you do not set `offset`, `tail`, or `pattern`, the tool returns the full
+  log when the log is not larger than `limit`. Otherwise, the tool returns the
+  start and the end of the log, and the byte range that it does not show.
+- A search shows a maximum of 300 characters for each line. If the matches do
+  not fit in `limit`, `next_offset` is the start of the first match that the
+  tool does not show. To continue the search, use this value as `offset`.
+- All pages start and end at UTF-8 character boundaries. The pages connect
+  without errors.
+- For calls from the model, each agent run has a limit of 8 reads and 256 KiB.
+  This limit does not apply to calls from a Code Mode script or to Bash
+  commands.
+
+Each terminal ID contains a random runtime ID. An ID from before `/reload` or
+`/resume` cannot read the output of a different command. Such an ID is not
+available.
+
+## Use with Code Mode
+
+In Code Mode, the model writes a JavaScript script that calls tools. The
+script receives the tool results. The model receives only the output of the
+script. The script has no timers.
+
+- If a `bash` call in a script moves to the background, the script receives a
+  terminal ID. The result comes to the model only after the script ends. To
+  use the result in the same script, call `tools.terminal_wait`.
+- In a script, `terminal_wait` returns an object with the fields `settled`,
+  `running`, `alreadyReported`, and `text`. Each item in `settled` contains the
+  ID, the status, and the exit code of a terminal that stopped.
+- In a script, a failed terminal does not cause an exception in
+  `terminal_wait`. Examine `status` instead.
+- In a script, `terminal_log_read` returns an object, for example with the
+  fields `text`, `nextOffset`, `mode`, and `matches`.
+- Reads from a script do not have the limit for each agent run. Their output
+  goes to the script, not to the model.
+- If the script ends before `terminal_wait` returns, the wait stops. The
+  result then comes to the model as a usual message. No result is lost.
+- If a script receives a result from `terminal_wait`, only the script has that
+  result. Put the important part in the script output, for example with
+  `text()`.
+
+Example:
+
+```js
+const started = await tools.bash({ command: "pnpm test", yield_time_ms: 1000 });
+const id = /bt-[a-f0-9]{16}-\d+/.exec(started)?.[0];
+if (id) {
+  const waited = await tools.terminal_wait({ ids: [id] });
+  text(waited.text);
+} else {
+  text(started);
+}
+```
+
+## Safety rules for commands
+
+The extension refuses some commands before they start. Each refusal tells the
+correct procedure.
+
+- **A command that only changes the shell state.** Examples are
+  `cd packages/x` and `export FOO=1`. The shell stops after each call, so the
+  change has no effect. The error tells you to use `working_dir`.
+- **The same command again.** The extension refuses a command that is
+  identical to an active command in the same directory. A second copy can
+  cause all side effects two times.
+- **A long `sleep`.** The extension refuses a `sleep N` command of 10 seconds
+  or more while a background terminal runs. An `echo` after the sleep does not
+  change this. A sleep does not make a result come sooner. The error tells you
+  to use `terminal_wait`.
+
+To wait for a server, poll the server in one command, for example
+`until curl -fs <url>; do sleep 1; done`. The extension allows shorter sleeps.
+It also allows a sleep when no background terminal runs.
+
+If the syntax is not clear, the extension does not refuse the command.
+Examples are a redirect and a command substitution. Each result also shows the
+directory where the command ran.
+
+## The `/ps` viewer
+
+When one or more background terminals run, a status line shows above the
+editor. The `/ps` command opens a full-screen view with two levels.
+
+1. **List.** This level shows all terminals. The newest terminal is at the
+   top.
+   - `↑`/`↓` or `j`/`k`: Select a terminal.
+   - `Enter`: Open the terminal.
+   - `x`: Stop the selected terminal.
+   - `Esc`: Close the view.
+2. **Detail.** This level has three tabs: **Info**, **stdout**, and
+   **stderr**.
+   - **Info** shows the full data of the call: command, directory, PID,
+     status, times, timeout, exit status, output sizes, log paths, and errors.
+   - `t`, `←`/`→`, or `h`/`l`: Change the tab.
+   - `↑`/`↓`, `PgUp`/`PgDn`, `g`/`G`: Scroll the output.
+   - `x`: Stop the terminal.
+
+The output tabs show new output when it comes. If you scroll up, the view
+stays at that position. When a stream is larger than the memory limit, the
+view reads the full log file from the disk. If you scroll above the loaded
+part, the view loads earlier bytes. `G` goes back to the end of the output. A
+note row shows the loaded size, the size before and after it, and the log
+path.
 
 ## Design
 
-- **Automatic yielding, no polling.** Quick commands return directly; only
-  commands that outlive the initial wait become background work. Completion
-  uses `pi.sendMessage(..., { deliverAs: "steer", triggerTurn: true })`: a busy
-  agent receives it after its current tool batch, an idle one is woken. When
-  the model has nothing else to do it calls `terminal_wait`, which blocks for
-  the settlement and returns the result itself — consuming the completion so it
-  is never also delivered as a message. Settlements consumed by `terminal_wait`
-  or `terminal_stop` never produce a follow-up.
-- **Truthful quick-vs-yielded rendering.** Quick and initial-wait Bash rows show
-  a bounded sanitized preview. Only a command that actually yields is rendered
-  as a compact background terminal; asynchronous completion rows remain compact.
-- **Fresh-shell guidance.** Model guidance points to `working_dir` instead of
-  persistent `cd` assumptions and prefers dedicated inspection tools.
-- **Loud failure for the two silent mistakes.** Prompt wording only makes a
-  misunderstanding less likely, so both contract errors that produce *no* error
-  signal are refused before spawning. A command that only mutates the discarded
-  shell (`cd packages/x`, `export FOO=1`) is rejected with the `working_dir`
-  fix, because otherwise it exits 0 and the next call silently runs elsewhere.
-  Re-issuing a command identical to one still running in the same directory is
-  rejected too, because a yielded command looks like a hang and the duplicate
-  would repeat every side effect while both copies report success. A lone
-  `sleep N` while a background terminal runs is rejected as well — results are
-  pushed, so sleeping cannot make one arrive sooner; the error points at
-  `terminal_wait`. Ambiguous
-  syntax (redirects, command substitution) always fails open. Every settled
-  result also names the directory the command actually ran in, because the
-  common mistake is assuming a cwd that was never set.
-- **Exactly-once batched completion.** A race-safe waiter token decides whether
-  the initial Bash call or a later follow-up owns settlement. A drain-once map
-  handles delivery retries without duplicates. A bounded quiet-window scheduler
-  combines nearby map entries into one follow-up, caps aggregate content at
-  32 KiB, and leaves isolated completion messages unchanged.
-- **Bounded head+tail memory plus full capture.** Each stdout/stderr stream
-  retains a stable **256 KiB startup head** and rolling tail within a **2 MiB**
-  cap. Omitted middle bytes are marked. Complete output spills from byte zero
-  to an owner-only file (`0600` in a `0700` session directory), capped at
-  256 MiB per stream. A terminal's spill files are deleted when it is pruned
-  from the 32-entry history. The `/ps` detail view pages that file through a
-  bounded window (1 MiB live tail, up to 4 MiB when reading backwards), so the
-  user can read output the model's bounded result never showed.
-- **Separate stdout and stderr.** Both streams are independently retained,
-  spilled, inspected, and formatted. The model reads a bounded view of the
-  complete archive with `terminal_log_read` using the terminal id; windows are
-  snapped to UTF-8 boundaries so paging with `next_offset` is byte-exact. The
-  tool reads but never controls a process.
-- **No interactive stdin.** Normal commands see EOF. The legacy WSL Bash
-  transport may receive the script over stdin, but that pipe is closed
-  immediately and cannot be used interactively.
-- **Process-tree termination.** POSIX children use their own process group.
-  Cleanup checks that group independently of stdio closure, so descendants with
-  redirected output are also reaped on natural shell exit and shutdown.
-  On Windows the manager creates a dedicated Job Object before starting a
-  terminal, and a pre-shell launcher joins it before Bash can run; every
-  descendant therefore inherits `KILL_ON_JOB_CLOSE` membership without an
-  assignment race. Closing the handle reliably reaps descendants that outlive
-  the shell and keep stdio pipes open, with `taskkill /T` as the first attempt.
-  Hosts whose outer Windows job forbids nesting are detected once and retain
-  the legacy direct-spawn/taskkill fallback. Shutdown and hard timeouts send
-  SIGTERM and escalate to SIGKILL after two
-  seconds. A synchronous process-exit tracker also kills managed trees when a
-  Pi crash bypasses normal extension cleanup.
-- **Session scoped.** `/new`, `/resume`, `/fork`, `/reload`, and quit terminate
-  every process tree and remove the remaining spill directory.
+### Output storage
 
-The async core uses [Effect](https://effect.website) v4. Node
-`child_process` output remains callback-driven. See
-[`docs/implementation-guide.md`](./docs/implementation-guide.md) for internal
-invariants.
+- In memory, each stream keeps the first 256 KiB and the most recent output,
+  to a maximum of 2 MiB. A marker shows the bytes that are not kept.
+- The extension writes the full output of each stream to a log file on the
+  disk. The file has the mode `0600`, in a directory with the mode `0700`.
+  Each file has a maximum of 256 MiB.
+- The extension deletes the log files of a terminal when it removes the
+  terminal from the history of 32 entries.
+- `/ps` reads the log file in a limited window. The window is 1 MiB at the
+  end, and a maximum of 4 MiB when you scroll back.
+
+### Output for the model
+
+- A `bash` result shows a maximum of 16 KiB of stdout and 8 KiB of stderr.
+- A completion message shows a maximum of 8 KiB of stdout and 4 KiB of stderr.
+  After a failure or a timeout, it shows 16 KiB and 8 KiB.
+- If the tool does not show all output, the result gives a log reference. The
+  model can read the full log with `terminal_log_read`.
+
+### Process trees
+
+- On POSIX systems, each command has its own process group. The extension
+  also stops child processes that redirect their output.
+- On Windows, the extension creates a Job Object before each terminal starts.
+  A small launcher adds itself to the job before Bash starts. All child
+  processes are then in the job. When the extension closes the job handle,
+  Windows stops all of them. The extension first tries `taskkill /T`.
+- If the host does not allow nested jobs, the extension uses only `taskkill`.
+- A shutdown or a hard timeout sends SIGTERM. After 2 seconds, it sends
+  SIGKILL.
+- If Pi crashes, a process-exit handler stops all managed process trees.
+
+### Session scope
+
+The commands `/new`, `/resume`, `/fork`, `/reload`, and quit stop all process
+trees. They also remove the log directory of the session.
+
+### Internal structure
+
+The async core uses [Effect](https://effect.website) v4. The Node.js
+`child_process` output uses callbacks. For the internal rules, refer to
+[`docs/implementation-guide.md`](./docs/implementation-guide.md).
 
 ## Install
 
-```bash
-pi install npm:@tian.zuo/pi-background-terminals
-```
+1. Install the package:
 
-Restart Pi or run `/reload` afterwards.
+   ```bash
+   pi install npm:@tian.zuo/pi-background-terminals
+   ```
+
+2. Restart Pi, or type `/reload`.
 
 ## Development
 
-This workspace pins Effect `4.0.0-rc.117` and uses TypeScript 7 (`tsgo`), so
-it is checked in isolation:
+This workspace uses Effect `4.0.0-rc.117` and TypeScript 7 (`tsgo`). Do the
+checks for this package only:
 
 ```bash
 pnpm install --filter @tian.zuo/pi-background-terminals
@@ -214,8 +323,9 @@ pnpm run check
 pnpm test
 ```
 
-Tests run without forced process exit, including lifecycle regressions for
-redirected descendants, pre-spawn cancellation, and runtime-scoped archive IDs.
+The tests do not force the process to exit. They include tests for child
+processes that redirect their output, cancellation before start, and terminal
+IDs for each runtime.
 
 ## License
 

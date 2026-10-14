@@ -186,7 +186,7 @@ test("background tool metadata stays concise", async () => {
     const budgets = new Map([
       ["bash", 1_200],
       ["terminal_log_read", 950],
-      ["terminal_wait", 650],
+      ["terminal_wait", 700],
       ["terminal_stop", 400],
     ]);
 
@@ -1487,8 +1487,14 @@ test("a plain sleep is refused while a background terminal runs, allowed otherwi
       app.tools
         .get("bash")
         .execute("call-sleep-blocked", { command: "sleep 30" }, undefined, undefined, app.ctx),
-      /terminal_wait/,
+      /terminal_wait[\s\S]*until curl/,
     );
+    // A short sleep is legitimate work and runs normally even while a
+    // terminal runs.
+    const short = await app.tools
+      .get("bash")
+      .execute("call-sleep-short", { command: "sleep 1" }, undefined, undefined, app.ctx);
+    assert.equal(short.details?.status, "done");
 
     // With nothing running, the same shape executes normally.
     const free = harness();
@@ -1506,6 +1512,146 @@ test("a plain sleep is refused while a background terminal runs, allowed otherwi
     } finally {
       await free.shutdown();
     }
+  } finally {
+    await app.shutdown();
+  }
+});
+
+/** Fire the extension's tool_call handlers as Code Mode's nested call does. */
+function markNested(app: ReturnType<typeof harness>, toolCallId: string, toolName: string) {
+  for (const handler of app.handlers.get("tool_call") ?? []) {
+    handler(
+      { type: "tool_call", toolCallId, toolName, input: {}, parentToolCallId: "script" },
+      app.ctx,
+    );
+  }
+}
+
+test("a nested yielded bash result tells the script to collect it with terminal_wait", async () => {
+  const app = harness();
+  try {
+    markNested(app, "script/1", "bash");
+    const nested = await app.tools.get("bash").execute(
+      "script/1",
+      {
+        command: command("setTimeout(() => {}, 1_500)"),
+        yield_time_ms: 250,
+      },
+      undefined,
+      undefined,
+      app.ctx,
+    );
+    assert.match(nested.content[0].text, /after the calling script ends/);
+    const id = nested.details?.id as string;
+    assert.ok(nested.content[0].text.includes(`terminal_wait({ ids: ["${id}"] })`));
+
+    // A top-level yield keeps the model-facing wording. (Distinct command
+    // text — an identical still-running command hits the duplicate guard.)
+    const top = await app.tools.get("bash").execute(
+      "call-top-yield",
+      {
+        command: command("setTimeout(() => {}, 1_500) // top-level"),
+        yield_time_ms: 250,
+      },
+      undefined,
+      undefined,
+      app.ctx,
+    );
+    assert.match(top.content[0].text, /after a later tool call — keep working/);
+    assert.doesNotMatch(top.content[0].text, /calling script ends/);
+  } finally {
+    await app.shutdown();
+  }
+});
+
+test("nested terminal_log_read calls are exempt from the per-run budgets", async () => {
+  const app = harness();
+  try {
+    const result = await app.tools.get("bash").execute(
+      "call-nested-source",
+      {
+        command: command('process.stdout.write("0123456789".repeat(2_000))'),
+        yield_time_ms: 30_000,
+      },
+      undefined,
+      undefined,
+      app.ctx,
+    );
+    const id = result.details?.id as string;
+    const read = app.tools.get("terminal_log_read");
+
+    // Ten nested reads — over the 8-call budget — all succeed.
+    for (let index = 1; index <= 10; index++) {
+      const callId = `script/${index}`;
+      markNested(app, callId, "terminal_log_read");
+      const page = await read.execute(
+        callId,
+        { ref: `${id}:stdout`, offset: 0, limit: 64 },
+        undefined,
+        undefined,
+        app.ctx,
+      );
+      assert.equal(page.structuredContent.mode, "page");
+    }
+
+    // And the untouched budget still serves a top-level read.
+    const after = await read.execute(
+      "call-after-nested",
+      { ref: `${id}:stdout`, offset: 0, limit: 64 },
+      undefined,
+      undefined,
+      app.ctx,
+    );
+    assert.equal(after.structuredContent.mode, "page");
+  } finally {
+    await app.shutdown();
+  }
+});
+
+test("terminal_wait exposes structuredContent, including on a failed terminal", async () => {
+  const app = harness();
+  try {
+    const ok = await app.tools.get("bash").execute(
+      "call-wait-structured-ok",
+      {
+        command: command('setTimeout(() => console.log("struct-done"), 400)'),
+        yield_time_ms: 250,
+      },
+      undefined,
+      undefined,
+      app.ctx,
+    );
+    const bad = await app.tools.get("bash").execute(
+      "call-wait-structured-bad",
+      {
+        command: command("setTimeout(() => process.exit(7), 400)"),
+        yield_time_ms: 250,
+      },
+      undefined,
+      undefined,
+      app.ctx,
+    );
+
+    const okWait = await app.tools
+      .get("terminal_wait")
+      .execute("call-wait-struct-ok", { ids: [ok.details?.id] }, undefined, undefined, app.ctx);
+    assert.equal(okWait.isError, undefined);
+    assert.equal(okWait.structuredContent.settled[0].id, ok.details?.id);
+    assert.equal(okWait.structuredContent.settled[0].status, "done");
+    assert.equal(okWait.structuredContent.settled[0].exitCode, 0);
+    assert.equal("signal" in okWait.structuredContent.settled[0], false);
+    assert.deepEqual(okWait.structuredContent.running, []);
+    assert.deepEqual(okWait.structuredContent.alreadyReported, []);
+    assert.match(okWait.structuredContent.text, /struct-done/);
+
+    const badWait = await app.tools
+      .get("terminal_wait")
+      .execute("call-wait-struct-bad", { ids: [bad.details?.id] }, undefined, undefined, app.ctx);
+    // A failing terminal is still an error result, but with structuredContent
+    // a code-mode script can read the failure instead of getting a rejection.
+    assert.equal(badWait.isError, true);
+    assert.equal(badWait.structuredContent.settled[0].status, "failed");
+    assert.equal(badWait.structuredContent.settled[0].exitCode, 7);
   } finally {
     await app.shutdown();
   }
