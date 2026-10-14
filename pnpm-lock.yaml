@@ -473,8 +473,8 @@ importers:
         specifier: ^1.2.0
         version: 1.2.0
       defuddle:
-        specifier: ^0.19.4
-        version: 0.19.4
+        specifier: ^0.19.5
+        version: 0.19.5
       effect:
         specifier: 4.0.0-rc.117
         version: 4.0.0-rc.117
@@ -1669,8 +1669,8 @@ packages:
   defu@6.1.7:
     resolution: {integrity: sha512-7z22QmUWiQ/2d0KkdYmANbRUVABpZ9SNYyH5vx6PZ+nE5bcC0l7uFvEfHlyld/HcGBFTL536ClDt3DEcSlEJAQ==}
 
-  defuddle@0.19.4:
-    resolution: {integrity: sha512-Jz98aWlyEeuWcg9u2AavCEKknviI9GijMkrGFPk0wi1Lkfr1DDDw6XM+ak44Ol8kBDmDJsvU9Su2eUY09Fvh3Q==}
+  defuddle@0.19.5:
+    resolution: {integrity: sha512-WpgFv5TWA8s8bWRXMb+tosdEbdeZwgrKYw+BQiuTQfQc4XdCm69Yq/76Lzgvr0ALC1VxZcMWwjNGGgIstcxUtw==}
     hasBin: true
 
   depd@2.0.0:
@@ -3772,7 +3772,7 @@ snapshots:
 
   defu@6.1.7: {}
 
-  defuddle@0.19.4:
+  defuddle@0.19.5:
     dependencies:
       commander: 12.1.0
       mathml-to-latex: 1.8.0
