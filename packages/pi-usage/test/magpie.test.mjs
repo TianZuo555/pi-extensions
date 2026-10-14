@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -190,4 +191,56 @@ test("queryMagpieQuotas reports an absent binary as no data", posix, async () =>
   } finally {
     delete process.env.PI_USAGE_MAGPIE_BIN;
   }
+});
+
+test("queryMagpieQuotas prefers a running gateway over the binary", async (t) => {
+  const server = http.createServer((_req, res) => {
+    res.end(
+      JSON.stringify({
+        object: "list",
+        data: [{ provider: "deepseek", kind: "balance", balance: "$5.00", windows: [] }],
+      }),
+    );
+  });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  t.after(() => server.close());
+  // A binary that would fail proves the gateway answered instead of it.
+  process.env.PI_USAGE_MAGPIE_BIN = "/nonexistent/magpie";
+  process.env.PI_USAGE_MAGPIE_GATEWAY = `http://127.0.0.1:${server.address().port}`;
+  t.after(() => {
+    delete process.env.PI_USAGE_MAGPIE_BIN;
+    delete process.env.PI_USAGE_MAGPIE_GATEWAY;
+  });
+
+  const quotas = await queryMagpieQuotas({ fresh: true });
+  assert.equal(quotas.length, 1);
+  assert.equal(quotas[0].provider, "deepseek");
+  const report = magpieReport(deepseekSpec, quotas);
+  assert.equal(report.windows[0].remaining, 5);
+});
+
+test("queryMagpieQuotas falls back to the binary when no gateway answers", posix, async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-usage-magpie-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const bin = path.join(dir, "magpie");
+  fs.writeFileSync(
+    bin,
+    '#!/bin/sh\nprintf \'[{"provider":"deepseek","kind":"balance","balance":"¥16.82","windows":[]}]\'\n',
+    { mode: 0o755 },
+  );
+  // Nothing listens on this port; a closed server guarantees that.
+  const server = http.createServer();
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const port = server.address().port;
+  server.close();
+  process.env.PI_USAGE_MAGPIE_GATEWAY = `http://127.0.0.1:${port}`;
+  process.env.PI_USAGE_MAGPIE_BIN = bin;
+  t.after(() => {
+    delete process.env.PI_USAGE_MAGPIE_GATEWAY;
+    delete process.env.PI_USAGE_MAGPIE_BIN;
+  });
+
+  const quotas = await queryMagpieQuotas({ fresh: true });
+  assert.equal(quotas.length, 1);
+  assert.equal(quotas[0].provider, "deepseek");
 });

@@ -2,11 +2,14 @@
 //
 // When magpie is installed it already discovers the machine's agent sign-ins —
 // Codex's ~/.codex/auth.json, Copilot's keychain item and config.json, the API
-// keys it stores for vendors like DeepSeek and Zhipu — and answers
-// `magpie quota --json` with one entry per account, plan or key balance. That
-// reading is preferred over pi's own credential: it stays correct when magpie
-// routes pi's models through its local gateway (where pi's stored key is a
-// gateway placeholder), refreshes OAuth tokens itself, and reports every
+// keys it stores for vendors like DeepSeek and Zhipu — and answers quota with
+// one entry per account, plan or key balance. Two routes reach that reading:
+// GET /v1/magpie/quotas on the local gateway while the app runs (a cached
+// snapshot, sub-second), and `magpie quota --json` otherwise (the CLI loads
+// every account, several seconds). The gateway is tried first, the CLI next.
+// That reading is preferred over pi's own credential: it stays correct when
+// magpie routes pi's models through its local gateway (where pi's stored key
+// is a gateway placeholder), refreshes OAuth tokens itself, and reports every
 // account it knows. When magpie is absent, fails, or has no entry for a
 // provider, the caller falls back to the direct provider query.
 
@@ -17,7 +20,9 @@ import path from "node:path";
 import type { ProviderReport, UsageWindow } from "./providers.ts";
 
 const QUERY_TIMEOUT_MS = 25_000; // magpie's own vendor timeout is 15s
+const GATEWAY_TIMEOUT_MS = 3_000; // a running gateway serves a cached snapshot
 const MEMO_TTL_MS = 30_000;
+const DEFAULT_GATEWAY_PORT = 3425; // settings.go's DefaultPort
 
 // `magpie` relies on PATH; the rest are the install locations of the script
 // installer, Homebrew and the signed macOS app. PI_USAGE_MAGPIE_BIN overrides
@@ -85,13 +90,24 @@ export function queryMagpieQuotas(options: { fresh?: boolean } = {}): Promise<Ma
 }
 
 async function collectQuotas(): Promise<MagpieQuota[]> {
-  const override = process.env.PI_USAGE_MAGPIE_BIN;
-  // Under node --test nothing may hit a real magpie install; an explicit
-  // PI_USAGE_MAGPIE_BIN is the only way a test points at a binary.
-  if (!override && process.execArgv.some((arg) => arg === "--test" || arg.startsWith("--test-"))) {
-    return [];
+  const binOverride = process.env.PI_USAGE_MAGPIE_BIN;
+  const gatewayOverride = process.env.PI_USAGE_MAGPIE_GATEWAY;
+  // Under node --test nothing may hit a real magpie install; explicit
+  // PI_USAGE_MAGPIE_* overrides are the only way a test reaches one.
+  const underTest = process.execArgv.some((arg) => arg === "--test" || arg.startsWith("--test-"));
+
+  const url = gatewayOverride ?? (underTest ? undefined : gatewayUrl());
+  if (url) {
+    const quotas = await fetchGatewayQuotas(`${url}/v1/magpie/quotas`);
+    if (quotas !== undefined) return quotas;
   }
-  const candidates = override ? [override] : resolvedBinary ? [resolvedBinary] : MAGPIE_BINARIES;
+
+  if (underTest && !binOverride) return [];
+  const candidates = binOverride
+    ? [binOverride]
+    : resolvedBinary
+      ? [resolvedBinary]
+      : MAGPIE_BINARIES;
   for (const binary of candidates) {
     if (binary !== "magpie" && !fs.existsSync(binary)) continue;
     const quotas = await runQuota(binary);
@@ -100,6 +116,37 @@ async function collectQuotas(): Promise<MagpieQuota[]> {
     return quotas;
   }
   return [];
+}
+
+/** The gateway's origin: MAGPIE_ADDR, else the port Settings has (3425). */
+function gatewayUrl(): string {
+  const addr = process.env.MAGPIE_ADDR;
+  if (addr) return `http://${addr.startsWith(":") ? `127.0.0.1${addr}` : addr}`;
+  return `http://127.0.0.1:${readGatewayPort()}`;
+}
+
+function readGatewayPort(): number {
+  try {
+    const file = path.join(os.homedir(), ".config", "magpie", "settings.json");
+    const port = (JSON.parse(fs.readFileSync(file, "utf8")) as { port?: unknown }).port;
+    if (typeof port === "number" && port >= 1024 && port <= 65535) return port;
+  } catch {
+    // No settings file or a malformed one: the default applies.
+  }
+  return DEFAULT_GATEWAY_PORT;
+}
+
+/** Ask the running app for its quota snapshot; undefined when none answers. */
+async function fetchGatewayQuotas(url: string): Promise<MagpieQuota[] | undefined> {
+  try {
+    const response = await fetch(url, { signal: AbortSignal.timeout(GATEWAY_TIMEOUT_MS) });
+    if (!response.ok) return undefined;
+    const body: unknown = await response.json();
+    const data = Array.isArray(body) ? body : (body as { data?: unknown }).data;
+    return Array.isArray(data) ? (data as MagpieQuota[]) : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function runQuota(binary: string): Promise<MagpieQuota[] | undefined> {

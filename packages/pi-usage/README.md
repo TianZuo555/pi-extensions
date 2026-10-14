@@ -111,13 +111,16 @@ endpoints).
 ## Credentials
 
 When [magpie](https://github.com/yetone/magpie) is installed, usage is read
-from it first: `magpie quota --json` reports Codex, GitHub Copilot, Z.ai/GLM
-Coding Plan (global and China), and DeepSeek from the sign-ins magpie
-discovers itself (Codex's `~/.codex/auth.json`, Copilot's credential store,
-the keys it holds for vendors). That keeps `/usage` correct even when magpie
+from it first, covering Codex, GitHub Copilot, Z.ai/GLM Coding Plan (global
+and China), and DeepSeek from the sign-ins magpie discovers itself (Codex's
+`~/.codex/auth.json`, Copilot's credential store, the keys it holds for
+vendors). While the magpie app runs, its local gateway serves a cached
+snapshot over HTTP (sub-second); otherwise `magpie quota --json` is spawned,
+which takes a few seconds. That keeps `/usage` correct even when magpie
 routes pi's models through its local gateway and pi's stored key is only a
 gateway placeholder. `PI_USAGE_MAGPIE_BIN` points the extension at a magpie
-binary outside the usual install locations.
+binary outside the usual install locations, `PI_USAGE_MAGPIE_GATEWAY` at a
+gateway outside the usual address.
 
 Per provider with no magpie entry, usage falls back to credentials pi saved
 itself in `~/.pi/agent/auth.json` (or `$PI_CODING_AGENT_DIR/auth.json` when
