@@ -185,9 +185,9 @@ export default function usageExtension(pi: ExtensionAPI): void {
   // the floating rejection into an uncaughtException and kills the process.
   const probeModel = (
     ctx: ExtensionContext,
-  ): { stale: true } | { stale: false; provider?: string } => {
+  ): { stale: true } | { stale: false; provider?: string; id?: string } => {
     try {
-      return { stale: false, provider: ctx.model?.provider };
+      return { stale: false, provider: ctx.model?.provider, id: ctx.model?.id };
     } catch {
       return { stale: true };
     }
@@ -207,7 +207,7 @@ export default function usageExtension(pi: ExtensionAPI): void {
 
   const activeProviderId = (ctx: ExtensionContext): string | undefined => {
     const probe = probeModel(ctx);
-    return probe.stale ? undefined : probe.provider;
+    return probe.stale ? undefined : usageProviderId(probe.provider, probe.id);
   };
 
   // When the global and China GLM plans are configured with the same API key
@@ -235,7 +235,7 @@ export default function usageExtension(pi: ExtensionAPI): void {
     // Nothing to publish for a session that no longer exists.
     if (probe.stale) return;
     const provider = PROVIDERS.find(
-      (candidate) => candidate.id === usageProviderId(probe.provider),
+      (candidate) => candidate.id === usageProviderId(probe.provider, probe.id),
     );
     if (!provider) {
       safeSetStatus(ctx, undefined);
@@ -247,7 +247,7 @@ export default function usageExtension(pi: ExtensionAPI): void {
       const state = await queryProvider(ctx, provider, force);
       const current = probeModel(ctx);
       // Do not publish an old provider's report after a model switch.
-      if (current.stale || usageProviderId(current.provider) !== provider.id) return;
+      if (current.stale || usageProviderId(current.provider, current.id) !== provider.id) return;
       safeSetStatus(ctx, footerStatus(state, current.provider));
     } finally {
       statusBusy = false;
@@ -289,8 +289,9 @@ export default function usageExtension(pi: ExtensionAPI): void {
   };
 
   const showMenu = async (ctx: ExtensionCommandContext) => {
+    const probe = probeModel(ctx);
     const emptyMessage =
-      activeProviderId(ctx) === "openai" ? OPENAI_LOGIN_HINT : NO_PROVIDER_LOGIN_MESSAGE;
+      !probe.stale && probe.provider === "openai" ? OPENAI_LOGIN_HINT : NO_PROVIDER_LOGIN_MESSAGE;
     if (!ctx.hasUI) {
       const states = await collectStates(ctx, false);
       ctx.ui.notify(
@@ -412,7 +413,7 @@ export default function usageExtension(pi: ExtensionAPI): void {
     const probe = probeModel(ctx);
     if (probe.stale) return;
     const provider = PROVIDERS.find(
-      (candidate) => candidate.id === usageProviderId(probe.provider),
+      (candidate) => candidate.id === usageProviderId(probe.provider, probe.id),
     );
     if (!provider) {
       safeSetStatus(ctx, undefined);
@@ -519,10 +520,24 @@ export default function usageExtension(pi: ExtensionAPI): void {
   });
 }
 
+// Magpie serves every routed model under its own "magpie" provider id; the
+// upstream provider is the model id's first segment ("copilot/claude-…").
+const MAGPIE_MODEL_PROVIDER: Record<string, string> = {
+  codex: CODEX_PROVIDER_ID,
+  copilot: COPILOT_PROVIDER_ID,
+  zai: ZAI_PROVIDER_ID,
+  zhipu: ZAI_CN_PROVIDER_ID,
+  deepseek: DEEPSEEK_PROVIDER_ID,
+};
+
 // OpenAI models reuse the legacy Codex account, endpoint, and cache. The two
 // logins are assumed to represent the same account; no identity check is made.
-function usageProviderId(modelProvider: string | undefined): string | undefined {
-  return modelProvider === "openai" ? CODEX_PROVIDER_ID : modelProvider;
+function usageProviderId(modelProvider: string | undefined, modelId?: string): string | undefined {
+  if (modelProvider === "openai") return CODEX_PROVIDER_ID;
+  if (modelProvider === "magpie" && modelId) {
+    return MAGPIE_MODEL_PROVIDER[modelId.split("/")[0] ?? ""];
+  }
+  return modelProvider;
 }
 
 function footerStatus(state: ProviderState | undefined, modelProvider: string | undefined) {
