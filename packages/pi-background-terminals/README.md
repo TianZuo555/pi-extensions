@@ -36,7 +36,7 @@ Parameters:
   `D=/path;` or `cd /path &&` setup and preserves both ends when bounding a long
   command, so repeated setup prefixes do not hide the actual work.
 - `yield_time_ms` — optional initial wait, default **10 seconds**. Integer values
-  are clamped to **250–30,000 ms** rather than rejected when out of range.
+  are clamped to **250–300,000 ms** rather than rejected when out of range.
 
 Behavior:
 
@@ -61,13 +61,29 @@ Behavior:
    isolated exit keeps the original message shape, and every terminal result
    remains exactly-once. Detailed stdout/stderr remain in `/ps`.
 
-There are no model-facing status, list, kill, polling, or stdin tools. The
-read-only `terminal_log_read` tool only pages an opaque archive ref emitted by
-`bash`; it returns at most 64 KiB per call, and 256 KiB across at most 8 reads
-per agent run. Code-mode scripts receive the page as structured fields (`text`,
-`offset`, `nextOffset`, …) so they can loop on `next_offset` without parsing the
-header line. The user still owns terminal inspection and termination through
-`/ps`.
+Alongside `bash`, the model gets three more tools:
+
+- `terminal_wait` — blocks until a background terminal exits and returns its
+  result in place of the later completion message (that settlement is consumed,
+  never delivered twice). With no `ids` it waits on all running terminals and
+  returns as soon as the first exits; `timeout` (default 300 s, clamped to
+  1–3,600 s) or Esc ends the wait without stopping anything. A plain `sleep`
+  command is refused while a background terminal runs and points here; it runs
+  normally when none does.
+- `terminal_stop` — stops a running terminal's process tree with a one-line
+  result; its settlement is consumed so no completion message follows. A stop
+  the user issues from `/ps` is still reported to the model, delivered with the
+  next user turn instead of waking an idle agent.
+- `terminal_log_read` — read-only access to a terminal's complete log by bare
+  id (stdout, or `id:stderr`). With no `offset` it returns the whole log when it
+  fits `limit` (default 8 KiB), otherwise a head+tail view with the omitted
+  byte range; `offset` pages exactly (`next_offset` continues), `tail` returns
+  the newest bytes, and `pattern` runs a case-insensitive line search over the
+  whole log with byte offsets. Per call it returns at most 64 KiB, and 256 KiB
+  across at most 8 reads per agent run. Code-mode scripts receive the result as
+  structured fields (`text`, `offset`, `nextOffset`, `mode`, `matches`, …).
+
+The user still owns full terminal inspection and termination through `/ps`.
 
 Terminal IDs include a random runtime identifier, so archive references from
 before `/reload` or `/resume` cannot resolve to a different command's output.
@@ -112,7 +128,11 @@ While at least one terminal runs, a one-line widget renders above the editor.
 - **Automatic yielding, no polling.** Quick commands return directly; only
   commands that outlive the initial wait become background work. Completion
   uses `pi.sendMessage(..., { deliverAs: "steer", triggerTurn: true })`: a busy
-  agent receives it after its current tool batch, an idle one is woken.
+  agent receives it after its current tool batch, an idle one is woken. When
+  the model has nothing else to do it calls `terminal_wait`, which blocks for
+  the settlement and returns the result itself — consuming the completion so it
+  is never also delivered as a message. Settlements consumed by `terminal_wait`
+  or `terminal_stop` never produce a follow-up.
 - **Truthful quick-vs-yielded rendering.** Quick and initial-wait Bash rows show
   a bounded sanitized preview. Only a command that actually yields is rendered
   as a compact background terminal; asynchronous completion rows remain compact.
@@ -125,7 +145,10 @@ While at least one terminal runs, a one-line widget renders above the editor.
   fix, because otherwise it exits 0 and the next call silently runs elsewhere.
   Re-issuing a command identical to one still running in the same directory is
   rejected too, because a yielded command looks like a hang and the duplicate
-  would repeat every side effect while both copies report success. Ambiguous
+  would repeat every side effect while both copies report success. A lone
+  `sleep N` while a background terminal runs is rejected as well — results are
+  pushed, so sleeping cannot make one arrive sooner; the error points at
+  `terminal_wait`. Ambiguous
   syntax (redirects, command substitution) always fails open. Every settled
   result also names the directory the command actually ran in, because the
   common mistake is assuming a cwd that was never set.
@@ -143,11 +166,10 @@ While at least one terminal runs, a one-line widget renders above the editor.
   bounded window (1 MiB live tail, up to 4 MiB when reading backwards), so the
   user can read output the model's bounded result never showed.
 - **Separate stdout and stderr.** Both streams are independently retained,
-  spilled, inspected, and formatted. The model can page a bounded settled
-  archive with `terminal_log_read` using the opaque ref and byte offsets from
-  the Bash result; windows are snapped to UTF-8 boundaries so paging with
-  `next_offset` is byte-exact, and the tool never reports status or controls a
-  process.
+  spilled, inspected, and formatted. The model reads a bounded view of the
+  complete archive with `terminal_log_read` using the terminal id; windows are
+  snapped to UTF-8 boundaries so paging with `next_offset` is byte-exact. The
+  tool reads but never controls a process.
 - **No interactive stdin.** Normal commands see EOF. The legacy WSL Bash
   transport may receive the script over stdin, but that pipe is closed
   immediately and cannot be used interactively.

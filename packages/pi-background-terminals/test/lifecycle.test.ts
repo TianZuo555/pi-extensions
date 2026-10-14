@@ -87,12 +87,15 @@ test("archive identities never alias after runtime recreation", async () => {
       if (oldId) {
         assert.notEqual(snap.id, oldId);
         await assert.rejects(
-          runTool(runtime, manager.readLog({ id: oldId, stream: "stdout", offset: 0, limit: 64 })),
+          runTool(
+            runtime,
+            manager.readLog({ id: oldId, stream: "stdout", mode: "page", offset: 0, limit: 64 }),
+          ),
           /Unknown terminal id/,
         );
       }
       const page = await runtime.runPromise(
-        manager.readLog({ id: snap.id, stream: "stdout", offset: 0, limit: 64 }),
+        manager.readLog({ id: snap.id, stream: "stdout", mode: "page", offset: 0, limit: 64 }),
       );
       assert.equal(page.text, text);
       oldId = snap.id;

@@ -17,6 +17,10 @@ import {
   MAX_TRACKED,
   MAX_RUNTIME_TIMEOUT_SECONDS,
   MAX_SPILL_BYTES_PER_STREAM,
+  DEFAULT_TERMINAL_WAIT_SECONDS,
+  MAX_TERMINAL_WAIT_SECONDS,
+  DEFAULT_TERMINAL_LOG_READ_BYTES,
+  MAX_TERMINAL_LOG_READ_BYTES,
   TERMINAL_LOG_READ_RUN_BUDGET,
   TERMINAL_LOG_READ_RUN_CALLS,
 } from "./constants.ts";
@@ -44,8 +48,10 @@ const RESULT_STDERR_MAX_LINES = 20;
 // explain their own values; runtime errors provide detailed recovery on demand.
 export const BASH_TOOL_DESCRIPTION =
   "Run Bash in a fresh shell — no interactive stdin; use working_dir, not a standalone cd. " +
-  "Returns output within the initial wait, else returns a background terminal id; its result arrives at a later tool call — do not poll. " +
+  "Returns output within the initial wait, else a background terminal id; its result arrives at a later tool call. " +
+  "Nothing else to do? Call terminal_wait — never sleep or poll. " +
   "`cmd &` dies with its shell — give a server its own call instead. " +
+  "Wait on CI or deploys with one blocking command (`gh run watch`, an `until` loop). " +
   `yield_time_ms sets the wait; timeout kills the process tree; max ${MAX_RUNNING} running terminals.`;
 
 export const BASH_PROMPT_SNIPPET = "Run Bash; long commands yield and notify on exit";
@@ -60,19 +66,23 @@ export const BASH_PARAMETER_DESCRIPTIONS = {
 };
 
 export const TERMINAL_LOG_READ_TOOL_DESCRIPTION =
-  "Read a bounded terminal-log page by bash archive ref; continue with next_offset. Read-only; no status or control.";
-export const TERMINAL_LOG_READ_PROMPT_SNIPPET = "Read a terminal archive page";
+  "Read a background terminal log by id (stdout; id:stderr for stderr). Default: whole log if it fits limit, else head+tail with the omitted byte range. " +
+  "tail: newest bytes. pattern: case-insensitive regex over the whole log; returns matching lines with byte offsets. offset: exact page; continue with next_offset. Read-only.";
+export const TERMINAL_LOG_READ_PROMPT_SNIPPET = "Read or search a terminal log";
 
 export const TERMINAL_LOG_READ_PARAMETER_DESCRIPTIONS = {
-  ref: "Exact Bash archive ref (runtime-scoped).",
-  offset: "Start byte; default 0.",
-  limit: "Page bytes; default maximum.",
+  ref: "Terminal id, or id:stdout / id:stderr.",
+  offset: "Start byte for an exact page or search.",
+  limit: `Max bytes returned; default ${DEFAULT_TERMINAL_LOG_READ_BYTES}, max ${MAX_TERMINAL_LOG_READ_BYTES}.`,
+  tail: "Return the newest limit bytes.",
+  pattern: "Case-insensitive regex; returns matching lines.",
 };
 
 /** Field text on `terminal_log_read` `outputSchema` (code-mode scripts, not the model). */
 export const TERMINAL_LOG_READ_OUTPUT_FIELD_DESCRIPTIONS = {
   id: "Background terminal id.",
   stream: "stdout or stderr.",
+  mode: "page, head_tail, tail, or search.",
   offset: "Start byte of this page.",
   nextOffset: "Byte to pass as offset for the next page.",
   bytesRead: "Bytes in this page.",
@@ -80,6 +90,32 @@ export const TERMINAL_LOG_READ_OUTPUT_FIELD_DESCRIPTIONS = {
   settled: "True when the command has exited.",
   complete: "True when the archive has the full stream.",
   text: "Page text. Empty when this range has no output.",
+  omittedStart: "First omitted byte (head_tail).",
+  omittedEnd: "Byte after the omitted range (head_tail).",
+  matchCount: "Matching lines found (search).",
+  matches: "Shown matching lines with line-start byte offsets (search).",
+  pattern: "Search regex source (search).",
+};
+
+export const TERMINAL_WAIT_TOOL_DESCRIPTION =
+  "Block until a background terminal exits and return its result (it is not delivered again). Use instead of sleep when nothing else is left to do. " +
+  "Returns as soon as any listed terminal exits; the timeout or Esc ends the wait without stopping anything.";
+export const TERMINAL_WAIT_PROMPT_SNIPPET = "Wait for a background terminal instead of sleeping";
+export const TERMINAL_WAIT_PARAMETER_DESCRIPTIONS = {
+  ids: "Terminal ids; default all running background terminals.",
+  timeout: `Max wait in seconds; default ${DEFAULT_TERMINAL_WAIT_SECONDS}, clamped to 1-${MAX_TERMINAL_WAIT_SECONDS}.`,
+};
+
+export const TERMINAL_STOP_TOOL_DESCRIPTION =
+  "Stop a running background terminal and its process tree. Returns one status line; no completion message follows. Use it to restart a server or end work no longer needed.";
+export const TERMINAL_STOP_PROMPT_SNIPPET = "Stop a background terminal";
+export const TERMINAL_STOP_PARAMETER_DESCRIPTIONS = { id: "Terminal id." };
+
+export const TERMINAL_STOP_TEXT = {
+  stopped: (snap: TerminalSnapshot) => `Stopped ${describeTerminal(snap)}.`,
+  stillTerminating: (id: string) =>
+    `Stop requested for ${id}; it is still terminating and will report when it exits.`,
+  alreadyExited: (snap: TerminalSnapshot) => `${snap.id} ${terminalHow(snap)}; nothing to stop.`,
 };
 
 export const TERMINAL_ERRORS = {
@@ -88,7 +124,7 @@ export const TERMINAL_ERRORS = {
   invalidDirectory: (cwd: string) => `working_dir is not a directory: ${cwd}`,
   shuttingDown: "Background terminal manager is shutting down.",
   shutDownDuringStart: "Background terminal manager shut down while starting.",
-  concurrency: `Max ${MAX_RUNNING} background terminals can run concurrently. Stop one from /ps before starting another.`,
+  concurrency: `Max ${MAX_RUNNING} background terminals can run concurrently. Stop one with terminal_stop before starting another.`,
   spillFlush: "Full-log spill flush timed out; full output may be incomplete",
   spillFailed: (error: string) => `Full-log spill failed: ${error}`,
   spillCapped: (stream: string) =>
@@ -107,7 +143,14 @@ export const TERMINAL_ERRORS = {
   unavailableArchive: (ref: string) => `Archive ${ref} is unavailable.`,
   unreadableArchive: (ref: string) => `Archive ${ref} could not be read.`,
   invalidRef: (ref: string) =>
-    `Invalid terminal log ref "${ref}"; use the exact runtime-scoped ref emitted by Bash.`,
+    `Invalid terminal log ref "${ref}"; pass a terminal id (bt-<id>-<n>), optionally with :stdout or :stderr.`,
+  tailConflict: "tail cannot be combined with offset or pattern.",
+  invalidPattern: (message: string) => `Invalid pattern: ${message}`,
+  waitNothing:
+    "No background terminal is running and no result is pending; there is nothing to wait for.",
+  waitAborted:
+    "Wait interrupted; background terminals keep running and will report when they exit.",
+  stopInterrupted: "Stop interrupted; termination continues in the background.",
   readCalls: `terminal_log_read budget exhausted for this agent run (maximum ${TERMINAL_LOG_READ_RUN_CALLS} reads). Work with the output you already have; the user can inspect the full log with /ps.`,
   readBytes: `terminal_log_read budget exhausted for this agent run (maximum ${TERMINAL_LOG_READ_RUN_BUDGET} bytes). Work with the output you already have; the user can inspect the full log with /ps.`,
   interrupted: "Operation was aborted.",
@@ -120,12 +163,24 @@ export function foregroundFallbackWarning(reason: string) {
 }
 
 export function formatTerminalLogRead(result: TerminalLogReadResult) {
-  const range = result.bytesRead === 0 ? "empty" : `${result.offset}-${result.nextOffset - 1}`;
-  return [
-    `${result.id}:${result.stream} bytes ${range} of ${result.size}; ` +
-      `settled: ${result.settled ? "yes" : "no"}; complete: ${result.complete ? "yes" : "no"}; next_offset: ${result.nextOffset}`,
-    result.text || "(empty)",
-  ].join("\n");
+  const tail = `settled: ${result.settled ? "yes" : "no"}; complete: ${result.complete ? "yes" : "no"}; next_offset: ${result.nextOffset}`;
+  let header: string;
+  if (result.mode === "search") {
+    const shown = result.matches?.length ?? 0;
+    const total = result.matchCount ?? 0;
+    header =
+      `${result.id}:${result.stream} ${total} matches for /${result.pattern ?? ""}/` +
+      (shown < total ? ` (showing first ${shown})` : "") +
+      `; ${tail}`;
+  } else if (result.mode === "head_tail") {
+    header =
+      `${result.id}:${result.stream} head+tail of ${result.size} ` +
+      `(bytes ${result.omittedStart ?? 0}-${(result.omittedEnd ?? 0) - 1} omitted); ${tail}`;
+  } else {
+    const range = result.bytesRead === 0 ? "empty" : `${result.offset}-${result.nextOffset - 1}`;
+    header = `${result.id}:${result.stream} bytes ${range} of ${result.size}; ${tail}`;
+  }
+  return [header, result.text || "(empty)"].join("\n");
 }
 
 export function stateOnlyCommandError() {
@@ -141,8 +196,18 @@ export function duplicateCommandError(snap: TerminalSnapshot) {
     `This exact command is already running as background terminal ${snap.id} ` +
     `(started ${formatElapsed(snap)} ago, pid ${snap.pid ?? "?"}). It has not failed: yielded commands ` +
     "keep running and report back on exit. This second copy was not executed — re-running it would " +
-    "repeat its side effects. Wait for that result, or stop it from /ps. To run it again on purpose, " +
+    "repeat its side effects. Wait for it with terminal_wait, or terminal_stop it and run it again " +
+    "to restart. To run a second copy on purpose, " +
     "change the command text or use a different working_dir."
+  );
+}
+
+export function sleepWhileRunningError(snaps: readonly TerminalSnapshot[]) {
+  const ids = snaps.map((snap) => snap.id).join(", ");
+  return (
+    "Not executed: a plain sleep does not make background results arrive sooner. " +
+    `Call terminal_wait to block until ${ids} exits; it returns as soon as one does, ` +
+    "with its result. A plain sleep runs normally when no background terminal is running."
   );
 }
 
@@ -337,7 +402,7 @@ export function buildBashResult(snap: TerminalSnapshot) {
   // Running terminals carry it via describeTerminal() instead.
   let text =
     snap.status === "running"
-      ? `Command is still running as background terminal ${snap.id}. When it exits, its result is injected after your next tool call — keep working; do not poll or sleep. The user can inspect or stop it with /ps.\n${describeTerminal(snap)}`
+      ? `Command is still running as background terminal ${snap.id}. Its result arrives automatically after a later tool call — keep working. If nothing else is left to do, call terminal_wait; never sleep or poll. Stop it with terminal_stop.\n${describeTerminal(snap)}`
       : snap.status === "timed_out"
         ? `Command timed out after ${formatElapsed(snap)} in ${snap.cwd}.`
         : `Command finished in ${formatElapsed(snap)} (${formatExit(snap)}) in ${snap.cwd}.`;
@@ -352,6 +417,15 @@ export function buildBashResult(snap: TerminalSnapshot) {
   );
 }
 
+/** The "how it ended" wording shared by completion and wait/stop results. */
+function terminalHow(snap: TerminalSnapshot) {
+  return snap.status === "killed"
+    ? "was killed"
+    : snap.status === "timed_out"
+      ? "timed out"
+      : `exited (${formatExit(snap)})`;
+}
+
 /** Async completion follow-up injected only after bash yielded. A finite
  * `budgetBytes` (batched completions share one message) shrinks the output
  * windows inside outputSection so the summary and archive refs survive —
@@ -360,12 +434,7 @@ export function buildTerminalResultMessage(
   snap: TerminalSnapshot,
   budgetBytes = Number.POSITIVE_INFINITY,
 ) {
-  const how =
-    snap.status === "killed"
-      ? "was killed"
-      : snap.status === "timed_out"
-        ? "timed out"
-        : `exited (${formatExit(snap)})`;
+  const how = terminalHow(snap);
   let text = `Background terminal ${snap.id} "${snap.title}" ${how} after ${formatElapsed(snap)}.`;
   if (snap.errorText) text += `\nError: ${snap.errorText}`;
   // Failures need the initial diagnostic budget: the useful error often sits
@@ -442,4 +511,36 @@ export function buildTerminalResultBatchMessage(snaps: readonly TerminalSnapshot
   );
   const boundedMessages = snaps.map((snap) => buildTerminalResultMessage(snap, perMessageBytes));
   return [header, ...boundedMessages].join(separator);
+}
+
+/** Model-facing text for `terminal_wait`: settled results first (full
+ * completion shape), then previously reported exits, then what still runs. */
+export function buildTerminalWaitResult(input: {
+  readonly settled: readonly TerminalSnapshot[];
+  readonly alreadyReported: readonly TerminalSnapshot[];
+  readonly running: readonly TerminalSnapshot[];
+  readonly timeoutSeconds: number;
+}) {
+  const sections: string[] = [];
+  if (input.settled.length > 0) {
+    sections.push(buildTerminalResultBatchMessage(input.settled));
+  }
+  if (input.alreadyReported.length > 0) {
+    sections.push(
+      input.alreadyReported
+        .map((snap) => `${snap.id} ${terminalHow(snap)}; its result was delivered earlier.`)
+        .join("\n"),
+    );
+  }
+  if (input.running.length > 0) {
+    const lines: string[] = [];
+    if (sections.length === 0) {
+      lines.push(`No background terminal exited within ${input.timeoutSeconds}s.`);
+    }
+    for (const snap of input.running) {
+      lines.push(`Still running: ${describeTerminal(snap)}`);
+    }
+    sections.push(lines.join("\n"));
+  }
+  return sections.join("\n\n");
 }

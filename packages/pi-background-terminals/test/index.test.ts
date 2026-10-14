@@ -167,8 +167,11 @@ test("cancellation during manager initialization prevents spawn and fallback", a
 test("extension overrides bash, adds log reading, and keeps the user /ps command", async () => {
   const app = harness(backgroundTerminals);
   try {
-    assert.deepEqual([...app.tools.keys()], ["bash", "terminal_log_read"]);
-    assert.equal(app.tools.get("terminal_log_read").promptSnippet, "Read a terminal archive page");
+    assert.deepEqual(
+      [...app.tools.keys()],
+      ["bash", "terminal_log_read", "terminal_wait", "terminal_stop"],
+    );
+    assert.equal(app.tools.get("terminal_log_read").promptSnippet, "Read or search a terminal log");
     assert.ok(app.tools.get("terminal_log_read").outputSchema);
     assert.equal(app.tools.get("terminal_log_read").promptGuidelines, undefined);
     assert.deepEqual([...app.commands.keys()], ["ps"]);
@@ -181,8 +184,10 @@ test("background tool metadata stays concise", async () => {
   const app = harness(backgroundTerminals);
   try {
     const budgets = new Map([
-      ["bash", 1_050],
-      ["terminal_log_read", 520],
+      ["bash", 1_200],
+      ["terminal_log_read", 950],
+      ["terminal_wait", 650],
+      ["terminal_stop", 400],
     ]);
 
     for (const [name, tool] of app.tools) {
@@ -899,7 +904,7 @@ test("yielded command returns an id then sends exactly one completion", async ()
     );
 
     assert.match(result.content[0].text, /background terminal bt-[a-f0-9]{16}-\d+/);
-    assert.match(result.content[0].text, /do not poll/);
+    assert.match(result.content[0].text, /never sleep or poll/);
     assert.equal(
       result.details?.id,
       /background terminal (bt-[a-f0-9]{16}-\d+)/.exec(result.content[0].text)?.[1],
@@ -1164,6 +1169,343 @@ test("a result still in its quiet window is delivered before the run settles", a
     // The quiet-window timer was cancelled: no duplicate later.
     await new Promise((resolve) => setTimeout(resolve, 1_500));
     assert.equal(app.messages.length, 1);
+  } finally {
+    await app.shutdown();
+  }
+});
+
+test("terminal_log_read accepts a bare id and defaults to head+tail on large logs", async () => {
+  const app = harness();
+  try {
+    const result = await app.tools.get("bash").execute(
+      "call-bare-ref-source",
+      {
+        command: command('process.stdout.write("0123456789".repeat(2_000))'),
+        yield_time_ms: 30_000,
+      },
+      undefined,
+      undefined,
+      app.ctx,
+    );
+    const id = result.details?.id as string;
+    assert.match(id, /^bt-[a-f0-9]{16}-\d+$/);
+
+    // A bare id resolves to stdout — no :stream suffix needed.
+    const small = await app.tools
+      .get("terminal_log_read")
+      .execute("call-bare-small", { ref: id }, undefined, undefined, app.ctx);
+    assert.equal(small.structuredContent.stream, "stdout");
+    assert.equal(small.structuredContent.mode, "head_tail");
+    assert.match(small.content[0].text, /head\+tail of 20000/);
+    assert.match(small.content[0].text, /bytes \d+-\d+ omitted/);
+
+    const paged = await app.tools
+      .get("terminal_log_read")
+      .execute("call-bare-paged", { ref: id, offset: 0, limit: 64 }, undefined, undefined, app.ctx);
+    assert.equal(paged.structuredContent.mode, "page");
+    assert.match(paged.content[0].text, /bytes 0-63/);
+  } finally {
+    await app.shutdown();
+  }
+});
+
+test("terminal_log_read tail conflicts with offset and pattern searches the whole log", async () => {
+  const app = harness();
+  try {
+    const result = await app.tools.get("bash").execute(
+      "call-search-source",
+      {
+        command: command(
+          'for (let i = 0; i < 500; i++) console.log(i === 250 ? "NEEDLE-here" : "line-" + i)',
+        ),
+        yield_time_ms: 30_000,
+      },
+      undefined,
+      undefined,
+      app.ctx,
+    );
+    const id = result.details?.id as string;
+    const read = app.tools.get("terminal_log_read");
+
+    await assert.rejects(
+      read.execute(
+        "call-tail-conflict",
+        { ref: id, tail: true, offset: 0 },
+        undefined,
+        undefined,
+        app.ctx,
+      ),
+      /tail cannot be combined with offset or pattern/,
+    );
+
+    const tailed = await read.execute(
+      "call-tail",
+      { ref: id, tail: true, limit: 64 },
+      undefined,
+      undefined,
+      app.ctx,
+    );
+    assert.equal(tailed.structuredContent.mode, "tail");
+    assert.match(tailed.content[0].text, /line-499/);
+
+    const searched = await read.execute(
+      "call-search",
+      { ref: id, pattern: "needle" },
+      undefined,
+      undefined,
+      app.ctx,
+    );
+    assert.equal(searched.structuredContent.mode, "search");
+    assert.equal(searched.structuredContent.matchCount, 1);
+    assert.match(searched.content[0].text, /@\d+: NEEDLE-here/);
+
+    await assert.rejects(
+      read.execute(
+        "call-bad-pattern",
+        { ref: id, pattern: "([open" },
+        undefined,
+        undefined,
+        app.ctx,
+      ),
+      /Invalid pattern/,
+    );
+  } finally {
+    await app.shutdown();
+  }
+});
+
+test("terminal_wait returns a settled result once and delivers no follow-up", async () => {
+  const app = harness();
+  try {
+    const result = await app.tools.get("bash").execute(
+      "call-wait-source",
+      {
+        command: command('setTimeout(() => console.log("done"), 600)'),
+        yield_time_ms: 250,
+      },
+      undefined,
+      undefined,
+      app.ctx,
+    );
+    assert.equal(result.details?.yielded, true);
+
+    const waited = await app.tools
+      .get("terminal_wait")
+      .execute("call-wait", {}, undefined, undefined, app.ctx);
+    assert.match(waited.content[0].text, /exited \(exit 0\)/);
+    assert.match(waited.content[0].text, /done/);
+    assert.equal(waited.details?.settled?.[0]?.id, result.details?.id);
+
+    await new Promise((resolve) => setTimeout(resolve, 1_600));
+    assert.equal(app.messages.length, 0, "consumed settlement is not also delivered");
+  } finally {
+    await app.shutdown();
+  }
+});
+
+test("terminal_wait times out with still-running lines; the exit is delivered later", async () => {
+  const app = harness();
+  try {
+    await app.tools.get("bash").execute(
+      "call-wait-timeout-source",
+      {
+        command: command('setTimeout(() => console.log("late-done"), 1_500)'),
+        yield_time_ms: 250,
+      },
+      undefined,
+      undefined,
+      app.ctx,
+    );
+
+    const waited = await app.tools
+      .get("terminal_wait")
+      .execute("call-wait-timeout", { timeout: 1 }, undefined, undefined, app.ctx);
+    assert.match(waited.content[0].text, /No background terminal exited within 1s/);
+    assert.match(waited.content[0].text, /Still running: bt-/);
+    assert.equal(waited.details?.settled?.length, 0);
+    assert.equal(waited.details?.running?.length, 1);
+
+    // The wait consumed nothing: the exit arrives as a normal follow-up.
+    assert.equal(
+      await pollUntil(() => app.messages.length === 1, 8_000),
+      true,
+      "unsettled terminal reported on exit",
+    );
+    assert.match(app.messages[0].message.content, /exited \(exit 0\)/);
+    assert.deepEqual(app.messages[0].options, { deliverAs: "steer", triggerTurn: true });
+  } finally {
+    await app.shutdown();
+  }
+});
+
+test("terminal_wait returns a queued result whose delivery failed", async () => {
+  const app = harness();
+  app.ctx.mode = "tui";
+  (app.pi as any).sendMessage = () => {
+    throw new Error("delivery unavailable");
+  };
+  try {
+    await app.tools.get("bash").execute(
+      "call-wait-pending-source",
+      {
+        command: command('setTimeout(() => console.log("pending-done"), 400)'),
+        yield_time_ms: 250,
+      },
+      undefined,
+      undefined,
+      app.ctx,
+    );
+    // Let the terminal settle and the delivery attempt fail, leaving the
+    // result queued in the delivery map.
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+
+    const waited = await app.tools
+      .get("terminal_wait")
+      .execute("call-wait-pending", {}, undefined, undefined, app.ctx);
+    assert.match(waited.content[0].text, /exited \(exit 0\)/);
+    assert.match(waited.content[0].text, /pending-done/);
+  } finally {
+    await app.shutdown();
+  }
+});
+
+test("terminal_wait with nothing running and nothing pending errors", async () => {
+  const app = harness();
+  try {
+    await assert.rejects(
+      app.tools.get("terminal_wait").execute("call-wait-none", {}, undefined, undefined, app.ctx),
+      /nothing to wait for/,
+    );
+    // An empty ids list behaves like omission.
+    await assert.rejects(
+      app.tools
+        .get("terminal_wait")
+        .execute("call-wait-empty-ids", { ids: [] }, undefined, undefined, app.ctx),
+      /nothing to wait for/,
+    );
+  } finally {
+    await app.shutdown();
+  }
+});
+
+test("terminal_stop kills a running terminal with no completion message", async () => {
+  const app = harness();
+  try {
+    const result = await app.tools.get("bash").execute(
+      "call-stop-source",
+      {
+        command: command("setInterval(() => {}, 1000)"),
+        yield_time_ms: 250,
+      },
+      undefined,
+      undefined,
+      app.ctx,
+    );
+    const id = result.details?.id as string;
+    assert.equal(result.details?.yielded, true);
+
+    const stopped = await app.tools
+      .get("terminal_stop")
+      .execute("call-stop", { id }, undefined, undefined, app.ctx);
+    assert.match(stopped.content[0].text, new RegExp(`Stopped ${id}`));
+    assert.equal(stopped.details?.status, "killed");
+
+    await new Promise((resolve) => setTimeout(resolve, 1_600));
+    assert.equal(app.messages.length, 0, "a consumed stop sends no completion");
+
+    // Stopping an already-settled terminal reports the earlier exit.
+    const again = await app.tools
+      .get("terminal_stop")
+      .execute("call-stop-again", { id }, undefined, undefined, app.ctx);
+    assert.match(again.content[0].text, /was killed; nothing to stop/);
+
+    await assert.rejects(
+      app.tools
+        .get("terminal_stop")
+        .execute(
+          "call-stop-unknown",
+          { id: "bt-0000000000000000-9" },
+          undefined,
+          undefined,
+          app.ctx,
+        ),
+      /Unknown terminal id/,
+    );
+  } finally {
+    await app.shutdown();
+  }
+});
+
+test("a /ps stop is delivered with the next user turn instead of waking the model", async () => {
+  const { createTerminalRuntime } = await import("../src/runtime.ts");
+  const { TerminalManager } = await import("../src/manager.ts");
+  const runtime = createTerminalRuntime();
+  const app = harness(
+    createBackgroundTerminalsExtension({
+      resolveShellSettings: () => ({}),
+      createRuntime: () => runtime,
+    }),
+  );
+  try {
+    const manager = await runtime.runPromise(TerminalManager);
+    const result = await app.tools.get("bash").execute(
+      "call-ps-stop-source",
+      {
+        command: command("setInterval(() => {}, 1000)"),
+        yield_time_ms: 250,
+      },
+      undefined,
+      undefined,
+      app.ctx,
+    );
+    const id = result.details?.id as string;
+    assert.equal(result.details?.yielded, true);
+
+    manager.view.requestKill(id);
+    assert.equal(await pollUntil(() => app.messages.length === 1), true, "kill follow-up arrived");
+    assert.match(app.messages[0].message.content, /was killed/);
+    assert.deepEqual(app.messages[0].options, { deliverAs: "nextTurn" });
+  } finally {
+    await app.shutdown();
+  }
+});
+
+test("a plain sleep is refused while a background terminal runs, allowed otherwise", async () => {
+  const app = harness();
+  try {
+    await app.tools.get("bash").execute(
+      "call-sleep-guard-source",
+      {
+        command: command("setInterval(() => {}, 1000)"),
+        yield_time_ms: 250,
+      },
+      undefined,
+      undefined,
+      app.ctx,
+    );
+    await assert.rejects(
+      app.tools
+        .get("bash")
+        .execute("call-sleep-blocked", { command: "sleep 30" }, undefined, undefined, app.ctx),
+      /terminal_wait/,
+    );
+
+    // With nothing running, the same shape executes normally.
+    const free = harness();
+    try {
+      const slept = await free.tools
+        .get("bash")
+        .execute(
+          "call-sleep-free",
+          { command: "sleep 0.1", yield_time_ms: 30_000 },
+          undefined,
+          undefined,
+          free.ctx,
+        );
+      assert.equal(slept.details?.status, "done");
+    } finally {
+      await free.shutdown();
+    }
   } finally {
     await app.shutdown();
   }

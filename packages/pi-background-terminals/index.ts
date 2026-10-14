@@ -2,10 +2,16 @@
  * Background terminals — execute no-stdin shell commands that automatically
  * yield into the background when they outlive a bounded initial wait.
  *
- * One tool for the LLM:
+ * Tools for the LLM:
  * - bash: overrides Pi's built-in bash, returns final output when the command
  *   finishes promptly, otherwise returns a terminal id and notifies exactly
- *   once when it exits. Inspection and termination remain user-owned via /ps.
+ *   once when it exits.
+ * - terminal_log_read: bounded reads over a terminal's complete log.
+ * - terminal_wait: blocks until a background terminal exits and returns its
+ *   result instead of a later completion message — the sleep replacement.
+ * - terminal_stop: stops a running terminal's process tree with a one-line
+ *   result and no completion message.
+ * The user still owns inspection and termination via /ps.
  *
  * While ≥1 process runs, a one-line widget above the editor shows
  * "N background terminal(s) running • /ps to view". `/ps` opens a two-stage
@@ -35,10 +41,13 @@ import { Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { createCompletionBatchScheduler } from "./src/completion-batcher.ts";
 import { SpawnError, type TerminalSnapshot, type TerminalStatus } from "./src/domain.ts";
-import { findDuplicateRunning, isStateOnlyCommand } from "./src/command-shape.ts";
+import { findDuplicateRunning, isPlainSleep, isStateOnlyCommand } from "./src/command-shape.ts";
 import {
   DEFAULT_YIELD_TIME_MS,
   MAX_RUNTIME_TIMEOUT_SECONDS,
+  DEFAULT_TERMINAL_WAIT_SECONDS,
+  MAX_TERMINAL_WAIT_SECONDS,
+  DEFAULT_TERMINAL_LOG_READ_BYTES,
   MAX_TERMINAL_LOG_READ_BYTES,
   TERMINAL_LOG_READ_RUN_BUDGET,
   TERMINAL_LOG_READ_RUN_CALLS,
@@ -54,6 +63,7 @@ import {
   foregroundFallbackWarning,
   formatTerminalLogRead,
   duplicateCommandError,
+  sleepWhileRunningError,
   stateOnlyCommandError,
   BASH_PARAMETER_DESCRIPTIONS,
   BASH_PROMPT_SNIPPET,
@@ -61,12 +71,21 @@ import {
   buildBashProgress,
   buildBashResult,
   buildTerminalResultBatchMessage,
+  buildTerminalResultMessage,
+  buildTerminalWaitResult,
   deriveCommandTitle,
   describeTerminal,
   TERMINAL_LOG_READ_OUTPUT_FIELD_DESCRIPTIONS,
   TERMINAL_LOG_READ_PARAMETER_DESCRIPTIONS,
   TERMINAL_LOG_READ_PROMPT_SNIPPET,
   TERMINAL_LOG_READ_TOOL_DESCRIPTION,
+  TERMINAL_STOP_PARAMETER_DESCRIPTIONS,
+  TERMINAL_STOP_PROMPT_SNIPPET,
+  TERMINAL_STOP_TEXT,
+  TERMINAL_STOP_TOOL_DESCRIPTION,
+  TERMINAL_WAIT_PARAMETER_DESCRIPTIONS,
+  TERMINAL_WAIT_PROMPT_SNIPPET,
+  TERMINAL_WAIT_TOOL_DESCRIPTION,
 } from "./src/prompt.ts";
 import { createDeferredResultDelivery } from "./src/result-delivery.ts";
 import { createTerminalRuntime, runTool, type TerminalRuntime } from "./src/runtime.ts";
@@ -87,6 +106,10 @@ const TerminalLogReadOutputSchema = Type.Object({
   stream: Type.Union([Type.Literal("stdout"), Type.Literal("stderr")], {
     description: TERMINAL_LOG_READ_OUTPUT_FIELD_DESCRIPTIONS.stream,
   }),
+  mode: Type.Union(
+    [Type.Literal("page"), Type.Literal("head_tail"), Type.Literal("tail"), Type.Literal("search")],
+    { description: TERMINAL_LOG_READ_OUTPUT_FIELD_DESCRIPTIONS.mode },
+  ),
   offset: Type.Integer({ description: TERMINAL_LOG_READ_OUTPUT_FIELD_DESCRIPTIONS.offset }),
   nextOffset: Type.Integer({ description: TERMINAL_LOG_READ_OUTPUT_FIELD_DESCRIPTIONS.nextOffset }),
   bytesRead: Type.Integer({ description: TERMINAL_LOG_READ_OUTPUT_FIELD_DESCRIPTIONS.bytesRead }),
@@ -94,6 +117,27 @@ const TerminalLogReadOutputSchema = Type.Object({
   settled: Type.Boolean({ description: TERMINAL_LOG_READ_OUTPUT_FIELD_DESCRIPTIONS.settled }),
   complete: Type.Boolean({ description: TERMINAL_LOG_READ_OUTPUT_FIELD_DESCRIPTIONS.complete }),
   text: Type.String({ description: TERMINAL_LOG_READ_OUTPUT_FIELD_DESCRIPTIONS.text }),
+  omittedStart: Type.Optional(
+    Type.Integer({ description: TERMINAL_LOG_READ_OUTPUT_FIELD_DESCRIPTIONS.omittedStart }),
+  ),
+  omittedEnd: Type.Optional(
+    Type.Integer({ description: TERMINAL_LOG_READ_OUTPUT_FIELD_DESCRIPTIONS.omittedEnd }),
+  ),
+  matchCount: Type.Optional(
+    Type.Integer({ description: TERMINAL_LOG_READ_OUTPUT_FIELD_DESCRIPTIONS.matchCount }),
+  ),
+  matches: Type.Optional(
+    Type.Array(
+      Type.Object({
+        offset: Type.Integer(),
+        text: Type.String(),
+      }),
+      { description: TERMINAL_LOG_READ_OUTPUT_FIELD_DESCRIPTIONS.matches },
+    ),
+  ),
+  pattern: Type.Optional(
+    Type.String({ description: TERMINAL_LOG_READ_OUTPUT_FIELD_DESCRIPTIONS.pattern }),
+  ),
 });
 
 const TERMINAL_STATUSES: ReadonlySet<string> = new Set([
@@ -132,12 +176,18 @@ function bashDetails(value: unknown): BashResultDetails | undefined {
 }
 
 function parseTerminalLogRef(ref: string) {
-  const match = /^(bt-[a-f0-9]{16}-\d+):(stdout|stderr)$/.exec(ref);
+  const match = /^(bt-[a-f0-9]{16}-\d+)(?::(stdout|stderr))?$/.exec(ref);
   if (!match) return undefined;
   return {
     id: match[1],
-    stream: match[2] as "stdout" | "stderr",
+    stream: (match[2] ?? "stdout") as "stdout" | "stderr",
   };
+}
+
+/** Deep-enough copy of a settled snapshot: live output views keep mutating
+ * (late flushes) after settle. Same shape onSettled defers. */
+function copySettled(snap: TerminalSnapshot): TerminalSnapshot {
+  return { ...snap, stdout: { ...snap.stdout }, stderr: { ...snap.stderr } };
 }
 
 function quickOutputPreview(text: string, maxLines: number, full = false) {
@@ -313,7 +363,11 @@ export function createBackgroundTerminalsExtension(
           // result as soon as it lands instead of only after it writes a final
           // answer (followUp). triggerTurn wakes an idle model. Each terminal is
           // still delivered exactly once, nearby settlements sharing a message.
-          { deliverAs: "steer", triggerTurn: true },
+          // An all-killed batch is a /ps stop the user already saw; delivering
+          // it with the next user turn reports it without waking an idle model.
+          snaps.every((snap) => snap.status === "killed")
+            ? { deliverAs: "nextTurn" }
+            : { deliverAs: "steer", triggerTurn: true },
         );
         return true;
       } catch (error) {
@@ -346,11 +400,7 @@ export function createBackgroundTerminalsExtension(
       }
       // Defer a deep-enough copy: the live snapshot's output views keep
       // mutating (late flushes) after settle.
-      resultDelivery.defer({
-        ...snap,
-        stdout: { ...snap.stdout },
-        stderr: { ...snap.stderr },
-      });
+      resultDelivery.defer(copySettled(snap));
       scheduleResultFlush();
     };
 
@@ -600,6 +650,17 @@ export function createBackgroundTerminalsExtension(
         const duplicate = findDuplicateRunning(manager.view.list(), command, cwd);
         if (duplicate) throw new Error(duplicateCommandError(duplicate));
 
+        // A bare `sleep N` while a background terminal runs is the model
+        // re-inventing polling: results are pushed, so the sleep only wastes a
+        // turn. Point it at terminal_wait instead. With nothing running the
+        // sleep is legitimate work and runs normally.
+        if (isPlainSleep(command)) {
+          const blocking = manager.view
+            .list()
+            .filter((snap) => snap.status === "running" && snap.yielded === true);
+          if (blocking.length > 0) throw new Error(sleepWhileRunningError(blocking));
+        }
+
         const env = getPiShellEnv();
         for (const key of SESSION_ENV_KEYS) delete env[key];
         env.PI_SESSION_ID = ctx.sessionManager.getSessionId();
@@ -757,6 +818,16 @@ export function createBackgroundTerminalsExtension(
             description: TERMINAL_LOG_READ_PARAMETER_DESCRIPTIONS.limit,
           }),
         ),
+        tail: Type.Optional(
+          Type.Boolean({
+            description: TERMINAL_LOG_READ_PARAMETER_DESCRIPTIONS.tail,
+          }),
+        ),
+        pattern: Type.Optional(
+          Type.String({
+            description: TERMINAL_LOG_READ_PARAMETER_DESCRIPTIONS.pattern,
+          }),
+        ),
       }),
       outputSchema: TerminalLogReadOutputSchema,
       executionMode: "sequential",
@@ -764,10 +835,17 @@ export function createBackgroundTerminalsExtension(
       // human viewer. Rendering a 64 KiB page into the transcript would bury it.
       renderCall(args, theme, context) {
         const ref = typeof args?.ref === "string" ? args.ref : "...";
-        const offset = typeof args?.offset === "number" ? args.offset : 0;
+        const suffix =
+          typeof args?.pattern === "string"
+            ? ` /${args.pattern}/`
+            : args?.tail === true
+              ? " tail"
+              : typeof args?.offset === "number"
+                ? ` @${args.offset}`
+                : "";
         const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
         text.setText(
-          `${theme.fg("toolTitle", theme.bold("terminal_log_read"))} ${theme.fg("accent", ref)}${theme.fg("dim", ` @${offset}`)}`,
+          `${theme.fg("toolTitle", theme.bold("terminal_log_read"))} ${theme.fg("accent", ref)}${theme.fg("dim", suffix)}`,
         );
         return text;
       },
@@ -788,18 +866,38 @@ export function createBackgroundTerminalsExtension(
           );
           return text;
         }
+        const summary =
+          details.mode === "search"
+            ? `${details.matchCount ?? 0} matches`
+            : details.mode === "head_tail"
+              ? `head+tail of ${formatSize(details.size)}`
+              : `bytes ${details.offset}-${Math.max(details.offset, details.nextOffset - 1)} of ${formatSize(details.size)}`;
         text.setText(
-          `${theme.fg("success", "■")} ${theme.fg("accent", `${details.id}:${details.stream}`)} ${theme.fg(
-            "muted",
-            `bytes ${details.offset}-${Math.max(details.offset, details.nextOffset - 1)} of ${formatSize(details.size)}`,
-          )}`,
+          `${theme.fg("success", "■")} ${theme.fg("accent", `${details.id}:${details.stream}`)} ${theme.fg("muted", summary)}`,
         );
         return text;
       },
-      async execute(_toolCallId, params) {
+      async execute(_toolCallId, params, signal) {
         const parsed = parseTerminalLogRef(params.ref);
         if (!parsed) {
           throw new Error(TERMINAL_ERRORS.invalidRef(params.ref));
+        }
+        const hasTail = params.tail === true;
+        const hasPattern = params.pattern !== undefined;
+        if (hasTail && (params.offset !== undefined || hasPattern)) {
+          throw new Error(TERMINAL_ERRORS.tailConflict);
+        }
+        let pattern: RegExp | undefined;
+        if (hasPattern) {
+          try {
+            pattern = new RegExp(params.pattern ?? "", "i");
+          } catch (error) {
+            throw new Error(
+              TERMINAL_ERRORS.invalidPattern(
+                error instanceof Error ? error.message : String(error),
+              ),
+            );
+          }
         }
         // Two budgets, because either one alone is escapable: bytes bound a
         // firehose of full pages, calls bound a tiny-limit polling loop.
@@ -815,18 +913,18 @@ export function createBackgroundTerminalsExtension(
         const limit = Math.min(
           MAX_TERMINAL_LOG_READ_BYTES,
           remainingBytes,
-          Math.max(1, Math.floor(params.limit ?? MAX_TERMINAL_LOG_READ_BYTES)),
+          Math.max(1, Math.floor(params.limit ?? DEFAULT_TERMINAL_LOG_READ_BYTES)),
         );
         terminalLogReadCalls++;
         const { runtime: toolRuntime, manager } = await getManager();
-        const result = await runTool(
-          toolRuntime,
-          manager.readLog({
-            ...parsed,
-            offset: params.offset ?? 0,
-            limit,
-          }),
-        );
+        const request = pattern
+          ? { ...parsed, mode: "search" as const, pattern, offset: params.offset ?? 0, limit }
+          : hasTail
+            ? { ...parsed, mode: "tail" as const, limit }
+            : params.offset !== undefined
+              ? { ...parsed, mode: "page" as const, offset: params.offset, limit }
+              : { ...parsed, mode: "auto" as const, limit };
+        const result = await runTool(toolRuntime, manager.readLog(request), { signal });
         terminalLogReadBytes += result.bytesRead;
         return {
           content: [{ type: "text", text: formatTerminalLogRead(result) }],
@@ -837,6 +935,7 @@ export function createBackgroundTerminalsExtension(
           structuredContent: {
             id: result.id,
             stream: result.stream,
+            mode: result.mode,
             offset: result.offset,
             nextOffset: result.nextOffset,
             bytesRead: result.bytesRead,
@@ -844,8 +943,282 @@ export function createBackgroundTerminalsExtension(
             settled: result.settled,
             complete: result.complete,
             text: result.text,
+            // Mode-specific fields are absent rather than undefined so the
+            // structured payload stays strict JSON.
+            ...(result.omittedStart !== undefined
+              ? { omittedStart: result.omittedStart, omittedEnd: result.omittedEnd }
+              : {}),
+            ...(result.matchCount !== undefined
+              ? {
+                  matchCount: result.matchCount,
+                  matches: result.matches ? [...result.matches] : [],
+                  pattern: result.pattern,
+                }
+              : {}),
           },
         };
+      },
+    });
+
+    pi.registerTool({
+      name: "terminal_wait",
+      label: "terminal_wait",
+      description: TERMINAL_WAIT_TOOL_DESCRIPTION,
+      promptSnippet: TERMINAL_WAIT_PROMPT_SNIPPET,
+      parameters: Type.Object({
+        ids: Type.Optional(
+          Type.Array(Type.String(), {
+            description: TERMINAL_WAIT_PARAMETER_DESCRIPTIONS.ids,
+          }),
+        ),
+        timeout: Type.Optional(
+          Type.Integer({
+            description: TERMINAL_WAIT_PARAMETER_DESCRIPTIONS.timeout,
+          }),
+        ),
+      }),
+      renderCall(args, theme, context) {
+        const ids = Array.isArray(args?.ids)
+          ? (args.ids as unknown[]).filter((id) => typeof id === "string")
+          : [];
+        const label = ids.length > 0 ? ids.join(" ") : "all";
+        const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+        text.setText(
+          `${theme.fg("toolTitle", theme.bold("terminal_wait"))} ${theme.fg("accent", label)}`,
+        );
+        return text;
+      },
+      renderResult(result, _options, theme, context) {
+        const details = result.details as
+          | {
+              settled?: Array<{ id: string; status: string; exitCode?: number; signal?: string }>;
+              running?: string[];
+              alreadyReported?: string[];
+            }
+          | undefined;
+        const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+        if (!details) {
+          const message = result.content
+            .filter((part) => part.type === "text")
+            .map((part) => part.text)
+            .join("\n")
+            .split("\n")[0]
+            ?.trim();
+          text.setText(`${theme.fg("error", "x")} ${theme.fg("error", message || "wait failed")}`);
+          return text;
+        }
+        const settled = details.settled ?? [];
+        const running = details.running ?? [];
+        let summary: string;
+        if (settled.length > 0) {
+          const first = settled[0];
+          const word =
+            first.status === "timed_out"
+              ? "timed out"
+              : first.status === "killed"
+                ? "killed"
+                : (first.signal ?? `exit ${first.exitCode ?? "?"}`);
+          summary = `${first.id} ${word}${settled.length > 1 ? ` +${settled.length - 1} more` : ""}`;
+        } else if (running.length > 0) {
+          summary = `${running.length} still running`;
+        } else {
+          summary = "nothing pending";
+        }
+        const icon =
+          context.isError || settled.some((s) => s.status === "failed" || s.status === "timed_out")
+            ? theme.fg("error", "x")
+            : theme.fg("success", "■");
+        text.setText(
+          `${icon} ${theme.fg("toolTitle", theme.bold("terminal_wait"))} ${theme.fg("muted", "·")} ${theme.fg("accent", summary)}`,
+        );
+        return text;
+      },
+      async execute(_toolCallId, params, signal) {
+        const { runtime: toolRuntime, manager } = await getManager();
+        const timeoutSeconds = Math.max(
+          1,
+          Math.min(
+            MAX_TERMINAL_WAIT_SECONDS,
+            Number.isFinite(params.timeout)
+              ? Math.floor(params.timeout as number)
+              : DEFAULT_TERMINAL_WAIT_SECONDS,
+          ),
+        );
+
+        const clearSchedulerIfDrained = () => {
+          if (resultDelivery.size() === 0) resultBatchScheduler.clear();
+        };
+        const respond = (
+          settled: TerminalSnapshot[],
+          alreadyReported: TerminalSnapshot[],
+          running: TerminalSnapshot[],
+        ) => ({
+          content: [
+            {
+              type: "text" as const,
+              text: buildTerminalWaitResult({ settled, alreadyReported, running, timeoutSeconds }),
+            },
+          ],
+          details: {
+            settled: settled.map((snap) => ({
+              id: snap.id,
+              status: snap.status,
+              exitCode: snap.exitCode,
+              signal: snap.signal,
+            })),
+            running: running.map((snap) => snap.id),
+            alreadyReported: alreadyReported.map((snap) => snap.id),
+          },
+          isError:
+            settled.some((snap) => snap.status === "failed" || snap.status === "timed_out") ||
+            undefined,
+        });
+
+        const dedupedIds =
+          params.ids === undefined
+            ? undefined
+            : [...new Set(params.ids.filter((id): id is string => typeof id === "string"))];
+        // An empty list after filtering means "all running", like omission.
+        const explicitIds =
+          dedupedIds !== undefined && dedupedIds.length > 0 ? dedupedIds : undefined;
+
+        if (explicitIds === undefined) {
+          // Results already queued for delivery are returned by the wait
+          // itself rather than also arriving as a follow-up message.
+          const pending = resultDelivery.drain();
+          clearSchedulerIfDrained();
+          if (pending.length > 0) return respond(pending, [], []);
+          const targets = manager.view
+            .list()
+            .filter((snap) => snap.status === "running" && snap.yielded === true);
+          if (targets.length === 0) throw new Error(TERMINAL_ERRORS.waitNothing);
+          return await runWait(
+            targets.map((snap) => snap.id),
+            [],
+          );
+        }
+
+        const pendingTaken = resultDelivery.take(explicitIds);
+        const unknown = explicitIds.find(
+          (id) =>
+            manager.view.get(id) === undefined && pendingTaken.every((snap) => snap.id !== id),
+        );
+        if (unknown !== undefined) {
+          for (const snap of pendingTaken) resultDelivery.defer(snap);
+          throw new Error(
+            TERMINAL_ERRORS.unknownTerminal(
+              unknown,
+              manager.view.list().map((snap) => snap.id),
+            ),
+          );
+        }
+        clearSchedulerIfDrained();
+        const seen = manager.view.list();
+        const targets = explicitIds
+          .map((id) => seen.find((snap) => snap.id === id))
+          .filter((snap): snap is TerminalSnapshot => snap !== undefined);
+        const running = targets.filter((snap) => snap.status === "running");
+        const alreadyReported = targets.filter((snap) => snap.status !== "running");
+        if (pendingTaken.length > 0) {
+          return respond(pendingTaken, alreadyReported, running);
+        }
+        if (running.length === 0) {
+          return respond([], alreadyReported, []);
+        }
+        return await runWait(
+          running.map((snap) => snap.id),
+          alreadyReported,
+        );
+
+        async function runWait(runningIds: string[], reported: TerminalSnapshot[]) {
+          const snapshots = await runTool(
+            toolRuntime,
+            manager.waitForAny(runningIds, timeoutSeconds * 1000),
+            { signal, interruptMessage: TERMINAL_ERRORS.waitAborted },
+          );
+          const settled = snapshots.filter((snap) => snap.status !== "running");
+          // Race guard: a consumed settle must never also sit in the
+          // delivery queue.
+          resultDelivery.take(settled.map((snap) => snap.id));
+          clearSchedulerIfDrained();
+          const stillRunning = snapshots.filter((snap) => snap.status === "running");
+          return respond(settled.map(copySettled), reported, stillRunning);
+        }
+      },
+    });
+
+    pi.registerTool({
+      name: "terminal_stop",
+      label: "terminal_stop",
+      description: TERMINAL_STOP_TOOL_DESCRIPTION,
+      promptSnippet: TERMINAL_STOP_PROMPT_SNIPPET,
+      parameters: Type.Object({
+        id: Type.String({
+          description: TERMINAL_STOP_PARAMETER_DESCRIPTIONS.id,
+        }),
+      }),
+      renderCall(args, theme, context) {
+        const id = typeof args?.id === "string" ? args.id : "...";
+        const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+        text.setText(
+          `${theme.fg("toolTitle", theme.bold("terminal_stop"))} ${theme.fg("accent", id)}`,
+        );
+        return text;
+      },
+      renderResult(result, _options, theme, context) {
+        const details = result.details as { id?: string; status?: string } | undefined;
+        const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
+        if (!details) {
+          const message = result.content
+            .filter((part) => part.type === "text")
+            .map((part) => part.text)
+            .join("\n")
+            .split("\n")[0]
+            ?.trim();
+          text.setText(`${theme.fg("error", "x")} ${theme.fg("error", message || "stop failed")}`);
+          return text;
+        }
+        text.setText(
+          `${theme.fg("muted", "■")} ${theme.fg("toolTitle", theme.bold("terminal_stop"))} ${theme.fg("muted", "·")} ${theme.fg("accent", `${details.id ?? "?"} ${details.status ?? ""}`)}`,
+        );
+        return text;
+      },
+      async execute(_toolCallId, params, signal) {
+        const { runtime: toolRuntime, manager } = await getManager();
+        const existing = manager.view.get(params.id);
+        if (!existing) {
+          throw new Error(
+            TERMINAL_ERRORS.unknownTerminal(
+              params.id,
+              manager.view.list().map((snap) => snap.id),
+            ),
+          );
+        }
+        const done = (snap: TerminalSnapshot, text: string) => ({
+          content: [{ type: "text" as const, text }],
+          details: { id: snap.id, status: snap.status },
+        });
+        if (existing.status !== "running") {
+          // A result still queued for delivery is returned here; nothing may
+          // report it twice.
+          const pending = resultDelivery.take([params.id]);
+          if (resultDelivery.size() === 0) resultBatchScheduler.clear();
+          if (pending.length > 0) {
+            return done(pending[0], buildTerminalResultMessage(pending[0]));
+          }
+          return done(existing, TERMINAL_STOP_TEXT.alreadyExited(existing));
+        }
+        const snap = await runTool(toolRuntime, manager.stop(params.id), {
+          signal,
+          interruptMessage: TERMINAL_ERRORS.stopInterrupted,
+        });
+        // Same race guard as terminal_wait: the consumed settle owns the result.
+        resultDelivery.take([params.id]);
+        if (resultDelivery.size() === 0) resultBatchScheduler.clear();
+        if (snap.status === "running") {
+          return done(snap, TERMINAL_STOP_TEXT.stillTerminating(snap.id));
+        }
+        return done(snap, TERMINAL_STOP_TEXT.stopped(snap));
       },
     });
 

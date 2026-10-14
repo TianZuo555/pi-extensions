@@ -37,6 +37,18 @@ export function isStateOnlyCommand(command: string) {
  * directory. Same command in another directory, or one that already settled,
  * is a legitimate new run.
  */
+const PLAIN_SLEEP =
+  /^\s*sleep\s+\d+(?:\.\d+)?[smhd]?\s*(?:(?:;|&&)\s*(?:echo(?:\s+[^;&|<>`$()\n]*)?)?\s*)?$/;
+
+/**
+ * A lone `sleep N` (optionally followed by an echo). While a background
+ * terminal runs, that call only wastes a turn: settlement notifications are
+ * pushed, not polled, so sleeping cannot make a result arrive sooner.
+ */
+export function isPlainSleep(command: string) {
+  return PLAIN_SLEEP.test(command);
+}
+
 export function findDuplicateRunning(
   snapshots: ReadonlyArray<TerminalSnapshot>,
   command: string,
