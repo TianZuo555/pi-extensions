@@ -77,8 +77,8 @@
     "@earendil-works/pi-ai": "^1.2.0",
     "@earendil-works/pi-coding-agent": "^1.2.0",
     "@earendil-works/pi-tui": "^1.2.0",
-    "@types/node": "^26.6.4",
-    "lefthook": "^2.1.16",
+    "@types/node": "^26.6.5",
+    "lefthook": "^2.2.1",
     "typebox": "^1.3.36",
     "typescript": "^7.0.2"
   }
