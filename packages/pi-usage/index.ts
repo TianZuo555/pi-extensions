@@ -85,6 +85,10 @@ import {
 import { defaultSessionsDir, scanLocalUsage, type ScanResult } from "./src/local-scan.ts";
 
 const STATUS_KEY = "usage";
+const OPENAI_STATUS_HINT = "openai quota: /login → OpenAI Codex (legacy)";
+const OPENAI_LOGIN_HINT =
+  "To show Codex usage for OpenAI models, use /login → OpenAI Codex (legacy). " +
+  "The extension assumes both logins use the same account.";
 const AZURE_BLUE = "\x1b[38;2;0;127;255m";
 const RESET_FOREGROUND = "\x1b[39m";
 const REFRESH = "Refresh";
@@ -221,7 +225,9 @@ export default function usageExtension(pi: ExtensionAPI): void {
     const probe = probeModel(ctx);
     // Nothing to publish for a session that no longer exists.
     if (probe.stale) return;
-    const provider = PROVIDERS.find((candidate) => candidate.id === probe.provider);
+    const provider = PROVIDERS.find(
+      (candidate) => candidate.id === usageProviderId(probe.provider),
+    );
     if (!provider) {
       safeSetStatus(ctx, undefined);
       return;
@@ -230,12 +236,10 @@ export default function usageExtension(pi: ExtensionAPI): void {
     statusBusy = true;
     try {
       const state = await queryProvider(ctx, provider, force);
-      // Errors leave the footer empty; usage details stay in the /usage menu.
-      if (state.status === "ready") {
-        safeSetStatus(ctx, azureStatus(formatStatusline(state.report)));
-      } else {
-        safeSetStatus(ctx, undefined);
-      }
+      const current = probeModel(ctx);
+      // Do not publish an old provider's report after a model switch.
+      if (current.stale || usageProviderId(current.provider) !== provider.id) return;
+      safeSetStatus(ctx, footerStatus(state, current.provider));
     } finally {
       statusBusy = false;
     }
@@ -276,10 +280,12 @@ export default function usageExtension(pi: ExtensionAPI): void {
   };
 
   const showMenu = async (ctx: ExtensionCommandContext) => {
+    const emptyMessage =
+      activeProviderId(ctx) === "openai" ? OPENAI_LOGIN_HINT : NO_PROVIDER_LOGIN_MESSAGE;
     if (!ctx.hasUI) {
       const states = await collectStates(ctx, false);
       ctx.ui.notify(
-        states.length > 0 ? compactSummary(states) : NO_PROVIDER_LOGIN_MESSAGE,
+        states.length > 0 ? compactSummary(states) : emptyMessage,
         states.length > 0 ? "info" : "warning",
       );
       return;
@@ -292,7 +298,7 @@ export default function usageExtension(pi: ExtensionAPI): void {
       if (!states) return;
       if (states.length === 0) {
         publishActiveFrom(ctx, states);
-        ctx.ui.notify(NO_PROVIDER_LOGIN_MESSAGE, "warning");
+        ctx.ui.notify(emptyMessage, "warning");
         return;
       }
       publishActiveFrom(ctx, states);
@@ -313,7 +319,7 @@ export default function usageExtension(pi: ExtensionAPI): void {
             states = refreshed;
             if (states.length === 0) {
               publishActiveFrom(ctx, states);
-              ctx.ui.notify(NO_PROVIDER_LOGIN_MESSAGE, "warning");
+              ctx.ui.notify(emptyMessage, "warning");
               return;
             }
             publishActiveFrom(ctx, states);
@@ -396,17 +402,15 @@ export default function usageExtension(pi: ExtensionAPI): void {
   const publishActiveFrom = (ctx: ExtensionContext, states: ProviderState[]) => {
     const probe = probeModel(ctx);
     if (probe.stale) return;
-    const provider = PROVIDERS.find((candidate) => candidate.id === probe.provider);
+    const provider = PROVIDERS.find(
+      (candidate) => candidate.id === usageProviderId(probe.provider),
+    );
     if (!provider) {
       safeSetStatus(ctx, undefined);
       return;
     }
     const state = states.find((candidate) => candidate.id === provider.id);
-    if (state?.status === "ready") {
-      safeSetStatus(ctx, azureStatus(formatStatusline(state.report)));
-    } else {
-      safeSetStatus(ctx, undefined);
-    }
+    safeSetStatus(ctx, footerStatus(state, probe.provider));
   };
 
   pi.registerCommand("usage-mimo-sync", {
@@ -504,6 +508,21 @@ export default function usageExtension(pi: ExtensionAPI): void {
     })();
     await closing.catch(() => {});
   });
+}
+
+// OpenAI models reuse the legacy Codex account, endpoint, and cache. The two
+// logins are assumed to represent the same account; no identity check is made.
+function usageProviderId(modelProvider: string | undefined): string | undefined {
+  return modelProvider === "openai" ? CODEX_PROVIDER_ID : modelProvider;
+}
+
+function footerStatus(state: ProviderState | undefined, modelProvider: string | undefined) {
+  if (state?.status === "ready") return azureStatus(formatStatusline(state.report));
+  if (modelProvider === "openai" && (!state || state.status === "unconfigured")) {
+    return azureStatus(OPENAI_STATUS_HINT);
+  }
+  // Query failures remain available in /usage rather than in the footer.
+  return undefined;
 }
 
 function azureStatus(text: string | undefined): string | undefined {
