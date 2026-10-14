@@ -509,6 +509,32 @@ test("selectBridgedTools bridges only built-in MCP tools", () => {
   assert.deepEqual(bridged, ["mcp__github__search_issues", "read_mcp_resource"]);
 });
 
+test("Pi tool mode bridges active builtins, extensions and MCP while excluding hidden tools and replay", () => {
+  const tools = [
+    { name: "read", sourceInfo: { path: "builtin:read" } },
+    { name: "bash", sourceInfo: { path: "builtin:bash" } },
+    {
+      name: "ask_user",
+      sourceInfo: { source: "npm:@tian.zuo/pi-ask-user" },
+      exposure: "model-only",
+    },
+    { name: "codemode", sourceInfo: { path: "builtin:codemode" } },
+    { name: "mcp__docs__search", sourceInfo: { path: "builtin:mcp" } },
+    { name: "inactive" },
+    { name: "hidden", exposure: "hidden" },
+    { name: "antigravity" },
+  ];
+  const active = tools.filter((tool) => tool.name !== "inactive").map((tool) => tool.name);
+  assert.deepEqual(
+    selectBridgedTools(tools, active, "pi").map((tool) => tool.name),
+    ["read", "bash", "ask_user", "codemode", "mcp__docs__search"],
+  );
+  assert.deepEqual(
+    selectBridgedTools(tools, active, "native").map((tool) => tool.name),
+    ["mcp__docs__search"],
+  );
+});
+
 test("adapter migration warning detects package and local sources without matching tool names", () => {
   const cases = [
     { source: "npm:pi-mcp-adapter", expected: true },

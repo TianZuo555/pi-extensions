@@ -22,6 +22,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import type { ImageContent, JsonObject, TextContent } from "@earendil-works/pi-ai";
 import { WRAPPER_TOOL_NAME } from "./prompt.ts";
+import type { AgyToolMode } from "./tool-mode.ts";
 
 export const BRIDGE_SERVER_NAME = "pi-bridge";
 export const BRIDGE_TOOL_PREFIX = "pi__";
@@ -42,33 +43,31 @@ export interface PiToolInfo {
   description?: string;
   parameters?: unknown;
   sourceInfo?: { source?: string; path?: string };
+  exposure?: string;
 }
 
 /**
- * The only pi tools bridged into agy: the tools pi's built-in MCP extension
- * registers (`mcp__<server>__<tool>` plus the MCP resource tools), identified
- * by their `builtin:mcp` source path. Only direct-exposure tools are active,
- * so a server reaches agy by setting `"exposure": "direct"` in `mcp.json`;
- * codemode/deferred tools stay pi-side (the bridge's calls execute as model
- * tool calls, which pi resolves against the active tool set). Everything else
- * of pi's surface — builtins and extension tools alike (ask_user, web_search,
- * todo, …) — is pi-session machinery agy must not mutate mid-turn; agy has
- * native equivalents for files, shell, and web. Skills are bridged separately
- * as one dynamic `pi__activate_skill` tool.
+ * Native mode exposes active tools registered by Pi's built-in MCP extension
+ * (`builtin:mcp`), with skills bridged separately as `pi__activate_skill`.
+ * Pi tool mode instead exposes every active Pi builtin, extension and MCP
+ * tool. Calls execute as real model tool calls in Pi, so its active tool set,
+ * hooks and permissions apply. Inactive and hidden tools and the display-only
+ * replay wrapper are never exposed; codemode can reach its own callable tools.
  */
 const BUILTIN_MCP_PATH = "builtin:mcp";
 
-/** Select the pi tools eligible for bridging (built-in MCP tools only). */
+/** Native mode bridges built-in MCP tools; Pi mode bridges the active Pi tool set. */
 export function selectBridgedTools(
   tools: PiToolInfo[],
   activeNames: readonly string[],
+  mode: AgyToolMode = "native",
 ): BridgeToolDef[] {
   const active = new Set(activeNames);
   const bridged: BridgeToolDef[] = [];
   for (const tool of tools) {
-    if (!active.has(tool.name)) continue;
+    if (!active.has(tool.name) || tool.exposure === "hidden") continue;
     if (tool.name === WRAPPER_TOOL_NAME) continue; // display-only replay wrapper
-    if (tool.sourceInfo?.path !== BUILTIN_MCP_PATH) continue;
+    if (mode === "native" && tool.sourceInfo?.path !== BUILTIN_MCP_PATH) continue;
     bridged.push({
       name: tool.name,
       description: tool.description ?? "",

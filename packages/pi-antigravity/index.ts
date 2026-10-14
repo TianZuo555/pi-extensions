@@ -6,6 +6,7 @@
 //
 // Commands:
 //   /agy            show agy conversation and persistent-driver status
+//   /agy-tools      toggle Pi tools on/off or show the current mode
 //   /agy-reset      drop the current agy conversation (next turn starts fresh)
 //   /agy-models     re-discover models from `agy models` and re-register
 //   /agy-agents     list configured custom agents
@@ -34,6 +35,8 @@ import {
 } from "./lib/agy-children.ts";
 import { checkAgyBinary, MIN_AGY_VERSION, runAgyCommand } from "./lib/agy-diagnostics.ts";
 import { parseAgyAgents, readAgyProcessProfile } from "./lib/agy-profile.ts";
+import { createPiToolsAgent } from "./lib/pi-tools-agent.ts";
+import { readAgyToolMode, resolveAgyToolModeCommand, type AgyToolMode } from "./lib/tool-mode.ts";
 import { pruneBridgeMcpCache, removeMcpCacheEntry } from "./lib/mcp-cache.ts";
 import {
   AgyPiBridge,
@@ -260,6 +263,15 @@ async function discoverModels(refresh = false): Promise<ModelCache> {
 }
 
 export default function antigravityExtension(pi: ExtensionAPI): void {
+  pi.registerFlag("agy-tools", {
+    description: "Antigravity tool mode: native or pi (execute work through Pi tools)",
+    type: "string",
+  });
+  // Flags are not populated while the extension factory runs.
+  let toolMode: AgyToolMode | undefined;
+  const getToolMode = () => (toolMode ??= readAgyToolMode(pi.getFlag("agy-tools")));
+  let switchingToolMode = false;
+
   installAgyDeathHooks();
   const runtime = createAntigravityRuntime();
   const service = runtime.runSync(AntigravityRuntime);
@@ -328,6 +340,7 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
       conversationId: snapshot.conversationId,
       cwd,
       modelId: snapshot.model,
+      toolMode: getToolMode(),
       turns: snapshot.turns,
       usage: snapshot.conversationUsage,
       contextTokens: observedContextTokens,
@@ -367,6 +380,7 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
 
   const bridge = new AgyPiBridge(`${BRIDGE_SERVER_NAME}-${process.pid}`);
   const bridgeToken = randomUUID();
+  const piToolsAgent = createPiToolsAgent();
   bridge.requireToken(bridgeToken);
   // Session-unique tool prefix: agy's MCP config is global, so concurrent pi
   // sessions' bridges all appear in every agy turn's tools/list. Namespacing
@@ -408,17 +422,52 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
    * session — agy eagerly connects to MCP servers at startup (verified
    * 2026-08-21) — so this runs as soon as an Antigravity model is selected.
    */
+  function validateToolMode(mode: AgyToolMode): void {
+    if (mode === "pi") {
+      if (!BRIDGE_ENABLED) {
+        throw new Error("antigravity: Pi tool mode requires the Pi-tool bridge to be enabled.");
+      }
+      if (readAgyProcessProfile().agent) {
+        throw new Error(
+          "antigravity: Pi tool mode manages its own agent; unset PI_ANTIGRAVITY_AGENT.",
+        );
+      }
+    }
+  }
+
   async function ensureBridgeRegistered(ui?: ExtensionUIContext): Promise<void> {
-    // Commands catch adapters that have not registered any server tools yet;
-    // use source metadata rather than tool names, and include inactive tools.
+    const mode = getToolMode();
+    validateToolMode(mode);
+    // Native mode supports built-in MCP only. Pi mode can execute any active Pi tool.
     const resources = probeCtx(() => [...pi.getAllTools(), ...pi.getCommands()]);
-    if (!resources.stale) {
+    if (mode === "native" && !resources.stale) {
       bridgeManager.warnMcpAdapterUnsupported(
         resources.value,
         ui ? (warning) => ui.notify(warning, "warning") : undefined,
       );
     }
-    await bridgeManager.ensureRegistered((warning) => ui?.notify(warning, "warning"));
+    const registered = await bridgeManager.ensureRegistered((warning) =>
+      ui?.notify(warning, "warning"),
+    );
+    if (mode === "pi") {
+      const url = bridge.url;
+      if (!registered || !url) {
+        throw new Error("antigravity: Pi tool mode requires a registered Pi-tool bridge.");
+      }
+      await piToolsAgent.prepare({ serverName: bridge.serverName, url, token: bridgeToken });
+    }
+  }
+
+  function getProcessProfile() {
+    if (switchingToolMode) {
+      throw new Error("antigravity: tool mode is changing; retry when the switch finishes.");
+    }
+    const profile = readAgyProcessProfile();
+    if (getToolMode() === "native") return profile;
+    if (!bridgeManager.isRegistered() || !piToolsAgent.isPrepared()) {
+      throw new Error("antigravity: Pi tool mode could not prepare its agent and bridge.");
+    }
+    return { ...profile, agent: piToolsAgent.name };
   }
 
   /**
@@ -427,7 +476,11 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
    * Antigravity models and on shutdown.
    */
   async function teardownBridge(): Promise<void> {
-    await bridgeManager.teardown();
+    try {
+      await bridgeManager.teardown();
+    } finally {
+      await piToolsAgent.remove();
+    }
   }
 
   // --- Skill passing (Phase 2) ----------------------------------------------
@@ -435,17 +488,15 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
   // is respected. Model-invocation-disabled skills are excluded.
   let loadedSkills: SkillLite[] = [];
 
-  /**
-   * The instruction block relayed to agy on fresh conversations: pi's
-   * documentation section only — boilerplate, tool inventory, skills and
-   * workspace rules all reach agy through other channels or not at all.
-   */
+  /** Native mode relays Pi docs; Pi tool mode uses the provider's current Pi snapshot. */
   const getSystemPromptRelay = () =>
-    buildAgyRelayedInstructions({
-      readme: getReadmePath(),
-      docs: getDocsPath(),
-      examples: getExamplesPath(),
-    });
+    getToolMode() === "pi"
+      ? undefined // The provider relays the current Pi instructions for its Pi tools.
+      : buildAgyRelayedInstructions({
+          readme: getReadmePath(),
+          docs: getDocsPath(),
+          examples: getExamplesPath(),
+        });
 
   function captureSkills(skills: unknown): void {
     if (!Array.isArray(skills)) return;
@@ -480,6 +531,12 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
   /** Publish one `pi__p<pid>__activate_skill` tool for global pi skills. */
   function refreshSkillTools(): void {
     if (!BRIDGE_ENABLED) return;
+    if (getToolMode() === "pi") {
+      // Pi instructions already carry the skill catalog and paths. Read skills
+      // through Pi tools so their file access follows the Pi execution pipeline.
+      bridge.setDynamicTools([]);
+      return;
+    }
     const skills = bridgedSkills();
     if (skills.length === 0) {
       bridge.setDynamicTools([]);
@@ -505,7 +562,7 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
     } catch {
       return []; // API unavailable (print/RPC edge) — expose nothing.
     }
-    return selectBridgedTools(allTools, activeNames);
+    return selectBridgedTools(allTools, activeNames, getToolMode());
   });
 
   // Per-skill tools are gone; one activate_skill tool is published on every
@@ -751,9 +808,10 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
         handleAgyActivity,
         createAntigravityRuntime,
         (modelId) => currentCache.models.find((candidate) => candidate.id === modelId),
-        readAgyProcessProfile,
+        getProcessProfile,
         bridgeManager.processRevision,
         getSystemPromptRelay,
+        () => (getToolMode() === "pi" ? getProcessProfile() : {}),
       ),
     });
   };
@@ -829,6 +887,7 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
             ctx.sessionManager.getBranch(),
             ctx.sessionManager.getSessionId(),
             ctx.cwd,
+            getToolMode(),
           )
         : undefined;
     const compatibleRestore =
@@ -837,6 +896,9 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
       (await agyConversationExists(restored.conversationId))
         ? restored
         : undefined;
+    // Pi tool mode uses a session-owned agent with the current bridge URL/token.
+    // On resume, bootstrap Pi history into a fresh agy conversation instead of
+    // restoring a conversation that refers to a removed agent or another tool mode.
     await runAntigravity(
       runtime,
       service.setSession(ctx.cwd, undefined, !compatibleRestore && event.reason !== "new"),
@@ -968,9 +1030,7 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
     } catch {
       // Already closed.
     }
-    if (bridgeManager.isRegistered() || bridgeManager.isRunning()) {
-      await teardownBridge();
-    }
+    await teardownBridge();
     try {
       tasksUi?.setWidget(AGY_TASKS_WIDGET_KEY, undefined);
       tasksUi?.setWidget(AGY_ARTIFACTS_WIDGET_KEY, undefined);
@@ -1013,7 +1073,7 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
     handler: async (args, ctx) => {
       if (args.trim()) {
         ctx.ui.notify(
-          'antigravity: use "/agy-reset", "/agy-models", "/agy-agents", "/agy-doctor", "/agy-subagents", "/agy-tasks", "/agy-artifacts", or "/agy-usage".',
+          'antigravity: use "/agy-tools", "/agy-reset", "/agy-models", "/agy-agents", "/agy-doctor", "/agy-subagents", "/agy-tasks", "/agy-artifacts", or "/agy-usage".',
           "error",
         );
         return;
@@ -1043,7 +1103,8 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
       let profile = "agent: none · mode: default";
       try {
         const configured = readAgyProcessProfile();
-        profile = `agent: ${configured.agent ?? "none"} · mode: ${configured.mode ?? "default"}`;
+        const agent = getToolMode() === "pi" ? piToolsAgent.name : configured.agent;
+        profile = `agent: ${agent ?? "none"} · mode: ${configured.mode ?? "default"} · tools: ${getToolMode()}`;
       } catch (error) {
         profile = `profile error: ${error instanceof Error ? error.message : String(error)}`;
       }
@@ -1051,6 +1112,85 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
         `antigravity: ${title}\nconversation: ${id ?? "none"}\n${details.join(" · ")}\n${profile}`,
         "info",
       );
+    },
+  });
+
+  pi.registerCommand("agy-tools", {
+    description: "Toggle Pi tools, or use on, off, or status",
+    getArgumentCompletions: (prefix) =>
+      ["on", "off", "status"]
+        .filter((value) => value.startsWith(prefix))
+        .map((value) => ({ value, label: value })),
+    handler: async (args, ctx) => {
+      const action = resolveAgyToolModeCommand(args, getToolMode());
+      const notifyStatus = () =>
+        ctx.ui.notify(
+          `antigravity: Pi tools ${getToolMode() === "pi" ? "ON (pi)" : "OFF (native)"}.`,
+          "info",
+        );
+      if (action === undefined) {
+        ctx.ui.notify(
+          'agy-tools: usage "/agy-tools [on|off|status]"; no argument toggles the mode.',
+          "error",
+        );
+        return;
+      }
+      if (action === "status") {
+        notifyStatus();
+        return;
+      }
+      await ctx.waitForIdle();
+      const session = probeCtx(() => ({ cwd: ctx.cwd, provider: ctx.model?.provider }));
+      if (session.stale) return;
+      if (switchingToolMode) {
+        ctx.ui.notify("antigravity: a tool-mode switch is already in progress.", "info");
+        return;
+      }
+      const previous = getToolMode();
+      const next = args.trim() ? action : previous === "pi" ? "native" : "pi";
+      if (next === previous) {
+        notifyStatus();
+        return;
+      }
+      try {
+        validateToolMode(next);
+      } catch (error) {
+        ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
+        return;
+      }
+      switchingToolMode = true;
+      try {
+        await runAntigravity(runtime, service.setSession(session.value.cwd, undefined, true));
+        appendConversationReset(ctx);
+        subagentRoster.clear();
+        setAgyTasksWidget(0);
+        setAgyArtifactsWidget(0);
+        await teardownBridge();
+        toolMode = next;
+        refreshSkillTools();
+        if (session.value.provider === "antigravity") await ensureBridgeRegistered(ctx.ui);
+        bridge.refreshTools();
+        notifyStatus();
+      } catch (error) {
+        toolMode = previous;
+        refreshSkillTools();
+        let message = error instanceof Error ? error.message : String(error);
+        try {
+          await teardownBridge();
+          if (session.value.provider === "antigravity") await ensureBridgeRegistered(ctx.ui);
+          bridge.refreshTools();
+        } catch (restoreError) {
+          message += `; restoring ${previous} mode also failed: ${
+            restoreError instanceof Error ? restoreError.message : String(restoreError)
+          }`;
+        }
+        ctx.ui.notify(
+          `antigravity: failed to switch tools; mode remains ${previous} (${message}).`,
+          "error",
+        );
+      } finally {
+        switchingToolMode = false;
+      }
     },
   });
 
@@ -1185,7 +1325,8 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
       let profile = "agent=none mode=default";
       try {
         const configured = readAgyProcessProfile();
-        profile = `agent=${configured.agent ?? "none"} mode=${configured.mode ?? "default"}`;
+        const agent = getToolMode() === "pi" ? piToolsAgent.name : configured.agent;
+        profile = `agent=${agent ?? "none"} mode=${configured.mode ?? "default"} tools=${getToolMode()}`;
         lines.push(
           `selection: ${ctx.model?.id ?? "none"} · effort ${
             resolveAgyModelEffort(

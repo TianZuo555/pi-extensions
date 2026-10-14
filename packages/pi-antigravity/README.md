@@ -8,13 +8,14 @@ Use **Google Antigravity** (`agy`) models inside the [pi coding agent](https://p
 - **Actionable diagnostics** — `/agy-doctor` explains executable selection, checks every candidate and the minimum version, and reports models, driver spawn/recycle counters, bridge revision, conversation database, and display metadata without spending model tokens.
 - **Native rendering, not mimicry** — agy's read-only tools (`view_file`, `grep_search`, `find_by_name`, `list_dir`) are re-executed as real pi builtins (`read` / `grep` / `find` / `ls`), so their cards use pi's own renderers and show live, accurate output. Everything else renders through one display-only `antigravity` wrapper.
 - **Skills & MCP bridge** — pi-private skills (`~/.pi/agent/skills`, `<project>/.pi/skills`, pi-package installs) are one `pi__p<pid>__activate_skill` tool (pass `{ name }` from the tool's enum), and pi's built-in MCP servers (`mcp.json`, `"exposure": "direct"`) are reachable from agy with pi's permissions, hooks, and rendering. Shared `.agents/skills` roots are agy's own discovery. Per-session tool names keep concurrent pi sessions fully isolated.
+- **Pi tools mode** — start with `--agy-tools pi` to run a minimal custom agy agent that uses Pi's active tools through the MCP bridge. File access, commands, extension tools, and MCP calls execute in Pi with its hooks, permissions, and rendering.
 - **Background-task manager** — long-running agy commands are tracked in a dashboard (`/agy-tasks`) that shows each task's status, pids, and log; `/agy-tasks stop all` reaps the process groups this pi recorded.
 - **Artifact browser** — direct conversation files, generated media, and uploads are listed via `/agy-artifacts`; markdown plans/reports have a bounded read-only preview with checklist progress.
 - **Model quotas** — `/agy-usage` ports agy's `/usage` into the same Refresh/Close menu as `/usage`: weekly and 5-hour remaining bars per model group, refreshed without spending tokens.
 
 ### MCP adapter migration
 
-When an Antigravity model is selected, the extension warns once per session if `pi-mcp-adapter` is loaded. Its tools are no longer bridged, and it replaces Pi's built-in MCP support. Remove or disable the adapter, move your servers to `~/.pi/agent/mcp.json` (or `.pi/mcp.json`) with `"exposure": "direct"`, then run `/reload`. The warning is suppressed when the Pi-tool bridge is disabled.
+When an Antigravity model is selected in native tool mode, the extension warns once per session if `pi-mcp-adapter` is loaded. Its tools are no longer bridged, and it replaces Pi's built-in MCP support. Remove or disable the adapter, move your servers to `~/.pi/agent/mcp.json` (or `.pi/mcp.json`) with `"exposure": "direct"`, then run `/reload`. The warning is suppressed when the Pi-tool bridge is disabled.
 
 ### Background tasks (`/agy-tasks`)
 
@@ -54,21 +55,40 @@ Claude and GPT models
   Weekly limit:     [████████████████████] 100% left · resets 15:08 on 4 Sep
 ```
 
+## Pi tools mode
+
+Use `/agy-tools on` to enable Pi tools in the current session and `/agy-tools off` to return to the previous native tool behavior. `/agy-tools` toggles the mode; `/agy-tools status` shows it. Native tools are the default. Switching waits for an active run to finish, rebuilds the agy conversation and bridge, and preserves the Pi history. If the new mode cannot be prepared, the command restores the previous mode. The slash-command choice applies to the current extension runtime; reloading or restarting uses the startup configuration again.
+
+You can also choose the model normally and select Pi tools at startup:
+
+```sh
+pi --provider antigravity --model claude-sonnet-4-6 --agy-tools pi
+```
+
+Alternatively, set `PI_ANTIGRAVITY_TOOLS=pi`. The `--agy-tools` flag takes precedence over the environment; `native` is the default.
+
+Pi tools mode starts a custom agent directly with `agy --agent`; it does not create a parent agent to relay messages. The agent declares `tools: []`, disables ambient agy customizations, and configures only the current session's authenticated Pi bridge. Antigravity adds its MCP dispatcher/resource tools and fundamental task-management tool; ordinary native file, shell, web, and editing tools are not configured. Work goes through the active Pi tool set, including builtins such as `read`, `bash`, `edit`, and `write`, extension tools, and MCP tools. Inactive/hidden tools and the display-only replay wrapper stay out. Bridged `codemode` and `tool_search` retain Pi's own tool discovery and execution behavior.
+
+This mode relays the current Pi instructions, including project and user guidance and the loaded skill catalog. Skills are loaded using Pi tools rather than the native mode's virtual `activate_skill` reader. Each bridge call becomes a real Pi tool call, so Pi's hooks, permission checks, tool selection, and results apply before agy continues. If the bridge or agent cannot be prepared, the request fails instead of starting the default agent. `PI_ANTIGRAVITY_AGENT` cannot be combined with Pi tools mode, and the bridge must be enabled.
+
+The session-owned agent configuration lives under `~/.gemini/config/agents/` and is removed when leaving Antigravity or shutting down. Ordinary turns reuse the persistent agy process. Resuming or reloading a Pi session starts a fresh agy conversation and restores Pi history, binding it to the current bridge and avoiding an older native-tool conversation. `/agy` and `/agy-doctor` show the selected tool mode.
+
 ## Context and permissions
 
 The first agy turn receives the active Pi conversation history, including earlier work with another provider. `/agy-reset` deliberately starts fresh without replaying that history; it does not delete the Pi transcript. A later provider switch or branch move can restore the active history again.
 
 Pi's system instructions are relayed on the first native turn, after a native conversation restore, and when they change. Unchanged instructions are not repeated on each turn or tool-loop re-entry; removing them sends an explicit clearing notice. Unacknowledged instruction and skill-catalog updates are retained across stall retries. Disposable summaries receive their own instructions without changing the live conversation.
 
-**This is a text adapter, not a native system role.** agy's CLI has no system-prompt input, so the relay is a labeled user-prompt snapshot — and it is deliberately minimal: only pi's documentation paths, rebuilt from the installed pi package. Everything else in pi's rendered system prompt is dropped by design: pi's tool inventory and guidelines describe tools agy cannot call, workspace `AGENTS.md`/`GEMINI.md`/`.agents/rules` files are agy's own native discovery, skills arrive through the `activate_skill` bridge, and user-authored pi customizations (`customPrompt`, `appendSystemPrompt`) configure the pi agent — not agy. Summarization requests keep their own caller instructions untouched.
+**Pi instructions are relayed as text, not a native system role.** agy's CLI has no system-prompt input, so the relay is a labeled user-prompt snapshot. In native tool mode it is deliberately minimal: only pi's documentation paths, rebuilt from the installed pi package. Everything else in pi's rendered system prompt is dropped by design: pi's tool inventory and guidelines describe tools agy cannot call, workspace `AGENTS.md`/`GEMINI.md`/`.agents/rules` files are agy's own native discovery, skills arrive through the `activate_skill` bridge, and user-authored pi customizations (`customPrompt`, `appendSystemPrompt`) configure the pi agent — not agy. Summarization requests keep their own caller instructions untouched.
 
-**Native agy tools bypass Pi's pre-execution permission hooks.** Both execution modes always pass `--dangerously-skip-permissions` because headless agy otherwise denies permission prompts. Native commands, file edits, browser actions, and reads execute inside agy; their Pi cards are replayed afterward. Blocking or disabling a Pi tool cannot prevent a native operation that already happened. Only tools routed through the Pi bridge execute under Pi's hooks and permissions. Use this extension only where you trust agy's access to the workspace; the replay UI is not a security boundary.
+**In native tool mode, native agy tools bypass Pi's pre-execution permission hooks.** Both execution modes always pass `--dangerously-skip-permissions` because headless agy otherwise denies permission prompts. Native commands, file edits, browser actions, and reads execute inside agy; their Pi cards are replayed afterward. Blocking or disabling a Pi tool cannot prevent a native operation that already happened. Only tools routed through the Pi bridge execute under Pi's hooks and permissions. Use this extension only where you trust agy's access to the workspace; the replay UI is not a security boundary.
 
 ## Commands
 
 | Command          | What it does                                                                                                    |
 | ---------------- | --------------------------------------------------------------------------------------------------------------- |
 | `/agy`           | Conversation title/status (id, model, turns, process, native context)                                           |
+| `/agy-tools`     | Toggle Pi tools; `on` enables them, `off` restores native tools, and `status` shows the mode                       |
 | `/agy-reset`     | Drop the agy conversation and driver; next turn starts fresh                                                    |
 | `/agy-models`    | Re-discover models and re-register the provider                                                                 |
 | `/agy-agents`    | List configured custom agy agents without inference                                                             |
@@ -84,7 +104,8 @@ Pi's system instructions are relayed on the first native turn, after a native co
 | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | `PI_ANTIGRAVITY_PI_TOOL_BRIDGE=0`        | Turn the bridge off. pi-private skills become unavailable to agy (a one-time warning); shared `.agents` skills still reach agy natively.       |
 | `PI_ANTIGRAVITY_DRIVER=0`                | Operational rollback: spawn one `agy --print` process per logical turn. Its stall watchdog is pure inactivity — no liveness or parked-turn probing — so a quiet tool or parked background task still dies at `AGY_TOOL_STALL_TIMEOUT_MS`. |
-| `PI_ANTIGRAVITY_AGENT=<name>`            | Select a custom agy agent. Empty, control-character-containing, and overlong values are rejected before spawn.                               |
+| `PI_ANTIGRAVITY_TOOLS=native\|pi`        | Select the tool mode at startup; overridden by `--agy-tools`. Pi mode runs work through the session's Pi tools.                              |
+| `PI_ANTIGRAVITY_AGENT=<name>`            | Select a custom agy agent in native tool mode. Empty, control-character-containing, and overlong values are rejected before spawn.          |
 | `PI_ANTIGRAVITY_MODE=plan\|accept-edits` | Select agy's stable CLI execution mode. Other values fail before spawn.                                                                      |
 | `AGY_BINARY=/path/to/agy`                | Strictly use a specific agy binary; no fallback if it fails.                                                                                 |
 | `AGY_TURN_TIMEOUT_MS=600000`             | Pi-owned overall budget for one logical turn, including startup, fallback, stall retries, and backoff. Retries receive only the remaining budget. Persistent mode sets agy's separate `--print-timeout` above Node's maximum timer budget so its default five-minute wait cannot silently end a live turn; Pi's deadline and abort still stop the process.                                  |

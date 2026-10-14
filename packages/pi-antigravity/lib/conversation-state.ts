@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { AgyUsage } from "./events.ts";
+import type { AgyToolMode } from "./tool-mode.ts";
 
 export const AGY_CONVERSATION_STATE_ENTRY = "pi-antigravity-conversation-state";
 
@@ -13,6 +14,7 @@ export interface PersistedAgyConversation {
   conversationId: string;
   cwd: string;
   modelId: string;
+  toolMode?: AgyToolMode;
   turns: number;
   usage: AgyUsage;
   /** Most recent observed model context footprint (input + cache read). */
@@ -104,6 +106,9 @@ export function parsePersistedAgyState(value: unknown): PersistedAgyState | unde
   if (record.kind !== "conversation") return undefined;
   if (!isBoundedString(record.conversationId, 256)) return undefined;
   if (!isBoundedString(record.modelId, 256)) return undefined;
+  if (record.toolMode !== undefined && record.toolMode !== "native" && record.toolMode !== "pi") {
+    return undefined;
+  }
   if (!Number.isSafeInteger(record.turns) || (record.turns as number) < 0) return undefined;
   const usage = parseUsage(record.usage);
   if (!usage) return undefined;
@@ -117,6 +122,7 @@ export function parsePersistedAgyState(value: unknown): PersistedAgyState | unde
     conversationId: record.conversationId,
     cwd: record.cwd,
     modelId: record.modelId,
+    ...(record.toolMode ? { toolMode: record.toolMode } : {}),
     turns: record.turns as number,
     usage,
     contextTokens: record.contextTokens as number | undefined,
@@ -135,14 +141,18 @@ export function restorableAgyConversation(
   branch: readonly SessionEntry[],
   sessionId: string,
   cwd: string,
+  toolMode: AgyToolMode = "native",
 ): PersistedAgyConversation | undefined {
+  // Pi mode uses a session-owned agent and current loopback credentials.
+  // Its saved conversation must be rebuilt from Pi history on a new session.
+  if (toolMode === "pi") return undefined;
   for (let index = branch.length - 1; index >= 0; index -= 1) {
     const entry = branch[index];
     if (entry.type !== "custom" || entry.customType !== AGY_CONVERSATION_STATE_ENTRY) continue;
     const state = parsePersistedAgyState(entry.data);
     // The newest state marker is authoritative. A reset or malformed marker
     // must not accidentally resurrect an older conversation.
-    if (!state || state.kind === "reset") return undefined;
+    if (!state || state.kind === "reset" || state.toolMode === "pi") return undefined;
     if (state.sessionId !== sessionId || state.cwd !== cwd) return undefined;
     if (
       branch.slice(index + 1).some((candidate) => CONTEXT_CHANGING_ENTRY_TYPES.has(candidate.type))
