@@ -27,7 +27,8 @@ import {
   groupThinkingLevelMap,
   parseDevinModels,
   type DevinModelFamily,
-  modelCacheTtlMs,
+  isModelCacheFresh,
+  MODEL_CACHE_VERSION,
 } from "./lib/models.ts";
 import { createDevinPermissionHandler } from "./lib/permission.ts";
 import { WRAPPER_TOOL_DESCRIPTION, WRAPPER_TOOL_NAME } from "./lib/prompt.ts";
@@ -66,6 +67,7 @@ const YOLO_MODE = "bypass";
 interface DevinModelCache {
   fetchedAt: number;
   source: "live" | "fallback";
+  version?: number;
   families: DevinModelFamily[];
 }
 
@@ -641,11 +643,7 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
   const discoverModels = async (refresh = false): Promise<DevinModelCache> => {
     if (!refresh) {
       const cached = readJson<DevinModelCache | undefined>(MODEL_CACHE_FILE, undefined);
-      if (
-        cached?.families?.length &&
-        cached.fetchedAt &&
-        Date.now() - cached.fetchedAt < modelCacheTtlMs(cached.source)
-      ) {
+      if (cached?.families?.length && isModelCacheFresh(cached)) {
         catalog = cached;
         return catalog;
       }
@@ -664,7 +662,7 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
       if (catalog.families.length) return catalog;
       throw new Error("devin models list returned no families");
     }
-    catalog = { fetchedAt: Date.now(), source: "live", families };
+    catalog = { fetchedAt: Date.now(), source: "live", version: MODEL_CACHE_VERSION, families };
     try {
       writeJson(MODEL_CACHE_FILE, catalog);
     } catch {
@@ -696,7 +694,7 @@ export default function piDevinAcpExtension(pi: ExtensionAPI): void {
   let modelRefresh: Promise<void> | undefined;
   function refreshModelsIfExpired(): Promise<void> {
     if (modelRefresh) return modelRefresh;
-    if (catalog.fetchedAt && Date.now() - catalog.fetchedAt < modelCacheTtlMs(catalog.source)) {
+    if (isModelCacheFresh(catalog)) {
       return Promise.resolve();
     }
     modelRefresh = (async () => {

@@ -4,7 +4,11 @@ import { test } from "node:test";
 import {
   clampDevinEffort,
   devinGroups,
+  FALLBACK_CACHE_TTL_MS,
   findDevinGroup,
+  isModelCacheFresh,
+  LIVE_CACHE_TTL_MS,
+  MODEL_CACHE_VERSION,
   modelCacheTtlMs,
   parseDevinModels,
   parseRowMeta,
@@ -264,6 +268,27 @@ test("resolveDevinModelRow maps thinking levels to concrete variants", () => {
 
 test("modelCacheTtlMs distinguishes live and fallback caches", () => {
   assert.ok(modelCacheTtlMs("live") > modelCacheTtlMs("fallback"));
+});
+
+test("isModelCacheFresh requires the current cache version within the TTL", () => {
+  const now = 1_000_000_000_000;
+  const live = { source: "live" as const, version: MODEL_CACHE_VERSION };
+  assert.equal(isModelCacheFresh({ ...live, fetchedAt: now - 1_000 }, now), true);
+  assert.equal(isModelCacheFresh({ source: "live", fetchedAt: now - 1_000 }, now), false);
+  assert.equal(isModelCacheFresh({ ...live, version: 1, fetchedAt: now - 1_000 }, now), false);
+  assert.equal(isModelCacheFresh({ ...live, fetchedAt: now - LIVE_CACHE_TTL_MS - 1 }, now), false);
+  assert.equal(isModelCacheFresh({ ...live, fetchedAt: 0 }, now), false);
+  assert.equal(
+    isModelCacheFresh(
+      { ...live, source: "fallback", fetchedAt: now - FALLBACK_CACHE_TTL_MS - 1 },
+      now,
+    ),
+    false,
+  );
+  assert.equal(
+    isModelCacheFresh({ ...live, source: "fallback", fetchedAt: now - 60_000 }, now),
+    true,
+  );
 });
 
 const select = (id: string, values: string[]): DevinConfigOption => ({

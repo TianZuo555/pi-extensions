@@ -14,7 +14,7 @@ import type {
 import extension from "../index.ts";
 import { piConfigDir } from "../lib/config.ts";
 import { resetDevinBinaryCache } from "../lib/diagnostics.ts";
-import { modelCacheTtlMs, parseDevinModels } from "../lib/models.ts";
+import { MODEL_CACHE_VERSION, modelCacheTtlMs, parseDevinModels } from "../lib/models.ts";
 
 const CACHE_DIR = piConfigDir("devin-acp");
 const CACHE_FILE = `${CACHE_DIR}/models.json`;
@@ -29,10 +29,11 @@ const MODERN_OUTPUT = fs.readFileSync(
 const cachedCatalog = (source: "live" | "fallback", ageMs: number) => ({
   source,
   fetchedAt: Date.now() - ageMs,
+  version: MODEL_CACHE_VERSION,
   families: parseDevinModels(OUTPUT.replaceAll("new-family", "old-family")),
 });
 
-type Cache = ReturnType<typeof cachedCatalog>;
+type Cache = Omit<ReturnType<typeof cachedCatalog>, "version"> & { version?: number };
 type Handler = (event: any, ctx: ExtensionContext) => unknown;
 
 function deferred() {
@@ -234,6 +235,7 @@ test("live discovery registers and caches models whose rows omit metadata", opti
   assert.equal(swe.thinkingLevelMap?.high, "swe-2-high");
   assert.equal(swe.thinkingLevelMap?.max, "swe-2-max");
   assert.equal(h.saved()?.source, "live");
+  assert.equal(h.saved()?.version, MODEL_CACHE_VERSION);
   assert.deepEqual(
     h.saved()?.families,
     JSON.parse(JSON.stringify(parseDevinModels(MODERN_OUTPUT))),
@@ -247,11 +249,30 @@ test(
     const h = harness(t, {
       source: "live",
       fetchedAt: Date.now(),
+      version: MODEL_CACHE_VERSION,
       families: parseDevinModels(MODERN_OUTPUT),
     });
     await h.start();
     assert.ok(h.registrations[0].some((model) => model.id === "swe-2"));
     assert.deepEqual(h.calls, []);
+  },
+);
+
+test(
+  "session startup refreshes a fresh cache written before the cache version existed",
+  options,
+  async (t) => {
+    // What the old parser cached for this output: every swe-2 row dropped.
+    const families = parseDevinModels(MODERN_OUTPUT);
+    families.find((family) => family.id === "swe-2")!.rows = [];
+    const h = harness(t, { source: "live", fetchedAt: Date.now(), families });
+    await h.start();
+    await h.requested;
+    assert.ok(!h.registrations[0].some((model) => model.id === "swe-2"));
+    h.complete(MODERN_OUTPUT);
+    await h.registered;
+    assert.ok(h.registrations.at(-1)!.some((model) => model.id === "swe-2"));
+    assert.equal(h.saved()?.version, MODEL_CACHE_VERSION);
   },
 );
 

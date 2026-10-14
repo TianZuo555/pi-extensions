@@ -426,3 +426,20 @@ export const FALLBACK_CACHE_TTL_MS = 5 * 60 * 1000;
 export function modelCacheTtlMs(source: "live" | "fallback" | undefined): number {
   return source === "fallback" ? FALLBACK_CACHE_TTL_MS : LIVE_CACHE_TTL_MS;
 }
+
+/**
+ * Bump whenever parser changes alter what a cached catalog would contain,
+ * so catalogs written by older releases refresh instead of serving stale.
+ */
+export const MODEL_CACHE_VERSION = 2;
+
+export function isModelCacheFresh(
+  cache: { fetchedAt?: number; source?: "live" | "fallback"; version?: number },
+  now = Date.now(),
+): boolean {
+  return (
+    cache.version === MODEL_CACHE_VERSION &&
+    Boolean(cache.fetchedAt) &&
+    now - (cache.fetchedAt ?? 0) < modelCacheTtlMs(cache.source)
+  );
+}
