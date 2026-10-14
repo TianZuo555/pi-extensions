@@ -16,7 +16,15 @@ supported provider.
 Codex usage uses the `openai-codex` login — listed as **OpenAI Codex (legacy)**
 in `/login`. The newer **Sign in with ChatGPT** credential on the `openai`
 provider is an api.openai.com token that the ChatGPT usage endpoint does not
-accept, so it cannot report Codex usage.
+accept. For models under either `openai` or `openai-codex`, the extension
+queries usage with the **legacy Codex credential** and displays the same
+`codex` footer meter. It assumes both logins use the same account; account
+identity is not checked. The meter reports legacy Codex quota, not a separately
+queried quota for the newer OpenAI login.
+
+If you only have the newer OpenAI login, the footer prompts you to use
+`/login → OpenAI Codex (legacy)`. You can keep your `openai` model selected
+after signing in.
 
 ```text
 OpenAI Codex · Plus
@@ -93,7 +101,7 @@ bar chart, peak breakdown, and scrollable model rankings (up to top 10 models):
 
 ## Statusline
 
-When the active model provider is Codex, Copilot, Z.ai, Z.ai Coding Plan
+When the active model provider is OpenAI, Codex, Copilot, Z.ai, Z.ai Coding Plan
 (China), DeepSeek, or Xiaomi MiMo, the footer shows a compact Azure Blue meter
 such as `codex 60% wk`, `copilot 31% credits`, `copilot 49% premium`,
 `zai 59% 5h`, `zai-cn 82% 5h`, `deepseek ¥27.00`, or `xiaomi ¥21.66`,
