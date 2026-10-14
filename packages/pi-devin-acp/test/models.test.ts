@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import {
   clampDevinEffort,
@@ -124,6 +125,53 @@ test("parseDevinModels parses families, aliases, and rows; skips noise", () => {
   assert.equal(opus.rows[5].fast, true);
   const gpt52 = families.find((f) => f.id === "gpt-5.2");
   assert.equal(gpt52?.rows[0].id, "MODEL_GPT_5_2_LOW");
+});
+
+test("parseDevinModels keeps rows without metadata and pricing-only rows", () => {
+  const output = readFileSync(
+    new URL("./fixtures/devin-models-3000.11.3.txt", import.meta.url),
+    "utf-8",
+  );
+  for (const text of [output, output.replaceAll("\n", "  \n")]) {
+    const families = parseDevinModels(text);
+    assert.equal(families.length, 2);
+    const swe = families[0];
+    assert.equal(swe.id, "swe-2");
+    assert.equal(swe.name, "SWE-2");
+    assert.deepEqual(swe.aliases, ["swe"]);
+    assert.deepEqual(
+      swe.rows.map(({ id, name, effort }) => ({ id, name, effort })),
+      [
+        { id: "swe-2-high", name: "SWE-2 High", effort: "high" },
+        { id: "swe-2-medium", name: "SWE-2 Medium", effort: "medium" },
+        { id: "swe-2-max", name: "SWE-2 Max", effort: "max" },
+      ],
+    );
+    for (const row of swe.rows) {
+      assert.equal(row.contextWindow, 0);
+      assert.deepEqual(row.cost, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+    }
+    const group = findDevinGroup(families, "swe-2");
+    assert.ok(group);
+    assert.equal(group.reasoning, true);
+    for (const level of ["high", "medium", "max"] as const) {
+      assert.equal(resolveDevinModelRow(group, level).id, `swe-2-${level}`);
+    }
+    const lightning = families[1].rows[0];
+    assert.equal(lightning.name, "SWE-1.7 Lightning Max");
+    assert.equal(lightning.contextWindow, 0);
+    assert.deepEqual(lightning.cost, { input: 2.5, output: 12.5, cacheRead: 1, cacheWrite: 0 });
+  }
+});
+
+test("omitting SWE-2 metadata leaves all other families unchanged", () => {
+  const original = parseDevinModels(MODELS_OUTPUT);
+  const withoutMetadata = parseDevinModels(MODELS_OUTPUT.replaceAll("  [262K context, Free]", ""));
+  assert.deepEqual(
+    withoutMetadata.filter((family) => family.id !== "swe-2"),
+    original.filter((family) => family.id !== "swe-2"),
+  );
+  assert.equal(findDevinGroup(withoutMetadata, "swe-2")?.rows.length, 3);
 });
 
 test("buildGroups splits context variants into separate pi models", () => {

@@ -148,7 +148,7 @@ export function parseRowMeta(meta: string): { contextWindow: number; cost: Devin
 
 const FAMILY_LINE = /^(\S.*)\s\(([^()\s]+)\)\s*$/;
 const ALIASES_LINE = /^\s+aliases:\s*(.+)$/;
-const ROW_LINE = /^\s{2,}(\S+)\s{2,}(\S.*?)\s{2,}\[([^\]]*)\]\s*$/;
+const ROW_LINE = /^\s{2,}(\S+)\s{2,}(\S.*?)(?:\s{2,}\[([^\]]*)\])?\s*$/;
 
 /**
  * Parse `devin models list` output. Non-matching lines (header, footer,
@@ -168,7 +168,7 @@ export function parseDevinModels(text: string): DevinModelFamily[] {
     }
     const row = line.match(ROW_LINE);
     if (row && current) {
-      const { contextWindow, cost } = parseRowMeta(row[3]);
+      const { contextWindow, cost } = parseRowMeta(row[3] ?? "");
       const markers = rowMarkers(row[1]);
       current.rows.push({
         id: row[1],

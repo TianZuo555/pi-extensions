@@ -22,6 +22,10 @@ const SETTINGS_FILE = `${CACHE_DIR}/settings.json`;
 const OUTPUT = `New Family (new-family)
   new-family-low  New Family Low  [200K context, Free]
 `;
+const MODERN_OUTPUT = fs.readFileSync(
+  new URL("./fixtures/devin-models-3000.11.3.txt", import.meta.url),
+  "utf-8",
+);
 const cachedCatalog = (source: "live" | "fallback", ageMs: number) => ({
   source,
   fetchedAt: Date.now() - ageMs,
@@ -209,6 +213,47 @@ test("session startup discovers new families when no cache exists", options, asy
     ["new-family"],
   );
 });
+
+test("live discovery registers and caches models whose rows omit metadata", options, async (t) => {
+  const h = harness(t);
+  await h.start();
+  await h.requested;
+  h.complete(MODERN_OUTPUT);
+  await h.registered;
+  const models = h.registrations.at(-1)!;
+  assert.deepEqual(
+    models.map((model) => model.id),
+    ["swe-2", "swe-1.7-lightning"],
+  );
+  const swe = models[0];
+  assert.ok(swe.type === undefined || swe.type === "chat");
+  assert.equal(swe.contextWindow, 262_144);
+  assert.equal(swe.reasoning, true);
+  assert.deepEqual(swe.cost, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 });
+  assert.equal(swe.thinkingLevelMap?.medium, "swe-2-medium");
+  assert.equal(swe.thinkingLevelMap?.high, "swe-2-high");
+  assert.equal(swe.thinkingLevelMap?.max, "swe-2-max");
+  assert.equal(h.saved()?.source, "live");
+  assert.deepEqual(
+    h.saved()?.families,
+    JSON.parse(JSON.stringify(parseDevinModels(MODERN_OUTPUT))),
+  );
+});
+
+test(
+  "loading a fresh modern catalog registers SWE-2 without launching the CLI",
+  options,
+  async (t) => {
+    const h = harness(t, {
+      source: "live",
+      fetchedAt: Date.now(),
+      families: parseDevinModels(MODERN_OUTPUT),
+    });
+    await h.start();
+    assert.ok(h.registrations[0].some((model) => model.id === "swe-2"));
+    assert.deepEqual(h.calls, []);
+  },
+);
 
 test("model selection reuses the automatic refresh already in flight", options, async (t) => {
   const h = harness(t, cachedCatalog("live", modelCacheTtlMs("live") + 1_000));
