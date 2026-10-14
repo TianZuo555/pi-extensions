@@ -22,6 +22,7 @@ import {
   SynchronizedRef,
 } from "effect";
 import type { ResolvedToken } from "../lib/auth.ts";
+import { magpieReport, queryMagpieQuotas } from "../lib/magpie.ts";
 import type { ProviderState } from "../lib/format.ts";
 import type { ProviderReport } from "../lib/providers.ts";
 import type { ProviderQueryError } from "./fetch.ts";
@@ -32,6 +33,8 @@ export interface ProviderQuerySpec {
   id: string;
   name: string;
   configureHint: string;
+  /** The provider's id in `magpie quota --json` output, when magpie covers it. */
+  magpieId?: string;
   hasLoginInfo: (ctx: ExtensionContext) => boolean;
   resolve: (ctx: ExtensionContext) => Promise<ResolvedToken | undefined>;
   queryEffect: (
@@ -112,8 +115,22 @@ const makeUsageRuntime = Effect.gen(function* () {
   const executeQuery = (
     ctx: ExtensionContext,
     provider: ProviderQuerySpec,
+    force: boolean,
   ): Effect.Effect<ProviderState> =>
     Effect.gen(function* () {
+      // magpie is asked first: it discovers sign-ins pi has no copy of and
+      // refreshes OAuth itself, so its reading is authoritative when present.
+      // A provider magpie does not know falls back to pi's own credential.
+      if (provider.magpieId) {
+        const magpie = yield* Effect.promise(() => queryMagpieQuotas({ fresh: force })).pipe(
+          Effect.orElseSucceed(() => []),
+        );
+        const report = magpieReport(
+          { id: provider.id, name: provider.name, magpieId: provider.magpieId },
+          magpie,
+        );
+        if (report) return readyState(provider, report);
+      }
       const resolved = yield* resolveToken(ctx, provider);
       if (!resolved) return unconfiguredState(provider);
       const report = yield* provider.queryEffect(resolved.token);
@@ -197,7 +214,7 @@ const makeUsageRuntime = Effect.gen(function* () {
           const deferred = joinOrStart.deferred;
 
           const worker = Effect.gen(function* () {
-            const result = yield* executeQuery(ctx, provider);
+            const result = yield* executeQuery(ctx, provider, force);
             if (result.status === "ready") {
               yield* SynchronizedRef.update(ref, (state) => {
                 state.cache.set(provider.id, { at: Date.now(), report: result.report });
