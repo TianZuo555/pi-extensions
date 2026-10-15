@@ -695,161 +695,173 @@ test("a queued start fails with the concurrency error when no slot frees", async
 });
 
 test("a queued start takes the slot a stop frees", async () => {
-  await withManager(async (manager, runtime) => {
-    const spawns = await runTool(
-      runtime,
-      Effect.forEach(
-        Array.from({ length: MAX_RUNNING }, (_, n) => n),
-        (n) =>
-          manager.start({
-            command: nodeCmd("setInterval(() => {}, 1000)"),
-            title: `filler-${n}`,
-            cwd,
-          }),
-        { concurrency: "unbounded" },
-      ),
-    );
-    const pending = runTool(
-      runtime,
-      manager.start({
-        command: nodeCmd("setInterval(() => {}, 1000)"),
-        title: "queued-start",
-        cwd,
-      }),
-    );
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    await runTool(runtime, manager.stop(spawns[0].id));
-    const granted = await pending;
-    assert.equal(granted.status, "running");
-    assert.equal(granted.title, "queued-start");
-  });
+  await withManager(
+    async (manager, runtime) => {
+      const spawns = await runTool(
+        runtime,
+        Effect.forEach(
+          Array.from({ length: MAX_RUNNING }, (_, n) => n),
+          (n) =>
+            manager.start({
+              command: nodeCmd("setInterval(() => {}, 1000)"),
+              title: `filler-${n}`,
+              cwd,
+            }),
+          { concurrency: "unbounded" },
+        ),
+      );
+      const pending = runTool(
+        runtime,
+        manager.start({
+          command: nodeCmd("setInterval(() => {}, 1000)"),
+          title: "queued-start",
+          cwd,
+        }),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      await runTool(runtime, manager.stop(spawns[0].id));
+      const granted = await pending;
+      assert.equal(granted.status, "running");
+      assert.equal(granted.title, "queued-start");
+    },
+    { ...FAST_TIMINGS, slotWaitMs: 10_000 },
+  );
 });
 
 test("aborting a queued start leaves no entry and no leaked reservation", async () => {
-  await withManager(async (manager, runtime) => {
-    const spawns = await runTool(
-      runtime,
-      Effect.forEach(
-        Array.from({ length: MAX_RUNNING }, (_, n) => n),
-        (n) =>
-          manager.start({
-            command: nodeCmd("setInterval(() => {}, 1000)"),
-            title: `filler-${n}`,
-            cwd,
-          }),
-        { concurrency: "unbounded" },
-      ),
-    );
-    const controller = new AbortController();
-    const pending = runTool(
-      runtime,
-      manager.start({
-        command: nodeCmd("setInterval(() => {}, 1000)"),
-        title: "aborted-queued",
-        cwd,
-        signal: controller.signal,
-      }),
-    );
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    controller.abort();
-    await assert.rejects(pending, /abort/i);
-    assert.equal(manager.view.size(), MAX_RUNNING);
-    assert.equal(
-      manager.view.list().some((snap) => snap.title === "aborted-queued"),
-      false,
-    );
-    // The queue released its claim: once a slot frees a later start runs.
-    manager.view.requestKill(spawns[0].id);
-    await settlement(manager, spawns[0].id);
-    const later = await runTool(
-      runtime,
-      manager.start({
-        command: nodeCmd("setInterval(() => {}, 1000)"),
-        title: "after-abort",
-        cwd,
-      }),
-    );
-    assert.equal(later.status, "running");
-  });
+  await withManager(
+    async (manager, runtime) => {
+      const spawns = await runTool(
+        runtime,
+        Effect.forEach(
+          Array.from({ length: MAX_RUNNING }, (_, n) => n),
+          (n) =>
+            manager.start({
+              command: nodeCmd("setInterval(() => {}, 1000)"),
+              title: `filler-${n}`,
+              cwd,
+            }),
+          { concurrency: "unbounded" },
+        ),
+      );
+      const controller = new AbortController();
+      const pending = runTool(
+        runtime,
+        manager.start({
+          command: nodeCmd("setInterval(() => {}, 1000)"),
+          title: "aborted-queued",
+          cwd,
+          signal: controller.signal,
+        }),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      controller.abort();
+      await assert.rejects(pending, /abort/i);
+      assert.equal(manager.view.size(), MAX_RUNNING);
+      assert.equal(
+        manager.view.list().some((snap) => snap.title === "aborted-queued"),
+        false,
+      );
+      // The queue released its claim: once a slot frees a later start runs.
+      manager.view.requestKill(spawns[0].id);
+      await settlement(manager, spawns[0].id);
+      const later = await runTool(
+        runtime,
+        manager.start({
+          command: nodeCmd("setInterval(() => {}, 1000)"),
+          title: "after-abort",
+          cwd,
+        }),
+      );
+      assert.equal(later.status, "running");
+    },
+    { ...FAST_TIMINGS, slotWaitMs: 10_000 },
+  );
 });
 
 test("disposeAll fails a queued start with the shutting-down error", async () => {
-  await withManager(async (manager, runtime) => {
-    await runTool(
-      runtime,
-      Effect.forEach(
-        Array.from({ length: MAX_RUNNING }, (_, n) => n),
-        (n) =>
-          manager.start({
-            command: nodeCmd("setInterval(() => {}, 1000)"),
-            title: `filler-${n}`,
-            cwd,
-          }),
-        { concurrency: "unbounded" },
-      ),
-    );
-    const pending = runTool(
-      runtime,
-      manager.start({
-        command: nodeCmd("setInterval(() => {}, 1000)"),
-        title: "disposed-queued",
-        cwd,
-      }),
-    );
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    const rejected = assert.rejects(pending, /shutting down/);
-    await runTool(runtime, manager.disposeAll);
-    await rejected;
-  });
+  await withManager(
+    async (manager, runtime) => {
+      await runTool(
+        runtime,
+        Effect.forEach(
+          Array.from({ length: MAX_RUNNING }, (_, n) => n),
+          (n) =>
+            manager.start({
+              command: nodeCmd("setInterval(() => {}, 1000)"),
+              title: `filler-${n}`,
+              cwd,
+            }),
+          { concurrency: "unbounded" },
+        ),
+      );
+      const pending = runTool(
+        runtime,
+        manager.start({
+          command: nodeCmd("setInterval(() => {}, 1000)"),
+          title: "disposed-queued",
+          cwd,
+        }),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const rejected = assert.rejects(pending, /shutting down/);
+      await runTool(runtime, manager.disposeAll);
+      await rejected;
+    },
+    { ...FAST_TIMINGS, slotWaitMs: 10_000 },
+  );
 });
 
 test("queued starts are granted slots in arrival order", async () => {
-  await withManager(async (manager, runtime) => {
-    const spawns = await runTool(
-      runtime,
-      Effect.forEach(
-        Array.from({ length: MAX_RUNNING }, (_, n) => n),
-        (n) =>
-          manager.start({
-            command: nodeCmd("setInterval(() => {}, 1000)"),
-            title: `filler-${n}`,
-            cwd,
-          }),
-        { concurrency: "unbounded" },
-      ),
-    );
-    const first = runTool(
-      runtime,
-      manager.start({
-        command: nodeCmd("setInterval(() => {}, 1000)"),
-        title: "fifo-1",
-        cwd,
-      }),
-    );
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    const second = runTool(
-      runtime,
-      manager.start({
-        command: nodeCmd("setInterval(() => {}, 1000)"),
-        title: "fifo-2",
-        cwd,
-      }),
-    );
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    manager.view.requestKill(spawns[0].id);
-    await settlement(manager, spawns[0].id);
-    const grantedFirst = await first;
-    assert.equal(grantedFirst.title, "fifo-1");
-    // fifo-2 is still queued behind a full house.
-    assert.equal(
-      manager.view.list().some((snap) => snap.title === "fifo-2"),
-      false,
-    );
-    manager.view.requestKill(spawns[1].id);
-    await settlement(manager, spawns[1].id);
-    const grantedSecond = await second;
-    assert.equal(grantedSecond.title, "fifo-2");
-  });
+  await withManager(
+    async (manager, runtime) => {
+      const spawns = await runTool(
+        runtime,
+        Effect.forEach(
+          Array.from({ length: MAX_RUNNING }, (_, n) => n),
+          (n) =>
+            manager.start({
+              command: nodeCmd("setInterval(() => {}, 1000)"),
+              title: `filler-${n}`,
+              cwd,
+            }),
+          { concurrency: "unbounded" },
+        ),
+      );
+      const first = runTool(
+        runtime,
+        manager.start({
+          command: nodeCmd("setInterval(() => {}, 1000)"),
+          title: "fifo-1",
+          cwd,
+        }),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const second = runTool(
+        runtime,
+        manager.start({
+          command: nodeCmd("setInterval(() => {}, 1000)"),
+          title: "fifo-2",
+          cwd,
+        }),
+      );
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      manager.view.requestKill(spawns[0].id);
+      await settlement(manager, spawns[0].id);
+      const grantedFirst = await first;
+      assert.equal(grantedFirst.title, "fifo-1");
+      // fifo-2 is still queued behind a full house.
+      assert.equal(
+        manager.view.list().some((snap) => snap.title === "fifo-2"),
+        false,
+      );
+      manager.view.requestKill(spawns[1].id);
+      await settlement(manager, spawns[1].id);
+      const grantedSecond = await second;
+      assert.equal(grantedSecond.title, "fifo-2");
+    },
+    { ...FAST_TIMINGS, slotWaitMs: 10_000 },
+  );
 });
 
 test("concurrency cap rejects an extra start; a failed spawn releases its slot", async () => {

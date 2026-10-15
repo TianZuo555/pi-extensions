@@ -240,8 +240,12 @@ function parseTerminalLogRef(ref: string) {
 }
 
 /** Strict-JSON structured bash result for Code Mode scripts: optional keys
- * are absent rather than undefined. `OutputView.text` already carries the
- * `... N bytes omitted ...` marker when a stream truncated. */
+ * are absent rather than undefined. `exit_code` is reported only for a
+ * natural exit (status done/failed) — never for running/timed_out/killed,
+ * where a forced kill reports platform-specific codes (taskkill exit 1 on
+ * Windows) — so the field means the same thing on every platform.
+ * `OutputView.text` already carries the `... N bytes omitted ...` marker when
+ * a stream truncated. */
 function bashStructuredContent(snap: TerminalSnapshot) {
   const stdout = snap.stdout.text;
   const stderr = snap.stderr.text;
@@ -252,7 +256,9 @@ function bashStructuredContent(snap: TerminalSnapshot) {
   return {
     output,
     truncated: snap.stdout.truncatedBytes > 0 || snap.stderr.truncatedBytes > 0,
-    ...(snap.exitCode !== undefined ? { exit_code: snap.exitCode } : {}),
+    ...((snap.status === "done" || snap.status === "failed") && snap.exitCode !== undefined
+      ? { exit_code: snap.exitCode }
+      : {}),
     wall_time_seconds: Math.round(((snap.settledAt ?? Date.now()) - snap.createdAt) / 100) / 10,
     terminal_id: snap.id,
     status: snap.status,
