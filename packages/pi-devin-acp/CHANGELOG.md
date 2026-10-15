@@ -1,5 +1,11 @@
 # @tian.zuo/pi-devin-acp
 
+## 0.5.2
+
+### Patch Changes
+
+- [#158](https://github.com/TianZuo555/pi-extensions/pull/158) [`222f555`](https://github.com/TianZuo555/pi-extensions/commit/222f55577fa1fed11c54451e151a78812a3163f1) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Register Devin model rows even when the CLI omits their pricing and context metadata, restoring `devin/swe-2` for catalogs that print its rows without metadata. Model catalogs cached by an older release are now refreshed automatically on the next session start instead of waiting for the 24-hour expiry.
+
 ## 0.5.1
 
 ### Patch Changes
