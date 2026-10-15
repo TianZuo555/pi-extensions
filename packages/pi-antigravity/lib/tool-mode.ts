@@ -19,12 +19,13 @@ export function resolveAgyToolModeCommand(
   }
 }
 
-/** CLI flags are available after extension loading; the flag overrides the environment. */
+/** CLI and environment overrides take precedence over the saved user preference. */
 export function readAgyToolMode(
   flag: unknown = undefined,
   env: NodeJS.ProcessEnv = process.env,
+  savedMode: AgyToolMode | undefined = undefined,
 ): AgyToolMode {
-  const value = flag ?? env.PI_ANTIGRAVITY_TOOLS ?? "native";
+  const value = flag ?? env.PI_ANTIGRAVITY_TOOLS ?? savedMode ?? "native";
   if (typeof value !== "string" || (value.trim() !== "native" && value.trim() !== "pi")) {
     throw new Error('--agy-tools / PI_ANTIGRAVITY_TOOLS must be exactly "native" or "pi".');
   }

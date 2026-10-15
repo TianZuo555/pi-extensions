@@ -8,6 +8,9 @@ import { readAgyToolMode, resolveAgyToolModeCommand } from "../lib/tool-mode.ts"
 
 test("tool mode defaults to native and the startup flag overrides the environment", () => {
   assert.equal(readAgyToolMode(undefined, {}), "native");
+  assert.equal(readAgyToolMode(undefined, {}, "pi"), "pi");
+  assert.equal(readAgyToolMode(undefined, { PI_ANTIGRAVITY_TOOLS: "native" }, "pi"), "native");
+  assert.equal(readAgyToolMode("pi", { PI_ANTIGRAVITY_TOOLS: "native" }, "native"), "pi");
   assert.equal(readAgyToolMode(undefined, { PI_ANTIGRAVITY_TOOLS: "pi" }), "pi");
   assert.equal(readAgyToolMode("native", { PI_ANTIGRAVITY_TOOLS: "pi" }), "native");
   assert.equal(readAgyToolMode(" pi ", {}), "pi");

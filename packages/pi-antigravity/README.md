@@ -57,7 +57,17 @@ Claude and GPT models
 
 ## Pi tools mode
 
-Use `/agy-tools on` to enable Pi tools in the current session and `/agy-tools off` to return to the previous native tool behavior. `/agy-tools` toggles the mode; `/agy-tools status` shows it. Native tools are the default. Switching waits for an active run to finish, rebuilds the agy conversation and bridge, and preserves the Pi history. If the new mode cannot be prepared, the command restores the previous mode. The slash-command choice applies to the current extension runtime; reloading or restarting uses the startup configuration again.
+Use `/agy tools on` to enable Pi tools and `/agy tools off` to return to native tools. `/agy tools` toggles the mode; `/agy tools status` shows it. `/agy-tools [on|off|status]` provides the same controls. Each successful toggle saves `antigravity.toolMode` in Pi's user-level `settings.json`, so the choice survives `/reload`, restart, and resume. Explicit `on` or `off` also saves the preference when that mode is already active. Switching waits for an active run to finish, rebuilds the agy conversation and bridge, and preserves Pi history. If preparation or saving fails, the previous mode and saved preference remain in effect.
+
+The saved setting lives under `~/.pi/agent/settings.json` (or `PI_CODING_AGENT_DIR`):
+
+```json
+{
+  "antigravity": {
+    "toolMode": "pi"
+  }
+}
+```
 
 You can also choose the model normally and select Pi tools at startup:
 
@@ -65,7 +75,7 @@ You can also choose the model normally and select Pi tools at startup:
 pi --provider antigravity --model claude-sonnet-4-6 --agy-tools pi
 ```
 
-Alternatively, set `PI_ANTIGRAVITY_TOOLS=pi`. The `--agy-tools` flag takes precedence over the environment; `native` is the default.
+Alternatively, set `PI_ANTIGRAVITY_TOOLS=pi`. Startup precedence is `--agy-tools` → `PI_ANTIGRAVITY_TOOLS` → saved `antigravity.toolMode` → `native`. Startup overrides do not change the saved preference; the toggle commands save it.
 
 Pi tools mode starts a custom agent directly with `agy --agent`; it does not create a parent agent to relay messages. The agent declares `tools: []`, disables ambient agy customizations, and configures only the current session's authenticated Pi bridge. Antigravity adds its MCP dispatcher/resource tools and fundamental task-management tool; ordinary native file, shell, web, and editing tools are not configured. Work goes through the active Pi tool set, including builtins such as `read`, `bash`, `edit`, and `write`, extension tools, and MCP tools. Inactive/hidden tools and the display-only replay wrapper stay out. Bridged `codemode` and `tool_search` retain Pi's own tool discovery and execution behavior.
 
@@ -95,8 +105,8 @@ Pi's system instructions are relayed on the first native turn, after a native co
 
 | Command          | What it does                                                                                                    |
 | ---------------- | --------------------------------------------------------------------------------------------------------------- |
-| `/agy`           | Conversation title/status (id, model, turns, process, native context)                                           |
-| `/agy-tools`     | Toggle Pi tools; `on` enables them, `off` restores native tools, and `status` shows the mode                       |
+| `/agy`           | Conversation title/status; `/agy tools [on|off|status]` controls and saves the tool mode                         |
+| `/agy-tools`     | Toggle and save Pi tools; `on` enables them, `off` restores native tools, and `status` shows the mode              |
 | `/agy-reset`     | Drop the agy conversation and driver; next turn starts fresh                                                    |
 | `/agy-models`    | Re-discover models and re-register the provider                                                                 |
 | `/agy-agents`    | List configured custom agy agents without inference                                                             |

@@ -3,6 +3,7 @@ import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
+import { loadSavedAgyToolMode } from "../lib/tool-mode-settings.ts";
 import type { ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 
 test("agy-tools command toggles safely, waits for idle, and restores the old mode on failure", async (t) => {
@@ -15,7 +16,7 @@ test("agy-tools command toggles safely, waits for idle, and restores the old mod
     HOMEPATH: home,
     PI_CODING_AGENT_DIR: agentDir,
     PI_ANTIGRAVITY_PI_TOOL_BRIDGE: "1",
-    PI_ANTIGRAVITY_TOOLS: "native",
+    PI_ANTIGRAVITY_TOOLS: undefined,
     PI_ANTIGRAVITY_AGENT: undefined,
     AGY_BINARY: path.join(home, "missing-agy"),
   };
@@ -89,7 +90,9 @@ test("agy-tools command toggles safely, waits for idle, and restores the old mod
   await handlers.get("session_start")!({ reason: "new" }, ctx);
   const command = commands.get("agy-tools")!;
   assert.ok(command);
-  const run = (args: string) => command.handler(args, ctx as never);
+  const run = (args: string) => commands.get("agy-tools")!.handler(args, ctx as never);
+  const settingsFile = path.join(agentDir, "settings.json");
+  const savedMode = () => loadSavedAgyToolMode(settingsFile);
   const status = async () => {
     await run("status");
     return notices.at(-1)!.message;
@@ -117,13 +120,16 @@ test("agy-tools command toggles safely, waits for idle, and restores the old mod
     await pending;
     waitForIdle = async () => {};
     assert.match(await status(), /ON \(pi\)/);
+    assert.equal(savedMode(), "pi");
     assert.equal(branch.length, 2);
     assert.equal(branch[0], history);
   });
 
   await t.test("on/off are idempotent and no argument toggles both ways", async () => {
     const before = branch.length;
+    await rm(settingsFile);
     await run("on");
+    assert.equal(savedMode(), "pi");
     assert.equal(branch.length, before);
     await run("off");
     assert.match(await status(), /OFF \(native\)/);
@@ -161,6 +167,7 @@ test("agy-tools command toggles safely, waits for idle, and restores the old mod
           ),
         );
         assert.match(await status(), /OFF \(native\)/);
+        assert.equal(savedMode(), "native");
         assert.equal(branch[0], history);
       } finally {
         await rm(blocker, { force: true });
@@ -168,4 +175,38 @@ test("agy-tools command toggles safely, waits for idle, and restores the old mod
       }
     },
   );
+
+  await t.test(
+    "a failed settings write restores the running mode and preserves the file",
+    async () => {
+      await writeFile(settingsFile, "{broken");
+      try {
+        await run("on");
+        assert.match(notices.at(-1)!.message, /failed to switch tools; mode remains native/);
+        assert.match(await status(), /OFF \(native\)/);
+        assert.throws(savedMode);
+      } finally {
+        await writeFile(settingsFile, '{"antigravity":{"toolMode":"native"}}');
+      }
+    },
+  );
+
+  await t.test("agy tools saves both modes across replacement extension runtimes", async () => {
+    const reload = async () => {
+      await handlers.get("session_shutdown")!({}, {});
+      handlers.clear();
+      commands.clear();
+      extension(pi as never);
+      await handlers.get("session_start")!({ reason: "resume" }, ctx);
+    };
+    await commands.get("agy")!.handler("tools on", ctx as never);
+    assert.equal(savedMode(), "pi");
+    await reload();
+    assert.match(await status(), /ON \(pi\)/);
+    await commands.get("agy")!.handler("tools off", ctx as never);
+    assert.equal(savedMode(), "native");
+    await reload();
+    assert.match(await status(), /OFF \(native\)/);
+    assert.equal(branch[0], history);
+  });
 });

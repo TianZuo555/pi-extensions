@@ -16,6 +16,7 @@
 
 import type {
   ExtensionAPI,
+  ExtensionCommandContext,
   ExtensionContext,
   ExtensionUIContext,
   ProviderModelConfig,
@@ -37,6 +38,7 @@ import { checkAgyBinary, MIN_AGY_VERSION, runAgyCommand } from "./lib/agy-diagno
 import { parseAgyAgents, readAgyProcessProfile } from "./lib/agy-profile.ts";
 import { createPiToolsAgent } from "./lib/pi-tools-agent.ts";
 import { readAgyToolMode, resolveAgyToolModeCommand, type AgyToolMode } from "./lib/tool-mode.ts";
+import { loadSavedAgyToolMode, saveAgyToolMode } from "./lib/tool-mode-settings.ts";
 import { removeMcpCacheEntry } from "./lib/mcp-cache.ts";
 import { createPrivateMcpConfig } from "./lib/mcp-config.ts";
 import { AgyPiBridge, selectBridgedTools, type PiToolInfo } from "./lib/bridge.ts";
@@ -216,7 +218,8 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
   });
   // Flags are not populated while the extension factory runs.
   let toolMode: AgyToolMode | undefined;
-  const getToolMode = () => (toolMode ??= readAgyToolMode(pi.getFlag("agy-tools")));
+  const getToolMode = () =>
+    (toolMode ??= readAgyToolMode(pi.getFlag("agy-tools"), process.env, loadSavedAgyToolMode()));
   let switchingToolMode = false;
 
   installAgyDeathHooks();
@@ -996,8 +999,14 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
   });
 
   pi.registerCommand("agy", {
-    description: "Show agy conversation and persistent-driver status",
+    description: "Show agy status, or persistently toggle Pi tools with tools [on|off|status]",
+    getArgumentCompletions: (prefix) =>
+      ["tools", "tools on", "tools off", "tools status"]
+        .filter((value) => value.startsWith(prefix))
+        .map((value) => ({ value, label: value })),
     handler: async (args, ctx) => {
+      const [action, ...rest] = args.trim().split(/\s+/);
+      if (action === "tools") return handleAgyToolsCommand(rest.join(" "), ctx);
       if (args.trim()) {
         ctx.ui.notify(
           'antigravity: use "/agy-tools", "/agy-reset", "/agy-models", "/agy-agents", "/agy-doctor", "/agy-subagents", "/agy-tasks", "/agy-artifacts", or "/agy-usage".',
@@ -1043,83 +1052,94 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
   });
 
   pi.registerCommand("agy-tools", {
-    description: "Toggle Pi tools, or use on, off, or status",
+    description: "Toggle and save Pi tools, or use on, off, or status",
     getArgumentCompletions: (prefix) =>
       ["on", "off", "status"]
         .filter((value) => value.startsWith(prefix))
         .map((value) => ({ value, label: value })),
-    handler: async (args, ctx) => {
-      const action = resolveAgyToolModeCommand(args, getToolMode());
-      const notifyStatus = () =>
+    handler: handleAgyToolsCommand,
+  });
+
+  async function handleAgyToolsCommand(args: string, ctx: ExtensionCommandContext): Promise<void> {
+    const action = resolveAgyToolModeCommand(args, getToolMode());
+    const notifyStatus = () =>
+      ctx.ui.notify(
+        `antigravity: Pi tools ${getToolMode() === "pi" ? "ON (pi)" : "OFF (native)"}.`,
+        "info",
+      );
+    if (action === undefined) {
+      ctx.ui.notify(
+        'agy-tools: usage "/agy-tools [on|off|status]"; no argument toggles the mode.',
+        "error",
+      );
+      return;
+    }
+    if (action === "status") {
+      notifyStatus();
+      return;
+    }
+    await ctx.waitForIdle();
+    const session = probeCtx(() => ({ cwd: ctx.cwd, provider: ctx.model?.provider }));
+    if (session.stale) return;
+    if (switchingToolMode) {
+      ctx.ui.notify("antigravity: a tool-mode switch is already in progress.", "info");
+      return;
+    }
+    const previous = getToolMode();
+    const next = args.trim() ? action : previous === "pi" ? "native" : "pi";
+    if (next === previous) {
+      try {
+        await saveAgyToolMode(next);
+        notifyStatus();
+      } catch (error) {
         ctx.ui.notify(
-          `antigravity: Pi tools ${getToolMode() === "pi" ? "ON (pi)" : "OFF (native)"}.`,
-          "info",
-        );
-      if (action === undefined) {
-        ctx.ui.notify(
-          'agy-tools: usage "/agy-tools [on|off|status]"; no argument toggles the mode.',
+          `antigravity: could not save tool mode (${error instanceof Error ? error.message : String(error)}).`,
           "error",
         );
-        return;
       }
-      if (action === "status") {
-        notifyStatus();
-        return;
-      }
-      await ctx.waitForIdle();
-      const session = probeCtx(() => ({ cwd: ctx.cwd, provider: ctx.model?.provider }));
-      if (session.stale) return;
-      if (switchingToolMode) {
-        ctx.ui.notify("antigravity: a tool-mode switch is already in progress.", "info");
-        return;
-      }
-      const previous = getToolMode();
-      const next = args.trim() ? action : previous === "pi" ? "native" : "pi";
-      if (next === previous) {
-        notifyStatus();
-        return;
-      }
+      return;
+    }
+    try {
+      validateToolMode(next);
+    } catch (error) {
+      ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
+      return;
+    }
+    switchingToolMode = true;
+    try {
+      await runAntigravity(runtime, service.setSession(session.value.cwd, undefined, true));
+      appendConversationReset(ctx);
+      subagentRoster.clear();
+      setAgyTasksWidget(0);
+      setAgyArtifactsWidget(0);
+      await teardownBridge();
+      toolMode = next;
+      refreshSkillTools();
+      if (session.value.provider === "antigravity") await ensureBridgeRegistered(ctx.ui);
+      bridge.refreshTools();
+      await saveAgyToolMode(next);
+      notifyStatus();
+    } catch (error) {
+      toolMode = previous;
+      refreshSkillTools();
+      let message = error instanceof Error ? error.message : String(error);
       try {
-        validateToolMode(next);
-      } catch (error) {
-        ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
-        return;
-      }
-      switchingToolMode = true;
-      try {
-        await runAntigravity(runtime, service.setSession(session.value.cwd, undefined, true));
-        appendConversationReset(ctx);
-        subagentRoster.clear();
-        setAgyTasksWidget(0);
-        setAgyArtifactsWidget(0);
         await teardownBridge();
-        toolMode = next;
-        refreshSkillTools();
         if (session.value.provider === "antigravity") await ensureBridgeRegistered(ctx.ui);
         bridge.refreshTools();
-        notifyStatus();
-      } catch (error) {
-        toolMode = previous;
-        refreshSkillTools();
-        let message = error instanceof Error ? error.message : String(error);
-        try {
-          await teardownBridge();
-          if (session.value.provider === "antigravity") await ensureBridgeRegistered(ctx.ui);
-          bridge.refreshTools();
-        } catch (restoreError) {
-          message += `; restoring ${previous} mode also failed: ${
-            restoreError instanceof Error ? restoreError.message : String(restoreError)
-          }`;
-        }
-        ctx.ui.notify(
-          `antigravity: failed to switch tools; mode remains ${previous} (${message}).`,
-          "error",
-        );
-      } finally {
-        switchingToolMode = false;
+      } catch (restoreError) {
+        message += `; restoring ${previous} mode also failed: ${
+          restoreError instanceof Error ? restoreError.message : String(restoreError)
+        }`;
       }
-    },
-  });
+      ctx.ui.notify(
+        `antigravity: failed to switch tools; mode remains ${previous} (${message}).`,
+        "error",
+      );
+    } finally {
+      switchingToolMode = false;
+    }
+  }
 
   pi.registerCommand("agy-reset", {
     description: "Drop the agy conversation and driver; next turn starts fresh",
