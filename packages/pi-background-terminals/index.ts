@@ -89,6 +89,7 @@ import {
   TERMINAL_STOP_TEXT,
   TERMINAL_STOP_TOOL_DESCRIPTION,
   TERMINAL_WAIT_OUTPUT_FIELD_DESCRIPTIONS,
+  BASH_OUTPUT_FIELD_DESCRIPTIONS,
   TERMINAL_WAIT_PARAMETER_DESCRIPTIONS,
   TERMINAL_WAIT_PROMPT_SNIPPET,
   TERMINAL_WAIT_TOOL_DESCRIPTION,
@@ -170,6 +171,30 @@ const TERMINAL_WAIT_OUTPUT_SCHEMA = Type.Object({
   text: Type.String({ description: TERMINAL_WAIT_OUTPUT_FIELD_DESCRIPTIONS.text }),
 });
 
+const BASH_OUTPUT_SCHEMA = Type.Object({
+  output: Type.String({ description: BASH_OUTPUT_FIELD_DESCRIPTIONS.output }),
+  truncated: Type.Boolean({ description: BASH_OUTPUT_FIELD_DESCRIPTIONS.truncated }),
+  exit_code: Type.Optional(Type.Integer({ description: BASH_OUTPUT_FIELD_DESCRIPTIONS.exit_code })),
+  wall_time_seconds: Type.Number({
+    description: BASH_OUTPUT_FIELD_DESCRIPTIONS.wall_time_seconds,
+  }),
+  terminal_id: Type.Optional(
+    Type.String({ description: BASH_OUTPUT_FIELD_DESCRIPTIONS.terminal_id }),
+  ),
+  status: Type.Optional(
+    Type.Union(
+      [
+        Type.Literal("running"),
+        Type.Literal("done"),
+        Type.Literal("failed"),
+        Type.Literal("timed_out"),
+        Type.Literal("killed"),
+      ],
+      { description: BASH_OUTPUT_FIELD_DESCRIPTIONS.status },
+    ),
+  ),
+});
+
 const TERMINAL_STATUSES: ReadonlySet<string> = new Set([
   "running",
   "done",
@@ -211,6 +236,26 @@ function parseTerminalLogRef(ref: string) {
   return {
     id: match[1],
     stream: (match[2] ?? "stdout") as "stdout" | "stderr",
+  };
+}
+
+/** Strict-JSON structured bash result for Code Mode scripts: optional keys
+ * are absent rather than undefined. `OutputView.text` already carries the
+ * `... N bytes omitted ...` marker when a stream truncated. */
+function bashStructuredContent(snap: TerminalSnapshot) {
+  const stdout = snap.stdout.text;
+  const stderr = snap.stderr.text;
+  let output = stdout;
+  if (stderr.length > 0) {
+    output += (output.length > 0 && !output.endsWith("\n") ? "\n" : "") + stderr;
+  }
+  return {
+    output,
+    truncated: snap.stdout.truncatedBytes > 0 || snap.stderr.truncatedBytes > 0,
+    ...(snap.exitCode !== undefined ? { exit_code: snap.exitCode } : {}),
+    wall_time_seconds: Math.round(((snap.settledAt ?? Date.now()) - snap.createdAt) / 100) / 10,
+    terminal_id: snap.id,
+    status: snap.status,
   };
 }
 
@@ -536,6 +581,9 @@ export function createBackgroundTerminalsExtension(
           }),
         ),
       }),
+      // Code Mode scripts resolve this schema to structured fields — including
+      // on isError, where a text-only tool result would reject instead.
+      outputSchema: BASH_OUTPUT_SCHEMA,
       // Quick commands show their useful title and a bounded output preview.
       // Commands that actually yield collapse to one compact terminal row; /ps
       // remains the complete invocation/output viewer for every managed process.
@@ -808,6 +856,9 @@ export function createBackgroundTerminalsExtension(
             return {
               content: [{ type: "text", text: TERMINAL_ERRORS.initialWaitAborted(started.id) }],
               details: { id: started.id, status: "running", yielded: true },
+              structuredContent: bashStructuredContent(
+                live ?? manager.view.get(started.id) ?? started,
+              ),
               isError: true,
             };
           }
@@ -840,9 +891,18 @@ export function createBackgroundTerminalsExtension(
           // are tool errors. Returned rather than thrown so the structured
           // status reaches the renderer. Yielded failures arrive later as
           // completion messages.
-          return { content: [{ type: "text", text }], details, isError: true };
+          return {
+            content: [{ type: "text", text }],
+            details,
+            structuredContent: bashStructuredContent(snap),
+            isError: true,
+          };
         }
-        return { content: [{ type: "text", text }], details };
+        return {
+          content: [{ type: "text", text }],
+          details,
+          structuredContent: bashStructuredContent(snap),
+        };
       },
     });
 

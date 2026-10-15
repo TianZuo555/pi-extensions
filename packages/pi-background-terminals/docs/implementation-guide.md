@@ -343,6 +343,17 @@ continues in the background" stays truthful.
 inside Code Mode, so a failed terminal would otherwise be unreadable to a
 script; structured output resolves to fields even when `isError` is set.
 
+`bash` likewise declares an `outputSchema` and returns `structuredContent` on
+every managed result — quick completions, yielded running terminals, the
+Esc-abort path, and error results alike — so a non-zero exit resolves to
+fields in Code Mode instead of rejecting. The shape mirrors Pi's built-in
+bash (`output`, `truncated`, `exit_code`, `wall_time_seconds`) plus
+`terminal_id` and `status`; `exit_code` is absent while the command runs and
+when a signal or timeout stopped it. There is no `full_output_path` — spill
+paths stay private; a script reads the full log with `terminal_log_read`.
+The foreground-fallback path passes the built-in's `structuredContent`
+through unchanged.
+
 ### Code Mode nesting
 
 Pi's Code Mode runs tools inside a script via `ctx.executeTool`; every such
@@ -523,9 +534,11 @@ accepts a bare `bt-<runtime-id>-N` id (stdout) or the `id:stdout` / `id:stderr`
 ref, plus `offset`, `limit`, `tail`, and `pattern`. Mode selection: `pattern`
 runs a streaming case-insensitive line search over `[offset, size)` that
 carries partial lines across 64 KiB chunks, formats matches as
-`@<line-start-byte>: <line>` capped to 300 chars, stops collecting when the
-next line would exceed `limit` bytes while `matchCount` keeps counting, and
-honors the tool's AbortSignal between chunks; `tail` returns the newest
+`@<line-start-byte>: <line>` capped to 300 chars, stops collecting when a
+later match would exceed `limit` bytes while `matchCount` keeps counting —
+the first match is always shown, cut to `limit` bytes ending in `…` when
+needed, so `nextOffset` always advances past `offset` — and honors the tool's
+AbortSignal between chunks; `tail` returns the newest
 `limit` bytes; an explicit `offset` is an exact page; otherwise auto returns
 the whole log when it fits or a head+tail view naming the omitted byte range.
 The manager resolves the id against the live session registry rather than
@@ -541,11 +554,12 @@ refs from a previous runtime cannot alias terminals after reload/resume.
 A byte offset chosen by the model can land inside a code point, so both window
 edges are snapped to UTF-8 boundaries before decoding: leading continuation
 bytes are skipped, and a trailing sequence the window cut short is excluded so
-the next page starts at its lead byte. `offset` and `next_offset` describe the
-snapped window, which makes paging with `next_offset` byte-exact rather than
-silently inserting replacement characters at every page boundary. A window at
-end of file, or one too small to hold a single code point, is returned as read
-so paging always advances.
+the next page starts at its lead byte. A `limit` smaller than one code point
+expands to exactly that code point (at most 3 bytes over), so a page or tail
+read still decodes and the next page continues after it. `offset` and
+`next_offset` describe the snapped window, which makes paging with
+`next_offset` byte-exact rather than silently inserting replacement
+characters at every page boundary.
 
 ## 13. Process lifecycle and termination
 
@@ -598,9 +612,18 @@ the listener and sweeps any residual pid after normal bounded teardown.
 ## 14. Capacity and pruning
 
 At most eight terminals may run concurrently. Start reserves a slot
-synchronously before spawning, so parallel tool calls cannot race through the
-cap. Reaching the cap is an explicit error; it does not bypass management via
-the foreground fallback.
+synchronously when one is free and no one is queued, so parallel tool calls
+cannot race through the cap and a new caller cannot jump the queue. Calls
+beyond the cap queue FIFO for up to 10 s (`MAX_SLOT_WAIT_MS`, injectable as
+`timings.slotWaitMs`): a single `pumpSlotQueue` hands freed slots — after a
+settle and after a failed start releases its reservation — to the oldest
+waiter, transferring the reservation with the grant. A queued wait ends on
+the grant, the timeout (`ConcurrencyLimitError`), the tool's AbortSignal (the
+same failure a pre-spawn abort produces), disposal (the shutting-down
+`SpawnError`), or fiber interruption; on every non-grant exit the waiter
+leaves the queue and a grant that landed in the same instant releases its
+reservation again, so no slot leaks. Failing is explicit — it never bypasses
+management via the foreground fallback.
 
 The registry retains at most 32 live/settled entries for `/ps` and exposes them
 newest first. When over the limit it prunes settled entries oldest first —

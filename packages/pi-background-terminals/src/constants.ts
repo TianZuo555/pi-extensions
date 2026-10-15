@@ -1,4 +1,6 @@
 export const MAX_RUNNING = 8;
+/** How long a start beyond MAX_RUNNING waits for a free slot before failing. */
+export const MAX_SLOT_WAIT_MS = 10_000;
 export const MAX_TRACKED = 32;
 export const DEFAULT_YIELD_TIME_MS = 10_000;
 export const MIN_YIELD_TIME_MS = 250;

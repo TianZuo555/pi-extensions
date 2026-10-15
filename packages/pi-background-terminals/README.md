@@ -79,7 +79,11 @@ result immediately. The model then continues in the same run.
 
 ### Limits
 
-- A maximum of 8 terminals can run at the same time.
+- A maximum of 8 commands can run at the same time. This limit includes
+  foreground commands and background terminals.
+- If 8 commands run, a new call waits for a free slot. The calls start in the
+  sequence that they arrive. If no slot becomes free in 10 seconds, the call
+  fails.
 - The extension keeps the data of the last 32 terminals.
 - The maximum `timeout` is approximately 2,147,483 seconds. This is the limit
   of a Node.js timer.
@@ -87,7 +91,8 @@ result immediately. The model then continues in the same run.
 ### Cancellation
 
 - If you cancel a call before the command starts, the command does not start.
-  This rule also applies to the fallback.
+  This rule also applies to a call that waits for a free slot, and to the
+  fallback.
 - If you push Esc after the command starts, only the initial wait stops. The
   command continues in the background. The result comes later, as usual.
 
@@ -158,8 +163,11 @@ This tool reads the full log of a terminal. It does not control the process.
 - A search shows a maximum of 300 characters for each line. If the matches do
   not fit in `limit`, `next_offset` is the start of the first match that the
   tool does not show. To continue the search, use this value as `offset`.
+- A search always shows the first match. If that line is larger than `limit`,
+  the tool cuts the line. Thus each search continues past its first match.
 - All pages start and end at UTF-8 character boundaries. The pages connect
-  without errors.
+  without errors. If `limit` is smaller than one character, the page contains
+  that full character.
 - For calls from the model, each agent run has a limit of 8 reads and 256 KiB.
   This limit does not apply to calls from a Code Mode script or to Bash
   commands.
@@ -174,9 +182,24 @@ In Code Mode, the model writes a JavaScript script that calls tools. The
 script receives the tool results. The model receives only the output of the
 script. The script has no timers.
 
-- If a `bash` call in a script moves to the background, the script receives a
-  terminal ID. The result comes to the model only after the script ends. To
-  use the result in the same script, call `tools.terminal_wait`.
+- In a script, `bash` returns an object. It has the fields of the built-in
+  tool: `output`, `truncated`, `exit_code`, and `wall_time_seconds`. It also
+  has the fields `terminal_id` and `status`.
+- In a script, a non-zero exit does not cause an exception in `bash`. Examine
+  `exit_code` or `status` instead.
+- `exit_code` is not present while the command runs. It is also not present
+  after a signal or a timeout stops the command.
+- `output` contains stdout and then stderr. For a large stream, it contains
+  only the start and the end, and `truncated` is true. To read the full log,
+  use `terminal_log_read` with `terminal_id`.
+- The object does not contain `full_output_path`, because the log files are
+  private.
+- If a `bash` call in a script moves to the background, `status` is
+  `running`. The result comes to the model only after the script ends. To use
+  the result in the same script, call `tools.terminal_wait` with
+  `terminal_id`.
+- A script can start more than 8 commands, for example with `Promise.all`.
+  The extension runs a maximum of 8 at the same time. The other calls wait.
 - In a script, `terminal_wait` returns an object with the fields `settled`,
   `running`, `alreadyReported`, and `text`. Each item in `settled` contains the
   ID, the status, and the exit code of a terminal that stopped.
@@ -196,12 +219,11 @@ Example:
 
 ```js
 const started = await tools.bash({ command: "pnpm test", yield_time_ms: 1000 });
-const id = /bt-[a-f0-9]{16}-\d+/.exec(started)?.[0];
-if (id) {
-  const waited = await tools.terminal_wait({ ids: [id] });
+if (started.status === "running") {
+  const waited = await tools.terminal_wait({ ids: [started.terminal_id] });
   text(waited.text);
 } else {
-  text(started);
+  text(`exit ${started.exit_code}\n${started.output}`);
 }
 ```
 

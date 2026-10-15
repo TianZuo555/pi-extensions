@@ -12,6 +12,7 @@ import { formatElapsed, formatExit, type TerminalSnapshot } from "./domain.ts";
 import {
   DEFAULT_YIELD_TIME_MS,
   MAX_RUNNING,
+  MAX_SLOT_WAIT_MS,
   MAX_YIELD_TIME_MS,
   MIN_YIELD_TIME_MS,
   MAX_TRACKED,
@@ -53,7 +54,7 @@ export const BASH_TOOL_DESCRIPTION =
   "Nothing else to do? Call terminal_wait — never sleep or poll. " +
   "`cmd &` dies with its shell — give a server its own call instead. " +
   "Wait on CI or deploys with one blocking command (`gh run watch`, an `until` loop). " +
-  `yield_time_ms sets the wait; timeout kills the process tree; max ${MAX_RUNNING} running terminals.`;
+  `yield_time_ms sets the wait; timeout kills the process tree; at most ${MAX_RUNNING} commands run at once; extra calls queue.`;
 
 export const BASH_PROMPT_SNIPPET = "Run Bash; long commands yield and notify on exit";
 
@@ -93,7 +94,7 @@ export const TERMINAL_LOG_READ_OUTPUT_FIELD_DESCRIPTIONS = {
   text: "Page text. Empty when this range has no output.",
   omittedStart: "First omitted byte (head_tail).",
   omittedEnd: "Byte after the omitted range (head_tail).",
-  matchCount: "Matching lines found (search).",
+  matchCount: "Matching lines from offset to the end of the log, shown or not (search).",
   matches: "Shown matching lines with line-start byte offsets (search).",
   pattern: "Search regex source (search).",
 };
@@ -109,6 +110,19 @@ export const TERMINAL_WAIT_OUTPUT_FIELD_DESCRIPTIONS = {
   running: "Ids still running.",
   alreadyReported: "Ids whose results were delivered earlier.",
   text: "The same result text the model sees.",
+};
+
+/** Field text on `bash` `outputSchema` (code-mode scripts, not the model). */
+export const BASH_OUTPUT_FIELD_DESCRIPTIONS = {
+  output:
+    "stdout, then stderr. A long stream keeps its head and tail with an omitted-bytes marker.",
+  truncated:
+    "True when output omits bytes. Read the full log with terminal_log_read and terminal_id.",
+  exit_code:
+    "Process exit code. Absent while the command runs, or when a signal or timeout stopped it.",
+  wall_time_seconds: "Seconds since the command started.",
+  terminal_id: "Terminal id for terminal_wait, terminal_stop, and terminal_log_read.",
+  status: "running (moved to the background), done, failed, timed_out, or killed.",
 };
 export const TERMINAL_WAIT_PROMPT_SNIPPET = "Wait for a background terminal instead of sleeping";
 export const TERMINAL_WAIT_PARAMETER_DESCRIPTIONS = {
@@ -134,7 +148,7 @@ export const TERMINAL_ERRORS = {
   invalidDirectory: (cwd: string) => `working_dir is not a directory: ${cwd}`,
   shuttingDown: "Background terminal manager is shutting down.",
   shutDownDuringStart: "Background terminal manager shut down while starting.",
-  concurrency: `Max ${MAX_RUNNING} background terminals can run concurrently. Stop one with terminal_stop before starting another.`,
+  concurrency: `${MAX_RUNNING} commands are already running and none exited within ${MAX_SLOT_WAIT_MS / 1000}s. Stop one with terminal_stop or wait with terminal_wait, then retry.`,
   spillFlush: "Full-log spill flush timed out; full output may be incomplete",
   spillFailed: (error: string) => `Full-log spill failed: ${error}`,
   spillCapped: (stream: string) =>

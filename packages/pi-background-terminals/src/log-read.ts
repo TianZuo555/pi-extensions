@@ -72,11 +72,18 @@ export function readLogPage(filePath: string, offset: number, limit: number): Lo
   const body = raw.subarray(leading);
   const atEof = start + raw.length >= size;
   const complete = completeCodePointEnd(body);
-  // Only trim a split trailing sequence when the rest of it is already on
-  // disk. At EOF there is nothing to stitch to, and a window too small to
-  // hold one code point must still advance.
-  const bytes = atEof || complete === 0 ? body : body.subarray(0, complete);
   const readOffset = start + leading;
+  // Only trim a split trailing sequence when the rest of it is already on
+  // disk. At EOF there is nothing to stitch to. When the window cannot hold
+  // even one code point (limit smaller than the sequence), expand to exactly
+  // that code point — at most 3 bytes past limit — so the page still decodes
+  // and the next page can continue after it.
+  let bytes = atEof || complete === 0 ? body : body.subarray(0, complete);
+  if (!atEof && complete === 0 && body.length > 0) {
+    const lead = body[0];
+    const seqLen = lead >= 0xf0 ? 4 : lead >= 0xe0 ? 3 : lead >= 0xc0 ? 2 : 1;
+    bytes = readWindow(filePath, readOffset, Math.min(seqLen, size - readOffset));
+  }
   const text = bytes.toString("utf8");
   return {
     mode: "page",
@@ -91,14 +98,27 @@ export function readLogPage(filePath: string, offset: number, limit: number): Lo
 /** The newest `limit` bytes, start-snapped to a code-point boundary. */
 export function readLogTail(filePath: string, limit: number): LogReadBody {
   const size = fs.statSync(filePath).size;
-  const start = Math.max(0, size - limit);
+  let start = Math.max(0, size - limit);
   const raw = readWindow(filePath, start, size - start);
   const leading = start > 0 ? codePointStart(raw) : 0;
-  const bytes = raw.subarray(leading);
+  let bytes = raw.subarray(leading);
+  let offset = start + leading;
+  if (bytes.length === 0 && raw.length > 0) {
+    // The window sits entirely inside the final multi-byte code point (limit
+    // smaller than the sequence). Back up to its lead byte so tail still
+    // returns at least that code point.
+    const probeStart = Math.max(0, size - 4);
+    const probe = readWindow(filePath, probeStart, size - probeStart);
+    let lead = probe.length - 1;
+    while (lead > 0 && (probe[lead] & 0xc0) === 0x80) lead--;
+    start = probeStart + lead;
+    offset = start;
+    bytes = probe.subarray(lead);
+  }
   const text = bytes.toString("utf8");
   return {
     mode: "tail",
-    offset: start + leading,
+    offset,
     nextOffset: size,
     bytesRead: Buffer.byteLength(text),
     size,
@@ -146,9 +166,11 @@ export function readLogAuto(filePath: string, limit: number): LogReadBody {
  * at scan start. Reads chunks (never the whole file — spills can be
  * 256 MiB), carries partial lines across chunk boundaries, and records each
  * match as `@<line-start-byte-offset>: <line>` with the line cut to 300
- * chars. Collection stops when the next formatted line would exceed `limit`
- * bytes; `matchCount` still counts the rest so the caller knows how much was
- * left out.
+ * chars. The first match is always shown — cut to `limit` bytes on a UTF-8
+ * boundary ending in `…` when needed — so `nextOffset` always advances past
+ * `offset` and a capped continuation cannot loop. Collection stops when a
+ * later match would exceed `limit` bytes; `matchCount` still counts the rest
+ * so the caller knows how much was left out.
  */
 export async function searchLogFile(
   filePath: string,
@@ -179,7 +201,21 @@ export async function searchLogFile(
     const formatted = `@${lineOffset}: ${shown}`;
     const cost = Buffer.byteLength(formatted) + (matches.length > 0 ? 1 : 0);
     if (capOffset !== undefined) return;
-    if (shownBytes + cost <= options.limit) {
+    if (matches.length === 0) {
+      // The first match is always emitted, even when it cannot fit whole —
+      // otherwise nextOffset could equal offset and continuation would loop.
+      // Cut to at most `limit` bytes on a UTF-8 boundary ending in `…`; when
+      // even the `@<offset>: ` prefix + `…` exceeds limit, emit that anyway.
+      let line = formatted;
+      if (cost > options.limit) {
+        const prefix = `@${lineOffset}: `;
+        const room = options.limit - Buffer.byteLength(prefix) - 3; // "…" is 3 bytes
+        const cut = Buffer.from(shown, "utf8").subarray(0, Math.max(0, room));
+        line = `${prefix}${cut.subarray(0, completeCodePointEnd(cut)).toString("utf8")}…`;
+      }
+      matches.push({ offset: lineOffset, text: line });
+      shownBytes += Buffer.byteLength(line);
+    } else if (shownBytes + cost <= options.limit) {
       matches.push({ offset: lineOffset, text: formatted });
       shownBytes += cost;
     } else {

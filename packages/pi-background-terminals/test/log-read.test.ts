@@ -230,3 +230,83 @@ test("search aborts the scan between chunks", async () => {
     );
   });
 });
+
+test("page expands to a whole code point when the limit is smaller", async () => {
+  await withTempFile("🚀x", async (file) => {
+    const first = readLogPage(file, 0, 1);
+    assert.equal(first.text, "🚀");
+    assert.equal(first.nextOffset, 4);
+    const second = readLogPage(file, 4, 1);
+    assert.equal(second.text, "x");
+    assert.equal(second.nextOffset, 5);
+  });
+});
+
+test("tiny-limit pages stitch back to the exact string", async () => {
+  const content = "a🚀é中b";
+  const total = Buffer.byteLength(content);
+  await withTempFile(content, async (file) => {
+    for (const limit of [1, 2, 3]) {
+      let offset = 0;
+      let stitched = "";
+      while (offset < total) {
+        const page = readLogPage(file, offset, limit);
+        stitched += page.text;
+        assert.ok(page.nextOffset > offset, `page at ${offset} must advance`);
+        assert.equal(page.text.includes("\ufffd"), false);
+        offset = page.nextOffset;
+      }
+      assert.equal(stitched, content, `limit ${limit}`);
+    }
+  });
+});
+
+test("tail returns at least the last code point when the limit is smaller", async () => {
+  await withTempFile("a🚀", async (file) => {
+    const result = readLogTail(file, 1);
+    assert.equal(result.text, "🚀");
+    assert.equal(result.offset, 1);
+    assert.equal(result.nextOffset, 5);
+  });
+});
+
+test("search always advances when the first match exceeds the limit", async () => {
+  const line = `ERROR ${"x".repeat(100)}`;
+  const lineLen = Buffer.byteLength(line) + 1;
+  await withTempFile(`${line}\n${line}\n${line}\n`, async (file) => {
+    const result = await searchLogFile(file, { pattern: /error/i, offset: 0, limit: 10 });
+    // Exactly the first match is shown, cut to the limit and ending in ….
+    assert.equal(result.matches?.length, 1);
+    const shown = result.matches![0];
+    assert.equal(shown.offset, 0);
+    assert.match(shown.text, /^@0: /);
+    assert.ok(shown.text.endsWith("…"));
+    assert.ok(Buffer.byteLength(shown.text) <= 10);
+    assert.equal(result.matchCount, 3);
+    // nextOffset is the SECOND line's start: a continuation resumes there.
+    assert.equal(result.nextOffset, lineLen);
+    // Continuing visits all three matches at strictly increasing offsets.
+    const seen = [0];
+    let offset = result.nextOffset;
+    while (offset < result.size) {
+      const next = await searchLogFile(file, { pattern: /error/i, offset, limit: 10 });
+      for (const match of next.matches ?? []) seen.push(match.offset);
+      assert.ok(next.nextOffset > offset, "each page must advance");
+      offset = next.nextOffset;
+    }
+    assert.deepEqual(seen, [0, lineLen, lineLen * 2]);
+  });
+});
+
+test("search still makes progress with a limit smaller than the match prefix", async () => {
+  const line = `ERROR ${"x".repeat(50)}`;
+  const lineLen = Buffer.byteLength(line) + 1;
+  await withTempFile(`${line}\n${line}\n`, async (file) => {
+    const result = await searchLogFile(file, { pattern: /error/i, offset: 0, limit: 1 });
+    // Even the "@<offset>: " prefix + "…" exceeds the limit — it is emitted
+    // anyway so the caller sees something and nextOffset advances.
+    assert.equal(result.matches?.length, 1);
+    assert.equal(result.matches![0].text, "@0: …");
+    assert.equal(result.nextOffset, lineLen);
+  });
+});

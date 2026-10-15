@@ -40,6 +40,7 @@ import {
 
 import {
   MAX_RUNNING,
+  MAX_SLOT_WAIT_MS,
   MAX_TRACKED,
   MIN_YIELD_TIME_MS,
   MAX_YIELD_TIME_MS,
@@ -71,6 +72,9 @@ export interface TerminalManagerTimings {
    * settle grace + flush must stay inside the scope-close bound, so teardown
    * remains bounded end to end. */
   readonly spillFlushTimeoutMs: number;
+  /** How long a start beyond MAX_RUNNING queues for a free slot before
+   * failing with ConcurrencyLimitError. */
+  readonly slotWaitMs: number;
 }
 
 export const DEFAULT_MANAGER_TIMINGS: TerminalManagerTimings = {
@@ -78,6 +82,7 @@ export const DEFAULT_MANAGER_TIMINGS: TerminalManagerTimings = {
   forceKillAfterMs: 2_000,
   settleGraceMs: 1_000,
   spillFlushTimeoutMs: 1_500,
+  slotWaitMs: MAX_SLOT_WAIT_MS,
 };
 
 export interface WindowsJobSupport {
@@ -456,6 +461,12 @@ const makeManager = (timings: TerminalManagerTimings) =>
     const runtimeId = randomBytes(8).toString("hex");
     let counter = 0;
     let reserved = 0;
+    /** Starts waiting for a free MAX_RUNNING slot, oldest first. A waiter
+     * granted by pumpSlotQueue already holds its `reserved` slot. */
+    const slotQueue: Array<{
+      grant: Deferred.Deferred<void, SpawnError | ConcurrencyLimitError>;
+      granted: boolean;
+    }> = [];
     let disposed = false;
     let spillDir: string | undefined | null;
     let onSettled: ((snap: TerminalSnapshot, consumed: boolean) => void) | undefined;
@@ -481,6 +492,72 @@ const makeManager = (timings: TerminalManagerTimings) =>
 
     const runningCount = () =>
       [...entries.values()].filter((e) => e.snapshot.status === "running").length;
+
+    /** Hand free slots to queued starts in arrival order. The reservation
+     * (reserved++) transfers to the waiter with the grant, so no new caller
+     * can steal it before the waiter's fiber resumes. */
+    const pumpSlotQueue = () => {
+      while (slotQueue.length > 0 && runningCount() + reserved < MAX_RUNNING) {
+        const waiter = slotQueue.shift();
+        if (!waiter) break;
+        waiter.granted = true;
+        reserved++;
+        Deferred.doneUnsafe(waiter.grant, Effect.void);
+      }
+    };
+
+    /** Queue behind the MAX_RUNNING cap until a slot frees, slotWaitMs
+     * elapses, the tool signal aborts, or the fiber is interrupted. */
+    const waitForSlot = (signal: AbortSignal | undefined) =>
+      Effect.gen(function* () {
+        const grant = yield* Deferred.make<void, SpawnError | ConcurrencyLimitError>();
+        const waiter = { grant, granted: false };
+        yield* Effect.sync(() => {
+          slotQueue.push(waiter);
+          // Capacity freed between the cap check and the enqueue is handed
+          // over immediately rather than waited out.
+          pumpSlotQueue();
+        });
+        const abortWait =
+          signal === undefined
+            ? Effect.never
+            : Effect.callback<never, SpawnError>((resume) => {
+                const onAbort = () =>
+                  resume(
+                    // Same failure a pre-spawn abort produces inside doStart.
+                    new SpawnError({
+                      message: boundedError(signal.reason),
+                      fallbackSafe: false,
+                    }),
+                  );
+                if (signal.aborted) onAbort();
+                else signal.addEventListener("abort", onAbort, { once: true });
+                return Effect.sync(() => signal.removeEventListener("abort", onAbort));
+              });
+        // raceFirst: a grant failure (disposeAll) or the abort must win over
+        // the never-completing sibling — raceAll would wait for a success.
+        yield* Effect.raceFirst(Deferred.await(grant), abortWait).pipe(
+          Effect.timeoutOrElse({
+            duration: timings.slotWaitMs,
+            orElse: () => new ConcurrencyLimitError({ message: TERMINAL_ERRORS.concurrency }),
+          }),
+          // On any non-grant exit the waiter leaves the queue; a grant that
+          // landed in the same instant releases its reservation again so no
+          // slot leaks.
+          Effect.onExit((exit) =>
+            Exit.isSuccess(exit)
+              ? Effect.void
+              : Effect.sync(() => {
+                  const index = slotQueue.indexOf(waiter);
+                  if (index >= 0) slotQueue.splice(index, 1);
+                  if (waiter.granted) {
+                    reserved--;
+                    pumpSlotQueue();
+                  }
+                }),
+          ),
+        );
+      });
 
     const closeEntryScope = (entry: Entry) =>
       Scope.close(entry.scope, Exit.void).pipe(Effect.ignore);
@@ -616,6 +693,8 @@ const makeManager = (timings: TerminalManagerTimings) =>
       entry.childJob?.close();
       if (entry.childJob) detachedChildren.untrackJob(entry.childJob);
       notify(s.id);
+      // A running slot just freed; hand it to the oldest queued start.
+      pumpSlotQueue();
       try {
         // During teardown, don't queue results into a shutting-down session.
         if (!disposed) onSettled?.(s, consumed);
@@ -772,13 +851,13 @@ const makeManager = (timings: TerminalManagerTimings) =>
               fallbackSafe: false,
             });
           }
-          if (runningCount() + reserved >= MAX_RUNNING) {
-            return new ConcurrencyLimitError({
-              message: TERMINAL_ERRORS.concurrency,
-            });
+          // A new caller must not jump ahead of queued waiters: only an empty
+          // queue takes the fast synchronous reservation.
+          if (slotQueue.length === 0 && runningCount() + reserved < MAX_RUNNING) {
+            reserved++;
+            return Effect.void;
           }
-          reserved++;
-          return Effect.void;
+          return waitForSlot(options.signal);
         });
 
         const doStart = Effect.gen(function* () {
@@ -1048,6 +1127,8 @@ const makeManager = (timings: TerminalManagerTimings) =>
           Effect.ensuring(
             Effect.sync(() => {
               reserved--;
+              // A failed/aborted start hands its reservation to the queue.
+              pumpSlotQueue();
               notify();
             }),
           ),
@@ -1310,6 +1391,13 @@ const makeManager = (timings: TerminalManagerTimings) =>
 
     const disposeAll = Effect.gen(function* () {
       disposed = true;
+      // Queued starts can never be granted a slot now; fail them outright.
+      for (const waiter of slotQueue.splice(0)) {
+        Deferred.doneUnsafe(
+          waiter.grant,
+          new SpawnError({ message: TERMINAL_ERRORS.shuttingDown, fallbackSafe: false }),
+        );
+      }
       const all = [...entries.values()];
       entries.clear();
       for (const entry of all) {

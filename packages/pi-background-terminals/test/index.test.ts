@@ -1564,6 +1564,103 @@ test("a nested yielded bash result tells the script to collect it with terminal_
   }
 });
 
+test("bash returns structuredContent on every managed result for Code Mode scripts", async () => {
+  const app = harness();
+  try {
+    const bash = app.tools.get("bash");
+
+    const ok = await bash.execute(
+      "sc-ok",
+      { command: command("process.stdout.write('hi\\n')"), yield_time_ms: 30_000 },
+      undefined,
+      undefined,
+      app.ctx,
+    );
+    assert.equal(ok.isError, undefined);
+    const okSc = ok.structuredContent as Record<string, unknown>;
+    assert.equal(okSc.output, "hi\n");
+    assert.equal(okSc.truncated, false);
+    assert.equal(okSc.exit_code, 0);
+    assert.equal(okSc.status, "done");
+    assert.equal(okSc.terminal_id, ok.details?.id);
+    assert.equal(typeof okSc.wall_time_seconds, "number");
+    assert.ok((okSc.wall_time_seconds as number) >= 0);
+
+    const bad = await bash.execute(
+      "sc-bad",
+      {
+        command: command(
+          "process.stdout.write('out\\n');process.stderr.write('err\\n');process.exit(3)",
+        ),
+        yield_time_ms: 30_000,
+      },
+      undefined,
+      undefined,
+      app.ctx,
+    );
+    assert.equal(bad.isError, true);
+    const badSc = bad.structuredContent as Record<string, unknown>;
+    assert.equal(badSc.exit_code, 3);
+    assert.equal(badSc.status, "failed");
+    assert.equal(badSc.output, "out\nerr\n");
+
+    const yielded = await bash.execute(
+      "sc-yield",
+      { command: command("setTimeout(() => {}, 1_500)"), yield_time_ms: 250 },
+      undefined,
+      undefined,
+      app.ctx,
+    );
+    const yieldSc = yielded.structuredContent as Record<string, unknown>;
+    assert.equal(yieldSc.status, "running");
+    assert.equal("exit_code" in yieldSc, false);
+    assert.equal(yieldSc.terminal_id, yielded.details?.id);
+
+    const timedOut = await bash.execute(
+      "sc-timeout",
+      { command: command("setTimeout(() => {}, 60_000)"), timeout: 1, yield_time_ms: 30_000 },
+      undefined,
+      undefined,
+      app.ctx,
+    );
+    assert.equal(timedOut.isError, true);
+    const timeoutSc = timedOut.structuredContent as Record<string, unknown>;
+    assert.equal(timeoutSc.status, "timed_out");
+    assert.equal("exit_code" in timeoutSc, false);
+
+    const controller = new AbortController();
+    const pending = bash.execute(
+      "sc-esc",
+      { command: command("setTimeout(() => {}, 60_000)"), yield_time_ms: 30_000 },
+      controller.signal,
+      undefined,
+      app.ctx,
+    );
+    setTimeout(() => controller.abort(), 100);
+    const esc = await pending;
+    assert.equal(esc.isError, true);
+    const escSc = esc.structuredContent as Record<string, unknown>;
+    assert.equal(escSc.status, "running");
+    assert.equal("exit_code" in escSc, false);
+
+    const big = await bash.execute(
+      "sc-big",
+      {
+        command: command("process.stdout.write('x'.repeat(3 * 1024 * 1024))"),
+        yield_time_ms: 30_000,
+      },
+      undefined,
+      undefined,
+      app.ctx,
+    );
+    const bigSc = big.structuredContent as Record<string, unknown>;
+    assert.equal(bigSc.truncated, true);
+    assert.match(bigSc.output as string, /bytes omitted/);
+  } finally {
+    await app.shutdown();
+  }
+});
+
 test("nested terminal_log_read calls are exempt from the per-run budgets", async () => {
   const app = harness();
   try {
