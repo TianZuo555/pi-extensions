@@ -15,6 +15,8 @@ export interface PersistedAgyConversation {
   cwd: string;
   modelId: string;
   toolMode?: AgyToolMode;
+  /** Bridge discovery belongs to one extension instance. */
+  bridgeServer?: string;
   turns: number;
   usage: AgyUsage;
   /** Most recent observed model context footprint (input + cache read). */
@@ -110,6 +112,9 @@ export function parsePersistedAgyState(value: unknown): PersistedAgyState | unde
     return undefined;
   }
   if (!Number.isSafeInteger(record.turns) || (record.turns as number) < 0) return undefined;
+  if (record.bridgeServer !== undefined && !isBoundedString(record.bridgeServer, 64)) {
+    return undefined;
+  }
   const usage = parseUsage(record.usage);
   if (!usage) return undefined;
   if (record.contextTokens !== undefined && !isNonNegativeNumber(record.contextTokens)) {
@@ -123,6 +128,7 @@ export function parsePersistedAgyState(value: unknown): PersistedAgyState | unde
     cwd: record.cwd,
     modelId: record.modelId,
     ...(record.toolMode ? { toolMode: record.toolMode } : {}),
+    ...(record.bridgeServer ? { bridgeServer: record.bridgeServer as string } : {}),
     turns: record.turns as number,
     usage,
     contextTokens: record.contextTokens as number | undefined,
@@ -142,6 +148,7 @@ export function restorableAgyConversation(
   sessionId: string,
   cwd: string,
   toolMode: AgyToolMode = "native",
+  bridgeServer?: string,
 ): PersistedAgyConversation | undefined {
   // Pi mode uses a session-owned agent and current loopback credentials.
   // Its saved conversation must be rebuilt from Pi history on a new session.
@@ -154,6 +161,7 @@ export function restorableAgyConversation(
     // must not accidentally resurrect an older conversation.
     if (!state || state.kind === "reset" || state.toolMode === "pi") return undefined;
     if (state.sessionId !== sessionId || state.cwd !== cwd) return undefined;
+    if (state.bridgeServer !== bridgeServer) return undefined;
     if (
       branch.slice(index + 1).some((candidate) => CONTEXT_CHANGING_ENTRY_TYPES.has(candidate.type))
     ) {

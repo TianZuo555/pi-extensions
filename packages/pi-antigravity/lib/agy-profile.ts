@@ -3,6 +3,8 @@ export type AgyExecutionMode = "plan" | "accept-edits";
 export interface AgyProcessProfile {
   agent?: string;
   mode?: AgyExecutionMode;
+  /** Private workspace directory containing this session's MCP configuration. */
+  mcpDirectory?: string;
 }
 
 const MAX_AGENT_NAME_LENGTH = 128;

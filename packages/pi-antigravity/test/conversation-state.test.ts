@@ -57,6 +57,33 @@ test("Pi tool mode never restores native conversations or stale session-owned ag
   assert.equal(parsePersistedAgyState({ ...conversation, toolMode: "unknown" }), undefined);
 });
 
+test("private bridge conversations restore only within their owning extension instance", () => {
+  const scoped = { ...conversation, bridgeServer: "pi-current" };
+  const branch = [stateEntry(scoped)];
+  assert.deepEqual(parsePersistedAgyState(scoped), scoped);
+  assert.deepEqual(
+    restorableAgyConversation(branch, "pi-session-1", "/repo", "native", "pi-current"),
+    scoped,
+  );
+  assert.equal(
+    restorableAgyConversation(branch, "pi-session-1", "/repo", "native", "pi-new"),
+    undefined,
+  );
+  assert.equal(restorableAgyConversation(branch, "pi-session-1", "/repo"), undefined);
+  assert.equal(
+    restorableAgyConversation(
+      [stateEntry(conversation)],
+      "pi-session-1",
+      "/repo",
+      "native",
+      "pi-current",
+    ),
+    undefined,
+  );
+  assert.equal(parsePersistedAgyState({ ...scoped, bridgeServer: "" }), undefined);
+  assert.equal(parsePersistedAgyState({ ...scoped, bridgeServer: 1 }), undefined);
+});
+
 test("context-changing entries after the marker make a native resume stale", () => {
   const message = entry(
     "message",

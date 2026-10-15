@@ -150,16 +150,22 @@ test("agy-tools command toggles safely, waits for idle, and restores the old mod
   await t.test(
     "bridge preparation failure rolls back without selecting a default Pi agent",
     async () => {
+      const blocker = path.join(cache, "bridges");
+      await writeFile(blocker, "not a directory");
       ctx.model.provider = "antigravity";
-      await run("on");
-      assert.ok(
-        notices.some((notice) =>
-          /failed to switch tools; mode remains native/.test(notice.message),
-        ),
-      );
-      assert.match(await status(), /OFF \(native\)/);
-      assert.equal(branch[0], history);
-      ctx.model.provider = "other";
+      try {
+        await run("on");
+        assert.ok(
+          notices.some((notice) =>
+            /failed to switch tools; mode remains native/.test(notice.message),
+          ),
+        );
+        assert.match(await status(), /OFF \(native\)/);
+        assert.equal(branch[0], history);
+      } finally {
+        await rm(blocker, { force: true });
+        ctx.model.provider = "other";
+      }
     },
   );
 });

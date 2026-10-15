@@ -31,7 +31,7 @@ export interface SkillLite {
   baseDir: string;
 }
 
-/** MCP tool name (without the session `pi__p<pid>__` prefix). */
+/** MCP tool name (without the stable `pi__` prefix). */
 export const ACTIVATE_SKILL_TOOL_NAME = "activate_skill";
 
 const MAX_DESCRIPTION = 120;

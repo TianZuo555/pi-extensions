@@ -7,7 +7,7 @@ Use **Google Antigravity** (`agy`) models inside the [pi coding agent](https://p
 - **Persistent stream driver** — ordinary user turns reuse one healthy `agy` process; conversation, model, workspace, agent, mode, and bridge changes recycle it safely.
 - **Actionable diagnostics** — `/agy-doctor` explains executable selection, checks every candidate and the minimum version, and reports models, driver spawn/recycle counters, bridge revision, conversation database, and display metadata without spending model tokens.
 - **Native rendering, not mimicry** — agy's read-only tools (`view_file`, `grep_search`, `find_by_name`, `list_dir`) are re-executed as real pi builtins (`read` / `grep` / `find` / `ls`), so their cards use pi's own renderers and show live, accurate output. Everything else renders through one display-only `antigravity` wrapper.
-- **Skills & MCP bridge** — pi-private skills (`~/.pi/agent/skills`, `<project>/.pi/skills`, pi-package installs) are one `pi__p<pid>__activate_skill` tool (pass `{ name }` from the tool's enum), and pi's built-in MCP servers (`mcp.json`, `"exposure": "direct"`) are reachable from agy with pi's permissions, hooks, and rendering. Shared `.agents/skills` roots are agy's own discovery. Per-session tool names keep concurrent pi sessions fully isolated.
+- **Skills & MCP bridge** — pi-private skills (`~/.pi/agent/skills`, `<project>/.pi/skills`, pi-package installs) are one `pi__activate_skill` tool (pass `{ name }` from the tool's enum), and pi's built-in MCP servers (`mcp.json`, `"exposure": "direct"`) are reachable from agy with pi's permissions, hooks, and rendering. Shared `.agents/skills` roots are agy's own discovery. Each session supplies its bridge through a private workspace MCP configuration.
 - **Pi tools mode** — start with `--agy-tools pi` to run a minimal custom agy agent that uses Pi's active tools through the MCP bridge. File access, commands, extension tools, and MCP calls execute in Pi with its hooks, permissions, and rendering.
 - **Background-task manager** — long-running agy commands are tracked in a dashboard (`/agy-tasks`) that shows each task's status, pids, and log; `/agy-tasks stop all` reaps the process groups this pi recorded.
 - **Artifact browser** — direct conversation files, generated media, and uploads are listed via `/agy-artifacts`; markdown plans/reports have a bounded read-only preview with checklist progress.
@@ -72,6 +72,14 @@ Pi tools mode starts a custom agent directly with `agy --agent`; it does not cre
 This mode relays the current Pi instructions, including project and user guidance and the loaded skill catalog. Skills are loaded using Pi tools rather than the native mode's virtual `activate_skill` reader. Each bridge call becomes a real Pi tool call, so Pi's hooks, permission checks, tool selection, and results apply before agy continues. If the bridge or agent cannot be prepared, the request fails instead of starting the default agent. `PI_ANTIGRAVITY_AGENT` cannot be combined with Pi tools mode, and the bridge must be enabled.
 
 The session-owned agent configuration lives under `~/.gemini/config/agents/` and is removed when leaving Antigravity or shutting down. Ordinary turns reuse the persistent agy process. Resuming or reloading a Pi session starts a fresh agy conversation and restores Pi history, binding it to the current bridge and avoiding an older native-tool conversation. `/agy` and `/agy-doctor` show the selected tool mode.
+
+## Private MCP discovery
+
+Both tool modes write the authenticated bridge configuration under `~/.pi/agent/antigravity/bridges/<instance>/.agents/mcp_config.json` (or the configured Pi agent directory). Each agy child receives only that instance's directory through an extra `--add-dir`; its working directory remains the project. The extension does not register, remove, or prune servers in agy's global MCP configuration.
+
+Tools have stable names such as `pi__read`, `pi__tool_search`, and `pi__activate_skill`. Each instance keeps a short, unique server name for routing and agy's descriptor cache. Mode changes, provider switches, and shutdown remove only the instance's private configuration and descriptor-cache key. Failed preparation closes the listener and removes partial configuration; concurrent startup shares one preparation. Saved native conversations are bound to their bridge instance; restarting or reloading with new private discovery rebuilds the conversation from Pi history.
+
+This isolates the bridge supplied by each Pi instance. Native agy can still load your existing global MCP servers, and live bridge registrations from older extension versions remain global until those sessions stop. Restart older Pi sessions when upgrading to private discovery.
 
 ## Context and permissions
 
@@ -149,13 +157,13 @@ flowchart TB
     Prov -. "compaction / branch summary" .-> Summary
     Agent -- "read-only step done:\nemit native toolCall" --> Native
     Prov -- "mutating/specialty step done:\ndisplay-only antigravity card" --> UI
-    Agent -- "wants a skill or pi MCP tool:\ncall pi__p<pid>__<name> (MCP)" --> Bridge
+    Agent -- "wants a skill or pi MCP tool:\ncall pi__<name> (MCP)" --> Bridge
     Bridge -- "route into live turn" --> Prov
     Prov -- "stopReason: toolUse" --> UI
     UI -- "pi executes the REAL tool" --> Mcp
     Mcp -- "result" --> Prov
     Prov -- "result back to agy" --> Bridge
-    Skills -- "pi-private skills become\npi__p<pid>__activate_skill" --> Bridge
+    Skills -- "pi-private skills become\npi__activate_skill" --> Bridge
 ```
 
 ## Release notes

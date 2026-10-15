@@ -66,6 +66,7 @@ test("buildAgyArgs always skips permissions and puts the prompt directly after -
     model: "m1",
     effort: "medium",
     cwd: "/tmp/w",
+    mcpDirectory: "/tmp/private bridge",
     timeoutMs: 90_000,
     agent: "reviewer",
     mode: "plan",
@@ -73,7 +74,10 @@ test("buildAgyArgs always skips permissions and puts the prompt directly after -
   assert.equal(full[full.indexOf("--conversation") + 1], "c1");
   assert.equal(full[full.indexOf("--model") + 1], "m1");
   assert.equal(full[full.indexOf("--effort") + 1], "medium");
-  assert.equal(full[full.indexOf("--add-dir") + 1], "/tmp/w");
+  assert.deepEqual(
+    full.flatMap((value, index) => (value === "--add-dir" ? [full[index + 1]] : [])),
+    ["/tmp/w", "/tmp/private bridge"],
+  );
   assert.equal(full[full.indexOf("--print-timeout") + 1], "90s");
   assert.equal(full[full.indexOf("--agent") + 1], "reviewer");
   assert.equal(full[full.indexOf("--mode") + 1], "plan");
@@ -515,7 +519,6 @@ test("real child process: terminal result resolves early and child close callbac
     const promise = runAgyTurn({
       prompt: "hi",
       timeoutMs: 10_000,
-      inactivityTimeoutMs: 500,
       spawnOverride: (() => child) as never,
     });
 
@@ -571,7 +574,6 @@ test("real child process: terminal result resolves early, held-open process rema
     const promise = runAgyTurn({
       prompt: "hi",
       timeoutMs: 10_000,
-      inactivityTimeoutMs: 500,
       spawnOverride: (() => child) as never,
     });
 

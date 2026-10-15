@@ -370,6 +370,7 @@ export function streamAntigravity(
             effort,
             agent: processProfile.agent,
             mode: processProfile.mode,
+            mcpDirectory: processProfile.mcpDirectory,
             bridgeRevision,
             signal: options?.signal,
           }),

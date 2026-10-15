@@ -11,8 +11,8 @@ test("bridge lifecycle process revision combines registration generation and cat
   const manager = createBridgeLifecycleManager({
     bridge,
     bridgeToken: "token",
-    addMcpServer: async () => {},
-    removeMcpServer: async () => {},
+    writeMcpConfig: async () => {},
+    removeMcpConfig: async () => {},
     evictMcpCache: async () => {},
   });
   try {
@@ -39,6 +39,53 @@ test("bridge lifecycle process revision combines registration generation and cat
     assert.equal(manager.registrationGeneration(), 2);
     assert.match(manager.processRevision(), /^2:/);
   } finally {
+    await manager.teardown();
+  }
+});
+
+test("concurrent preparation is single-flight and teardown waits for pending writes", async () => {
+  const bridge = new AgyPiBridge("pi-preparation");
+  let releaseWrite!: () => void;
+  const blockedWrite = new Promise<void>((resolve) => {
+    releaseWrite = resolve;
+  });
+  let enteredWrite!: () => void;
+  const writing = new Promise<void>((resolve) => {
+    enteredWrite = resolve;
+  });
+  let writes = 0;
+  const removed: string[] = [];
+  const manager = createBridgeLifecycleManager({
+    bridge,
+    bridgeToken: "token",
+    writeMcpConfig: async () => {
+      writes += 1;
+      enteredWrite();
+      await blockedWrite;
+    },
+    removeMcpConfig: async (name) => {
+      removed.push(name);
+    },
+    evictMcpCache: async () => {},
+  });
+  try {
+    const first = manager.ensureRegistered();
+    const second = manager.ensureRegistered();
+    await writing;
+    assert.equal(manager.isRegistered(), false);
+    const closing = manager.teardown();
+    releaseWrite();
+    assert.deepEqual(await Promise.all([first, second]), [true, true]);
+    await closing;
+    assert.equal(writes, 1);
+    assert.deepEqual(removed, [bridge.serverName]);
+    assert.equal(manager.isRegistered(), false);
+    assert.equal(manager.isRunning(), false);
+    assert.equal(manager.registrationGeneration(), 2);
+    await manager.teardown();
+    assert.deepEqual(removed, [bridge.serverName]);
+  } finally {
+    releaseWrite();
     await manager.teardown();
   }
 });

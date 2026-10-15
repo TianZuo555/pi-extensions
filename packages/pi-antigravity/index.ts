@@ -37,13 +37,9 @@ import { checkAgyBinary, MIN_AGY_VERSION, runAgyCommand } from "./lib/agy-diagno
 import { parseAgyAgents, readAgyProcessProfile } from "./lib/agy-profile.ts";
 import { createPiToolsAgent } from "./lib/pi-tools-agent.ts";
 import { readAgyToolMode, resolveAgyToolModeCommand, type AgyToolMode } from "./lib/tool-mode.ts";
-import { pruneBridgeMcpCache, removeMcpCacheEntry } from "./lib/mcp-cache.ts";
-import {
-  AgyPiBridge,
-  BRIDGE_SERVER_NAME,
-  selectBridgedTools,
-  type PiToolInfo,
-} from "./lib/bridge.ts";
+import { removeMcpCacheEntry } from "./lib/mcp-cache.ts";
+import { createPrivateMcpConfig } from "./lib/mcp-config.ts";
+import { AgyPiBridge, selectBridgedTools, type PiToolInfo } from "./lib/bridge.ts";
 import { createBridgeLifecycleManager } from "./lib/bridge-lifecycle.ts";
 import {
   ACTIVATE_SKILL_TOOL_NAME,
@@ -127,57 +123,8 @@ function statusOneLine(value: string, maxLength = 160): string {
 
 const BRIDGE_ENABLED = process.env.PI_ANTIGRAVITY_PI_TOOL_BRIDGE !== "0";
 
-/** Timeout for shutdown-path agy calls — fast enough not to stall closing pi. */
-const SHUTDOWN_AGY_TIMEOUT_MS = 5_000;
-
 async function execAgy(args: string[], timeoutMs = DISCOVERY_TIMEOUT_MS): Promise<string> {
   return (await runAgyCommand(args, { timeoutMs })).stdout;
-}
-
-/**
- * Remove `pi-bridge-*` MCP registrations whose loopback server is no longer
- * reachable. Registrations live in agy's GLOBAL config while bridge servers
- * are per-pi-session: crashed sessions leak registrations forever, and every
- * live session's tools are merged into every agy turn's tools/list. Pruning
- * dead entries on startup keeps cross-session pollution to live sessions.
- * agy also caches tool manifests on disk per server
- * (`~/.gemini/antigravity-cli/mcp/<name>/`) and never evicts them, so the
- * same sweep prunes cache entries with no live server left.
- */
-async function pruneStaleBridgeRegistrations(): Promise<void> {
-  let list: string;
-  try {
-    list = await execAgy(["mcp", "list"]);
-  } catch {
-    return; // agy unavailable — registration below will warn instead
-  }
-  const stale: string[] = [];
-  const live: string[] = [];
-  for (const line of list.split("\n").slice(1)) {
-    const columns = line.trim().split(/\s+/);
-    const name = columns[0] ?? "";
-    const url = columns[columns.length - 1] ?? "";
-    if (!name.startsWith(`${BRIDGE_SERVER_NAME}-`) || !/^http:\/\/127\.0\.0\.1:\d+\//.test(url)) {
-      continue;
-    }
-    try {
-      await fetch(url, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "ping" }),
-        signal: AbortSignal.timeout(1_500),
-      });
-      // Any HTTP answer (even 403/404) means a server is still listening.
-      live.push(name);
-    } catch {
-      stale.push(name);
-    }
-  }
-  await Promise.all(stale.map((name) => execAgy(["mcp", "remove", name]).catch(() => {})));
-  // `agy mcp remove` deregisters but leaves the on-disk manifest cache
-  // behind; entries whose registration is already gone never reappear in
-  // `agy mcp list`, so prune the cache against the live set here.
-  await pruneBridgeMcpCache({ liveServers: live });
 }
 
 interface ModelCache {
@@ -341,6 +288,7 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
       cwd,
       modelId: snapshot.model,
       toolMode: getToolMode(),
+      bridgeServer: BRIDGE_ENABLED ? mcpConfig.serverName : undefined,
       turns: snapshot.turns,
       usage: snapshot.conversationUsage,
       contextTokens: observedContextTokens,
@@ -378,50 +326,26 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
 
   // --- Pi-tool bridge setup -------------------------------------------------
 
-  const bridge = new AgyPiBridge(`${BRIDGE_SERVER_NAME}-${process.pid}`);
+  const mcpConfig = createPrivateMcpConfig();
+  const bridge = new AgyPiBridge(mcpConfig.serverName);
   const bridgeToken = randomUUID();
   const piToolsAgent = createPiToolsAgent();
   bridge.requireToken(bridgeToken);
-  // Session-unique tool prefix: agy's MCP config is global, so concurrent pi
-  // sessions' bridges all appear in every agy turn's tools/list. Namespacing
-  // each session's tools makes tool→server routing unambiguous — a call can
-  // only reach the session that advertised it.
-  const bridgeToolPrefix = `pi__p${process.pid}__`;
-  bridge.setToolPrefix(bridgeToolPrefix);
   bridge.setOnCall((call) => service.pushBridgeCall(call));
 
   const bridgeManager = createBridgeLifecycleManager({
     bridge,
     bridgeToken,
     enabled: BRIDGE_ENABLED,
-    pruneStaleRegistrations: pruneStaleBridgeRegistrations,
-    addMcpServer: async (serverName, url, token) => {
-      await execAgy([
-        "mcp",
-        "add",
-        "--type",
-        "http",
-        "--header",
-        `x-pi-bridge-token: ${token}`,
-        serverName,
-        url,
-      ]);
-    },
-    removeMcpServer: async (serverName) => {
-      await execAgy(["mcp", "remove", serverName], SHUTDOWN_AGY_TIMEOUT_MS);
-    },
+    writeMcpConfig: async (_serverName, url, token) => mcpConfig.write(url, token),
+    removeMcpConfig: async () => mcpConfig.remove(),
     evictMcpCache: removeMcpCacheEntry,
     // tasksUi is populated by the session_start handler; read it lazily so a
     // warning raised before UI attach is simply dropped rather than throwing.
     notifyWarning: (message) => tasksUi?.notify(message, "warning"),
   });
 
-  /**
-   * Register the pi-tool bridge with agy. Idempotent: no-op when disabled or
-   * already registered. Registration must precede the first agy spawn of the
-   * session — agy eagerly connects to MCP servers at startup (verified
-   * 2026-08-21) — so this runs as soon as an Antigravity model is selected.
-   */
+  /** Prepare private MCP discovery before agy scans its workspace at startup. */
   function validateToolMode(mode: AgyToolMode): void {
     if (mode === "pi") {
       if (!BRIDGE_ENABLED) {
@@ -462,7 +386,10 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
     if (switchingToolMode) {
       throw new Error("antigravity: tool mode is changing; retry when the switch finishes.");
     }
-    const profile = readAgyProcessProfile();
+    const profile = {
+      ...readAgyProcessProfile(),
+      mcpDirectory: bridgeManager.isRegistered() ? mcpConfig.directory : undefined,
+    };
     if (getToolMode() === "native") return profile;
     if (!bridgeManager.isRegistered() || !piToolsAgent.isPrepared()) {
       throw new Error("antigravity: Pi tool mode could not prepare its agent and bridge.");
@@ -471,9 +398,8 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
   }
 
   /**
-   * Deregister the pi-tool bridge and evict its manifest cache. No-op when
-   * the bridge is not registered or running. Runs when the session leaves
-   * Antigravity models and on shutdown.
+   * Remove this instance's private discovery and descriptor cache.
+   * Runs when the session leaves Antigravity models and on shutdown.
    */
   async function teardownBridge(): Promise<void> {
     try {
@@ -528,7 +454,7 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
     return undefined;
   };
 
-  /** Publish one `pi__p<pid>__activate_skill` tool for global pi skills. */
+  /** Publish one `pi__activate_skill` tool for global pi skills. */
   function refreshSkillTools(): void {
     if (!BRIDGE_ENABLED) return;
     if (getToolMode() === "pi") {
@@ -888,6 +814,7 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
             ctx.sessionManager.getSessionId(),
             ctx.cwd,
             getToolMode(),
+            BRIDGE_ENABLED ? mcpConfig.serverName : undefined,
           )
         : undefined;
     const compatibleRestore =
@@ -896,9 +823,9 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
       (await agyConversationExists(restored.conversationId))
         ? restored
         : undefined;
-    // Pi tool mode uses a session-owned agent with the current bridge URL/token.
-    // On resume, bootstrap Pi history into a fresh agy conversation instead of
-    // restoring a conversation that refers to a removed agent or another tool mode.
+    // Fresh instances have new private discovery credentials and server names.
+    // Rebuild from Pi history when the saved conversation belongs to another
+    // bridge, agent, or tool mode.
     await runAntigravity(
       runtime,
       service.setSession(ctx.cwd, undefined, !compatibleRestore && event.reason !== "new"),
@@ -1344,7 +1271,8 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
       }
       lines.push(`profile: ${profile}`);
       lines.push(
-        `bridge: enabled=${BRIDGE_ENABLED} running=${bridgeManager.isRunning()} registered=${bridgeManager.isRegistered()} revision=${bridgeManager.processRevision()}`,
+        `bridge: enabled=${BRIDGE_ENABLED} running=${bridgeManager.isRunning()} prepared=${bridgeManager.isRegistered()} revision=${bridgeManager.processRevision()}`,
+        `bridge discovery: ${bridgeManager.isRegistered() ? mcpConfig.directory : "none"}`,
       );
 
       const conversationId = snapshot?.conversationId;

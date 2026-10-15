@@ -4,11 +4,10 @@ import type { SkillLite } from "./skills.ts";
 export interface BridgeLifecycleDeps {
   bridge: AgyPiBridge;
   bridgeToken: string;
-  addMcpServer: (serverName: string, url: string, token: string) => Promise<void>;
-  removeMcpServer: (serverName: string) => Promise<void>;
+  writeMcpConfig: (serverName: string, url: string, token: string) => Promise<void>;
+  removeMcpConfig: (serverName: string) => Promise<void>;
   evictMcpCache: (serverName: string) => Promise<void>;
   enabled?: boolean;
-  pruneStaleRegistrations?: () => Promise<void>;
   notifyWarning?: (message: string) => void;
 }
 
@@ -19,32 +18,96 @@ export interface BridgeLifecycleManager {
   readonly teardown: () => Promise<void>;
   readonly registrationGeneration: () => number;
   readonly processRevision: () => string;
-  /** Warn once when the unsupported MCP adapter owns session tools or commands. */
   readonly warnMcpAdapterUnsupported: (
     resources: readonly Pick<PiToolInfo, "sourceInfo">[],
     notify?: (message: string) => void,
   ) => void;
-  /**
-   * Warn once that pi-private skills cannot reach agy without the bridge.
-   * The skill catalog is never injected into prompts — `activate_skill` is
-   * the only channel, so a missing bridge means those skills are simply
-   * unavailable and the user should hear about it.
-   */
   readonly warnSkillsUnavailable: (skills: SkillLite[]) => void;
 }
 
 export function createBridgeLifecycleManager(deps: BridgeLifecycleDeps): BridgeLifecycleManager {
   const enabled = deps.enabled ?? true;
   let registered = false;
+  let ownsConfig = false;
   let generation = 0;
+  let preparing: Promise<boolean> | undefined;
+  let tearingDown: Promise<void> | undefined;
   let warnedSkillsUnavailable = false;
   let warnedMcpAdapterUnsupported = false;
+
+  const cleanup = async () => {
+    if (!registered && !ownsConfig && !deps.bridge.running) return;
+    registered = false;
+    let removalError: unknown;
+    try {
+      await deps.removeMcpConfig(deps.bridge.serverName);
+      ownsConfig = false;
+    } catch (error) {
+      removalError = error;
+    }
+    try {
+      await deps.evictMcpCache(deps.bridge.serverName);
+    } catch {
+      // Descriptor-cache eviction is best-effort and limited to our own key.
+    }
+    try {
+      await deps.bridge.close();
+    } finally {
+      generation += 1;
+    }
+    if (removalError) throw removalError;
+  };
+
+  const prepare = async (notify?: (message: string) => void) => {
+    try {
+      await deps.bridge.start();
+      const url = deps.bridge.url;
+      if (!url) throw new Error("pi-tool bridge did not expose a URL after start.");
+      // A failed write can still leave a partial directory that we own.
+      ownsConfig = true;
+      await deps.writeMcpConfig(deps.bridge.serverName, url, deps.bridgeToken);
+      deps.bridge.refreshTools();
+      registered = true;
+      generation += 1;
+      return true;
+    } catch (error) {
+      let message = error instanceof Error ? error.message : String(error);
+      try {
+        await cleanup();
+      } catch (cleanupError) {
+        message += `; cleanup failed: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`;
+      }
+      const warning = `antigravity: pi-tool bridge unavailable (${message}).`;
+      (notify ?? deps.notifyWarning)?.(warning);
+      return false;
+    }
+  };
 
   return {
     isRegistered: () => registered,
     isRunning: () => deps.bridge.running,
     registrationGeneration: () => generation,
     processRevision: () => `${generation}:${deps.bridge.catalogRevision}`,
+
+    ensureRegistered: async (notify) => {
+      if (!enabled) return false;
+      if (tearingDown) await tearingDown;
+      if (registered) return true;
+      preparing ??= prepare(notify).finally(() => {
+        preparing = undefined;
+      });
+      return preparing;
+    },
+
+    teardown: async () => {
+      tearingDown ??= (async () => {
+        await preparing;
+        await cleanup();
+      })().finally(() => {
+        tearingDown = undefined;
+      });
+      await tearingDown;
+    },
 
     warnMcpAdapterUnsupported: (resources, notify) => {
       if (!enabled || warnedMcpAdapterUnsupported) return;
@@ -63,64 +126,13 @@ export function createBridgeLifecycleManager(deps: BridgeLifecycleDeps): BridgeL
       );
     },
 
-    ensureRegistered: async (notify?: (message: string) => void) => {
-      if (!enabled) return false;
-      if (registered) return true;
-
-      try {
-        if (deps.pruneStaleRegistrations) {
-          await deps.pruneStaleRegistrations();
-        }
-        if (!deps.bridge.running) {
-          await deps.bridge.start();
-        }
-        const url = deps.bridge.url;
-        if (!url) throw new Error("pi-tool bridge did not expose a URL after start.");
-        await deps.addMcpServer(deps.bridge.serverName, url, deps.bridgeToken);
-        deps.bridge.refreshTools();
-        registered = true;
-        generation += 1;
-        return true;
-      } catch (error) {
-        registered = false;
-        const message = error instanceof Error ? error.message : String(error);
-        const warning = `antigravity: pi-tool bridge unavailable (${message}).`;
-        if (notify) {
-          notify(warning);
-        } else {
-          deps.notifyWarning?.(warning);
-        }
-        return false;
-      }
-    },
-
-    teardown: async () => {
-      if (!registered && !deps.bridge.running) return;
-      const changed = registered || deps.bridge.running;
-      registered = false;
-      try {
-        await deps.removeMcpServer(deps.bridge.serverName);
-      } catch {
-        // Registration may already be gone.
-      }
-      try {
-        await deps.evictMcpCache(deps.bridge.serverName);
-      } catch {
-        // Manifest cache eviction is best-effort.
-      }
-      if (deps.bridge.running) {
-        await deps.bridge.close();
-      }
-      if (changed) generation += 1;
-    },
-
     warnSkillsUnavailable: (skills) => {
       if (warnedSkillsUnavailable || skills.length === 0) return;
       if (enabled && registered) return;
       warnedSkillsUnavailable = true;
       deps.notifyWarning?.(
         enabled
-          ? "antigravity: pi-tool bridge failed to register — pi-private skills are unavailable to agy this session."
+          ? "antigravity: pi-tool bridge failed to prepare — pi-private skills are unavailable to agy this session."
           : "antigravity: pi-tool bridge is disabled — pi-private skills are unavailable to agy this session.",
       );
     },

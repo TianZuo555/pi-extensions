@@ -134,16 +134,8 @@ export class AgyPiBridge {
   #pending = new Map<string, PendingCall>();
   /** Shared secret agy must send on every request; unset = no auth (tests). */
   #token: string | undefined;
-  /** Per-session server name so concurrent pi sessions cannot hijack each other's registration. */
+  /** Unique descriptor-cache key; each agy process discovers its own private server. */
   readonly serverName: string;
-  /**
-   * Tool-name prefix used in tools/list and stripped on routing. Defaults to
-   * `pi__`; sessions set a unique prefix (`pi__p<pid>__`) so that when agy's
-   * GLOBAL MCP config merges several concurrent pi sessions' bridges, every
-   * tool name maps to exactly one server — a call can only route back to the
-   * session that advertised it.
-   */
-  #toolPrefix = BRIDGE_TOOL_PREFIX;
   /** Callback that routes a call into the live agy turn controller. Returns false when no turn is active. */
   #onCall: ((call: BridgeCall) => boolean) | undefined;
   /** Source of the current active-tool snapshot, invoked once per provider request. */
@@ -160,12 +152,6 @@ export class AgyPiBridge {
   /** Require `token` in the x-pi-bridge-token header on every request. */
   requireToken(token: string): void {
     this.#token = token;
-  }
-
-  /** Set the per-session tool-name prefix (e.g. `pi__p1234__`). */
-  setToolPrefix(prefix: string): void {
-    this.#toolPrefix = prefix;
-    this.#updateCatalogRevision();
   }
 
   setOnCall(onCall: (call: BridgeCall) => boolean): void {
@@ -208,13 +194,13 @@ export class AgyPiBridge {
       ...this.#tools
         .filter((tool) => !this.#dynamic.has(tool.name))
         .map((tool) => ({
-          name: `${this.#toolPrefix}${tool.name}`,
+          name: `${BRIDGE_TOOL_PREFIX}${tool.name}`,
           description:
             tool.description || `pi tool "${tool.name}" bridged into agy by ${BRIDGE_SERVER_NAME}.`,
           inputSchema: tool.parameters,
         })),
       ...[...this.#dynamic].map(([name, definition]) => ({
-        name: `${this.#toolPrefix}${name}`,
+        name: `${BRIDGE_TOOL_PREFIX}${name}`,
         description: definition.description,
         inputSchema: definition.parameters,
       })),
@@ -353,7 +339,7 @@ export class AgyPiBridge {
           result: {
             protocolVersion: rpc.params?.protocolVersion ?? "2024-11-05",
             capabilities: { tools: {} },
-            serverInfo: { name: BRIDGE_SERVER_NAME, version: "1.0.0" },
+            serverInfo: { name: this.serverName, version: "1.0.0" },
           },
         };
       }
@@ -368,14 +354,14 @@ export class AgyPiBridge {
               ...this.#tools
                 .filter((tool) => !this.#dynamic.has(tool.name))
                 .map((tool) => ({
-                  name: `${this.#toolPrefix}${tool.name}`,
+                  name: `${BRIDGE_TOOL_PREFIX}${tool.name}`,
                   description:
                     tool.description ||
                     `pi tool "${tool.name}" bridged into agy by ${BRIDGE_SERVER_NAME}.`,
                   inputSchema: tool.parameters,
                 })),
               ...[...this.#dynamic].map(([name, definition]) => ({
-                name: `${this.#toolPrefix}${name}`,
+                name: `${BRIDGE_TOOL_PREFIX}${name}`,
                 description: definition.description,
                 inputSchema: definition.parameters,
               })),
@@ -412,13 +398,13 @@ export class AgyPiBridge {
    * all produce an isError result rather than hanging agy.
    */
   async #routeCall(mcpName: string, args: JsonObject): Promise<BridgeCallResult> {
-    if (!mcpName.startsWith(this.#toolPrefix)) {
+    if (!mcpName.startsWith(BRIDGE_TOOL_PREFIX)) {
       return {
-        content: `antigravity: unknown tool "${mcpName}" — only ${this.#toolPrefix}* bridge tools exist.`,
+        content: `antigravity: unknown tool "${mcpName}" — only ${BRIDGE_TOOL_PREFIX}* bridge tools exist.`,
         isError: true,
       };
     }
-    const tool = mcpName.slice(this.#toolPrefix.length);
+    const tool = mcpName.slice(BRIDGE_TOOL_PREFIX.length);
     const dynamic = this.#dynamic.get(tool);
     if (dynamic) return dynamic.handler(args);
     if (this.#tools.some((def) => def.name === tool)) {
