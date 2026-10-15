@@ -69,6 +69,8 @@ The saved setting lives under `~/.pi/agent/settings.json` (or `PI_CODING_AGENT_D
 }
 ```
 
+The footer shows `pi-tools:on` or `pi-tools:off` while an Antigravity model is selected, matching Devin ACP's compact fast-mode indicator. It updates after toggles and reloads and disappears when leaving Antigravity.
+
 You can also choose the model normally and select Pi tools at startup:
 
 ```sh

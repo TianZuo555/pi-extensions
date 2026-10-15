@@ -271,6 +271,19 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
     }
   }
 
+  /** Match Devin's compact footer status while this provider is selected. */
+  function refreshToolModeStatus(ctx: ExtensionContext): void {
+    probeCtx(() => {
+      if (!ctx.hasUI) return;
+      ctx.ui.setStatus(
+        "antigravity",
+        ctx.model?.provider === "antigravity"
+          ? `pi-tools:${getToolMode() === "pi" ? "on" : "off"}`
+          : undefined,
+      );
+    });
+  }
+
   async function persistConversationState(ctx: ExtensionContext, force = false): Promise<void> {
     // Read every session-bound field before the first await — the stale window
     // widens once this handler yields.
@@ -809,6 +822,7 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
 
   pi.on("session_start", async (event, ctx: ExtensionContext) => {
     syncWrapperToolActivation(ctx.model?.provider);
+    refreshToolModeStatus(ctx);
     selectedModelKey = ctx.model ? `${ctx.model.provider}:${ctx.model.id}` : undefined;
     const restored =
       event.reason !== "fork" && ctx.model?.provider === "antigravity"
@@ -864,6 +878,7 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
 
   pi.on("model_select", async (event, ctx) => {
     syncWrapperToolActivation(event.model?.provider);
+    refreshToolModeStatus(ctx);
     const nextModelKey = event.model ? `${event.model.provider}:${event.model.id}` : undefined;
     if (selectedModelKey?.startsWith("antigravity:") && selectedModelKey !== nextModelKey) {
       // Another provider/model can add context that the mutable agy
@@ -962,6 +977,7 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
     }
     await teardownBridge();
     try {
+      tasksUi?.setStatus("antigravity", undefined);
       tasksUi?.setWidget(AGY_TASKS_WIDGET_KEY, undefined);
       tasksUi?.setWidget(AGY_ARTIFACTS_WIDGET_KEY, undefined);
     } catch {
@@ -1062,11 +1078,13 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
 
   async function handleAgyToolsCommand(args: string, ctx: ExtensionCommandContext): Promise<void> {
     const action = resolveAgyToolModeCommand(args, getToolMode());
-    const notifyStatus = () =>
+    const notifyStatus = () => {
+      refreshToolModeStatus(ctx);
       ctx.ui.notify(
         `antigravity: Pi tools ${getToolMode() === "pi" ? "ON (pi)" : "OFF (native)"}.`,
         "info",
       );
+    };
     if (action === undefined) {
       ctx.ui.notify(
         'agy-tools: usage "/agy-tools [on|off|status]"; no argument toggles the mode.',
@@ -1138,6 +1156,7 @@ export default function antigravityExtension(pi: ExtensionAPI): void {
       );
     } finally {
       switchingToolMode = false;
+      refreshToolModeStatus(ctx);
     }
   }
 

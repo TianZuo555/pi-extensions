@@ -44,6 +44,7 @@ test("agy-tools command toggles safely, waits for idle, and restores the old mod
   const commands = new Map<string, Command>();
   const handlers = new Map<string, (event: unknown, ctx: unknown) => unknown>();
   const notices: Array<{ message: string; type: string }> = [];
+  const footer = new Map<string, string | undefined>();
   const history = { type: "message", message: { role: "user", content: "Keep my history" } };
   const branch: unknown[] = [history];
   let waitForIdle = async () => {};
@@ -70,6 +71,7 @@ test("agy-tools command toggles safely, waits for idle, and restores the old mod
     ui: {
       notify: (message: string, type: string) => notices.push({ message, type }),
       setWidget: () => {},
+      setStatus: (key: string, value: string | undefined) => footer.set(key, value),
     },
     sessionManager: { getBranch: () => branch, getSessionId: () => "test-session" },
     waitForIdle: () => waitForIdle(),
@@ -168,6 +170,7 @@ test("agy-tools command toggles safely, waits for idle, and restores the old mod
         );
         assert.match(await status(), /OFF \(native\)/);
         assert.equal(savedMode(), "native");
+        assert.equal(footer.get("antigravity"), "pi-tools:off");
         assert.equal(branch[0], history);
       } finally {
         await rm(blocker, { force: true });
@@ -194,19 +197,28 @@ test("agy-tools command toggles safely, waits for idle, and restores the old mod
   await t.test("agy tools saves both modes across replacement extension runtimes", async () => {
     const reload = async () => {
       await handlers.get("session_shutdown")!({}, {});
+      assert.equal(footer.get("antigravity"), undefined);
       handlers.clear();
       commands.clear();
       extension(pi as never);
       await handlers.get("session_start")!({ reason: "resume" }, ctx);
     };
+    ctx.model.provider = "antigravity";
     await commands.get("agy")!.handler("tools on", ctx as never);
     assert.equal(savedMode(), "pi");
+    assert.equal(footer.get("antigravity"), "pi-tools:on");
     await reload();
     assert.match(await status(), /ON \(pi\)/);
+    assert.equal(footer.get("antigravity"), "pi-tools:on");
     await commands.get("agy")!.handler("tools off", ctx as never);
     assert.equal(savedMode(), "native");
+    assert.equal(footer.get("antigravity"), "pi-tools:off");
     await reload();
     assert.match(await status(), /OFF \(native\)/);
+    assert.equal(footer.get("antigravity"), "pi-tools:off");
+    ctx.model.provider = "other";
+    await handlers.get("model_select")!({ model: ctx.model }, ctx);
+    assert.equal(footer.get("antigravity"), undefined);
     assert.equal(branch[0], history);
   });
 });
