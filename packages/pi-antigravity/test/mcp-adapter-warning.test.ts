@@ -92,6 +92,8 @@ test("entry warns about the MCP adapter only when Antigravity is selected, once 
         on: (name: string, handler: (event: unknown, ctx: unknown) => unknown) => {
           handlers.set(name, handler);
         },
+        registerFlag: () => {},
+        getFlag: () => undefined,
         registerCommand: () => {},
         registerEntryRenderer: () => {},
         registerProvider: () => {},

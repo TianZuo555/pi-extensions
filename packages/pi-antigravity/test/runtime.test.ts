@@ -63,8 +63,10 @@ test("runtime re-entry keeps the active driver turn despite a newer bridge revis
   let runs = 0;
   const closes: string[] = [];
   let resolveRun: ((outcome: AgyTurnOutcome) => void) | undefined;
+  let capturedRequest: AgyTurnRequest | undefined;
   const executor: AgyTurnExecutor = {
-    run: async () => {
+    run: async (request) => {
+      capturedRequest = request;
       runs += 1;
       return new Promise<AgyTurnOutcome>((resolve) => {
         resolveRun = resolve;
@@ -84,6 +86,7 @@ test("runtime re-entry keeps the active driver turn despite a newer bridge revis
         prompt: "same user turn",
         modelId: "gemini-3.7-flash",
         bridgeRevision: "1:1",
+        mcpDirectory: "/private/first",
       }),
     );
     const reentered = await runAntigravity(
@@ -92,9 +95,11 @@ test("runtime re-entry keeps the active driver turn despite a newer bridge revis
         prompt: "same user turn",
         modelId: "gemini-3.7-flash",
         bridgeRevision: "1:2",
+        mcpDirectory: "/private/next",
       }),
     );
     assert.equal(reentered, first);
+    assert.equal(capturedRequest?.mcpDirectory, "/private/first");
     assert.equal(runs, 1);
     assert.deepEqual(closes, []);
 

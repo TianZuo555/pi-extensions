@@ -260,6 +260,8 @@ export function streamAntigravity(
    * files). Falls back to pi's rendered systemPrompt when absent (tests).
    */
   getSystemPromptRelay?: () => string | undefined,
+  /** Pi tool mode keeps disposable summaries on the same restricted agent. */
+  getSummaryProcessProfile: () => AgyProcessProfile = () => ({}),
 ) {
   return (
     model: Model<string>,
@@ -337,7 +339,7 @@ export function streamAntigravity(
         }
 
         let bridgeRevision: string | undefined;
-        let processProfile: AgyProcessProfile = {};
+        let processProfile: AgyProcessProfile = summaryRequest ? getSummaryProcessProfile() : {};
         if (!summaryRequest) {
           // Refresh and resolve before the driver fingerprint is evaluated.
           // Re-entry into a pending bridge turn returns the existing controller,
@@ -368,6 +370,7 @@ export function streamAntigravity(
             effort,
             agent: processProfile.agent,
             mode: processProfile.mode,
+            mcpDirectory: processProfile.mcpDirectory,
             bridgeRevision,
             signal: options?.signal,
           }),
