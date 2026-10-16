@@ -1,9 +1,5 @@
 import type { AssistantMessage, TextContent } from "@earendil-works/pi-ai";
-import {
-  AssistantMessageComponent,
-  ToolExecutionComponent,
-  VERSION,
-} from "@earendil-works/pi-coding-agent";
+import { AssistantMessageComponent, ToolExecutionComponent } from "@earendil-works/pi-coding-agent";
 import type { Component, Container } from "@earendil-works/pi-tui";
 import {
   buildCompactReasoningPreview,
@@ -107,14 +103,6 @@ function setPatchState(state: PatchState | undefined): void {
   (globalThis as Record<symbol, PatchState | undefined>)[PATCH_SYMBOL] = state;
 }
 
-export function isSupportedPiVersion(version: string): boolean {
-  const match = /^(\d+)\.(\d+)(?:\.(\d+))?/.exec(version);
-  if (!match) return false;
-  const major = Number(match[1]);
-  const minor = Number(match[2]);
-  return major === 0 && minor >= 83 && minor <= 87;
-}
-
 function createPatchState(): PatchState {
   return {
     refCount: 0,
@@ -142,6 +130,16 @@ function getToolContainerPrototype(): { addChild: ContainerAddChild } {
   return Object.getPrototypeOf(ToolExecutionComponent.prototype) as { addChild: ContainerAddChild };
 }
 
+/**
+ * Capability probe standing in for a version allowlist.
+ *
+ * The patch replaces specific TUI members, so it asks for exactly those and
+ * nothing else. A maintained `VERSION` range cannot answer this question: it
+ * only records which releases were tested, so it silently disables the
+ * extension the moment pi ships a version nobody added to the list — which is
+ * how this extension sat inert from pi 0.99 through 1.3 while its own tests
+ * kept passing.
+ */
 function hasPatchablePrototypeMethods(): boolean {
   const containerPrototype = getToolContainerPrototype();
   return (
@@ -594,14 +592,9 @@ export function installUiPatches(): PatchInstallResult {
   state = createPatchState();
   state.refCount = 1;
 
-  if (!isSupportedPiVersion(VERSION)) {
-    state.unsupportedReason = `pi-compact-output requires Pi 0.83.x–0.87.x (found ${VERSION})`;
-    setPatchState(state);
-    return { installed: false, reason: state.unsupportedReason };
-  }
-
   if (!hasPatchablePrototypeMethods()) {
-    state.unsupportedReason = "pi-compact-output: required TUI prototype methods are missing";
+    state.unsupportedReason =
+      "pi-compact-output: this Pi build is missing the TUI prototype members the patch replaces";
     setPatchState(state);
     return { installed: false, reason: state.unsupportedReason };
   }

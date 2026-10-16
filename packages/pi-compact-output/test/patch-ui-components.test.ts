@@ -6,7 +6,6 @@ import {
   AssistantMessageComponent,
   initTheme,
   ToolExecutionComponent,
-  VERSION,
 } from "@earendil-works/pi-coding-agent";
 import { type Container, Image, Text, type TUI, visibleWidth } from "@earendil-works/pi-tui";
 import compactOutputExtension from "../index.ts";
@@ -18,7 +17,6 @@ import {
   __resetPatchStateForTests,
   formatThinkingWorkingMessage,
   installUiPatches,
-  isSupportedPiVersion,
   releaseUiPatches,
   setCompactOutputLimits,
   setReasoningStreaming,
@@ -141,9 +139,7 @@ function createToolComponent(toolName = "grep") {
 
 test("expanded rendering is byte-for-byte identical to the saved original renderer", () => {
   const install = installUiPatches();
-  if (!install.installed) {
-    return;
-  }
+  assert.equal(install.installed, true, install.reason ?? "patch did not install");
 
   const component = createToolComponent();
   component.updateResult(
@@ -165,9 +161,7 @@ test("expanded rendering is byte-for-byte identical to the saved original render
 
 test("images are absent from the collapsed tool area and restored when expanded", () => {
   const install = installUiPatches();
-  if (!install.installed) {
-    return;
-  }
+  assert.equal(install.installed, true, install.reason ?? "patch did not install");
 
   const component = createToolComponent();
   component.updateResult(
@@ -198,9 +192,7 @@ test("images are absent from the collapsed tool area and restored when expanded"
 
 test("FFF-style grep results show the call plus two result lines and return expanded", () => {
   const install = installUiPatches();
-  if (!install.installed) {
-    return;
-  }
+  assert.equal(install.installed, true, install.reason ?? "patch did not install");
 
   for (const toolName of ["grep", "find", "ffgrep", "fffind"]) {
     const component = new ToolExecutionComponent(
@@ -278,9 +270,7 @@ test("reasoning display removes provider bold wrappers", () => {
 
 test("GPT-5.6 fixture with several headings renders the latest five reasoning lines", () => {
   const install = installUiPatches();
-  if (!install.installed) {
-    return;
-  }
+  assert.equal(install.installed, true, install.reason ?? "patch did not install");
 
   const rendered = renderAssistantTurn(
     assistantMessage(
@@ -303,9 +293,7 @@ test("GPT-5.6 fixture with several headings renders the latest five reasoning li
 
 test("long reasoning lines wrap instead of being truncated", () => {
   const install = installUiPatches();
-  if (!install.installed) {
-    return;
-  }
+  assert.equal(install.installed, true, install.reason ?? "patch did not install");
 
   const parent = createGroupParent();
   const component = new AssistantMessageComponent();
@@ -362,9 +350,7 @@ test("reasoning boxes stay within tiny render widths", () => {
 
 test("Ctrl+O expands the full reasoning block and collapses it again", () => {
   const install = installUiPatches();
-  if (!install.installed) {
-    return;
-  }
+  assert.equal(install.installed, true, install.reason ?? "patch did not install");
 
   const parent = createGroupParent();
   const component = new AssistantMessageComponent();
@@ -405,9 +391,7 @@ test("Ctrl+O expands the full reasoning block and collapses it again", () => {
 
 test("completed reasoning sections show a check mark", () => {
   const install = installUiPatches();
-  if (!install.installed) {
-    return;
-  }
+  assert.equal(install.installed, true, install.reason ?? "patch did not install");
 
   const parent = createGroupParent();
   const component = new AssistantMessageComponent();
@@ -436,9 +420,7 @@ test("completed reasoning sections show a check mark", () => {
 
 test("several consecutive thinking blocks render the latest compact reasoning segment", () => {
   const install = installUiPatches();
-  if (!install.installed) {
-    return;
-  }
+  assert.equal(install.installed, true, install.reason ?? "patch did not install");
 
   const rendered = renderAssistantTurn(
     assistantMessage(
@@ -454,9 +436,7 @@ test("several consecutive thinking blocks render the latest compact reasoning se
 
 test("several separate thinking-only assistant messages each render one line", () => {
   const install = installUiPatches();
-  if (!install.installed) {
-    return;
-  }
+  assert.equal(install.installed, true, install.reason ?? "patch did not install");
 
   for (const thinking of ["round one", "round two", "round three"]) {
     const rendered = renderAssistantTurn(
@@ -468,9 +448,7 @@ test("several separate thinking-only assistant messages each render one line", (
 
 test("thinking followed by final text preserves the final text", () => {
   const install = installUiPatches();
-  if (!install.installed) {
-    return;
-  }
+  assert.equal(install.installed, true, install.reason ?? "patch did not install");
 
   const rendered = renderAssistantTurn(
     assistantMessage(
@@ -487,9 +465,7 @@ test("thinking followed by final text preserves the final text", () => {
 
 test("length, aborted, and error stop reasons remain visible", () => {
   const install = installUiPatches();
-  if (!install.installed) {
-    return;
-  }
+  assert.equal(install.installed, true, install.reason ?? "patch did not install");
 
   const cases: AssistantMessage[] = [
     assistantMessage([{ type: "text", text: "partial" }], "length"),
@@ -520,9 +496,7 @@ test("length, aborted, and error stop reasons remain visible", () => {
 
 test("frozen input messages prove the wrapper does not mutate session data", () => {
   const install = installUiPatches();
-  if (!install.installed) {
-    return;
-  }
+  assert.equal(install.installed, true, install.reason ?? "patch did not install");
 
   const thinking = Object.freeze({ type: "thinking" as const, thinking: "secret" });
   const text = Object.freeze({ type: "text" as const, text: "visible" });
@@ -548,10 +522,7 @@ test("frozen input messages prove the wrapper does not mutate session data", () 
 test("installation is idempotent", () => {
   const first = installUiPatches();
   const second = installUiPatches();
-  if (!first.installed) {
-    assert.equal(second.installed, false);
-    return;
-  }
+  assert.equal(first.installed, true, first.reason ?? "patch did not install");
   assert.equal(second.installed, true);
   assert.equal(__getPatchStateForTests()?.refCount, 2);
   releaseUiPatches();
@@ -573,9 +544,7 @@ test("restoration restores the exact saved methods", () => {
   ).setExpanded;
 
   const install = installUiPatches();
-  if (!install.installed) {
-    return;
-  }
+  assert.equal(install.installed, true, install.reason ?? "patch did not install");
 
   assert.notEqual(ToolExecutionComponent.prototype.render, beforeRender);
   releaseUiPatches();
@@ -593,22 +562,17 @@ test("restoration restores the exact saved methods", () => {
   );
 });
 
-test("unsupported Pi versions leave original rendering active", () => {
-  const supported =
-    VERSION.startsWith("0.83.") ||
-    VERSION.startsWith("0.84.") ||
-    VERSION.startsWith("0.85.") ||
-    VERSION.startsWith("0.86.") ||
-    VERSION.startsWith("0.87.");
-  assert.equal(isSupportedPiVersion(VERSION), supported);
-  if (supported) {
-    return;
-  }
-
+// The patch installs against the Pi build under test. Asserting the positive
+// case is the whole point: a capability probe that quietly reports "unsupported"
+// is indistinguishable from a working one unless a test fails, and the previous
+// version-allowlist test derived its expectation from the installed VERSION, so
+// it passed for every version including the ones the extension did not support.
+test("the patch installs against the Pi build under test", () => {
   const beforeRender = ToolExecutionComponent.prototype.render;
   const result = installUiPatches();
-  assert.equal(result.installed, false);
-  assert.ok(result.reason);
+  assert.equal(result.installed, true, result.reason ?? "patch did not install");
+  assert.notEqual(ToolExecutionComponent.prototype.render, beforeRender);
+  releaseUiPatches();
   assert.equal(ToolExecutionComponent.prototype.render, beforeRender);
 });
 
@@ -652,9 +616,7 @@ test("extension leaves pi's default working message untouched", () => {
 
 test("compact reasoning renders a bordered header with a loading sign while streaming", () => {
   const install = installUiPatches();
-  if (!install.installed) {
-    return;
-  }
+  assert.equal(install.installed, true, install.reason ?? "patch did not install");
 
   const parent = createGroupParent();
   const component = new AssistantMessageComponent();
@@ -684,9 +646,7 @@ test("compact reasoning renders a bordered header with a loading sign while stre
 
 test("streaming within one reasoning segment keeps the first compact preview", () => {
   const install = installUiPatches();
-  if (!install.installed) {
-    return;
-  }
+  assert.equal(install.installed, true, install.reason ?? "patch did not install");
 
   const first = assistantMessage([{ type: "thinking", thinking: "alpha" }], "toolUse");
   const second = assistantMessage([{ type: "thinking", thinking: "alpha beta" }], "toolUse");
@@ -698,9 +658,7 @@ test("streaming within one reasoning segment keeps the first compact preview", (
 
 test("streaming within one reasoning segment grows the compact transcript preview", () => {
   const install = installUiPatches();
-  if (!install.installed) {
-    return;
-  }
+  assert.equal(install.installed, true, install.reason ?? "patch did not install");
 
   const parent = createGroupParent();
   const component = new AssistantMessageComponent();
@@ -723,9 +681,7 @@ test("streaming within one reasoning segment grows the compact transcript previe
 
 test("setCompactOutputLimits controls tool and reasoning line counts", () => {
   const install = installUiPatches();
-  if (!install.installed) {
-    return;
-  }
+  assert.equal(install.installed, true, install.reason ?? "patch did not install");
 
   setCompactOutputLimits(2, 2);
 
@@ -777,9 +733,7 @@ test("setCompactOutputLimits controls tool and reasoning line counts", () => {
 
 test("compact reasoning auto-scrolls to the latest five lines while collapsed", () => {
   const install = installUiPatches();
-  if (!install.installed) {
-    return;
-  }
+  assert.equal(install.installed, true, install.reason ?? "patch did not install");
 
   const parent = createGroupParent();
   const component = new AssistantMessageComponent();
@@ -796,9 +750,7 @@ test("compact reasoning auto-scrolls to the latest five lines while collapsed", 
 
 test("codex commentary text is hidden while thinking is compact", () => {
   const install = installUiPatches();
-  if (!install.installed) {
-    return;
-  }
+  assert.equal(install.installed, true, install.reason ?? "patch did not install");
 
   const parent = createGroupParent();
   const component = new AssistantMessageComponent();
@@ -830,9 +782,7 @@ test("codex commentary text is hidden while thinking is compact", () => {
 
 test("reasoning and tool groups stay in content order", () => {
   const install = installUiPatches();
-  if (!install.installed) {
-    return;
-  }
+  assert.equal(install.installed, true, install.reason ?? "patch did not install");
 
   const rendered = renderAssistantTurn(
     assistantMessage(
@@ -864,9 +814,7 @@ test("reasoning and tool groups stay in content order", () => {
 
 test("re-created components for finished tools keep one block per run", () => {
   const install = installUiPatches();
-  if (!install.installed) {
-    return;
-  }
+  assert.equal(install.installed, true, install.reason ?? "patch did not install");
 
   const parent = createGroupParent();
   const assistant = new AssistantMessageComponent();
@@ -950,9 +898,7 @@ test("re-created components for finished tools keep one block per run", () => {
 
 test("tool runs in separate turns keep their own blocks", () => {
   const install = installUiPatches();
-  if (!install.installed) {
-    return;
-  }
+  assert.equal(install.installed, true, install.reason ?? "patch did not install");
 
   const parent = createGroupParent();
   const toolCall = (id: string, name: string) => ({
@@ -1012,9 +958,7 @@ test("tool runs in separate turns keep their own blocks", () => {
 
 test("assistant component hides original thinking while compact block renders it", () => {
   const install = installUiPatches();
-  if (!install.installed) {
-    return;
-  }
+  assert.equal(install.installed, true, install.reason ?? "patch did not install");
 
   const parent = createGroupParent();
   const assistant = new AssistantMessageComponent(undefined, false);
@@ -1029,9 +973,7 @@ test("assistant component hides original thinking while compact block renders it
 
 test("rebuild-style assistant construction restores compact reasoning after compaction", () => {
   const install = installUiPatches();
-  if (!install.installed) {
-    return;
-  }
+  assert.equal(install.installed, true, install.reason ?? "patch did not install");
 
   const parent = createGroupParent();
   const assistant = new AssistantMessageComponent(
@@ -1085,9 +1027,7 @@ test("tool status blocks use the loading, success, and error markers", () => {
 
 test("consecutive tools collapse to one line with the last tool's message, and expand first-to-last", () => {
   const install = installUiPatches();
-  if (!install.installed) {
-    return;
-  }
+  assert.equal(install.installed, true, install.reason ?? "patch did not install");
 
   const parent = createGroupParent();
   const makeTool = (name: string, description: string) =>
@@ -1132,9 +1072,7 @@ test("consecutive tools collapse to one line with the last tool's message, and e
 
 test("collapsed group shows the last tool's call and result lines, never earlier results", () => {
   const install = installUiPatches();
-  if (!install.installed) {
-    return;
-  }
+  assert.equal(install.installed, true, install.reason ?? "patch did not install");
 
   const parent = createGroupParent();
   const grep = new ToolExecutionComponent(
@@ -1203,9 +1141,7 @@ test("collapsed group shows the last tool's call and result lines, never earlier
 
 test("compact render uses call renderer first line for real ToolExecutionComponent", () => {
   const install = installUiPatches();
-  if (!install.installed) {
-    return;
-  }
+  assert.equal(install.installed, true, install.reason ?? "patch did not install");
 
   const component = createToolComponent();
   component.markExecutionStarted();
@@ -1219,9 +1155,7 @@ test("compact render uses call renderer first line for real ToolExecutionCompone
 
 test("invalid runtime shape falls back to the original renderer", () => {
   const install = installUiPatches();
-  if (!install.installed) {
-    return;
-  }
+  assert.equal(install.installed, true, install.reason ?? "patch did not install");
 
   const component = createToolComponent();
   assert.ok(tryReadToolExecutionInternals(component));
@@ -1237,9 +1171,7 @@ test("invalid runtime shape falls back to the original renderer", () => {
 
 test("custom image renderer is not shown collapsed", () => {
   const install = installUiPatches();
-  if (!install.installed) {
-    return;
-  }
+  assert.equal(install.installed, true, install.reason ?? "patch did not install");
 
   const component = new ToolExecutionComponent(
     "screenshot",
