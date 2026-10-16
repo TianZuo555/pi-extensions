@@ -32,6 +32,9 @@ function fixture(t) {
   }
   env("PI_CODING_AGENT_DIR", undefined);
   env("DEEPSEEK_API_KEY", undefined);
+  for (const name of ["GH_TOKEN", "GITHUB_TOKEN", "GITHUB_COPILOT_TOKEN", "COPILOT_GITHUB_TOKEN"]) {
+    env(name, undefined);
+  }
 
   function writeAuth(dir, entries) {
     fs.mkdirSync(dir, { recursive: true });
@@ -130,4 +133,86 @@ test("all shared auth readers use the custom agent directory", async (t) => {
     assert.deepEqual(resolve(), { token, source: file });
   }
   assert.equal(auth.hasXiaomiModelLoginInfo(), true);
+});
+
+test("Copilot keeps the Enterprise domain with the stored GitHub OAuth token", async (t) => {
+  const f = fixture(t);
+  const file = f.writeAuth(f.defaultDir, {
+    "github-copilot": {
+      type: "oauth",
+      refresh: "enterprise-github-token",
+      access: "short-lived-chat-token",
+      enterpriseUrl: "example.ghe.com",
+    },
+  });
+  f.env("GH_TOKEN", "unrelated-public-token");
+  const auth = await f.load();
+  assert.deepEqual(auth.resolveCopilotToken(), {
+    token: "enterprise-github-token",
+    source: file,
+    enterpriseUrl: "example.ghe.com",
+  });
+});
+
+test("Copilot retains invalid Enterprise metadata for validation, not public fallback", async (t) => {
+  const f = fixture(t);
+  const file = f.writeAuth(f.defaultDir, {
+    "github-copilot": { type: "oauth", refresh: "enterprise-token", enterpriseUrl: null },
+  });
+  const auth = await f.load();
+  assert.deepEqual(auth.resolveCopilotToken(), {
+    token: "enterprise-token",
+    source: file,
+    enterpriseUrl: null,
+  });
+});
+
+test("incomplete Enterprise login does not borrow a public environment token", async (t) => {
+  const f = fixture(t);
+  f.writeAuth(f.defaultDir, {
+    "github-copilot": { type: "oauth", access: "chat-token", enterpriseUrl: "example.ghe.com" },
+  });
+  f.env("GH_TOKEN", "unrelated-public-token");
+  const auth = await f.load();
+  assert.equal(auth.resolveCopilotToken(), undefined);
+  assert.equal(auth.hasCopilotLoginInfo(), false);
+});
+
+test("Copilot still supports public environment credentials", async (t) => {
+  const f = fixture(t);
+  f.env("GITHUB_TOKEN", "public-github-token");
+  const auth = await f.load();
+  assert.deepEqual(auth.resolveCopilotToken(), {
+    token: "public-github-token",
+    source: "$GITHUB_TOKEN",
+  });
+});
+
+function writeCopilotApps(f, entries) {
+  const dir = path.join(f.home, ".config", "github-copilot");
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, "apps.json"), JSON.stringify(entries));
+}
+
+test("VS Code fallback selects a public token instead of the first Enterprise account", async (t) => {
+  const f = fixture(t);
+  writeCopilotApps(f, {
+    "example.ghe.com:enterprise-user": { oauth_token: "enterprise-token" },
+    "github.com:public-user": { oauth_token: "public-token" },
+  });
+  const auth = await f.load();
+  assert.deepEqual(auth.resolveCopilotToken(), {
+    token: "public-token",
+    source: "~/.config/github-copilot/apps.json",
+  });
+});
+
+test("VS Code Enterprise-only credentials are never sent to the public quota API", async (t) => {
+  const f = fixture(t);
+  writeCopilotApps(f, {
+    "example.ghe.com:enterprise-user": { oauth_token: "enterprise-token" },
+    "github.com.evil.test:user": { oauth_token: "unknown-token" },
+  });
+  const auth = await f.load();
+  assert.equal(auth.resolveCopilotToken(), undefined);
 });
