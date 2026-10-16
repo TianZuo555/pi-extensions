@@ -1,6 +1,7 @@
 // compact-output — grouped collapsed tool calls and compact reasoning summaries.
 //
-// Presentation-only TUI extension for Pi 0.83.x–0.87.x:
+// Presentation-only TUI extension for Pi builds that expose the TUI prototype
+// members it patches (see hasPatchablePrototypeMethods in lib/patch-ui-components.ts):
 // - Consecutive collapsed tool calls share one bordered status block with up to three lines.
 // - Reasoning appears in-sequence as wrapped compact blocks; provider bold wrappers and
 //   finished sections show a success check mark instead of a stale spinner.
@@ -119,6 +120,5 @@ export { SPINNER_INTERVAL_MS } from "./lib/compact-status.ts";
 export {
   getPatchDiagnostics,
   installUiPatches,
-  isSupportedPiVersion,
   releaseUiPatches,
 } from "./lib/patch-ui-components.ts";
