@@ -127,6 +127,43 @@ export function readLogTail(filePath: string, limit: number): LogReadBody {
 }
 
 /**
+ * The whole log when it fits `limit`; otherwise the first and last
+ * `limit / 2` bytes, joined by an explicit omitted byte range.
+ *
+ * This is the Code Mode contract Pi's built-in bash implements for
+ * `structuredContent.output` (`readFullOutput`): equal halves around a
+ * marker, so a script can tell where the omission starts and that the text
+ * either side of it is a complete prefix and suffix. Both edges are snapped
+ * to code points, so neither half decodes to U+FFFD.
+ */
+export function readLogHeadTail(filePath: string, limit: number): LogReadBody {
+  const size = fs.statSync(filePath).size;
+  if (size <= limit) return readLogPage(filePath, 0, limit);
+  const headLength = Math.floor(limit / 2);
+  const headRaw = readWindow(filePath, 0, headLength);
+  const headEnd = completeCodePointEnd(headRaw);
+  const head = headRaw.subarray(0, headEnd === 0 ? headRaw.length : headEnd);
+  const tailStart = size - Math.max(1, limit - head.length);
+  const tailRaw = readWindow(filePath, tailStart, size - tailStart);
+  const tailLead = codePointStart(tailRaw);
+  const tail = tailRaw.subarray(tailLead);
+  const omittedStart = head.length;
+  const omittedEnd = tailStart + tailLead;
+  const omitted = omittedEnd - omittedStart;
+  const text = `${head.toString("utf8")}\n\n[... ${omitted} bytes omitted ...]\n\n${tail.toString("utf8")}`;
+  return {
+    mode: "head_tail",
+    offset: 0,
+    nextOffset: size,
+    bytesRead: Buffer.byteLength(text),
+    size,
+    text,
+    omittedStart,
+    omittedEnd,
+  };
+}
+
+/**
  * The whole log when it fits `limit`; otherwise a startup head (one quarter)
  * plus the newest remainder, joined by an explicit omitted byte range.
  */

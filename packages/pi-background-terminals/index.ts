@@ -40,7 +40,12 @@ import {
 import { Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { createCompletionBatchScheduler } from "./src/completion-batcher.ts";
-import { SpawnError, type TerminalSnapshot, type TerminalStatus } from "./src/domain.ts";
+import {
+  SpawnError,
+  type OutputView,
+  type TerminalSnapshot,
+  type TerminalStatus,
+} from "./src/domain.ts";
 import {
   findDuplicateRunning,
   plainSleepSeconds,
@@ -56,7 +61,9 @@ import {
   MAX_TERMINAL_LOG_READ_BYTES,
   TERMINAL_LOG_READ_RUN_BUDGET,
   TERMINAL_LOG_READ_RUN_CALLS,
+  BASH_STRUCTURED_OUTPUT_MAX_BYTES,
 } from "./src/constants.ts";
+import { readLogHeadTail } from "./src/log-read.ts";
 import {
   TerminalManager,
   type SettlementWaitResult,
@@ -240,23 +247,45 @@ function parseTerminalLogRef(ref: string) {
   };
 }
 
+/**
+ * One stream's contribution to `structuredContent.output`, at the Code Mode
+ * budget rather than the model-facing one.
+ *
+ * The in-memory view is compacted to `SETTLED_RETAINED_PER_STREAM` (64 KiB)
+ * once the archive is on disk, which is far below what Pi's built-in bash
+ * promises scripts, so a settled stream reads its archive instead. A live
+ * stream has no complete archive yet: its view already is the bounded
+ * head+tail, and it carries the omission marker.
+ */
+function structuredStream(view: OutputView): { text: string; truncated: boolean } {
+  const { spillPath, archiveComplete } = view;
+  if (spillPath !== undefined && archiveComplete === true) {
+    try {
+      const read = readLogHeadTail(spillPath, BASH_STRUCTURED_OUTPUT_MAX_BYTES);
+      return { text: read.text, truncated: read.text.includes("bytes omitted") };
+    } catch {
+      // The archive vanished (pruned, or a spill that failed after settling):
+      // fall back to what memory still holds instead of failing the result.
+    }
+  }
+  return { text: view.text, truncated: view.truncatedBytes > 0 };
+}
+
 /** Strict-JSON structured bash result for Code Mode scripts: optional keys
  * are absent rather than undefined. `exit_code` is reported only for a
  * natural exit (status done/failed) — never for running/timed_out/killed,
  * where a forced kill reports platform-specific codes (taskkill exit 1 on
- * Windows) — so the field means the same thing on every platform.
- * `OutputView.text` already carries the `... N bytes omitted ...` marker when
- * a stream truncated. */
+ * Windows) — so the field means the same thing on every platform. */
 function bashStructuredContent(snap: TerminalSnapshot) {
-  const stdout = snap.stdout.text;
-  const stderr = snap.stderr.text;
-  let output = stdout;
-  if (stderr.length > 0) {
-    output += (output.length > 0 && !output.endsWith("\n") ? "\n" : "") + stderr;
+  const stdout = structuredStream(snap.stdout);
+  const stderr = structuredStream(snap.stderr);
+  let output = stdout.text;
+  if (stderr.text.length > 0) {
+    output += (output.length > 0 && !output.endsWith("\n") ? "\n" : "") + stderr.text;
   }
   return {
     output,
-    truncated: snap.stdout.truncatedBytes > 0 || snap.stderr.truncatedBytes > 0,
+    truncated: stdout.truncated || stderr.truncated,
     ...((snap.status === "done" || snap.status === "failed") && snap.exitCode !== undefined
       ? { exit_code: snap.exitCode }
       : {}),

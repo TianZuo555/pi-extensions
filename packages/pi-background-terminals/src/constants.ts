@@ -17,6 +17,9 @@ export const SETTLED_RETAINED_PER_STREAM = 64 * 1024;
 export const MAX_SPILL_BYTES_PER_STREAM = 256 * 1024 * 1024;
 export const DEFAULT_TERMINAL_WAIT_SECONDS = 300;
 export const MAX_TERMINAL_WAIT_SECONDS = 3_600;
+/** `bash` `structuredContent.output` cap for Code Mode scripts. Matches Pi's
+ * built-in bash, which a script is entitled to rely on (docs/codemode.md). */
+export const BASH_STRUCTURED_OUTPUT_MAX_BYTES = 1024 * 1024;
 export const DEFAULT_TERMINAL_LOG_READ_BYTES = 8 * 1024;
 export const MAX_TERMINAL_LOG_READ_BYTES = 64 * 1024;
 export const TERMINAL_LOG_READ_RUN_BUDGET = MAX_TERMINAL_LOG_READ_BYTES * 4;

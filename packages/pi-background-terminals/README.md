@@ -189,9 +189,12 @@ script. The script has no timers.
   `exit_code` or `status` instead.
 - `exit_code` is not present while the command runs. It is also not present
   after a signal or a timeout stops the command.
-- `output` contains stdout and then stderr. For a large stream, it contains
-  only the start and the end, and `truncated` is true. To read the full log,
-  use `terminal_log_read` with `terminal_id`.
+- `output` contains stdout and then stderr. It holds up to 1 MiB, the same
+  limit as the built-in tool. Longer output keeps its first and last
+  512 KiB around a `[... N bytes omitted ...]` marker, and `truncated` is
+  true. To read the full log, use `terminal_log_read` with `terminal_id`.
+  A stream that is still running has no complete log file, so `output`
+  holds the bounded in-memory view instead.
 - The object does not contain `full_output_path`, because the log files are
   private.
 - If a `bash` call in a script moves to the background, `status` is

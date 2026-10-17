@@ -354,6 +354,18 @@ paths stay private; a script reads the full log with `terminal_log_read`.
 The foreground-fallback path passes the built-in's `structuredContent`
 through unchanged.
 
+`output` is read at Pi's documented budget, not the model-facing one. Once a
+stream's archive is complete the manager compacts the in-memory view to
+`SETTLED_RETAINED_PER_STREAM` (64 KiB), which is far below the 1 MiB
+`docs/codemode.md` promises scripts, so `bashStructuredContent()` calls
+`readLogHeadTail(spillPath, BASH_STRUCTURED_OUTPUT_MAX_BYTES)` instead: first
+and last 512 KiB around `[... N bytes omitted ...]`, both edges snapped to
+code points. That mirrors the built-in's `readFullOutput`. A stream that is
+still running has no complete archive, so its bounded in-memory view is used
+and already carries the marker. A vanished archive (pruned, or a spill that
+failed after settling) falls back to the in-memory view rather than failing
+the result.
+
 ### Code Mode nesting
 
 Pi's Code Mode runs tools inside a script via `ctx.executeTool`; every such

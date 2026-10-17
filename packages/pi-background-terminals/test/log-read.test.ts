@@ -3,7 +3,13 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
-import { readLogAuto, readLogPage, readLogTail, searchLogFile } from "../src/log-read.ts";
+import {
+  readLogAuto,
+  readLogHeadTail,
+  readLogPage,
+  readLogTail,
+  searchLogFile,
+} from "../src/log-read.ts";
 
 function withTempFile(content: Buffer | string, run: (filePath: string) => Promise<void> | void) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bt-log-read-"));
@@ -58,6 +64,45 @@ test("auto never emits U+FFFD at multi-byte cut points", async () => {
   await withTempFile(content, async (file) => {
     const result = readLogAuto(file, 1_000);
     assert.equal(result.mode, "head_tail");
+    assert.equal(result.text.includes("\ufffd"), false);
+    assert.ok(result.omittedEnd! > result.omittedStart!);
+  });
+});
+
+test("head_tail splits the budget evenly and marks the omission", async () => {
+  const head = "H".repeat(4_000);
+  const middle = "M".repeat(100_000);
+  const tail = "T".repeat(4_000);
+  await withTempFile(head + middle + tail, async (file) => {
+    const limit = 10_000;
+    const result = readLogHeadTail(file, limit);
+    assert.equal(result.mode, "head_tail");
+    assert.equal(result.offset, 0);
+    assert.equal(result.nextOffset, result.size);
+    // Equal halves, unlike auto's one-quarter startup head.
+    assert.equal(result.text.split("\n\n[... ")[0], (head + middle).slice(0, 5_000));
+    assert.ok(result.text.endsWith(tail.slice(-5_000)), "keeps the last half");
+    // 98_000 bytes dropped: the log minus the two 5_000-byte halves.
+    assert.equal(result.omittedEnd! - result.omittedStart!, 98_000);
+    // The marker names exactly the bytes that were dropped.
+    assert.ok(
+      result.text.includes(`[... ${result.omittedEnd! - result.omittedStart!} bytes omitted ...]`),
+    );
+  });
+});
+
+test("head_tail returns the whole log when it fits, with no marker", async () => {
+  await withTempFile("short\n", async (file) => {
+    const result = readLogHeadTail(file, 1_024);
+    assert.equal(result.text, "short\n");
+    assert.equal(result.omittedStart, undefined);
+  });
+});
+
+test("head_tail never splits a code point at either cut", async () => {
+  const content = "界".repeat(2_000) + "🚀".repeat(500);
+  await withTempFile(content, async (file) => {
+    const result = readLogHeadTail(file, 1_000);
     assert.equal(result.text.includes("\ufffd"), false);
     assert.ok(result.omittedEnd! > result.omittedStart!);
   });

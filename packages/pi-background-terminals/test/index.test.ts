@@ -1656,6 +1656,44 @@ test("bash returns structuredContent on every managed result for Code Mode scrip
     const bigSc = big.structuredContent as Record<string, unknown>;
     assert.equal(bigSc.truncated, true);
     assert.match(bigSc.output as string, /bytes omitted/);
+    // Pi's documented contract for scripts is 1 MiB in equal halves, not the
+    // 64 KiB the settled in-memory view is compacted to for the model.
+    assert.equal(Buffer.byteLength(bigSc.output as string), 1024 * 1024 + 35);
+  } finally {
+    await app.shutdown();
+  }
+});
+
+test("structured bash output keeps 1 MiB in equal halves for scripts", async () => {
+  const app = harness();
+  try {
+    // A line-aligned stream with distinguishable ends, so the halves can be
+    // checked against the bytes the command actually wrote.
+    const bytes = 3 * 1024 * 1024;
+    const result = await app.tools.get("bash").execute(
+      "sc-halves",
+      {
+        command: command(
+          `const n = ${bytes}; process.stdout.write('A'.repeat(n / 2)); process.stdout.write('B'.repeat(n / 2));`,
+        ),
+        yield_time_ms: 30_000,
+      },
+      undefined,
+      undefined,
+      app.ctx,
+    );
+    const sc = result.structuredContent as Record<string, unknown>;
+    const output = sc.output as string;
+    const match = /^([\s\S]*?)\n\n\[\.\.\. (\d+) bytes omitted \.\.\.\]\n\n([\s\S]*)$/.exec(output);
+    assert.ok(match, "output has an omission marker");
+    const [, headPart, omitted, tailPart] = match;
+    assert.equal(sc.truncated, true);
+    assert.equal(headPart!.length, 512 * 1024, "head is half the budget");
+    assert.equal(tailPart!.length, 512 * 1024, "tail is the other half");
+    assert.ok(headPart!.startsWith("A"), "head starts at the beginning");
+    assert.ok(tailPart!.endsWith("B"), "tail ends at the end");
+    // The marker states exactly how many bytes were dropped.
+    assert.equal(Number(omitted), bytes - 1024 * 1024);
   } finally {
     await app.shutdown();
   }

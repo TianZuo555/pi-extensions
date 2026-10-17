@@ -118,7 +118,7 @@ export const TERMINAL_WAIT_OUTPUT_FIELD_DESCRIPTIONS = {
 /** Field text on `bash` `outputSchema` (code-mode scripts, not the model). */
 export const BASH_OUTPUT_FIELD_DESCRIPTIONS = {
   output:
-    "stdout, then stderr. A long stream keeps its head and tail with an omitted-bytes marker.",
+    "stdout, then stderr. Holds up to 1 MiB; longer output keeps its first and last 512 KiB around an omitted-bytes marker.",
   truncated:
     "True when output omits bytes. Read the full log with terminal_log_read and terminal_id.",
   exit_code:
