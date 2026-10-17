@@ -12,4 +12,4 @@ Add `terminal_wait` and `terminal_stop`, make `terminal_log_read` cheaper to use
 - `bash` calls beyond 8 concurrent commands queue for up to 10 s for a free slot instead of failing immediately.
 - `terminal_log_read` paging and tail no longer emit replacement characters when `limit` is smaller than one code point, and a capped search always advances `next_offset` so continuation cannot loop.
 - `yield_time_ms` is clamped to 250–300,000 ms instead of 30,000 ms.
-- Bash guidance points at `terminal_wait` and at one blocking command for CI and deploy waits.
+- Bash guidance tells the model to use a short initial wait for tests, builds, or similar tasks when independent work remains. It points at `terminal_wait` when the result is needed or no other work remains, instead of sleep or repeated log reads. CI and deploy waits still use one blocking command.

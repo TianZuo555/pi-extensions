@@ -118,3 +118,19 @@ Do not delete a result or its required output before delivery.
 When we review recent use, check repeated progress reads, sleep calls,
 repeated test runs, and successful results followed by related edits.
 Do not treat the usage estimates from this discussion as new measurements.
+
+## Follow-up: parallel work prompt
+
+The parallel work instruction was approved after the first commit of this
+record. The Bash tool description now includes this text:
+
+```text
+For tests, builds, or similar tasks, use a short yield_time_ms if independent work remains.
+Continue that work while the command runs.
+Use terminal_wait when you need the result or have no other work.
+Do not use sleep or repeated log reads to wait for completion.
+```
+
+This change adds guidance. It does not change the default wait or the
+behavior of the log tool. The Windows path assertions remain a separate
+item for discussion.

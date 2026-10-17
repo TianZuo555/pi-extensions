@@ -184,7 +184,7 @@ test("background tool metadata stays concise", async () => {
   const app = harness(backgroundTerminals);
   try {
     const budgets = new Map([
-      ["bash", 1_200],
+      ["bash", 1_450],
       ["terminal_log_read", 950],
       ["terminal_wait", 700],
       ["terminal_stop", 400],

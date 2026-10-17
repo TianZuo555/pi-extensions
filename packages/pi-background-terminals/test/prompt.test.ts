@@ -28,7 +28,10 @@ test("bash metadata states the managed-shell contract concisely", () => {
   // yield_time_ms waits, timeout kills: the pair models most often confuse.
   assert.match(BASH_TOOL_DESCRIPTION, /yield_time_ms sets the wait/);
   assert.match(BASH_TOOL_DESCRIPTION, /timeout kills the process tree/);
-  assert.match(BASH_TOOL_DESCRIPTION, /never sleep or poll/i);
+  assert.match(
+    BASH_TOOL_DESCRIPTION,
+    /Do not use sleep or repeated log reads to wait for completion/,
+  );
   // Results are steered in at the next tool boundary, so continuing to work
   // (not sleeping or polling) is what delivers them.
   assert.match(BASH_TOOL_DESCRIPTION, /result arrives at a later tool call/);
@@ -43,7 +46,7 @@ test("bash metadata states the managed-shell contract concisely", () => {
   // The schema carries exclusiveMinimum/maximum for timeout, so prose must not
   // spend tokens repeating them.
   assert.doesNotMatch(BASH_PARAMETER_DESCRIPTIONS.timeout, /maximum/i);
-  assert.ok(BASH_TOOL_DESCRIPTION.length <= 600);
+  assert.ok(BASH_TOOL_DESCRIPTION.length <= 850);
   assert.ok(BASH_PROMPT_SNIPPET.length <= 50);
   assert.ok(TERMINAL_LOG_READ_TOOL_DESCRIPTION.length <= 400);
   assert.ok(TERMINAL_LOG_READ_PROMPT_SNIPPET.length <= 32);

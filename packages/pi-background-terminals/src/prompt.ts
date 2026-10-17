@@ -51,7 +51,10 @@ const RESULT_STDERR_MAX_LINES = 20;
 export const BASH_TOOL_DESCRIPTION =
   "Run Bash in a fresh shell — no interactive stdin; use working_dir, not a standalone cd. " +
   "Returns output within the initial wait, else a background terminal id; its result arrives at a later tool call. " +
-  "Nothing else to do? Call terminal_wait — never sleep or poll. " +
+  "For tests, builds, or similar tasks, use a short yield_time_ms if independent work remains. " +
+  "Continue that work while the command runs. " +
+  "Use terminal_wait when you need the result or have no other work. " +
+  "Do not use sleep or repeated log reads to wait for completion. " +
   "`cmd &` dies with its shell — give a server its own call instead. " +
   "Wait on CI or deploys with one blocking command (`gh run watch`, an `until` loop). " +
   `yield_time_ms sets the wait; timeout kills the process tree; at most ${MAX_RUNNING} commands run at once; extra calls queue.`;
