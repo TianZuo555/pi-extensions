@@ -182,6 +182,26 @@ export const TERMINAL_ERRORS = {
     `Initial wait aborted; ${id} continues in the background and will report when it exits.`,
 };
 
+/** At most this many changed paths are named; the rest collapse into a count. */
+export const MAX_CHANGED_PATHS = 8;
+
+/**
+ * One line naming files the model changed while a command ran (see
+ * run-changes.ts), or undefined when none changed. States the fact and leaves
+ * the decision to the model: a re-run is often right, but not always (a docs
+ * edit beside a lint run changes nothing).
+ */
+export function changedFilesNote(relativePaths: readonly string[]) {
+  if (relativePaths.length === 0) return undefined;
+  const shown = relativePaths.slice(0, MAX_CHANGED_PATHS);
+  const hidden = relativePaths.length - shown.length;
+  const list = hidden > 0 ? `${shown.join(", ")} (+${hidden} more)` : shown.join(", ");
+  return (
+    `Changed while this command ran: ${list}. ` +
+    "The result may not reflect those changes; run the command again if they matter to it."
+  );
+}
+
 export function foregroundFallbackWarning(reason: string) {
   return `[Managed bash unavailable before spawn; using Pi's foreground bash fallback — no auto-yield or /ps tracking for this call. Reason: ${reason.slice(0, 500)}]`;
 }
@@ -421,8 +441,12 @@ export function buildBashProgress(snap: TerminalSnapshot) {
 
 /** Result of the initial bash wait, whether final or yielded. `nested` marks a
  * call made by a Code Mode script: its follow-up cannot interrupt the script,
- * so the guidance points at collecting the result inside the script. */
-export function buildBashResult(snap: TerminalSnapshot, options?: { nested?: boolean }) {
+ * so the guidance points at collecting the result inside the script.
+ * `changedFiles` qualifies a final result only: a running command has none. */
+export function buildBashResult(
+  snap: TerminalSnapshot,
+  options?: { nested?: boolean; changedFiles?: readonly string[] },
+) {
   // Always name the directory. A command sent to the wrong one usually still
   // exits 0, and the common mistake is assuming a cwd that was never set, so
   // the model must see where it actually ran even when that is the session cwd.
@@ -436,6 +460,10 @@ export function buildBashResult(snap: TerminalSnapshot, options?: { nested?: boo
         ? `Command timed out after ${formatElapsed(snap)} in ${snap.cwd}.`
         : `Command finished in ${formatElapsed(snap)} (${formatExit(snap)}) in ${snap.cwd}.`;
   if (snap.errorText) text += `\nError: ${snap.errorText}`;
+  if (snap.status !== "running") {
+    const note = changedFilesNote(options?.changedFiles ?? []);
+    if (note) text += `\n${note}`;
+  }
   return appendOutput(
     text,
     snap,
@@ -462,10 +490,14 @@ function terminalHow(snap: TerminalSnapshot) {
 export function buildTerminalResultMessage(
   snap: TerminalSnapshot,
   budgetBytes = Number.POSITIVE_INFINITY,
+  changedFiles: readonly string[] = [],
 ) {
   const how = terminalHow(snap);
   let text = `Background terminal ${snap.id} "${snap.title}" ${how} after ${formatElapsed(snap)}.`;
   if (snap.errorText) text += `\nError: ${snap.errorText}`;
+  // Sits before the output: it changes how the output should be read.
+  const note = changedFilesNote(changedFiles);
+  if (note) text += `\n${note}`;
   // Failures need the initial diagnostic budget: the useful error often sits
   // outside the compact success follow-up window. A killed process remains
   // intentionally concise because /ps is the user-facing inspection path.
@@ -526,10 +558,17 @@ export function truncateUtf8WithMarker(value: string, maximumBytes: number) {
 
 /** One follow-up for terminal completions that settle in the same quiet
  * window. Each terminal's share of the byte budget is enforced while its
- * message is built, so summaries and archive refs survive truncation. */
-export function buildTerminalResultBatchMessage(snaps: readonly TerminalSnapshot[]) {
+ * message is built, so summaries and archive refs survive truncation.
+ * `changedFiles` maps a terminal id to the files written while it ran. */
+export function buildTerminalResultBatchMessage(
+  snaps: readonly TerminalSnapshot[],
+  changedFiles: ReadonlyMap<string, readonly string[]> = new Map(),
+) {
   if (snaps.length === 0) return "";
-  if (snaps.length === 1) return buildTerminalResultMessage(snaps[0]);
+  const noteFor = (snap: TerminalSnapshot) => changedFiles.get(snap.id) ?? [];
+  if (snaps.length === 1) {
+    return buildTerminalResultMessage(snaps[0], Number.POSITIVE_INFINITY, noteFor(snaps[0]));
+  }
 
   const header = `${snaps.length} background terminals completed.`;
   const separator = "\n\n";
@@ -538,7 +577,9 @@ export function buildTerminalResultBatchMessage(snaps: readonly TerminalSnapshot
     0,
     Math.floor((MAX_COMPLETION_BATCH_CONTENT_BYTES - fixedBytes) / snaps.length),
   );
-  const boundedMessages = snaps.map((snap) => buildTerminalResultMessage(snap, perMessageBytes));
+  const boundedMessages = snaps.map((snap) =>
+    buildTerminalResultMessage(snap, perMessageBytes, noteFor(snap)),
+  );
   return [header, ...boundedMessages].join(separator);
 }
 
@@ -549,10 +590,11 @@ export function buildTerminalWaitResult(input: {
   readonly alreadyReported: readonly TerminalSnapshot[];
   readonly running: readonly TerminalSnapshot[];
   readonly timeoutSeconds: number;
+  readonly changedFiles?: ReadonlyMap<string, readonly string[]>;
 }) {
   const sections: string[] = [];
   if (input.settled.length > 0) {
-    sections.push(buildTerminalResultBatchMessage(input.settled));
+    sections.push(buildTerminalResultBatchMessage(input.settled, input.changedFiles));
   }
   if (input.alreadyReported.length > 0) {
     sections.push(

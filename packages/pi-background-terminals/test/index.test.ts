@@ -1753,3 +1753,136 @@ test("terminal_wait exposes structuredContent, including on a failed terminal", 
     await app.shutdown();
   }
 });
+
+/** Fire tool_result like pi does after a real edit/write call. */
+async function emitToolResult(
+  app: ReturnType<typeof harness>,
+  toolName: "edit" | "write",
+  filePath: string,
+  isError = false,
+) {
+  for (const handler of app.handlers.get("tool_result") ?? []) {
+    await handler(
+      {
+        type: "tool_result",
+        toolCallId: `call-${toolName}-${filePath}`,
+        toolName,
+        input: { path: filePath },
+        content: [{ type: "text", text: isError ? "no match" : "ok" }],
+        isError,
+      },
+      app.ctx,
+    );
+  }
+}
+
+test("completion notes files edited through tool_result while the command ran", async () => {
+  const app = harness();
+  try {
+    const started = await app.tools
+      .get("bash")
+      .execute(
+        "call-change-start",
+        { command: command("setTimeout(() => process.exit(0), 700)"), yield_time_ms: 250 },
+        undefined,
+        undefined,
+        app.ctx,
+      );
+    const id: string = started.details?.id;
+    assert.equal(started.details?.yielded, true);
+
+    // A successful edit inside the command's cwd, given relative to ctx.cwd
+    // as the model writes it.
+    await emitToolResult(app, "edit", "src/touched.ts");
+    // A failed edit and a write outside the cwd must not appear.
+    await emitToolResult(app, "edit", path.join(app.ctx.cwd, "src", "failed.ts"), true);
+    await emitToolResult(app, "write", path.join(os.tmpdir(), "elsewhere.md"));
+
+    const waited = await app.tools
+      .get("terminal_wait")
+      .execute("call-change-wait", { ids: [id] }, undefined, undefined, app.ctx);
+    const text: string = waited.content[0].text;
+    assert.match(text, /Changed while this command ran: src\/touched\.ts\./);
+    assert.match(text, /may not reflect those changes/);
+    assert.doesNotMatch(text, /failed\.ts|elsewhere\.md/);
+  } finally {
+    await app.shutdown();
+  }
+});
+
+test("the proactive completion message carries the same note", async () => {
+  const app = harness();
+  try {
+    const started = await app.tools
+      .get("bash")
+      .execute(
+        "call-push-start",
+        { command: command("setTimeout(() => process.exit(0), 600)"), yield_time_ms: 250 },
+        undefined,
+        undefined,
+        app.ctx,
+      );
+    assert.equal(started.details?.yielded, true);
+
+    await emitToolResult(app, "write", path.join(app.ctx.cwd, "README.md"));
+
+    assert.ok(
+      await pollUntil(() => app.messages.length > 0, 10_000),
+      "completion message was delivered",
+    );
+    assert.match(app.messages[0].message.content, /Changed while this command ran: README\.md/);
+  } finally {
+    await app.shutdown();
+  }
+});
+
+test("a change survives a new agent run while its command still runs", async () => {
+  // A command can start in one agent run and settle in a later one: another
+  // terminal's result or a user prompt starts a run in between.
+  const app = harness();
+  try {
+    const started = await app.tools
+      .get("bash")
+      .execute(
+        "call-span-start",
+        { command: command("setTimeout(() => process.exit(0), 600)"), yield_time_ms: 250 },
+        undefined,
+        undefined,
+        app.ctx,
+      );
+    const id: string = started.details?.id;
+    await emitToolResult(app, "write", path.join(app.ctx.cwd, "README.md"));
+    for (const handler of app.handlers.get("agent_start") ?? []) {
+      await handler({ type: "agent_start" }, app.ctx);
+    }
+
+    const waited = await app.tools
+      .get("terminal_wait")
+      .execute("call-span-wait", { ids: [id] }, undefined, undefined, app.ctx);
+    assert.match(waited.content[0].text, /Changed while this command ran: README\.md/);
+  } finally {
+    await app.shutdown();
+  }
+});
+
+test("a write before any command runs is not attributed to a later one", async () => {
+  const app = harness();
+  try {
+    await emitToolResult(app, "write", path.join(app.ctx.cwd, "README.md"));
+    const started = await app.tools
+      .get("bash")
+      .execute(
+        "call-before-start",
+        { command: command("setTimeout(() => process.exit(0), 600)"), yield_time_ms: 250 },
+        undefined,
+        undefined,
+        app.ctx,
+      );
+    const waited = await app.tools
+      .get("terminal_wait")
+      .execute("call-before-wait", { ids: [started.details?.id] }, undefined, undefined, app.ctx);
+    assert.doesNotMatch(waited.content[0].text, /Changed while this command/);
+  } finally {
+    await app.shutdown();
+  }
+});

@@ -95,6 +95,7 @@ import {
   TERMINAL_WAIT_TOOL_DESCRIPTION,
 } from "./src/prompt.ts";
 import { createDeferredResultDelivery } from "./src/result-delivery.ts";
+import { createRunChangeTracker, resolveToolPath } from "./src/run-changes.ts";
 import { createTerminalRuntime, runTool, type TerminalRuntime } from "./src/runtime.ts";
 import { sanitizeText } from "./src/ui/output-view.ts";
 
@@ -351,6 +352,17 @@ export function createBackgroundTerminalsExtension(
     let terminalLogReadBytes = 0;
     let terminalLogReadCalls = 0;
     const resultDelivery = createDeferredResultDelivery<TerminalSnapshot>();
+    /** Paths the model wrote with edit/write while commands ran, so a
+     * result can say it may predate them. */
+    const runChanges = createRunChangeTracker();
+    const changedFilesFor = (snaps: readonly TerminalSnapshot[]) => {
+      const map = new Map<string, readonly string[]>();
+      for (const snap of snaps) {
+        const changed = runChanges.changedDuring(snap.id);
+        if (changed.length > 0) map.set(snap.id, changed);
+      }
+      return map;
+    };
     /** Ids of tool calls made by a Code Mode script (any call whose
      * `tool_call` event carried a `parentToolCallId`). Nested results reach
      * the script, not the model — budgets and result text adapt accordingly. */
@@ -434,7 +446,7 @@ export function createBackgroundTerminalsExtension(
         pi.sendMessage(
           {
             customType: "background-terminal-result",
-            content: buildTerminalResultBatchMessage(snaps),
+            content: buildTerminalResultBatchMessage(snaps, changedFilesFor(snaps)),
             display: true,
             details:
               results.length === 1
@@ -504,6 +516,21 @@ export function createBackgroundTerminalsExtension(
       if (event.parentToolCallId) nestedCallIds.add(event.toolCallId);
     });
 
+    // A completion can describe code that no longer exists: a test that
+    // finishes after the model edited the code under test still reports the
+    // old result. Record only successful edit/write calls (a blocked or
+    // failed one changed nothing) and state the fact in the result. Before
+    // the first bash call there is no manager and nothing running to note.
+    pi.on("tool_result", async (event, ctx) => {
+      if (event.isError) return;
+      if (event.toolName !== "edit" && event.toolName !== "write") return;
+      const target = event.input?.path;
+      if (typeof target !== "string" || !managerPromise) return;
+      const bound = await managerPromise.catch(() => undefined);
+      if (!bound) return;
+      runChanges.record(resolveToolPath(target, ctx.cwd), bound.manager.view.list());
+    });
+
     // One agent run can contain many model/tool turns. The terminal_log_read
     // byte/call budget spans the whole run, then resets for the next
     // user/follow-up run rather than per turn.
@@ -534,6 +561,7 @@ export function createBackgroundTerminalsExtension(
       sessionContext = undefined;
       resetTerminalLogBudget();
       nestedCallIds.clear();
+      runChanges.clear();
       resultBatchScheduler.clear();
       resultDelivery.clear();
       unsubStatus?.();
@@ -886,7 +914,10 @@ export function createBackgroundTerminalsExtension(
           resultDelivery.consume([snap.id]);
         }
 
-        const text = buildBashResult(snap, { nested });
+        const text = buildBashResult(snap, {
+          nested,
+          changedFiles: runChanges.changedDuring(snap.id),
+        });
         const details: BashResultDetails = {
           id: snap.id,
           status: snap.status,
@@ -1180,6 +1211,7 @@ export function createBackgroundTerminalsExtension(
             alreadyReported,
             running,
             timeoutSeconds,
+            changedFiles: changedFilesFor(settled),
           });
           // Absent rather than undefined: structuredContent must be strict
           // JSON for code-mode consumers.
@@ -1343,7 +1375,14 @@ export function createBackgroundTerminalsExtension(
           const pending = resultDelivery.take([params.id]);
           if (resultDelivery.size() === 0) resultBatchScheduler.clear();
           if (pending.length > 0) {
-            return done(pending[0], buildTerminalResultMessage(pending[0]));
+            return done(
+              pending[0],
+              buildTerminalResultMessage(
+                pending[0],
+                Number.POSITIVE_INFINITY,
+                runChanges.changedDuring(pending[0].id),
+              ),
+            );
           }
           return done(existing, TERMINAL_STOP_TEXT.alreadyExited(existing));
         }

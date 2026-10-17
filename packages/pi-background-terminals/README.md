@@ -299,6 +299,27 @@ path.
 - If the tool does not show all output, the result gives a log reference. The
   model can read the full log with `terminal_log_read`.
 
+### Changes made while a command ran
+
+- The extension records each successful `edit` and `write` call against
+  the commands that run at that time. If a file inside the working directory
+  of a command changed, the final result of that command tells it:
+  `Changed while this command ran: src/lib.ts. The result may not reflect
+  those changes; run the command again if they matter to it.`
+- The note is in the completion message, in `terminal_wait`, and in the
+  `bash` result of a command that stops during its initial wait. A tool call
+  that runs in parallel can change a file during that wait. The note is also
+  in `terminal_stop` if the terminal stopped before the call and its result
+  was not sent. The note shows a maximum of 8 paths. It gives the number of
+  the other paths.
+- A change stays recorded until the terminal is removed from the history of
+  32 entries. A new agent run does not remove it, because a command can start
+  in one run and stop in a later run.
+- The note does not cause an action. The extension does not run the command
+  again, a successful result stays successful, and the extension does not
+  find file dependencies. The extension does not detect changes that shell
+  commands make, for example `sed -i`, `cargo fmt`, or `git apply`.
+
 ### Process trees
 
 - On POSIX systems, each command has its own process group. The extension
