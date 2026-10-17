@@ -312,6 +312,8 @@ path.
   in `terminal_stop` if the terminal stopped before the call and its result
   was not sent. The note shows a maximum of 8 paths. It gives the number of
   the other paths.
+- The note gives paths relative to the working directory of the command,
+  with `/` separators on every platform.
 - A change stays recorded until the terminal is removed from the history of
   32 entries. A new agent run does not remove it, because a command can start
   in one run and stop in a later run.

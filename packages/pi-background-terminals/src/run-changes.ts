@@ -39,12 +39,16 @@ export function resolveToolPath(input: string, cwd: string) {
   return path.resolve(cwd, target);
 }
 
-/** `filePath` relative to `dir`, or undefined when it is not inside `dir`. */
+/**
+ * `filePath` relative to `dir`, or undefined when it is not inside `dir`.
+ * Separators are normalized to `/` so the note reads the same on Windows as
+ * the paths the model itself writes.
+ */
 function relativeInside(dir: string, filePath: string) {
   const relative = path.relative(dir, filePath);
   if (relative === "" || path.isAbsolute(relative)) return undefined;
   if (relative === ".." || relative.startsWith(`..${path.sep}`)) return undefined;
-  return relative;
+  return path.sep === "/" ? relative : relative.split(path.sep).join("/");
 }
 
 export function createRunChangeTracker() {

@@ -79,6 +79,15 @@ test("changes of a terminal pruned from the manager are forgotten", () => {
   assert.deepEqual(tracker.changedDuring("bt-2"), ["src/next.ts"]);
 });
 
+test("changed paths use forward slashes on every platform", () => {
+  // The note is model-facing, so a Windows run must not report `src\lib.ts`.
+  const tracker = createRunChangeTracker();
+  tracker.record(path.join("/repo/packages/x", "src", "lib.ts"), [
+    snap({ cwd: path.join("/repo/packages/x") }),
+  ]);
+  assert.deepEqual(tracker.changedDuring("bt-1"), ["src/lib.ts"]);
+});
+
 test("tool paths resolve like Pi's edit and write tools", () => {
   assert.equal(resolveToolPath("src/lib.ts", "/repo"), path.resolve("/repo/src/lib.ts"));
   assert.equal(resolveToolPath("@src/lib.ts", "/repo"), path.resolve("/repo/src/lib.ts"));
