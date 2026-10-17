@@ -127,6 +127,23 @@ export function readLogTail(filePath: string, limit: number): LogReadBody {
 }
 
 /**
+ * The head of a head+tail view: the first `maxBytes`, cut on a code point.
+ *
+ * A window too small to hold the first code point would decode to U+FFFD, so
+ * it expands to exactly that code point (at most 3 bytes over `maxBytes`).
+ * These helpers are reachable from a public `limit` as low as 1, where a
+ * multi-byte first character is the normal case, not an edge case.
+ */
+function headWindow(filePath: string, size: number, maxBytes: number) {
+  const raw = readWindow(filePath, 0, Math.max(1, maxBytes));
+  const complete = completeCodePointEnd(raw);
+  if (complete > 0) return raw.subarray(0, complete);
+  const lead = raw[0];
+  const seqLen = lead >= 0xf0 ? 4 : lead >= 0xe0 ? 3 : lead >= 0xc0 ? 2 : 1;
+  return readWindow(filePath, 0, Math.min(Math.max(seqLen, raw.length), size));
+}
+
+/**
  * The whole log when it fits `limit`; otherwise the first and last
  * `limit / 2` bytes, joined by an explicit omitted byte range.
  *
@@ -139,10 +156,7 @@ export function readLogTail(filePath: string, limit: number): LogReadBody {
 export function readLogHeadTail(filePath: string, limit: number): LogReadBody {
   const size = fs.statSync(filePath).size;
   if (size <= limit) return readLogPage(filePath, 0, limit);
-  const headLength = Math.floor(limit / 2);
-  const headRaw = readWindow(filePath, 0, headLength);
-  const headEnd = completeCodePointEnd(headRaw);
-  const head = headRaw.subarray(0, headEnd === 0 ? headRaw.length : headEnd);
+  const head = headWindow(filePath, size, Math.floor(limit / 2));
   const tailStart = size - Math.max(1, limit - head.length);
   const tailRaw = readWindow(filePath, tailStart, size - tailStart);
   const tailLead = codePointStart(tailRaw);
@@ -173,9 +187,7 @@ export function readLogAuto(filePath: string, limit: number): LogReadBody {
     return readLogPage(filePath, 0, limit);
   }
   const headLength = Math.floor(limit / 4);
-  const headRaw = readWindow(filePath, 0, headLength);
-  const headEnd = completeCodePointEnd(headRaw);
-  const head = headRaw.subarray(0, headEnd === 0 ? headRaw.length : headEnd);
+  const head = headWindow(filePath, size, headLength);
   const tailStart = size - Math.max(1, limit - head.length);
   const tailRaw = readWindow(filePath, tailStart, size - tailStart);
   const tailLead = codePointStart(tailRaw);

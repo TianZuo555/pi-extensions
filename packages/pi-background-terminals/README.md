@@ -123,9 +123,13 @@ this purpose.
 
 - The tool returns when one of the terminals stops.
 - If a result waits for delivery, the tool returns that result immediately.
+  The `running` field still names the other background terminals that run,
+  because the default target is all of them.
 - The tool returns the result in place of the later message. The extension
   does not send that result again.
-- The timeout or Esc stops the wait. They do not stop a terminal.
+- The timeout or Esc stops the wait. They do not stop a terminal. A terminal
+  that stops at the same moment as the Esc still sends its result: the wait
+  returns it, or the extension sends the usual message.
 - If a terminal failed or had a timeout, the result is a tool error.
 
 ## The `terminal_stop` tool
@@ -189,8 +193,8 @@ script. The script has no timers.
   `exit_code` or `status` instead.
 - `exit_code` is not present while the command runs. It is also not present
   after a signal or a timeout stops the command.
-- `output` contains stdout and then stderr. It holds up to 1 MiB, the same
-  limit as the built-in tool. Longer output keeps its first and last
+- `output` contains stdout and then stderr. It holds up to 1 MiB together,
+  the same limit as the built-in tool. Longer output keeps its first and last
   512 KiB around a `[... N bytes omitted ...]` marker, and `truncated` is
   true. To read the full log, use `terminal_log_read` with `terminal_id`.
   A stream that is still running has no complete log file, so `output`

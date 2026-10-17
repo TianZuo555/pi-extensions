@@ -306,6 +306,32 @@ test("tiny-limit pages stitch back to the exact string", async () => {
   });
 });
 
+test("head+tail windows never emit U+FFFD when limit is below one code point", async () => {
+  // Both helpers are reachable from a public `limit` of 1, where a multi-byte
+  // first character is the normal case. A head window that cannot hold one
+  // code point must expand to it rather than decode a partial sequence.
+  await withTempFile("🚀🚀", async (file) => {
+    for (const limit of [1, 2, 3]) {
+      const headTail = readLogHeadTail(file, limit);
+      assert.equal(headTail.text.includes("\ufffd"), false, `head_tail limit ${limit}`);
+      assert.ok(headTail.text.startsWith("🚀"), `head_tail limit ${limit} keeps the first char`);
+      const auto = readLogAuto(file, limit);
+      assert.equal(auto.text.includes("\ufffd"), false, `auto limit ${limit}`);
+      assert.ok(auto.text.startsWith("🚀"), `auto limit ${limit} keeps the first char`);
+    }
+  });
+});
+
+test("head+tail windows never emit U+FFFD at the tail edge", async () => {
+  await withTempFile("x".repeat(50) + "🚀".repeat(50), async (file) => {
+    for (const limit of [4, 5, 6, 9]) {
+      for (const result of [readLogHeadTail(file, limit), readLogAuto(file, limit)]) {
+        assert.equal(result.text.includes("\ufffd"), false, `limit ${limit}`);
+      }
+    }
+  });
+});
+
 test("tail returns at least the last code point when the limit is smaller", async () => {
   await withTempFile("a🚀", async (file) => {
     const result = readLogTail(file, 1);

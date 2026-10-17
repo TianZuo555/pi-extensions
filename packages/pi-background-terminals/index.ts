@@ -249,7 +249,9 @@ function parseTerminalLogRef(ref: string) {
 
 /**
  * One stream's contribution to `structuredContent.output`, at the Code Mode
- * budget rather than the model-facing one.
+ * budget rather than the model-facing one, bounded by the `budget` the caller
+ * still has left. The schema promises one 1 MiB `output`, not 1 MiB per
+ * stream, so stdout and stderr share it.
  *
  * The in-memory view is compacted to `SETTLED_RETAINED_PER_STREAM` (64 KiB)
  * once the archive is on disk, which is far below what Pi's built-in bash
@@ -257,18 +259,34 @@ function parseTerminalLogRef(ref: string) {
  * stream has no complete archive yet: its view already is the bounded
  * head+tail, and it carries the omission marker.
  */
-function structuredStream(view: OutputView): { text: string; truncated: boolean } {
+function structuredStream(
+  view: OutputView,
+  budget: number,
+): { text: string; truncated: boolean; spent: number } {
   const { spillPath, archiveComplete } = view;
-  if (spillPath !== undefined && archiveComplete === true) {
+  let text = view.text;
+  let truncated = view.truncatedBytes > 0;
+  if (spillPath !== undefined && archiveComplete === true && budget > 0) {
     try {
-      const read = readLogHeadTail(spillPath, BASH_STRUCTURED_OUTPUT_MAX_BYTES);
-      return { text: read.text, truncated: read.text.includes("bytes omitted") };
+      const read = readLogHeadTail(spillPath, budget);
+      text = read.text;
+      truncated = read.text.includes("bytes omitted");
     } catch {
       // The archive vanished (pruned, or a spill that failed after settling):
       // fall back to what memory still holds instead of failing the result.
     }
   }
-  return { text: view.text, truncated: view.truncatedBytes > 0 };
+  if (truncated && budget <= 0) {
+    // No budget left for this stream at all: name what was dropped instead of
+    // appending an unbounded in-memory view to an already-full output.
+    const bytes = view.totalBytes;
+    return {
+      text: bytes > 0 ? `[... ${bytes} bytes omitted ...]` : "",
+      truncated: true,
+      spent: 0,
+    };
+  }
+  return { text, truncated, spent: Math.min(Buffer.byteLength(text, "utf8"), budget) };
 }
 
 /** Strict-JSON structured bash result for Code Mode scripts: optional keys
@@ -277,8 +295,8 @@ function structuredStream(view: OutputView): { text: string; truncated: boolean 
  * where a forced kill reports platform-specific codes (taskkill exit 1 on
  * Windows) — so the field means the same thing on every platform. */
 function bashStructuredContent(snap: TerminalSnapshot) {
-  const stdout = structuredStream(snap.stdout);
-  const stderr = structuredStream(snap.stderr);
+  const stdout = structuredStream(snap.stdout, BASH_STRUCTURED_OUTPUT_MAX_BYTES);
+  const stderr = structuredStream(snap.stderr, BASH_STRUCTURED_OUTPUT_MAX_BYTES - stdout.spent);
   let output = stdout.text;
   if (stderr.text.length > 0) {
     output += (output.length > 0 && !output.endsWith("\n") ? "\n" : "") + stderr.text;
@@ -1282,7 +1300,19 @@ export function createBackgroundTerminalsExtension(
           // itself rather than also arriving as a follow-up message.
           const pending = resultDelivery.drain();
           clearSchedulerIfDrained();
-          if (pending.length > 0) return respond(pending, [], []);
+          if (pending.length > 0) {
+            // The default target set is every running background terminal, so
+            // a queued result does not mean nothing is left: report what is
+            // still running, or the script reads "nothing pending" and stops
+            // waiting while a terminal it never asked about keeps going.
+            const taken = new Set(pending.map((snap) => snap.id));
+            const stillRunning = manager.view
+              .list()
+              .filter(
+                (snap) => snap.status === "running" && snap.yielded === true && !taken.has(snap.id),
+              );
+            return respond(pending, [], stillRunning);
+          }
           const targets = manager.view
             .list()
             .filter((snap) => snap.status === "running" && snap.yielded === true);
@@ -1331,11 +1361,36 @@ export function createBackgroundTerminalsExtension(
         );
 
         async function runWait(runningIds: string[], reported: TerminalSnapshot[]) {
-          const snapshots = await runTool(
-            toolRuntime,
-            manager.waitForAny(runningIds, timeoutSeconds * 1000),
-            { signal, interruptMessage: TERMINAL_ERRORS.waitAborted },
-          );
+          let snapshots: ReadonlyArray<TerminalSnapshot>;
+          try {
+            snapshots = await runTool(
+              toolRuntime,
+              manager.waitForAny(runningIds, timeoutSeconds * 1000),
+              { signal, interruptMessage: TERMINAL_ERRORS.waitAborted },
+            );
+          } catch (error) {
+            // A registered waiter marks its settlement consumed *before*
+            // onSettled runs, so an Esc that lands in that window suppresses
+            // the follow-up while this await throws — the result would be lost
+            // with nothing left to deliver it. Nothing was returned to the
+            // model, so a follow-up is the only way it can still arrive.
+            //
+            // The re-defer is deferred one turn on purpose: onSettled for the
+            // very settlement that triggered this abort may still be ahead of
+            // us, and its `consumed` branch clears the queue entry we would
+            // just have added. Letting that hook finish first makes the
+            // re-defer the last word.
+            queueMicrotask(() => {
+              for (const id of runningIds) {
+                const live = manager.view.get(id);
+                if (live !== undefined && live.status !== "running") {
+                  resultDelivery.defer(copySettled(live));
+                }
+              }
+              scheduleResultFlush();
+            });
+            throw error;
+          }
           const settled = snapshots.filter((snap) => snap.status !== "running");
           // Race guard: a consumed settle must never also sit in the
           // delivery queue.
@@ -1415,10 +1470,28 @@ export function createBackgroundTerminalsExtension(
           }
           return done(existing, TERMINAL_STOP_TEXT.alreadyExited(existing));
         }
-        const snap = await runTool(toolRuntime, manager.stop(params.id), {
-          signal,
-          interruptMessage: TERMINAL_ERRORS.stopInterrupted,
-        });
+        let snap: TerminalSnapshot;
+        try {
+          snap = await runTool(toolRuntime, manager.stop(params.id), {
+            signal,
+            interruptMessage: TERMINAL_ERRORS.stopInterrupted,
+          });
+        } catch (error) {
+          // `stop` registers a consumed waiter before starting the detached
+          // kill, so an Esc that lands after the terminal settled would
+          // otherwise discard a result nothing else can deliver. Termination
+          // itself continues either way; only delivery needs reconciling.
+          // Deferred one turn so the settle hook's own `consumed` clear cannot
+          // wipe the entry we add here (see runWait above).
+          queueMicrotask(() => {
+            const live = manager.view.get(params.id);
+            if (live !== undefined && live.status !== "running") {
+              resultDelivery.defer(copySettled(live));
+              scheduleResultFlush();
+            }
+          });
+          throw error;
+        }
         // Same race guard as terminal_wait: the consumed settle owns the result.
         resultDelivery.take([params.id]);
         if (resultDelivery.size() === 0) resultBatchScheduler.clear();

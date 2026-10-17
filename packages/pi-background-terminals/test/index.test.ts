@@ -1369,6 +1369,118 @@ test("terminal_wait returns a queued result whose delivery failed", async () => 
   }
 });
 
+test("a queued result still reports the other running terminals", async () => {
+  const app = harness();
+  app.ctx.mode = "tui";
+  (app.pi as any).sendMessage = () => {
+    throw new Error("delivery unavailable");
+  };
+  try {
+    // One terminal settles into the delivery queue; another keeps running.
+    await app.tools.get("bash").execute(
+      "call-queued-fast",
+      {
+        command: command('setTimeout(() => console.log("queued-done"), 400)'),
+        yield_time_ms: 250,
+      },
+      undefined,
+      undefined,
+      app.ctx,
+    );
+    const slow = await app.tools
+      .get("bash")
+      .execute(
+        "call-queued-slow",
+        { command: command("setInterval(() => {}, 1000)"), yield_time_ms: 250 },
+        undefined,
+        undefined,
+        app.ctx,
+      );
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+
+    // Omitting ids targets every running background terminal, so returning the
+    // queued result must not claim nothing is left while `slow` still runs.
+    const waited = await app.tools
+      .get("terminal_wait")
+      .execute("call-queued-wait", {}, undefined, undefined, app.ctx);
+    assert.match(waited.content[0].text, /queued-done/);
+    assert.deepEqual(waited.structuredContent.running, [slow.details?.id]);
+    assert.match(waited.content[0].text, /Still running/);
+  } finally {
+    await app.shutdown();
+  }
+});
+
+test("an Esc during terminal_wait does not discard the settlement it consumed", async () => {
+  const app = harness();
+  app.ctx.mode = "tui";
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "bt-abort-race-"));
+  try {
+    // The command writes a sentinel and exits immediately after it, so the
+    // test can abort at a known point instead of guessing a delay.
+    const ready = path.join(dir, "ready");
+    const started = await app.tools.get("bash").execute(
+      "call-abort-src",
+      {
+        command: command(
+          `require('node:fs').writeFileSync(${JSON.stringify(ready)}, "1"); setTimeout(() => console.log("abort-race-done"), 300)`,
+        ),
+        yield_time_ms: 250,
+      },
+      undefined,
+      undefined,
+      app.ctx,
+    );
+    const id = started.details?.id as string;
+    assert.equal(started.details?.yielded, true);
+
+    const controller = new AbortController();
+    const waiting = app.tools
+      .get("terminal_wait")
+      .execute("call-abort-wait", { ids: [id] }, controller.signal, undefined, app.ctx);
+
+    // Abort as the command settles: a registered waiter marks the settlement
+    // consumed before onSettled runs, so an abort in that window could
+    // suppress the follow-up while the wait itself also fails — losing the
+    // result outright. Both sides of the race are legal here; what must hold
+    // is that the result reaches the model exactly once.
+    while (!fs.existsSync(ready)) {
+      await new Promise((resolve) => setTimeout(resolve, 2));
+    }
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    controller.abort();
+    const outcome = await waiting.then(
+      (result: any) => ({ kind: "resolved" as const, result }),
+      () => ({ kind: "rejected" as const }),
+    );
+
+    const inline =
+      outcome.kind === "resolved" &&
+      (outcome.result.content[0]?.text ?? "").includes("abort-race-done");
+    const delivered = () =>
+      app.messages.some((entry) => JSON.stringify(entry.message ?? {}).includes("abort-race-done"));
+    if (!inline) {
+      // Interrupted before it could return the result: the settlement it
+      // consumed must still arrive as a follow-up message.
+      assert.ok(
+        await pollUntil(delivered, 10_000),
+        "the settlement consumed by the aborted wait must still be delivered",
+      );
+    }
+    // Exactly once: the inline result must not also arrive as a follow-up.
+    assert.equal(
+      delivered(),
+      !inline,
+      inline
+        ? "an inline result must not also be delivered as a follow-up"
+        : "the result must be delivered",
+    );
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+    await app.shutdown();
+  }
+});
+
 test("terminal_wait with nothing running and nothing pending errors", async () => {
   const app = harness();
   try {
@@ -1659,6 +1771,38 @@ test("bash returns structuredContent on every managed result for Code Mode scrip
     // Pi's documented contract for scripts is 1 MiB in equal halves, not the
     // 64 KiB the settled in-memory view is compacted to for the model.
     assert.equal(Buffer.byteLength(bigSc.output as string), 1024 * 1024 + 35);
+  } finally {
+    await app.shutdown();
+  }
+});
+
+test("the 1 MiB structured cap covers stdout and stderr together", async () => {
+  const app = harness();
+  try {
+    // Both streams over the cap: separate per-stream budgets would return
+    // ~2 MiB, doubling the payload and the Code Mode context cost.
+    const chunk = 700 * 1024;
+    const result = await app.tools.get("bash").execute(
+      "sc-two-streams",
+      {
+        command: command(
+          `process.stdout.write('o'.repeat(${chunk})); process.stderr.write('e'.repeat(${chunk}));`,
+        ),
+        yield_time_ms: 30_000,
+      },
+      undefined,
+      undefined,
+      app.ctx,
+    );
+    const sc = result.structuredContent as Record<string, unknown>;
+    const output = sc.output as string;
+    assert.equal(sc.truncated, true);
+    assert.ok(
+      Buffer.byteLength(output) <= 1024 * 1024 + 64,
+      `output must stay within the 1 MiB budget, got ${Buffer.byteLength(output)}`,
+    );
+    // stderr still reaches the script, named rather than silently dropped.
+    assert.match(output, /bytes omitted/);
   } finally {
     await app.shutdown();
   }

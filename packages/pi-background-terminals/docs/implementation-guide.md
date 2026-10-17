@@ -358,13 +358,32 @@ through unchanged.
 stream's archive is complete the manager compacts the in-memory view to
 `SETTLED_RETAINED_PER_STREAM` (64 KiB), which is far below the 1 MiB
 `docs/codemode.md` promises scripts, so `bashStructuredContent()` calls
-`readLogHeadTail(spillPath, BASH_STRUCTURED_OUTPUT_MAX_BYTES)` instead: first
-and last 512 KiB around `[... N bytes omitted ...]`, both edges snapped to
-code points. That mirrors the built-in's `readFullOutput`. A stream that is
-still running has no complete archive, so its bounded in-memory view is used
-and already carries the marker. A vanished archive (pruned, or a spill that
-failed after settling) falls back to the in-memory view rather than failing
-the result.
+`readLogHeadTail(spillPath, budget)` instead: first and last 512 KiB around
+`[... N bytes omitted ...]`, both edges snapped to code points. That mirrors
+the built-in's `readFullOutput`. A stream that is still running has no
+complete archive, so its bounded in-memory view is used and already carries
+the marker. A vanished archive (pruned, or a spill that failed after
+settling) falls back to the in-memory view rather than failing the result.
+
+The 1 MiB is one budget for the combined `output`, not one per stream:
+stdout reads against the full cap and stderr against what is left, so a
+command that floods both cannot return ~2 MiB. A stream with no budget left
+contributes only its omission marker. Per-stream caps would silently double
+the payload and the Code Mode context cost, and the schema promises a single
+limit.
+
+### Interrupted waits and stops
+
+A registered waiter marks a settlement consumed *before* `onSettled` runs
+(`manager.ts`), so an Esc that lands in that window suppresses the follow-up
+while the tool call also fails — the result would be lost with nothing left
+to deliver it. Both `terminal_wait` and `terminal_stop` reconcile in their
+catch path: they read the live snapshot for each target and re-defer it, then
+rethrow the interruption. The re-defer is scheduled one microtask later on
+purpose — `onSettled`'s own `consumed` branch clears the queue entry, and that
+hook may still be ahead of the catch, so letting it finish first makes the
+re-defer the last word. Termination itself is unaffected: `stop` runs the
+kill detached.
 
 ### Code Mode nesting
 
