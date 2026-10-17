@@ -259,6 +259,57 @@ test("search tests only the head of a runaway line", async () => {
   });
 });
 
+test("a backtracking-heavy pattern fails fast instead of hanging the session", async () => {
+  // One 64 KiB line of 'a'; a FAILING match forces the engine to try every
+  // split of that run. Measured before the worker: >5s for a 50-character
+  // line, and effectively forever here — with the abort signal checked only
+  // between chunks, nothing could have interrupted it.
+  const runOfA = `${"a".repeat(64 * 1024)}\n`;
+  await withTempFile(runOfA, async (file) => {
+    const began = Date.now();
+    await assert.rejects(
+      searchLogFile(file, {
+        pattern: /(a+)+b/,
+        offset: 0,
+        limit: 8 * 1024,
+        timeoutMs: 250,
+      }),
+      /too complex/,
+    );
+    assert.ok(Date.now() - began < 5_000, "the timeout must end the scan");
+  });
+});
+
+test("a terminated scan does not break the next search", async () => {
+  const runOfA = `${"a".repeat(64 * 1024)}\n`;
+  await withTempFile(runOfA, async (file) => {
+    await assert.rejects(
+      searchLogFile(file, { pattern: /(a+)+b/, offset: 0, limit: 8 * 1024, timeoutMs: 100 }),
+      /too complex/,
+    );
+    const ok = await searchLogFile(file, {
+      pattern: /aa/,
+      offset: 0,
+      limit: 8 * 1024,
+      timeoutMs: 5_000,
+    });
+    assert.equal(ok.matchCount, 1);
+    assert.ok(ok.text.startsWith("@0: "));
+  });
+});
+
+test("a backtracking pattern that can match still runs to completion", async () => {
+  await withTempFile(`${"a".repeat(10)}\n`, async (file) => {
+    const ok = await searchLogFile(file, {
+      pattern: /(a+)+b/,
+      offset: 0,
+      limit: 8 * 1024,
+      timeoutMs: 5_000,
+    });
+    assert.equal(ok.matchCount, 0);
+  });
+});
+
 test("search aborts the scan between chunks", async () => {
   const content = "x".repeat(64 * 1024);
   await withTempFile(content, async (file) => {

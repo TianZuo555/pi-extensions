@@ -8,6 +8,8 @@
  */
 
 import * as fs from "node:fs";
+import { fileURLToPath } from "node:url";
+import { Worker } from "node:worker_threads";
 import { codePointStart, completeCodePointEnd } from "./utf8.ts";
 
 export type LogReadMode = "page" | "head_tail" | "tail" | "search";
@@ -40,12 +42,13 @@ export interface SearchLogOptions {
   readonly chunkSizeBytes?: number;
   /** Lines longer than this are tested on their prefix only. */
   readonly maxLineBytes?: number;
+  /** Hard bound on the whole scan; injectable for tests. */
+  readonly timeoutMs?: number;
   readonly signal?: AbortSignal;
 }
 
 const DEFAULT_SEARCH_CHUNK_BYTES = 64 * 1024;
 const DEFAULT_MAX_LINE_BYTES = 64 * 1024;
-const MATCH_LINE_MAX_CHARS = 300;
 
 function readWindow(filePath: string, start: number, length: number) {
   if (length <= 0) return Buffer.alloc(0);
@@ -220,116 +223,68 @@ export function readLogAuto(filePath: string, limit: number): LogReadBody {
  * `offset` and a capped continuation cannot loop. Collection stops when a
  * later match would exceed `limit` bytes; `matchCount` still counts the rest
  * so the caller knows how much was left out.
+ *
+ * The scan itself runs in a worker (see log-search-worker.mjs): the pattern
+ * is a plain V8 RegExp, and a backtracking-heavy one such as `(a+)+b` can
+ * spend unbounded time failing against a repetitive line — long enough that
+ * the event loop, and with it the whole Pi session, appears to hang. The
+ * abort signal cannot interrupt a running `RegExp.test`, so no amount of
+ * between-chunk checks helps; only moving the scan off-thread does. A search
+ * that outlives `SEARCH_TIMEOUT_MS` is terminated and fails with an
+ * actionable error.
  */
+export const SEARCH_TIMEOUT_MS = 15_000;
+
+const SEARCH_WORKER_PATH = fileURLToPath(new URL("./log-search-worker.mjs", import.meta.url));
+
 export async function searchLogFile(
   filePath: string,
   options: SearchLogOptions,
 ): Promise<LogReadBody> {
-  const chunkSize = Math.max(1, options.chunkSizeBytes ?? DEFAULT_SEARCH_CHUNK_BYTES);
-  const maxLineBytes = Math.max(1, options.maxLineBytes ?? DEFAULT_MAX_LINE_BYTES);
+  options.signal?.throwIfAborted();
+  const timeoutMs = Math.max(1, options.timeoutMs ?? SEARCH_TIMEOUT_MS);
   const size = fs.statSync(filePath).size;
-  const start = Math.min(Math.max(0, options.offset), size);
-
-  const matches: Array<{ offset: number; text: string }> = [];
-  let matchCount = 0;
-  let shownBytes = 0;
-  /** Line-start byte of the first match that did not fit; set once, so shown
-   * matches are always a contiguous first-N prefix and a follow-up search from
-   * `nextOffset` continues exactly where collection stopped. */
-  let capOffset: number | undefined;
-
-  const recordLine = (line: Buffer, lineOffset: number) => {
-    const text = (
-      line.length > 0 && line[line.length - 1] === 0x0d ? line.subarray(0, line.length - 1) : line
-    ).toString("utf8");
-    options.pattern.lastIndex = 0;
-    if (!options.pattern.test(text)) return;
-    matchCount++;
-    const shown =
-      text.length > MATCH_LINE_MAX_CHARS ? `${text.slice(0, MATCH_LINE_MAX_CHARS)}…` : text;
-    const formatted = `@${lineOffset}: ${shown}`;
-    const cost = Buffer.byteLength(formatted) + (matches.length > 0 ? 1 : 0);
-    if (capOffset !== undefined) return;
-    if (matches.length === 0) {
-      // The first match is always emitted, even when it cannot fit whole —
-      // otherwise nextOffset could equal offset and continuation would loop.
-      // Cut to at most `limit` bytes on a UTF-8 boundary ending in `…`; when
-      // even the `@<offset>: ` prefix + `…` exceeds limit, emit that anyway.
-      let line = formatted;
-      if (cost > options.limit) {
-        const prefix = `@${lineOffset}: `;
-        const room = options.limit - Buffer.byteLength(prefix) - 3; // "…" is 3 bytes
-        const cut = Buffer.from(shown, "utf8").subarray(0, Math.max(0, room));
-        line = `${prefix}${cut.subarray(0, completeCodePointEnd(cut)).toString("utf8")}…`;
-      }
-      matches.push({ offset: lineOffset, text: line });
-      shownBytes += Buffer.byteLength(line);
-    } else if (shownBytes + cost <= options.limit) {
-      matches.push({ offset: lineOffset, text: formatted });
-      shownBytes += cost;
-    } else {
-      capOffset = lineOffset;
-    }
-  };
-
-  // `pending` holds the current line's first `maxLineBytes`; a runaway line
-  // is tested on that prefix only. `lineOffset` is the line's absolute start
-  // byte, reset at every observed newline.
-  let pending = Buffer.alloc(0);
-  let lineOffset = start;
-
-  const stream =
-    start < size
-      ? fs.createReadStream(filePath, {
-          start,
-          end: size - 1,
-          highWaterMark: chunkSize,
-        })
-      : undefined;
-  try {
-    let chunkStart = start;
-    for await (const chunk of stream ?? []) {
-      options.signal?.throwIfAborted();
-      const buffer = chunk as Buffer;
-      const base = chunkStart;
-      chunkStart += buffer.length;
-      let segStart = 0;
-      for (let index = 0; index < buffer.length; index++) {
-        if (buffer[index] !== 0x0a) continue;
-        const whole =
-          pending.length === 0
-            ? buffer.subarray(segStart, index)
-            : Buffer.concat([pending, buffer.subarray(segStart, index)]);
-        recordLine(whole.subarray(0, maxLineBytes), lineOffset);
-        pending = Buffer.alloc(0);
-        segStart = index + 1;
-        lineOffset = base + index + 1;
-      }
-      const rest = buffer.subarray(segStart);
-      if (rest.length > 0 && pending.length < maxLineBytes) {
-        const room = maxLineBytes - pending.length;
-        pending =
-          pending.length === 0
-            ? Buffer.from(rest.subarray(0, room))
-            : Buffer.concat([pending, rest.subarray(0, room)]);
-      }
-    }
-    // A last line without a trailing newline still counts.
-    if (pending.length > 0) recordLine(pending.subarray(0, maxLineBytes), lineOffset);
-  } finally {
-    stream?.destroy();
-  }
-
-  const text = matches.map((match) => match.text).join("\n");
-  return {
-    mode: "search",
-    offset: start,
-    nextOffset: capOffset ?? size,
-    bytesRead: Buffer.byteLength(text),
+  const request = {
+    filePath,
+    pattern: options.pattern,
+    offset: Math.min(Math.max(0, options.offset), size),
+    chunkSizeBytes: Math.max(1, options.chunkSizeBytes ?? DEFAULT_SEARCH_CHUNK_BYTES),
+    maxLineBytes: Math.max(1, options.maxLineBytes ?? DEFAULT_MAX_LINE_BYTES),
+    limit: options.limit,
     size,
-    text,
-    matchCount,
-    matches,
-    pattern: options.pattern.source,
   };
+
+  const worker = new Worker(SEARCH_WORKER_PATH);
+  // An in-flight search must never delay shutdown: if the session ends first,
+  // neither the worker nor the timeout timer should hold the event loop.
+  worker.unref();
+  return new Promise<LogReadBody>((resolve, reject) => {
+    const stop = (error: unknown) => {
+      clearTimeout(timer);
+      worker.terminate();
+      reject(error);
+    };
+    const timer = setTimeout(() => {
+      stop(
+        new Error(
+          `the pattern search stopped after ${timeoutMs / 1000}s without finishing — the pattern is likely too complex; simplify it or narrow the range with offset`,
+        ),
+      );
+    }, timeoutMs);
+    timer.unref?.();
+    const onAbort = () => stop(options.signal?.reason ?? new Error("search aborted"));
+    options.signal?.addEventListener("abort", onAbort, { once: true });
+    worker.on("message", (message: { ok: boolean; result?: LogReadBody; error?: string }) => {
+      clearTimeout(timer);
+      options.signal?.removeEventListener("abort", onAbort);
+      worker.terminate();
+      if (message.ok && message.result) resolve(message.result);
+      else reject(new Error(message.error ?? "log search failed"));
+    });
+    worker.on("error", (error) => stop(error));
+    worker.on("exit", (code) => {
+      if (code !== 0) stop(new Error(`log search worker exited with code ${code}`));
+    });
+    worker.postMessage(request);
+  });
 }

@@ -169,6 +169,9 @@ This tool reads the full log of a terminal. It does not control the process.
   tool does not show. To continue the search, use this value as `offset`.
 - A search always shows the first match. If that line is larger than `limit`,
   the tool cuts the line. Thus each search continues past its first match.
+- The search runs outside the main process. A pattern that would take very
+  long on a repetitive log stops after 15 s with an error instead of slowing
+  the session. Simplify the pattern, or narrow the range with `offset`.
 - All pages start and end at UTF-8 character boundaries. The pages connect
   without errors. If `limit` is smaller than one character, the page contains
   that full character.

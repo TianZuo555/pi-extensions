@@ -270,7 +270,9 @@ function structuredStream(
     try {
       const read = readLogHeadTail(spillPath, budget);
       text = read.text;
-      truncated = read.text.includes("bytes omitted");
+      // From the read's metadata, not the text: output that literally
+      // contains "bytes omitted" would otherwise read as incomplete.
+      truncated = read.omittedStart !== undefined;
     } catch {
       // The archive vanished (pruned, or a spill that failed after settling):
       // fall back to what memory still holds instead of failing the result.

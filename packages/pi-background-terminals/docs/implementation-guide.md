@@ -139,6 +139,7 @@ src/command-shape.ts        Pre-spawn guards: state-only, duplicate, plain sleep
 src/constants.ts            Shared execution and output limits
 src/domain.ts               Snapshot/status/error types
 src/log-read.ts             Pure file reads over a spill log (page/auto/tail/search)
+src/log-search-worker.mjs   Plain-JS worker that runs the pattern scan off-thread
 src/manager.ts              Effect service and process lifecycle
 src/output.ts               Bounded head+tail stream retention
 src/process-tracker.ts      Synchronous abnormal-exit process-tree safety net
@@ -568,10 +569,23 @@ carries partial lines across 64 KiB chunks, formats matches as
 `@<line-start-byte>: <line>` capped to 300 chars, stops collecting when a
 later match would exceed `limit` bytes while `matchCount` keeps counting —
 the first match is always shown, cut to `limit` bytes ending in `…` when
-needed, so `nextOffset` always advances past `offset` — and honors the tool's
-AbortSignal between chunks; `tail` returns the newest
-`limit` bytes; an explicit `offset` is an exact page; otherwise auto returns
-the whole log when it fits or a head+tail view naming the omitted byte range.
+needed, so `nextOffset` always advances past `offset`. `tail` returns the
+newest `limit` bytes; an explicit `offset` is an exact page; otherwise auto
+returns the whole log when it fits or a head+tail view naming the omitted
+byte range.
+
+The search runs in a worker thread (`src/log-search-worker.mjs`, plain JS —
+workers need a real file, like `win32-child.mjs`) under a 15 s hard timeout.
+The pattern is a plain V8 RegExp, and a backtracking-heavy one such as
+`(a+)+b` spends exponential time on a failing match against a repetitive
+line — measured at over 5 s for a 50-character line, effectively forever on
+the 64 KiB prefix a runaway line is tested against. The AbortSignal is only
+checked between chunks and cannot interrupt a running `RegExp.test`, so no
+amount of in-thread checking bounds the cost; the worker lets the tool
+terminate the scan and fail with an actionable error while the session stays
+responsive. The worker and its timeout timer are unref'd, so an in-flight
+search never delays shutdown.
+
 The manager resolves the id against the live session registry rather than
 exposing a filesystem path, and the pure read logic lives in `src/log-read.ts`.
 Each read returns `settled`, `complete`, the current file size, `next_offset`,

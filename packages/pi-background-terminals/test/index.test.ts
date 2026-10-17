@@ -1776,6 +1776,31 @@ test("bash returns structuredContent on every managed result for Code Mode scrip
   }
 });
 
+test("output that literally says bytes omitted is not marked truncated", async () => {
+  const app = harness();
+  try {
+    // Well under the 1 MiB budget: the phrase is content, not a marker.
+    const result = await app.tools.get("bash").execute(
+      "sc-marker-phrase",
+      {
+        command: command("process.stdout.write('bytes omitted is just text here '.repeat(1500))"),
+        yield_time_ms: 30_000,
+      },
+      undefined,
+      undefined,
+      app.ctx,
+    );
+    const sc = result.structuredContent as Record<string, unknown>;
+    assert.equal(sc.truncated, false, "complete output must not read as truncated");
+    const output = sc.output as string;
+    assert.ok(output.length > 1000);
+    assert.ok(output.includes("bytes omitted"), "the phrase is present");
+    assert.equal(output.endsWith("..."), false, "no truncation marker appended");
+  } finally {
+    await app.shutdown();
+  }
+});
+
 test("the 1 MiB structured cap covers stdout and stderr together", async () => {
   const app = harness();
   try {
