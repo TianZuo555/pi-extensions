@@ -2,7 +2,8 @@
 
 This document describes the invariants behind `@tian.zuo/pi-background-terminals`.
 The package overrides Pi's built-in `bash` model tool, adds the bounded
-read-only `terminal_log_read` tool, and adds one user command, `/ps`.
+read-only `terminal_log_read` tool, the `terminal_wait` and `terminal_stop`
+control tools, and one user command, `/ps`.
 
 ## 1. Product contract
 
@@ -13,7 +14,7 @@ Every model shell command goes through `bash`:
 2. Resolve Bash and Pi's shell settings.
 3. Spawn with no interactive stdin and capture stdout/stderr separately.
 4. Wait for a bounded initial yield period (default 10 seconds; integer inputs
-   are clamped to 250–30,000 ms).
+   are clamped to 250–300,000 ms).
 5. If the process settles during that wait, return its final state and output in
    the Bash result. A non-zero exit, kill, or timeout is a tool error.
 6. Otherwise return a terminal id and leave the process running.
@@ -27,10 +28,16 @@ useful command title. Only a command that actually yields is presented as a
 compact background-terminal row; asynchronous completion rows also stay compact.
 `/ps` remains the complete invocation and human-facing output viewer.
 
-The model has no status, list, kill, poll, or stdin tools. `terminal_log_read`
-only reads one bounded page from an opaque archive ref emitted by Bash; it does
-not wait for, inspect, or control a process. The user inspects and stops running
-terminals with `/ps`.
+The model has no stdin or list tools. `terminal_log_read` reads bounded views
+of a terminal's complete log (whole/auto head+tail, exact page, newest tail, or
+a case-insensitive line search); it never controls a process. `terminal_wait`
+blocks until a listed terminal exits — or all running yielded terminals — and
+returns that result itself, consuming the settlement so no completion message
+follows. `terminal_stop` kills a running terminal's tree with the same consumed
+settlement. A lone `sleep` command is refused while a background terminal runs
+and points at `terminal_wait`. The user inspects and stops running terminals
+with `/ps`; a `/ps` kill is still reported to the model, delivered with the
+next user turn instead of waking an idle one.
 
 A process is session-scoped. It never survives `/new`, `/resume`, `/fork`,
 `/reload`, or quit.
@@ -54,7 +61,7 @@ It adds managed-execution controls:
 ```text
 working_dir    optional working directory
 title          optional /ps label
-yield_time_ms  optional initial wait; integers clamp to 250–30,000 ms
+yield_time_ms  optional initial wait; integers clamp to 250–300,000 ms
 ```
 
 The override supplies its own prompt snippet because Pi does not inherit prompt
@@ -127,10 +134,12 @@ immediately. Neither path provides an interactive input surface.
 ## 5. File layout
 
 ```text
-index.ts                    Pi boundary, bash override, fallback, /ps
-src/command-shape.ts        Pre-spawn guards: state-only and duplicate commands
+index.ts                    Pi boundary, bash override, tools, fallback, /ps
+src/command-shape.ts        Pre-spawn guards: state-only, duplicate, plain sleep
 src/constants.ts            Shared execution and output limits
 src/domain.ts               Snapshot/status/error types
+src/log-read.ts             Pure file reads over a spill log (page/auto/tail/search)
+src/log-search-worker.mjs   Plain-JS worker that runs the pattern scan off-thread
 src/manager.ts              Effect service and process lifecycle
 src/output.ts               Bounded head+tail stream retention
 src/process-tracker.ts      Synchronous abnormal-exit process-tree safety net
@@ -245,6 +254,13 @@ invisible to the model, since neither produces an error it could learn from:
   is already tracked as `running`. Checked after manager resolution and before
   spawn, so the second copy never starts. A settled twin or another directory is
   a legitimate new run.
+- **Long plain sleeps while background work runs.** A lone `sleep N` of
+  10 s or more (optionally followed by an `echo`) while any terminal is
+  `running && yielded` is refused with a pointer to `terminal_wait`: results
+  are pushed, so the sleep cannot make one arrive sooner and only wastes a
+  turn. The error also shows the single-command readiness poll
+  (`until curl -fs <url>; do sleep 1; done`) for the other reason models reach
+  for sleep. Shorter sleeps, and sleeps while nothing runs, execute normally.
 
 Segments split on `&&`, `||`, `;`, `|`, and newlines.
 Redirects and command substitution fail open: they can escape the shell, so
@@ -310,6 +326,82 @@ There is a second defensive layer in `index.ts`: when a final snapshot is
 returned, `resultDelivery.consume(id)` removes any result deferred during the
 small gap between `start` and waiter registration.
 
+`waitForAny` and `stop` reuse the same consumed-waiter mechanism without the
+`yielded` side effect: `waitForAny` registers one waiter per running target and
+races their `settled` deferreds against the timeout (clamped to
+1–3,600 s), while `stop` registers its waiter BEFORE triggering the detached
+scope-close kill, then awaits settlement bounded by the stop timeout plus the
+settle grace. Both linearize the same way — one synchronous block removes the
+waiters and reads the statuses — and both remove waiters in `ensuring` so an
+interrupted wait cannot suppress a later completion. A settle that lands after
+removal flows to the normal follow-up path. A `stop` wait interrupted by Esc
+does not cancel the kill: the teardown fiber is detached, so "termination
+continues in the background" stays truthful.
+
+`terminal_wait` also declares an `outputSchema` and returns
+`structuredContent` (`settled` entries with status/exitCode/signal, `running`,
+`alreadyReported`, plus `text`). Text-only tool results reject on `isError`
+inside Code Mode, so a failed terminal would otherwise be unreadable to a
+script; structured output resolves to fields even when `isError` is set.
+
+`bash` likewise declares an `outputSchema` and returns `structuredContent` on
+every managed result — quick completions, yielded running terminals, the
+Esc-abort path, and error results alike — so a non-zero exit resolves to
+fields in Code Mode instead of rejecting. The shape mirrors Pi's built-in
+bash (`output`, `truncated`, `exit_code`, `wall_time_seconds`) plus
+`terminal_id` and `status`; `exit_code` is absent while the command runs and
+when a signal or timeout stopped it. There is no `full_output_path` — spill
+paths stay private; a script reads the full log with `terminal_log_read`.
+The foreground-fallback path passes the built-in's `structuredContent`
+through unchanged.
+
+`output` is read at Pi's documented budget, not the model-facing one. Once a
+stream's archive is complete the manager compacts the in-memory view to
+`SETTLED_RETAINED_PER_STREAM` (64 KiB), which is far below the 1 MiB
+`docs/codemode.md` promises scripts, so `bashStructuredContent()` calls
+`readLogHeadTail(spillPath, budget)` instead: first and last 512 KiB around
+`[... N bytes omitted ...]`, both edges snapped to code points. That mirrors
+the built-in's `readFullOutput`. A stream that is still running has no
+complete archive, so its bounded in-memory view is used and already carries
+the marker. A vanished archive (pruned, or a spill that failed after
+settling) falls back to the in-memory view rather than failing the result.
+
+The 1 MiB is one budget for the combined `output`, not one per stream:
+stdout reads against the full cap and stderr against what is left, so a
+command that floods both cannot return ~2 MiB. A stream with no budget left
+contributes only its omission marker. Per-stream caps would silently double
+the payload and the Code Mode context cost, and the schema promises a single
+limit.
+
+### Interrupted waits and stops
+
+A registered waiter marks a settlement consumed *before* `onSettled` runs
+(`manager.ts`), so an Esc that lands in that window suppresses the follow-up
+while the tool call also fails — the result would be lost with nothing left
+to deliver it. Both `terminal_wait` and `terminal_stop` reconcile in their
+catch path: they read the live snapshot for each target and re-defer it, then
+rethrow the interruption. The re-defer is scheduled one microtask later on
+purpose — `onSettled`'s own `consumed` branch clears the queue entry, and that
+hook may still be ahead of the catch, so letting it finish first makes the
+re-defer the last word. Termination itself is unaffected: `stop` runs the
+kill detached.
+
+### Code Mode nesting
+
+Pi's Code Mode runs tools inside a script via `ctx.executeTool`; every such
+nested call fires the `tool_call` event with `parentToolCallId` set and gets an
+id like `<parent>/<n>`. The extension listens for that event (never blocking
+the call) into a consume-once `nestedCallIds` set, cleared on `agent_start` and
+`session_shutdown`; `bash` and `terminal_log_read` consume it at the top of
+`execute`. Two behaviors adapt:
+
+- A nested `bash` call that yields gets different text: its completion
+  follow-up can only arrive after the calling script ends, so the result says
+  so and tells the script to collect it with `terminal_wait({ ids: [id] })`.
+- Nested `terminal_log_read` calls skip the per-run call/byte budgets —
+  their output reaches the script, not the model context, so the context-
+  protection budgets do not apply. Per-call `limit` bounds still hold.
+
 ## 10. Exactly-once completion delivery
 
 The settle hook receives `(snapshot, consumed)`:
@@ -348,6 +440,13 @@ pi.sendMessage(message, {
   triggerTurn: true,
 });
 ```
+
+A batch whose terminals were all `killed` is a `/ps` stop the user already
+watched happen; it is delivered as `{ deliverAs: "nextTurn" }` instead, so it
+reaches the model with the next user turn without waking an idle agent.
+`terminal_wait` and `terminal_stop` consume settlements at the waiter level
+(§9) and additionally `take()` their ids out of the delivery map as a race
+guard, so a result they return can never also become a message.
 
 `followUp` would only be drained once the model stops calling tools, so a model
 that keeps working would act without the result and write a final answer before
@@ -456,19 +555,41 @@ Still-tracked snapshots therefore keep valid full-log paths while session disk
 usage remains bounded by retained history rather than command count. Model-facing
 bounded output never exposes those private paths; it emits an opaque stream
 reference only while the archive exists, with its completeness and omitted byte
-range. `terminal_log_read` serves at most 64 KiB per page, 256 KiB per agent
+range. `terminal_log_read` serves at most 64 KiB per call, 256 KiB per agent
 run, and 8 reads per agent run, and reports `next_offset` without polling
 terminal status.
 
 ### Model-facing archive reads
 
 `terminal_log_read` is the only model-facing path into a complete spill. It
-accepts the opaque `bt-<runtime-id>-N:stdout` or `bt-<runtime-id>-N:stderr` reference emitted by Bash,
-plus a byte `offset` and bounded `limit`. The manager resolves the reference
-against the live session registry rather than exposing a filesystem path. Each
-read returns `settled`, `complete`, the current file size, and `next_offset`;
-reading a running stream is a single non-blocking snapshot, not a status or
-poll operation. Pages are capped at 64 KiB, and the extension permits 256 KiB
+accepts a bare `bt-<runtime-id>-N` id (stdout) or the `id:stdout` / `id:stderr`
+ref, plus `offset`, `limit`, `tail`, and `pattern`. Mode selection: `pattern`
+runs a streaming case-insensitive line search over `[offset, size)` that
+carries partial lines across 64 KiB chunks, formats matches as
+`@<line-start-byte>: <line>` capped to 300 chars, stops collecting when a
+later match would exceed `limit` bytes while `matchCount` keeps counting —
+the first match is always shown, cut to `limit` bytes ending in `…` when
+needed, so `nextOffset` always advances past `offset`. `tail` returns the
+newest `limit` bytes; an explicit `offset` is an exact page; otherwise auto
+returns the whole log when it fits or a head+tail view naming the omitted
+byte range.
+
+The search runs in a worker thread (`src/log-search-worker.mjs`, plain JS —
+workers need a real file, like `win32-child.mjs`) under a 15 s hard timeout.
+The pattern is a plain V8 RegExp, and a backtracking-heavy one such as
+`(a+)+b` spends exponential time on a failing match against a repetitive
+line — measured at over 5 s for a 50-character line, effectively forever on
+the 64 KiB prefix a runaway line is tested against. The AbortSignal is only
+checked between chunks and cannot interrupt a running `RegExp.test`, so no
+amount of in-thread checking bounds the cost; the worker lets the tool
+terminate the scan and fail with an actionable error while the session stays
+responsive. The worker and its timeout timer are unref'd, so an in-flight
+search never delays shutdown.
+
+The manager resolves the id against the live session registry rather than
+exposing a filesystem path, and the pure read logic lives in `src/log-read.ts`.
+Each read returns `settled`, `complete`, the current file size, `next_offset`,
+and a `mode`; results are at most 64 KiB, and the extension permits 256 KiB
 and 8 archive reads per agent run. Both budgets are required: the byte budget
 bounds full-page firehosing, and the call budget bounds a `limit: 1` polling
 loop that would otherwise spend almost no bytes. Pruned entries return an
@@ -478,11 +599,12 @@ refs from a previous runtime cannot alias terminals after reload/resume.
 A byte offset chosen by the model can land inside a code point, so both window
 edges are snapped to UTF-8 boundaries before decoding: leading continuation
 bytes are skipped, and a trailing sequence the window cut short is excluded so
-the next page starts at its lead byte. `offset` and `next_offset` describe the
-snapped window, which makes paging with `next_offset` byte-exact rather than
-silently inserting replacement characters at every page boundary. A window at
-end of file, or one too small to hold a single code point, is returned as read
-so paging always advances.
+the next page starts at its lead byte. A `limit` smaller than one code point
+expands to exactly that code point (at most 3 bytes over), so a page or tail
+read still decodes and the next page continues after it. `offset` and
+`next_offset` describe the snapped window, which makes paging with
+`next_offset` byte-exact rather than silently inserting replacement
+characters at every page boundary.
 
 ## 13. Process lifecycle and termination
 
@@ -535,9 +657,18 @@ the listener and sweeps any residual pid after normal bounded teardown.
 ## 14. Capacity and pruning
 
 At most eight terminals may run concurrently. Start reserves a slot
-synchronously before spawning, so parallel tool calls cannot race through the
-cap. Reaching the cap is an explicit error; it does not bypass management via
-the foreground fallback.
+synchronously when one is free and no one is queued, so parallel tool calls
+cannot race through the cap and a new caller cannot jump the queue. Calls
+beyond the cap queue FIFO for up to 10 s (`MAX_SLOT_WAIT_MS`, injectable as
+`timings.slotWaitMs`): a single `pumpSlotQueue` hands freed slots — after a
+settle and after a failed start releases its reservation — to the oldest
+waiter, transferring the reservation with the grant. A queued wait ends on
+the grant, the timeout (`ConcurrencyLimitError`), the tool's AbortSignal (the
+same failure a pre-spawn abort produces), disposal (the shutting-down
+`SpawnError`), or fiber interruption; on every non-grant exit the waiter
+leaves the queue and a grant that landed in the same instant releases its
+reservation again, so no slot leaks. Failing is explicit — it never bypasses
+management via the foreground fallback.
 
 The registry retains at most 32 live/settled entries for `/ps` and exposes them
 newest first. When over the limit it prunes settled entries oldest first —
@@ -621,7 +752,8 @@ teardown sweep, preventing an unregistered survivor.
 
 The package test suite covers:
 
-- registration of only the `bash` override plus `/ps`;
+- registration of the `bash` override, `terminal_log_read`, `terminal_wait`,
+  `terminal_stop`, and `/ps`, including per-tool prompt-size budgets;
 - quick completion without a duplicate follow-up;
 - yielded completion with exactly one automatic delivery;
 - sliding quiet and maximum-hold batching deadlines, including cancellation;
@@ -637,7 +769,9 @@ The package test suite covers:
 - visible quick-command title/output previews versus compact genuinely yielded
   Bash/completion rows;
 - fresh-shell/`working_dir` guidance and work-bearing default titles;
-- pre-spawn blocking and next-run reset for state-only and duplicate commands;
+- pre-spawn blocking and next-run reset for state-only and duplicate commands,
+  plus the ≥10 s plain-sleep guard while a background terminal runs and the
+  readiness-poll pointer in its error;
 - hard timeout status and tree termination;
 - Bash-specific syntax on the resolved shell;
 - pre-spawn cancellation preventing execution and fallback, including during initialization;
@@ -649,9 +783,22 @@ The package test suite covers:
 - session disposal, spill-directory cleanup, and per-entry pruning cleanup;
 - output head stability, rolling tail, UTF-8 boundaries, and omission counts;
 - complete spill capture beyond the memory cap;
-- opaque archive references, bounded `terminal_log_read` pages, settled/complete
-  metadata, UTF-8-exact paging of a multi-byte archive, per-run read budgets,
-  and expired-entry errors;
+- opaque archive references, bare-id and `id:stream` refs, `terminal_log_read`
+  auto head+tail / page / tail / search modes with byte-exact offsets and
+  limits, CRLF and chunk-boundary matching, abort-aware scanning,
+  settled/complete metadata, UTF-8-exact paging of a multi-byte archive,
+  per-run read budgets, and expired-entry errors;
+- `terminal_wait` returning a consumed settlement once (no follow-up),
+  first-of-two races, timeout still-running results whose later exit IS
+  delivered, queued pending results, the nothing-to-wait-for error (including
+  `ids: []`), and `structuredContent` on both success and failed terminals;
+- Code Mode nesting: `tool_call`/`parentToolCallId` detection, nested yield
+  text pointing at `terminal_wait`, and nested log reads exempt from the
+  per-run budgets;
+- `terminal_stop` consuming its settlement (one-line result, no completion
+  message), already-exited and unknown-id errors, and `/ps` kills delivered
+  with `deliverAs: "nextTurn"`;
+- `waitForAny`/`stop` waiter consumption semantics against the live registry;
 - drain-once result delivery without direct TUI stderr writes on retry;
 - `/ps` selection, default Info tab/invocation metadata, sanitization,
   wrapping, and cache behavior;

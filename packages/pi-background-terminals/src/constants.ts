@@ -1,8 +1,10 @@
 export const MAX_RUNNING = 8;
+/** How long a start beyond MAX_RUNNING waits for a free slot before failing. */
+export const MAX_SLOT_WAIT_MS = 10_000;
 export const MAX_TRACKED = 32;
 export const DEFAULT_YIELD_TIME_MS = 10_000;
 export const MIN_YIELD_TIME_MS = 250;
-export const MAX_YIELD_TIME_MS = 30_000;
+export const MAX_YIELD_TIME_MS = 300_000;
 /** Node timer maximum, shared with Pi's built-in Bash timeout. */
 export const MAX_RUNTIME_TIMEOUT_MS = 2_147_483_647;
 export const MAX_RUNTIME_TIMEOUT_SECONDS = MAX_RUNTIME_TIMEOUT_MS / 1000;
@@ -13,6 +15,15 @@ export const HEAD_RETAINED_PER_STREAM = 256 * 1024;
  * reads the spill file, so memory only needs enough for a result message. */
 export const SETTLED_RETAINED_PER_STREAM = 64 * 1024;
 export const MAX_SPILL_BYTES_PER_STREAM = 256 * 1024 * 1024;
+export const DEFAULT_TERMINAL_WAIT_SECONDS = 300;
+export const MAX_TERMINAL_WAIT_SECONDS = 3_600;
+/** `bash` `structuredContent.output` cap for Code Mode scripts. Matches Pi's
+ * built-in bash, which a script is entitled to rely on (docs/codemode.md). */
+export const BASH_STRUCTURED_OUTPUT_MAX_BYTES = 1024 * 1024;
+export const DEFAULT_TERMINAL_LOG_READ_BYTES = 8 * 1024;
 export const MAX_TERMINAL_LOG_READ_BYTES = 64 * 1024;
 export const TERMINAL_LOG_READ_RUN_BUDGET = MAX_TERMINAL_LOG_READ_BYTES * 4;
 export const TERMINAL_LOG_READ_RUN_CALLS = 8;
+/** Sleeps shorter than this are legitimate work; longer ones while a
+ * background terminal runs are refused in favor of terminal_wait. */
+export const PLAIN_SLEEP_GUARD_MIN_SECONDS = 10;

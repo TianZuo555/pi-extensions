@@ -30,10 +30,17 @@ import {
 import { OutputBuffer } from "./output.ts";
 import { createDetachedChildTracker } from "./process-tracker.ts";
 import { createChildJob, preloadChildJobSupport, type ChildJobHandle } from "./win32-job.ts";
-import { codePointStart, completeCodePointEnd } from "./utf8.ts";
+import {
+  readLogAuto,
+  readLogPage,
+  readLogTail,
+  searchLogFile,
+  type LogReadBody,
+} from "./log-read.ts";
 
 import {
   MAX_RUNNING,
+  MAX_SLOT_WAIT_MS,
   MAX_TRACKED,
   MIN_YIELD_TIME_MS,
   MAX_YIELD_TIME_MS,
@@ -42,6 +49,7 @@ import {
   SETTLED_RETAINED_PER_STREAM,
   MAX_SPILL_BYTES_PER_STREAM,
   MAX_TERMINAL_LOG_READ_BYTES,
+  MAX_TERMINAL_WAIT_SECONDS,
 } from "./constants.ts";
 import { TERMINAL_ERRORS } from "./prompt.ts";
 const MAX_ARCHIVE_TOMBSTONES = MAX_TRACKED * 4;
@@ -64,6 +72,9 @@ export interface TerminalManagerTimings {
    * settle grace + flush must stay inside the scope-close bound, so teardown
    * remains bounded end to end. */
   readonly spillFlushTimeoutMs: number;
+  /** How long a start beyond MAX_RUNNING queues for a free slot before
+   * failing with ConcurrencyLimitError. */
+  readonly slotWaitMs: number;
 }
 
 export const DEFAULT_MANAGER_TIMINGS: TerminalManagerTimings = {
@@ -71,6 +82,7 @@ export const DEFAULT_MANAGER_TIMINGS: TerminalManagerTimings = {
   forceKillAfterMs: 2_000,
   settleGraceMs: 1_000,
   spillFlushTimeoutMs: 1_500,
+  slotWaitMs: MAX_SLOT_WAIT_MS,
 };
 
 export interface WindowsJobSupport {
@@ -213,23 +225,23 @@ export interface SettlementWaitResult {
 
 export type TerminalLogStream = "stdout" | "stderr";
 
-export interface TerminalLogReadRequest {
-  readonly id: string;
-  readonly stream: TerminalLogStream;
-  readonly offset: number;
-  readonly limit: number;
-}
+export type TerminalLogReadRequest = { readonly id: string; readonly stream: TerminalLogStream } & (
+  | { readonly mode: "auto"; readonly limit: number }
+  | { readonly mode: "page"; readonly offset: number; readonly limit: number }
+  | { readonly mode: "tail"; readonly limit: number }
+  | {
+      readonly mode: "search";
+      readonly pattern: RegExp;
+      readonly offset: number;
+      readonly limit: number;
+    }
+);
 
-export interface TerminalLogReadResult {
+export interface TerminalLogReadResult extends LogReadBody {
   readonly id: string;
   readonly stream: TerminalLogStream;
-  readonly offset: number;
-  readonly nextOffset: number;
-  readonly bytesRead: number;
-  readonly size: number;
   readonly settled: boolean;
   readonly complete: boolean;
-  readonly text: string;
 }
 
 // --- Read model ----------------------------------------------------------------
@@ -265,6 +277,18 @@ export interface TerminalManagerShape {
   readLog(
     request: TerminalLogReadRequest,
   ): Effect.Effect<TerminalLogReadResult, UnknownTerminalError | TerminalLogUnavailableError>;
+  /** Wait until any of `ids` settles or `timeoutMs` elapses. Targets that settle while
+   * registered are consumed (onSettled consumed=true → no follow-up). Returns current
+   * snapshots of all targets in `ids` order. Returns immediately, registering no
+   * waiters, as soon as any target is already settled. Never touches `yielded`.
+   * timeoutMs clamped to [1_000, MAX_TERMINAL_WAIT_SECONDS*1000]. */
+  waitForAny(
+    ids: ReadonlyArray<string>,
+    timeoutMs: number,
+  ): Effect.Effect<ReadonlyArray<TerminalSnapshot>, UnknownTerminalError>;
+  /** Kill a running terminal's tree and wait (bounded by the existing stop timeout + settle grace from timings)
+   * for it to settle. Its settlement is consumed — no follow-up. Already settled → snapshot as-is. */
+  stop(id: string): Effect.Effect<TerminalSnapshot, UnknownTerminalError>;
   readonly disposeAll: Effect.Effect<void>;
   /** Whether this host permits the nested Job Object used by Windows cleanup. */
   readonly windowsJobSupport: WindowsJobSupport;
@@ -437,6 +461,12 @@ const makeManager = (timings: TerminalManagerTimings) =>
     const runtimeId = randomBytes(8).toString("hex");
     let counter = 0;
     let reserved = 0;
+    /** Starts waiting for a free MAX_RUNNING slot, oldest first. A waiter
+     * granted by pumpSlotQueue already holds its `reserved` slot. */
+    const slotQueue: Array<{
+      grant: Deferred.Deferred<void, SpawnError | ConcurrencyLimitError>;
+      granted: boolean;
+    }> = [];
     let disposed = false;
     let spillDir: string | undefined | null;
     let onSettled: ((snap: TerminalSnapshot, consumed: boolean) => void) | undefined;
@@ -462,6 +492,72 @@ const makeManager = (timings: TerminalManagerTimings) =>
 
     const runningCount = () =>
       [...entries.values()].filter((e) => e.snapshot.status === "running").length;
+
+    /** Hand free slots to queued starts in arrival order. The reservation
+     * (reserved++) transfers to the waiter with the grant, so no new caller
+     * can steal it before the waiter's fiber resumes. */
+    const pumpSlotQueue = () => {
+      while (slotQueue.length > 0 && runningCount() + reserved < MAX_RUNNING) {
+        const waiter = slotQueue.shift();
+        if (!waiter) break;
+        waiter.granted = true;
+        reserved++;
+        Deferred.doneUnsafe(waiter.grant, Effect.void);
+      }
+    };
+
+    /** Queue behind the MAX_RUNNING cap until a slot frees, slotWaitMs
+     * elapses, the tool signal aborts, or the fiber is interrupted. */
+    const waitForSlot = (signal: AbortSignal | undefined) =>
+      Effect.gen(function* () {
+        const grant = yield* Deferred.make<void, SpawnError | ConcurrencyLimitError>();
+        const waiter = { grant, granted: false };
+        yield* Effect.sync(() => {
+          slotQueue.push(waiter);
+          // Capacity freed between the cap check and the enqueue is handed
+          // over immediately rather than waited out.
+          pumpSlotQueue();
+        });
+        const abortWait =
+          signal === undefined
+            ? Effect.never
+            : Effect.callback<never, SpawnError>((resume) => {
+                const onAbort = () =>
+                  resume(
+                    // Same failure a pre-spawn abort produces inside doStart.
+                    new SpawnError({
+                      message: boundedError(signal.reason),
+                      fallbackSafe: false,
+                    }),
+                  );
+                if (signal.aborted) onAbort();
+                else signal.addEventListener("abort", onAbort, { once: true });
+                return Effect.sync(() => signal.removeEventListener("abort", onAbort));
+              });
+        // raceFirst: a grant failure (disposeAll) or the abort must win over
+        // the never-completing sibling — raceAll would wait for a success.
+        yield* Effect.raceFirst(Deferred.await(grant), abortWait).pipe(
+          Effect.timeoutOrElse({
+            duration: timings.slotWaitMs,
+            orElse: () => new ConcurrencyLimitError({ message: TERMINAL_ERRORS.concurrency }),
+          }),
+          // On any non-grant exit the waiter leaves the queue; a grant that
+          // landed in the same instant releases its reservation again so no
+          // slot leaks.
+          Effect.onExit((exit) =>
+            Exit.isSuccess(exit)
+              ? Effect.void
+              : Effect.sync(() => {
+                  const index = slotQueue.indexOf(waiter);
+                  if (index >= 0) slotQueue.splice(index, 1);
+                  if (waiter.granted) {
+                    reserved--;
+                    pumpSlotQueue();
+                  }
+                }),
+          ),
+        );
+      });
 
     const closeEntryScope = (entry: Entry) =>
       Scope.close(entry.scope, Exit.void).pipe(Effect.ignore);
@@ -597,6 +693,8 @@ const makeManager = (timings: TerminalManagerTimings) =>
       entry.childJob?.close();
       if (entry.childJob) detachedChildren.untrackJob(entry.childJob);
       notify(s.id);
+      // A running slot just freed; hand it to the oldest queued start.
+      pumpSlotQueue();
       try {
         // During teardown, don't queue results into a shutting-down session.
         if (!disposed) onSettled?.(s, consumed);
@@ -753,13 +851,13 @@ const makeManager = (timings: TerminalManagerTimings) =>
               fallbackSafe: false,
             });
           }
-          if (runningCount() + reserved >= MAX_RUNNING) {
-            return new ConcurrencyLimitError({
-              message: TERMINAL_ERRORS.concurrency,
-            });
+          // A new caller must not jump ahead of queued waiters: only an empty
+          // queue takes the fast synchronous reservation.
+          if (slotQueue.length === 0 && runningCount() + reserved < MAX_RUNNING) {
+            reserved++;
+            return Effect.void;
           }
-          reserved++;
-          return Effect.void;
+          return waitForSlot(options.signal);
         });
 
         const doStart = Effect.gen(function* () {
@@ -1029,6 +1127,8 @@ const makeManager = (timings: TerminalManagerTimings) =>
           Effect.ensuring(
             Effect.sync(() => {
               reserved--;
+              // A failed/aborted start hands its reservation to the queue.
+              pumpSlotQueue();
               notify();
             }),
           ),
@@ -1093,6 +1193,109 @@ const makeManager = (timings: TerminalManagerTimings) =>
         );
       });
 
+    /** Register one consuming waiter per running entry; returns the removal
+     * that linearizes timeout-vs-settle exactly like waitForSettlement's. */
+    const addConsumedWaiters = (running: Entry[]) => {
+      const registered: Array<{ entry: Entry; waiter: { consumed: boolean } }> = [];
+      for (const entry of running) {
+        const waiter = { consumed: false };
+        let waiters = settlementWaiters.get(entry.snapshot.id);
+        if (!waiters) {
+          waiters = new Set();
+          settlementWaiters.set(entry.snapshot.id, waiters);
+        }
+        waiters.add(waiter);
+        registered.push({ entry, waiter });
+      }
+      return () => {
+        for (const { entry, waiter } of registered) {
+          const current = settlementWaiters.get(entry.snapshot.id);
+          current?.delete(waiter);
+          if (current?.size === 0) settlementWaiters.delete(entry.snapshot.id);
+        }
+      };
+    };
+
+    const waitForAny = (ids: ReadonlyArray<string>, timeoutMs: number) =>
+      Effect.suspend((): Effect.Effect<ReadonlyArray<TerminalSnapshot>, UnknownTerminalError> => {
+        const targets: Entry[] = [];
+        for (const id of ids) {
+          const entry = entries.get(id);
+          if (!entry) {
+            return new UnknownTerminalError({
+              message: TERMINAL_ERRORS.unknownTerminal(id, [...entries.keys()]),
+            });
+          }
+          targets.push(entry);
+        }
+        // Any already-settled target means immediate return with no waiters:
+        // its deferred result is still pending, and registering waiters while
+        // another target keeps running would let the delivery flush ship it as
+        // a steer message mid-wait and then return it here too — a duplicate.
+        if (targets.some((target) => target.snapshot.status !== "running")) {
+          return Effect.succeed(targets.map((target) => target.snapshot as TerminalSnapshot));
+        }
+        const running = targets;
+
+        let removeWaiters = () => {};
+        const finish = Effect.sync((): ReadonlyArray<TerminalSnapshot> => {
+          // This synchronous removal linearizes timeout vs settle: a later
+          // settle sees no waiter and is therefore delivered as a follow-up.
+          removeWaiters();
+          return targets.map((target) => target.snapshot as TerminalSnapshot);
+        });
+        const waitMs = Math.max(1_000, Math.min(MAX_TERMINAL_WAIT_SECONDS * 1000, timeoutMs));
+
+        return Effect.sync(() => {
+          removeWaiters = addConsumedWaiters(running);
+        }).pipe(
+          Effect.andThen(
+            Effect.raceAll(running.map((entry) => Deferred.await(entry.settled))).pipe(
+              Effect.timeoutOrElse({ duration: waitMs, orElse: () => Effect.void }),
+              Effect.andThen(finish),
+            ),
+          ),
+          Effect.ensuring(Effect.sync(() => removeWaiters())),
+        );
+      });
+
+    const stop = (id: string) =>
+      Effect.suspend((): Effect.Effect<TerminalSnapshot, UnknownTerminalError> => {
+        const entry = entries.get(id);
+        if (!entry) {
+          return new UnknownTerminalError({
+            message: TERMINAL_ERRORS.unknownTerminal(id, [...entries.keys()]),
+          });
+        }
+        if (entry.snapshot.status !== "running") {
+          return Effect.succeed(entry.snapshot as TerminalSnapshot);
+        }
+
+        // The waiter must be registered BEFORE the detached kill starts: a
+        // fast settle between kill and registration would otherwise escape
+        // consumption and surface as a duplicate follow-up.
+        let removeWaiters = addConsumedWaiters([entry]);
+        const finish = Effect.sync((): TerminalSnapshot => {
+          removeWaiters();
+          removeWaiters = () => {};
+          return entry.snapshot as TerminalSnapshot;
+        });
+        // The teardown runs detached, so interrupting this wait cannot cancel
+        // the termination — "termination continues in the background".
+        killEntryNow(entry);
+        const bound = timings.stopTimeoutMs + timings.settleGraceMs;
+        return Deferred.await(entry.settled).pipe(
+          Effect.timeoutOrElse({ duration: bound, orElse: () => Effect.void }),
+          Effect.andThen(finish),
+          Effect.ensuring(
+            Effect.sync(() => {
+              removeWaiters();
+              removeWaiters = () => {};
+            }),
+          ),
+        );
+      });
+
     const readLog = (request: TerminalLogReadRequest) =>
       Effect.suspend(
         (): Effect.Effect<
@@ -1123,56 +1326,53 @@ const makeManager = (timings: TerminalManagerTimings) =>
               message: TERMINAL_ERRORS.unavailableArchive(`${request.id}:${request.stream}`),
             });
           }
-          const offset = Number.isFinite(request.offset)
-            ? Math.max(0, Math.floor(request.offset))
-            : 0;
           const limit = Number.isFinite(request.limit)
             ? Math.max(1, Math.min(MAX_TERMINAL_LOG_READ_BYTES, Math.floor(request.limit)))
             : MAX_TERMINAL_LOG_READ_BYTES;
+          const meta = {
+            id: request.id,
+            stream: request.stream,
+            settled: entry.snapshot.status !== "running",
+            complete: buffer.archiveComplete === true,
+          };
+          const unreadable = () =>
+            new TerminalLogUnavailableError({
+              message: TERMINAL_ERRORS.unreadableArchive(`${request.id}:${request.stream}`),
+            });
+          if (request.mode === "search") {
+            const offset = Number.isFinite(request.offset)
+              ? Math.max(0, Math.floor(request.offset))
+              : 0;
+            return Effect.tryPromise({
+              // The AbortSignal Effect hands tryPromise aborts the streaming
+              // scan between chunks when the tool call is interrupted.
+              try: (signal) =>
+                searchLogFile(spillPath, {
+                  pattern: request.pattern,
+                  offset,
+                  limit,
+                  signal,
+                }).then((body) => ({ ...body, ...meta }) satisfies TerminalLogReadResult),
+              catch: unreadable,
+            });
+          }
           return Effect.try({
             try: () => {
-              const size = fs.statSync(spillPath).size;
-              const start = Math.min(offset, size);
-              const length = Math.min(limit, size - start);
-              let raw = Buffer.alloc(0);
-              if (length > 0) {
-                const fd = fs.openSync(spillPath, "r");
-                try {
-                  const window = Buffer.allocUnsafe(length);
-                  const bytesRead = fs.readSync(fd, window, 0, length, start);
-                  raw = window.subarray(0, bytesRead);
-                } finally {
-                  fs.closeSync(fd);
-                }
-              }
-              // Snap both edges to code-point boundaries. Without this a window
-              // that splits a multi-byte character decodes to U+FFFD, which
-              // silently corrupts the text AND every page stitched after it.
-              const leading = start > 0 ? codePointStart(raw) : 0;
-              const body = raw.subarray(leading);
-              const atEof = start + raw.length >= size;
-              const complete = completeCodePointEnd(body);
-              // Only trim a split trailing sequence when the rest of it is
-              // already on disk. At EOF there is nothing to stitch to, and a
-              // window too small to hold one code point must still advance.
-              const bytes = atEof || complete === 0 ? body : body.subarray(0, complete);
-              const readOffset = start + leading;
-              return {
-                id: request.id,
-                stream: request.stream,
-                offset: readOffset,
-                nextOffset: readOffset + bytes.length,
-                bytesRead: bytes.length,
-                size,
-                settled: entry.snapshot.status !== "running",
-                complete: buffer.archiveComplete === true,
-                text: bytes.toString("utf8"),
-              } satisfies TerminalLogReadResult;
+              const body =
+                request.mode === "tail"
+                  ? readLogTail(spillPath, limit)
+                  : request.mode === "auto"
+                    ? readLogAuto(spillPath, limit)
+                    : readLogPage(
+                        spillPath,
+                        Number.isFinite(request.offset)
+                          ? Math.max(0, Math.floor(request.offset))
+                          : 0,
+                        limit,
+                      );
+              return { ...body, ...meta } satisfies TerminalLogReadResult;
             },
-            catch: () =>
-              new TerminalLogUnavailableError({
-                message: TERMINAL_ERRORS.unreadableArchive(`${request.id}:${request.stream}`),
-              }),
+            catch: unreadable,
           });
         },
       );
@@ -1182,16 +1382,22 @@ const makeManager = (timings: TerminalManagerTimings) =>
      * in a DETACHED fiber. Once the flag is set the termination must actually
      * happen; a tool abort interrupting the caller cannot cancel it (this is
      * what makes "termination continues in the background" truthful). */
-    const killEntry = (entry: Entry) =>
-      Effect.sync(() => {
-        if (entry.snapshot.status !== "running") return;
-        runCleanup(
-          closeEntryScope(entry).pipe(Effect.timeout(timings.stopTimeoutMs), Effect.ignore),
-        );
-      });
+    const killEntryNow = (entry: Entry) => {
+      if (entry.snapshot.status !== "running") return;
+      runCleanup(closeEntryScope(entry).pipe(Effect.timeout(timings.stopTimeoutMs), Effect.ignore));
+    };
+
+    const killEntry = (entry: Entry) => Effect.sync(() => killEntryNow(entry));
 
     const disposeAll = Effect.gen(function* () {
       disposed = true;
+      // Queued starts can never be granted a slot now; fail them outright.
+      for (const waiter of slotQueue.splice(0)) {
+        Deferred.doneUnsafe(
+          waiter.grant,
+          new SpawnError({ message: TERMINAL_ERRORS.shuttingDown, fallbackSafe: false }),
+        );
+      }
       const all = [...entries.values()];
       entries.clear();
       for (const entry of all) {
@@ -1264,6 +1470,8 @@ const makeManager = (timings: TerminalManagerTimings) =>
     return TerminalManager.of({
       start,
       waitForSettlement,
+      waitForAny,
+      stop,
       readLog,
       disposeAll,
       windowsJobSupport,

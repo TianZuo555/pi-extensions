@@ -21,30 +21,34 @@ import {
 
 test("bash metadata states the managed-shell contract concisely", () => {
   assert.match(BASH_TOOL_DESCRIPTION, /background terminal/);
-  assert.match(BASH_TOOL_DESCRIPTION, /returns .*id/);
+  assert.match(BASH_TOOL_DESCRIPTION, /a background terminal id/);
   assert.match(BASH_TOOL_DESCRIPTION, /fresh shell/);
   assert.match(BASH_TOOL_DESCRIPTION, /no interactive stdin/);
   assert.match(BASH_TOOL_DESCRIPTION, /working_dir/);
   // yield_time_ms waits, timeout kills: the pair models most often confuse.
   assert.match(BASH_TOOL_DESCRIPTION, /yield_time_ms sets the wait/);
   assert.match(BASH_TOOL_DESCRIPTION, /timeout kills the process tree/);
-  assert.match(BASH_TOOL_DESCRIPTION, /do not poll/i);
+  assert.match(
+    BASH_TOOL_DESCRIPTION,
+    /Do not use sleep or repeated log reads to wait for completion/,
+  );
   // Results are steered in at the next tool boundary, so continuing to work
   // (not sleeping or polling) is what delivers them.
   assert.match(BASH_TOOL_DESCRIPTION, /result arrives at a later tool call/);
+  assert.match(BASH_TOOL_DESCRIPTION, /terminal_wait/);
   // The classic footgun: `cmd &` dies with the shell, so servers need their
   // own call (which auto-yields).
   assert.match(BASH_TOOL_DESCRIPTION, /`cmd &` dies with its shell/);
   assert.match(BASH_PARAMETER_DESCRIPTIONS.command, /script/);
-  assert.match(BASH_PARAMETER_DESCRIPTIONS.yieldTimeMs, /default 10000, clamped to 250-30000/);
+  assert.match(BASH_PARAMETER_DESCRIPTIONS.yieldTimeMs, /default 10000, clamped to 250-300000/);
   assert.match(BASH_PARAMETER_DESCRIPTIONS.timeout, /no default/i);
   assert.match(BASH_PARAMETER_DESCRIPTIONS.workingDir, /session cwd/);
   // The schema carries exclusiveMinimum/maximum for timeout, so prose must not
   // spend tokens repeating them.
   assert.doesNotMatch(BASH_PARAMETER_DESCRIPTIONS.timeout, /maximum/i);
-  assert.ok(BASH_TOOL_DESCRIPTION.length <= 400);
+  assert.ok(BASH_TOOL_DESCRIPTION.length <= 850);
   assert.ok(BASH_PROMPT_SNIPPET.length <= 50);
-  assert.ok(TERMINAL_LOG_READ_TOOL_DESCRIPTION.length <= 120);
+  assert.ok(TERMINAL_LOG_READ_TOOL_DESCRIPTION.length <= 400);
   assert.ok(TERMINAL_LOG_READ_PROMPT_SNIPPET.length <= 32);
 });
 
@@ -91,7 +95,7 @@ function snap(overrides: Partial<TerminalSnapshot> = {}): TerminalSnapshot {
   };
 }
 
-test("yielded result tells the model not to poll and points the user to /ps", () => {
+test("yielded result points at terminal_wait and terminal_stop instead of polling", () => {
   const text = buildBashResult(
     snap({
       status: "running",
@@ -101,9 +105,10 @@ test("yielded result tells the model not to poll and points the user to /ps", ()
     }),
   );
   assert.match(text, /still running as background terminal bt-1/);
-  assert.match(text, /do not poll/);
-  assert.match(text, /injected after your next tool call — keep working/);
-  assert.match(text, /user can inspect or stop it with \/ps/);
+  assert.match(text, /never sleep or poll/);
+  assert.match(text, /arrives automatically after a later tool call — keep working/);
+  assert.match(text, /call terminal_wait/);
+  assert.match(text, /terminal_stop/);
   // pid and title arrive once, via the metadata line, not twice.
   assert.equal(text.match(/pid 123/g)?.length, 1);
   assert.match(text, /stdout:\nready/);

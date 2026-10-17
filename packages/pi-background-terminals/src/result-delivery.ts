@@ -15,6 +15,17 @@ export function createDeferredResultDelivery<T extends { id: string }>() {
     consume(ids: Iterable<string>) {
       for (const id of ids) pending.delete(id);
     },
+    take(ids: Iterable<string>) {
+      const results: T[] = [];
+      for (const id of ids) {
+        const result = pending.get(id);
+        if (result !== undefined) {
+          results.push(result);
+          pending.delete(id);
+        }
+      }
+      return results;
+    },
     drain() {
       const results = [...pending.values()];
       pending.clear();
