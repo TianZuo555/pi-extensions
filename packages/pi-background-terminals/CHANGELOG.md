@@ -1,5 +1,33 @@
 # @tian.zuo/pi-background-terminals
 
+## 0.6.0
+
+### Minor Changes
+
+- [#161](https://github.com/TianZuo555/pi-extensions/pull/161) [`131a98a`](https://github.com/TianZuo555/pi-extensions/commit/131a98ac5a8331246dfc389c2c53b4bd3057a26d) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Add `terminal_wait` and `terminal_stop`, make `terminal_log_read` cheaper to use, raise the initial-wait cap, and support Code Mode scripts.
+  
+  - `terminal_wait` blocks until a background terminal exits and returns its result in place of the later completion message, replacing sleep-and-poll turns. In Code Mode scripts it resolves to structured fields (`settled`, `running`, `alreadyReported`, `text`). A plain `sleep` of 10 s or more is refused while a background terminal runs and points at it. A wait or stop interrupted by Esc at the moment its terminal settles still delivers that result, so the interruption cannot lose it.
+  - `terminal_log_read` runs its pattern search off-thread under a 15 s timeout, so a backtracking-heavy pattern can no longer slow the whole session; it fails with an error instead. `truncated` on a `bash` structured result now comes from the read metadata, so output that merely contains the phrase "bytes omitted" no longer reads as incomplete.
+  - `terminal_stop` stops a terminal's process tree with a one-line result and no completion message, so the model can restart servers it started. A stop from `/ps` is delivered with the next user turn instead of waking an idle model.
+  - `terminal_log_read` accepts a bare terminal id, defaults to an 8 KiB head+tail view, and adds `tail` (newest bytes) and `pattern` (case-insensitive search over the whole log with byte offsets). Reads from Code Mode scripts are exempt from the per-run read budget, because their output reaches the script, not the model context.
+  - A `bash` call from a Code Mode script that yields says its result arrives after the script ends and how to collect it with `terminal_wait`.
+  - `bash` returns structured results (`output`, `truncated`, `exit_code`, `wall_time_seconds`, `terminal_id`, `status`) on every managed result, so a non-zero exit resolves to fields in Code Mode scripts instead of throwing. `output` holds up to 1 MiB in total across stdout and stderr, as Pi's built-in tool does; longer output keeps its first and last 512 KiB around a `[... N bytes omitted ...]` marker with `truncated` set, and `terminal_log_read` reads the rest.
+  - `bash` calls beyond 8 concurrent commands queue for up to 10 s for a free slot instead of failing immediately.
+  - `terminal_log_read` paging and tail no longer emit replacement characters when `limit` is smaller than one code point, and a capped search always advances `next_offset` so continuation cannot loop.
+  - `yield_time_ms` is clamped to 250–300,000 ms instead of 30,000 ms.
+  - Bash guidance tells the model to use a short initial wait for tests, builds, or similar tasks when independent work remains. It points at `terminal_wait` when the result is needed or no other work remains, instead of sleep or repeated log reads. CI and deploy waits still use one blocking command.
+
+- [#161](https://github.com/TianZuo555/pi-extensions/pull/161) [`131a98a`](https://github.com/TianZuo555/pi-extensions/commit/131a98ac5a8331246dfc389c2c53b4bd3057a26d) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Report files the model changed while a command was running.
+  
+  A test that finishes after the code under test changed can report a pass for code that no longer exists, and nothing in the transcript says so. Successful `edit` / `write` calls are now recorded against every command running at that moment, and the final result — the completion message, `terminal_wait`, `terminal_stop`, or the `bash` result itself — states the fact:
+  
+  ```
+  Background terminal bt-… "pnpm test" exited (exit 0) after 2m10s.
+  Changed while this command ran: src/lib.ts, tests.rs. The result may not reflect those changes; run the command again if they matter to it.
+  ```
+  
+  Only paths inside the command's working directory are named. A change stays recorded across agent runs until the terminal leaves the 32-entry history, because a command can start in one run and settle in a later one. It is a note, not an action: nothing is re-run, no successful result becomes a failure, and no file dependencies are inferred. Changes made by shell commands (`sed -i`, `cargo fmt`, `git apply`) are not detected.
+
 ## 0.5.4
 
 ### Patch Changes
