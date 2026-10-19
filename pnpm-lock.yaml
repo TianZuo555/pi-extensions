@@ -423,8 +423,8 @@ importers:
         specifier: 4.0.0-rc.117
         version: 4.0.0-rc.117
       playwriter:
-        specifier: 0.7.0
-        version: 0.7.0(@types/node@26.6.5)
+        specifier: 0.8.0
+        version: 0.8.0(@types/node@26.6.5)
     devDependencies:
       '@effect/language-service':
         specifier: ^0.87.4
@@ -1287,6 +1287,24 @@ packages:
   '@standard-schema/spec@1.1.0':
     resolution: {integrity: sha512-l2aFy5jALhniG5HgqrD6jXLi/rUWrKvqN/qJx6yoJsgKhblVd+iqqU4RCXavm/jPityDo5TCvKMnpjKnOriy0w==}
 
+  '@strada.sh/sdk@0.8.0':
+    resolution: {integrity: sha512-ZuzCXImf8TeZ4xSC9lKtLIpX0lLUPuKjBxCC5tOHWE3sSnXqC5HVlWQW7ERY7zfP/7uGCKRajhbQgRcwwL5T7w==}
+    deprecated: Broken on Cloudflare Workers (Illegal invocation). Use 0.9.1.
+    peerDependencies:
+      '@opentelemetry/api': ^1.9.0
+      '@opentelemetry/api-logs': '>=0.200.0'
+      better-auth: ^1.3.0
+      vite: '>=5'
+    peerDependenciesMeta:
+      '@opentelemetry/api':
+        optional: true
+      '@opentelemetry/api-logs':
+        optional: true
+      better-auth:
+        optional: true
+      vite:
+        optional: true
+
   '@types/node@26.6.5':
     resolution: {integrity: sha512-uMzsv9stDdofIZBx4UGh4Z9ZgXnGC9seRDscilBcTHAeOFk67MZg/k9bWVfO+bk4qZmG+l52hRnLwUiH2LnJTg==}
 
@@ -1426,8 +1444,8 @@ packages:
     resolution: {integrity: sha512-5AXjrcMClTryPe9LgZrygpB1lj7s0S9E0+W+AHaVKAVyHanafK86iPSvG5xHVSp/jC+VH1UXu0TAEmY279xH7A==}
     engines: {node: '>=14.6'}
 
-  '@xmorse/playwright-core@1.59.12':
-    resolution: {integrity: sha512-4CbXk53ConJ7GjTRC7ZRVagxag0dTVHMB61M3Vim37uOZgEIqnPwYFRcVKozV57EhB0i1+cysB1CQ05yV+L1oQ==}
+  '@xmorse/playwright-core@1.59.13':
+    resolution: {integrity: sha512-4xgVwV2gIj88nWwlBirNfXXimviocvVNhVFjFnFqA/6kXbZ4hC3SW6agIqzB0ChY7txxGpg/zwmkcKRacOpf8A==}
     engines: {node: '>=18'}
     hasBin: true
 
@@ -2297,8 +2315,8 @@ packages:
     resolution: {integrity: sha512-wQ0b/W4Fr01qtpHlqSqspcj3EhBvimsdh0KlHhH8HRZnMsEa0ea2fTULOXOS9ccQr3om+GcGRk4e+isrZWV8qQ==}
     engines: {node: '>=16.20.0'}
 
-  playwriter@0.7.0:
-    resolution: {integrity: sha512-nKKJyCch0vYmpTpi9g7fpYF9rDDfGwXxuNQ32vK9dXrtVOjIsZaEnfsYH1uptPwsRl82V7fdwUyRrsfVkMw45w==}
+  playwriter@0.8.0:
+    resolution: {integrity: sha512-+pfGhcb+hxA0piPWIxmSL1PH9gz6rvslNYMSb+M/P4AS0Q9XYtbTsk06HKVCKRdWXa9f5/eB0RLtLKwa1OKoUg==}
     hasBin: true
 
   pngjs@6.0.0:
@@ -3213,7 +3231,7 @@ snapshots:
     dependencies:
       '@hono/node-server': 1.19.17(hono@4.13.8)
       hono: 4.13.8
-      ws: 8.21.3
+      ws: 8.22.0
     transitivePeerDependencies:
       - bufferutil
       - utf-8-validate
@@ -3499,6 +3517,10 @@ snapshots:
 
   '@standard-schema/spec@1.1.0': {}
 
+  '@strada.sh/sdk@0.8.0(better-auth@1.7.5)':
+    optionalDependencies:
+      better-auth: 1.7.5
+
   '@types/node@26.6.5':
     dependencies:
       undici-types: 8.9.0
@@ -3573,7 +3595,7 @@ snapshots:
 
   '@xmldom/xmldom@0.9.12': {}
 
-  '@xmorse/playwright-core@1.59.12':
+  '@xmorse/playwright-core@1.59.13':
     dependencies:
       '@lowire/loop': 0.0.25
       '@modelcontextprotocol/sdk': 1.32.1(zod@4.6.5)
@@ -4393,12 +4415,13 @@ snapshots:
 
   pkce-challenge@5.0.1: {}
 
-  playwriter@0.7.0(@types/node@26.6.5):
+  playwriter@0.8.0(@types/node@26.6.5):
     dependencies:
       '@hono/node-server': 1.19.17(hono@4.13.8)
       '@hono/node-ws': 1.3.1(@hono/node-server@1.19.17(hono@4.13.8))(hono@4.13.8)
       '@modelcontextprotocol/sdk': 1.32.1(zod@4.6.5)
-      '@xmorse/playwright-core': 1.59.12
+      '@strada.sh/sdk': 0.8.0(better-auth@1.7.5)
+      '@xmorse/playwright-core': 1.59.13
       acorn: 8.18.0
       ajv: 8.20.0
       async-sema: 3.1.1
@@ -4413,7 +4436,7 @@ snapshots:
       string-dedent: 3.0.2
       strip-ansi: 7.2.0
       undici: 7.29.1
-      ws: 8.21.3
+      ws: 8.22.0
       zod: 4.6.5
       zustand: 5.0.15
     optionalDependencies:
@@ -4423,6 +4446,7 @@ snapshots:
       - '@cfworker/json-schema'
       - '@lynx-js/react'
       - '@opentelemetry/api'
+      - '@opentelemetry/api-logs'
       - '@prisma/client'
       - '@sveltejs/kit'
       - '@tanstack/react-start'
@@ -4445,6 +4469,7 @@ snapshots:
       - svelte
       - use-sync-external-store
       - utf-8-validate
+      - vite
       - vitest
       - vue
 
