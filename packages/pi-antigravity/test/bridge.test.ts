@@ -390,58 +390,55 @@ test("resolveBridgeResultsFromContext resolves matching toolResult messages", as
   }
 });
 
-test("per-session tool prefixes isolate concurrent bridges", async () => {
-  // Two live bridges, as with two concurrent pi sessions. agy's global MCP
-  // config merges both into every turn's tools/list; the per-session prefix
-  // must make routing unambiguous.
-  const a = new AgyPiBridge("pi-bridge-111");
-  const b = new AgyPiBridge("pi-bridge-222");
-  a.setToolPrefix("pi__p111__");
-  b.setToolPrefix("pi__p222__");
-  let routedTo: string | undefined;
-  a.setOnCall((call) => {
-    routedTo = `a:${call.tool}`;
-    setTimeout(() => a.resolveCall(call.id, { content: "from-a", isError: false }), 5);
-    return true;
-  });
-  b.setOnCall((call) => {
-    routedTo = `b:${call.tool}`;
-    setTimeout(() => b.resolveCall(call.id, { content: "from-b", isError: false }), 5);
-    return true;
-  });
-  a.setToolSource(() => TOOL_DEFS);
-  b.setToolSource(() => TOOL_DEFS);
+test("concurrent bridges expose stable names and enforce independent credentials", async () => {
+  const a = new AgyPiBridge("pi-session-a");
+  const b = new AgyPiBridge("pi-session-b");
+  a.requireToken("token-a");
+  b.requireToken("token-b");
+  a.setDynamicTools([
+    {
+      name: "commit",
+      description: "a",
+      parameters: { type: "object" },
+      handler: async () => ({ content: "from-a", isError: false }),
+    },
+  ]);
+  b.setDynamicTools([
+    {
+      name: "commit",
+      description: "b",
+      parameters: { type: "object" },
+      handler: async () => ({ content: "from-b", isError: false }),
+    },
+  ]);
   await a.start();
   await b.start();
+  const request = (bridge: AgyPiBridge, token: string, method: string) =>
+    fetch(bridge.url!, {
+      method: "POST",
+      headers: { "content-type": "application/json", "x-pi-bridge-token": token },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method,
+        params: { name: "pi__commit", arguments: {} },
+      }),
+    });
   try {
-    a.refreshTools();
-    b.refreshTools();
-
-    const listA = await post(a, { jsonrpc: "2.0", id: 1, method: "tools/list" });
-    const namesA = (listA.json.result.tools as Array<{ name: string }>).map((t) => t.name);
-    assert.deepEqual(namesA, ["pi__p111__commit"]);
-
-    // A's prefixed name routes to A only — even though B serves the same
-    // underlying tool and both have active turns.
-    const res = await post(a, {
-      jsonrpc: "2.0",
-      id: 2,
-      method: "tools/call",
-      params: { name: "pi__p111__commit", arguments: {} },
-    });
-    assert.equal(res.json.result.content[0].text, "from-a");
-    assert.equal(routedTo, "a:commit");
-
-    // A's name is NOT valid on B's bridge: the other session cannot be
-    // reached through it.
-    const wrong = await post(b, {
-      jsonrpc: "2.0",
-      id: 3,
-      method: "tools/call",
-      params: { name: "pi__p111__commit", arguments: {} },
-    });
-    assert.equal(wrong.json.result.isError, true);
-    assert.match(wrong.json.result.content[0].text, /unknown tool/);
+    for (const [bridge, token, expected] of [
+      [a, "token-a", "from-a"],
+      [b, "token-b", "from-b"],
+    ] as const) {
+      const list = (await (await request(bridge, token, "tools/list")).json()) as any;
+      assert.deepEqual(
+        list.result.tools.map((tool: { name: string }) => tool.name),
+        ["pi__commit"],
+      );
+      const call = (await (await request(bridge, token, "tools/call")).json()) as any;
+      assert.equal(call.result.content[0].text, expected);
+    }
+    assert.equal((await request(b, "token-a", "tools/call")).status, 403);
+    assert.equal((await request(a, "token-b", "tools/call")).status, 403);
   } finally {
     await a.close();
     await b.close();
@@ -509,6 +506,32 @@ test("selectBridgedTools bridges only built-in MCP tools", () => {
   assert.deepEqual(bridged, ["mcp__github__search_issues", "read_mcp_resource"]);
 });
 
+test("Pi tool mode bridges active builtins, extensions and MCP while excluding hidden tools and replay", () => {
+  const tools = [
+    { name: "read", sourceInfo: { path: "builtin:read" } },
+    { name: "bash", sourceInfo: { path: "builtin:bash" } },
+    {
+      name: "ask_user",
+      sourceInfo: { source: "npm:@tian.zuo/pi-ask-user" },
+      exposure: "model-only",
+    },
+    { name: "codemode", sourceInfo: { path: "builtin:codemode" } },
+    { name: "mcp__docs__search", sourceInfo: { path: "builtin:mcp" } },
+    { name: "inactive" },
+    { name: "hidden", exposure: "hidden" },
+    { name: "antigravity" },
+  ];
+  const active = tools.filter((tool) => tool.name !== "inactive").map((tool) => tool.name);
+  assert.deepEqual(
+    selectBridgedTools(tools, active, "pi").map((tool) => tool.name),
+    ["read", "bash", "ask_user", "codemode", "mcp__docs__search"],
+  );
+  assert.deepEqual(
+    selectBridgedTools(tools, active, "native").map((tool) => tool.name),
+    ["mcp__docs__search"],
+  );
+});
+
 test("adapter migration warning detects package and local sources without matching tool names", () => {
   const cases = [
     { source: "npm:pi-mcp-adapter", expected: true },
@@ -527,8 +550,8 @@ test("adapter migration warning detects package and local sources without matchi
     const manager = createBridgeLifecycleManager({
       bridge: new AgyPiBridge(),
       bridgeToken: "test-token",
-      addMcpServer: async () => {},
-      removeMcpServer: async () => {},
+      writeMcpConfig: async () => {},
+      removeMcpConfig: async () => {},
       evictMcpCache: async () => {},
       notifyWarning: (message) => warnings.push(message),
     });
@@ -552,8 +575,8 @@ test("adapter migration warning waits for a notification sink", () => {
   const manager = createBridgeLifecycleManager({
     bridge: new AgyPiBridge(),
     bridgeToken: "test-token",
-    addMcpServer: async () => {},
-    removeMcpServer: async () => {},
+    writeMcpConfig: async () => {},
+    removeMcpConfig: async () => {},
     evictMcpCache: async () => {},
   });
   const resources = [{ sourceInfo: { source: "npm:pi-mcp-adapter" } }];
@@ -564,13 +587,13 @@ test("adapter migration warning waits for a notification sink", () => {
   assert.equal(warnings.length, 1);
 });
 
-test("createBridgeLifecycleManager handles start-success/add-failure, retry, teardown, and fallback", async () => {
+test("createBridgeLifecycleManager handles partial-write failure, retry, teardown, and fallback", async () => {
   const bridge = new AgyPiBridge("pi-bridge-lifecycle");
-  let mcpAddShouldFail = true;
+  let mcpWriteShouldFail = true;
   let addCalls = 0;
   let removeCalls = 0;
   let evictCalls = 0;
-  let pruneCalls = 0;
+
   const warnings: string[] = [];
 
   const skills: SkillLite[] = [
@@ -586,16 +609,13 @@ test("createBridgeLifecycleManager handles start-success/add-failure, retry, tea
     bridge,
     bridgeToken: "test-token",
     enabled: true,
-    pruneStaleRegistrations: async () => {
-      pruneCalls++;
-    },
-    addMcpServer: async (_name, _url, _token) => {
+    writeMcpConfig: async (_name, _url, _token) => {
       addCalls++;
-      if (mcpAddShouldFail) {
-        throw new Error("agy mcp add connection refused");
+      if (mcpWriteShouldFail) {
+        throw new Error("private MCP config write failed");
       }
     },
-    removeMcpServer: async (_name) => {
+    removeMcpConfig: async (_name) => {
       removeCalls++;
     },
     evictMcpCache: async (_name) => {
@@ -605,12 +625,11 @@ test("createBridgeLifecycleManager handles start-success/add-failure, retry, tea
   });
 
   try {
-    // 1. Initial attempt: bridge starts listening, but addMcpServer fails
+    // 1. Initial attempt: bridge starts listening, but writeMcpConfig fails
     const firstResult = await manager.ensureRegistered();
     assert.equal(firstResult, false, "ensureRegistered reports failure");
-    assert.equal(manager.isRunning(), true, "HTTP listener started successfully");
+    assert.equal(manager.isRunning(), false, "failed preparation closes the listener");
     assert.equal(manager.isRegistered(), false, "not marked as registered");
-    assert.equal(pruneCalls, 1);
     assert.equal(addCalls, 1);
     assert.equal(warnings.length, 1);
     assert.match(warnings[0], /pi-tool bridge unavailable/);
@@ -622,8 +641,8 @@ test("createBridgeLifecycleManager handles start-success/add-failure, retry, tea
     assert.equal(warnings.length, 2);
     assert.match(warnings[1], /pi-private skills are unavailable/);
 
-    // 2. Retry attempt: addMcpServer succeeds
-    mcpAddShouldFail = false;
+    // 2. Retry attempt: writeMcpConfig succeeds
+    mcpWriteShouldFail = false;
     const secondResult = await manager.ensureRegistered();
     assert.equal(secondResult, true, "ensureRegistered reports success on retry");
     assert.equal(manager.isRunning(), true);
@@ -637,14 +656,14 @@ test("createBridgeLifecycleManager handles start-success/add-failure, retry, tea
     // Idempotent: calling ensureRegistered again when already registered is a no-op
     const thirdResult = await manager.ensureRegistered();
     assert.equal(thirdResult, true);
-    assert.equal(addCalls, 2, "did not call addMcpServer again");
+    assert.equal(addCalls, 2, "did not call writeMcpConfig again");
 
     // 3. Teardown
     await manager.teardown();
     assert.equal(manager.isRunning(), false, "bridge closed");
     assert.equal(manager.isRegistered(), false, "marked as unregistered");
-    assert.equal(removeCalls, 1, "removeMcpServer called");
-    assert.equal(evictCalls, 1, "evictMcpCache called");
+    assert.equal(removeCalls, 2, "failed preparation and teardown remove their config");
+    assert.equal(evictCalls, 2, "failed preparation and teardown evict their owned cache");
   } finally {
     await manager.teardown();
   }
@@ -658,10 +677,10 @@ test("createBridgeLifecycleManager respects disabled setting", async () => {
     bridge,
     bridgeToken: "test-token",
     enabled: false,
-    addMcpServer: async () => {
+    writeMcpConfig: async () => {
       addCalled = true;
     },
-    removeMcpServer: async () => {},
+    removeMcpConfig: async () => {},
     evictMcpCache: async () => {},
     notifyWarning: (msg) => warnings.push(msg),
   });
@@ -692,8 +711,8 @@ test("createBridgeLifecycleManager respects disabled setting", async () => {
     bridge,
     bridgeToken: "t",
     enabled: false,
-    addMcpServer: async () => {},
-    removeMcpServer: async () => {},
+    writeMcpConfig: async () => {},
+    removeMcpConfig: async () => {},
     evictMcpCache: async () => {},
     notifyWarning: (msg) => warnings.push(msg),
   });

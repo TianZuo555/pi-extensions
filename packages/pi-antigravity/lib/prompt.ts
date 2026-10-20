@@ -3,6 +3,20 @@
  * runtime logic per repo convention.
  */
 
+export const PI_TOOLS_AGENT_DESCRIPTION =
+  "Complete Pi requests using the current Pi session tools through its MCP bridge.";
+
+export function piToolsAgentPrompt(serverName: string): string {
+  return [
+    "# System Prompt",
+    "You are the agent for the current Pi coding session. Complete the user request using Pi tools.",
+    `Your tools are provided by the MCP server ${serverName}. Use the exact MCP tool names and schemas it exposes.`,
+    "Relayed Pi instructions refer to tools by their Pi names; match them to the tools exposed by this bridge.",
+    "Use the Pi bridge for file access, editing, commands, web access, skills, and other work. Pi handles tool execution, permissions, and tool results.",
+    "Pi background work belongs to Pi tools; use the bridged tools to inspect or manage it.",
+  ].join("\n\n");
+}
+
 /**
  * Display-only wrapper tool that replays recorded agy tool results.
  *
@@ -65,8 +79,8 @@ export function omittedImagesPrompt(images: number): string {
  *
  * The snapshot is written for a model holding Pi's tools, but agy runs its own
  * native tool set (`run_command`, `view_file`, `replace_file_content`, …) and
- * reaches Pi only through bridged MCP tools — `selectBridgedTools` never
- * exposes a Pi builtin. Relaying the builtin inventory therefore spends
+ * reaches Pi through bridged MCP tools. Native mode never exposes a Pi
+ * builtin; Pi tool mode exposes it with an MCP prefix. Relaying the unprefixed inventory spends
  * prompt tokens describing tools agy cannot call.
  *
  * Only Pi's own validated top-level block is removed. "Available tools:" is

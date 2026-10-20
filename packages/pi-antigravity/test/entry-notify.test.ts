@@ -82,6 +82,8 @@ test("bridge-disabled session warns once via ui.notify when pi-private skills ex
     on: (name: string, fn: (event: unknown, ctx: unknown) => unknown) => {
       handlers.set(name, fn);
     },
+    registerFlag: () => {},
+    getFlag: () => undefined,
     registerCommand: () => {},
     registerEntryRenderer: () => {},
     registerProvider: (_name: string, p: unknown) => {

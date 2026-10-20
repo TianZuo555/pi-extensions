@@ -232,6 +232,7 @@ test("buildDriverAgyArgs keeps the native print wait beyond Pi's timer budget", 
     model: "gemini-3.7-flash",
     effort: "high",
     cwd: "/repo",
+    mcpDirectory: "/private bridge",
     timeoutMs: 5,
     agent: "reviewer",
     mode: "plan",
@@ -243,6 +244,10 @@ test("buildDriverAgyArgs keeps the native print wait beyond Pi's timer budget", 
   assert.equal(args[args.indexOf("--effort") + 1], "high");
   assert.equal(args[args.indexOf("--agent") + 1], "reviewer");
   assert.equal(args[args.indexOf("--mode") + 1], "plan");
+  assert.deepEqual(
+    args.flatMap((value, index) => (value === "--add-dir" ? [args[index + 1]] : [])),
+    ["/repo", "/private bridge"],
+  );
   assert.ok(!args.includes("--print"));
   assert.equal(args[args.indexOf("--print-timeout") + 1], "2147484s");
   assert.ok(!args.includes("3:7"));
@@ -525,6 +530,11 @@ test("persistent driver identifies every process reuse mismatch", async () => {
   }> = [
     { cause: "binary", first: { binary: "/fake/agy-v1" }, second: { binary: "/fake/agy-v2" } },
     { cause: "cwd", second: { cwd: tmpdir() } },
+    {
+      cause: "mcp-directory",
+      first: { mcpDirectory: "/private/a" },
+      second: { mcpDirectory: "/private/b" },
+    },
     { cause: "model", first: { model: "model-a" }, second: { model: "model-b" } },
     { cause: "effort", first: { effort: "high" }, second: { effort: "low" } },
     { cause: "agent", first: { agent: "reviewer" }, second: { agent: "planner" } },
@@ -549,7 +559,11 @@ test("persistent driver identifies every process reuse mismatch", async () => {
       };
       try {
         await executor.run({ ...base, ...entry.first });
-        await executor.run({ ...base, prompt: "second", ...entry.second });
+        const outcome = await executor.run({ ...base, prompt: "second", ...entry.second });
+        if (entry.second.mcpDirectory) {
+          const { args } = JSON.parse(outcome.response) as { args: string[] };
+          assert.ok(args.includes(entry.second.mcpDirectory));
+        }
         const stats = executor.snapshot().stats;
         assert.equal(stats?.recycleCount, 1, entry.cause);
         assert.equal(stats?.lastRecycleReason, entry.cause);

@@ -346,6 +346,7 @@ function makeStreamHarness(
     context?: TranscriptContext;
     createIsolatedRuntime?: () => any;
     getSystemPromptRelay?: () => string | undefined;
+    getSummaryProcessProfile?: () => { agent: string };
   } = {},
 ) {
   const prompt = options.prompt ?? "hello";
@@ -393,6 +394,7 @@ function makeStreamHarness(
     undefined,
     undefined,
     options.getSystemPromptRelay,
+    options.getSummaryProcessProfile,
   );
   const model: Model<string> = {
     id: "gemini-3.7-flash",
@@ -512,7 +514,7 @@ test("streamAntigravity refreshes bridge state and passes effort, profile, and r
       supportedEfforts: ["high", "low"],
       defaultEffort: "high",
     }),
-    () => ({ agent: "reviewer", mode: "plan" }),
+    () => ({ agent: "reviewer", mode: "plan", mcpDirectory: "/private/reviewer" }),
     () => `2:${bridge.catalogRevision}`,
   );
   const model = {
@@ -547,6 +549,7 @@ test("streamAntigravity refreshes bridge state and passes effort, profile, and r
   assert.equal(captured?.systemPrompt, "Project instructions from Pi");
   assert.equal(captured?.agent, "reviewer");
   assert.equal(captured?.mode, "plan");
+  assert.equal(captured?.mcpDirectory, "/private/reviewer");
   assert.equal(captured?.bridgeRevision, "2:1");
 });
 
@@ -557,12 +560,21 @@ for (const tools of ["none", "done", "error", "incomplete"] as const) {
     const isolatedController = new AgyTurnController(summaryPrompt);
     const isolatedPrompts: string[] = [];
     let isolatedSystemPrompt: string | undefined;
+    let isolatedAgent: string | undefined;
+    let isolatedMcpDirectory: string | undefined;
     let isolatedBeginCount = 0;
     let disposed = false;
     const isolatedService = {
-      beginStreamTurn: (request: { prompt: string; systemPrompt?: string }) =>
+      beginStreamTurn: (request: {
+        prompt: string;
+        systemPrompt?: string;
+        agent?: string;
+        mcpDirectory?: string;
+      }) =>
         Effect.sync(() => {
           isolatedSystemPrompt = request.systemPrompt;
+          isolatedAgent = request.agent;
+          isolatedMcpDirectory = request.mcpDirectory;
           isolatedBeginCount += 1;
           isolatedPrompts.push(request.prompt);
           return isolatedController;
@@ -586,6 +598,10 @@ for (const tools of ["none", "done", "error", "incomplete"] as const) {
       createIsolatedRuntime: () => isolatedRuntime as any,
       // A live relay getter must not override the summary's own instructions.
       getSystemPromptRelay: () => "DOCS-ONLY-RELAY",
+      getSummaryProcessProfile:
+        tools === "none"
+          ? () => ({ agent: "pi-tools-summary", mcpDirectory: "/private/summary" })
+          : undefined,
     });
     const eventsPromise = harness.collect();
 
@@ -630,6 +646,8 @@ for (const tools of ["none", "done", "error", "incomplete"] as const) {
     // The summary keeps its own caller instructions — the docs-only relay is
     // for user turns only.
     assert.equal(isolatedSystemPrompt, "Pi summary instructions");
+    assert.equal(isolatedAgent, tools === "none" ? "pi-tools-summary" : undefined);
+    assert.equal(isolatedMcpDirectory, tools === "none" ? "/private/summary" : undefined);
     const done = events.find((event) => event.type === "done");
     assert.equal(done?.reason, "stop");
     assert.deepEqual(done?.message.content, [{ type: "text", text: "Compact summary" }]);
