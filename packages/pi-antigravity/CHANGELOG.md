@@ -1,5 +1,19 @@
 # @tian.zuo/pi-antigravity
 
+## 0.12.0
+
+### Minor Changes
+
+- [#162](https://github.com/TianZuo555/pi-extensions/pull/162) [`19d1db8`](https://github.com/TianZuo555/pi-extensions/commit/19d1db8febf1162089e781ea35c42327ce6a47c4) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Add `/agy-tools [on|off|status]`, `--agy-tools pi`, and `PI_ANTIGRAVITY_TOOLS=pi` to run a minimal custom Antigravity agent through Pi's MCP bridge. The slash command switches modes after the active run settles, preserves Pi history, and restores the previous mode if preparation fails. The mode exposes Pi's active builtin, extension, and MCP tools and relays Pi instructions, so tool calls use Pi's execution pipeline, hooks, and permissions. Session-owned agent configurations are cleaned up on exit; resumed Pi sessions rebuild the native conversation with the current bridge. Native tools remain the default mode.
+
+### Patch Changes
+
+- [#162](https://github.com/TianZuo555/pi-extensions/pull/162) [`f794312`](https://github.com/TianZuo555/pi-extensions/commit/f7943125f48cd610995dc984f0978545df9780fa) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Persist Pi tools mode in Pi's user settings across reloads, restarts, and resumed sessions. Add `/agy tools [on|off|status]` controls alongside `/agy-tools`, and retain the previous preference when switching or saving fails.
+
+- [#162](https://github.com/TianZuo555/pi-extensions/pull/162) [`e8f3fde`](https://github.com/TianZuo555/pi-extensions/commit/e8f3fde39953fdd26aa0f88176ca27bda349ddcc) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Isolate each Antigravity bridge with a private workspace MCP configuration passed only to its agy children. Both native and Pi tools modes use stable `pi__` tool names without modifying global MCP registrations. Keep descriptor caches scoped to a short unique server name, recycle drivers when private discovery changes, and clean up partial preparation, private credentials, and owned caches on teardown. Rebuild saved conversations from Pi history when their original bridge instance has been replaced.
+
+- [#162](https://github.com/TianZuo555/pi-extensions/pull/162) [`ecf61cf`](https://github.com/TianZuo555/pi-extensions/commit/ecf61cf3b929e0025288cf7de309ca0bca787fac) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Show `pi-tools:on` or `pi-tools:off` in Pi's footer while an Antigravity model is selected. Keep it in sync with saved preferences, toggles, reloads, and failed switches, and clear it when leaving the provider or shutting down.
+
 ## 0.11.4
 
 ### Patch Changes
