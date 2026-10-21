@@ -7,6 +7,20 @@ import type test from "node:test";
 // 建一个共享模板仓库（含初始 commit），每个测试 git clone --local 复制。
 // Clone ~180ms，而 init + 5 次 config + commit 需要 ~580ms；14 个测试累计省 ~5s。
 // 模板在模块加载时创建，不能用 t.after 绑定（会在首个 test 结束时被删）。
+/**
+ * CI runners have no global git identity, and `git clone` does not copy the
+ * template's local `user.name`/`user.email`. Pass the identity to every command
+ * so tests never depend on the developer's `~/.gitconfig`.
+ */
+const GIT_IDENTITY = [
+	"-c",
+	"user.name=Footer Test",
+	"-c",
+	"user.email=footer@example.invalid",
+	"-c",
+	"commit.gpgsign=false",
+] as const;
+
 const templateRepo = (() => {
 	const dir = mkdtempSync(join(tmpdir(), "pi-footer-git-tpl-"));
 	process.on("exit", () => {
@@ -58,7 +72,11 @@ export function repository(t: test.TestContext, initialBranch = "main") {
 		stdio: ["ignore", "pipe", "pipe"],
 	});
 	const git = (...args: string[]) =>
-		execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+		execFileSync("git", [...GIT_IDENTITY, ...args], {
+			cwd,
+			encoding: "utf8",
+			stdio: ["ignore", "pipe", "pipe"],
+		}).trim();
 	// clone 会加 origin 和 branch tracking；测试要自己控制 remote，先删 remote 顺便清 tracking。
 	if (initialBranch !== "main") {
 		git("branch", "-m", "main", initialBranch);
@@ -67,21 +85,7 @@ export function repository(t: test.TestContext, initialBranch = "main") {
 	const write = (name: string, content: string) => writeFileSync(join(cwd, name), content);
 	const commit = () => {
 		git("add", ".");
-		// CI runners have no global git identity. `git clone` does not copy the
-		// template's local user.name/user.email, so pass them per commit rather
-		// than relying on the developer's ~/.gitconfig.
-		git(
-			"-c",
-			"user.name=Footer Test",
-			"-c",
-			"user.email=footer@example.invalid",
-			"-c",
-			"commit.gpgsign=false",
-			"commit",
-			"--quiet",
-			"-m",
-			"fixture",
-		);
+		git("commit", "--quiet", "-m", "fixture");
 	};
 	return { cwd, git, write, commit };
 }
