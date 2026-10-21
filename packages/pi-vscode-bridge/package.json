@@ -1,7 +1,7 @@
 {
   "name": "@tian.zuo/pi-vscode-bridge",
   "version": "0.1.0",
-  "description": "Send file, line, and diff-hunk references from VS Code into a running pi agent's input editor.",
+  "description": "Deprecated: send file, line, and diff-hunk references from VS Code into a running pi agent's input editor. Retained for historical reference; no longer recommended or actively developed.",
   "type": "module",
   "private": true,
   "keywords": [
@@ -35,12 +35,7 @@
     ]
   },
   "scripts": {
-    "check": "tsc --noEmit -p .",
-    "test": "node --test --experimental-strip-types test/*.test.ts",
-    "compile:vscode": "tsc -p vscode/tsconfig.json",
-    "watch:vscode": "tsc -watch -p vscode/tsconfig.json",
-    "prepack": "pnpm run compile:vscode",
-    "package:vscode": "pnpm run compile:vscode && cd vscode && pnpm dlx @vscode/vsce package --no-dependencies"
+    "check": "tsc --noEmit -p ."
   },
   "dependencies": {
     "effect": "4.0.0-rc.117"

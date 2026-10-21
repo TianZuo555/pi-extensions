@@ -33,7 +33,6 @@
       "extensions/usage.ts",
       "extensions/background-terminals.ts",
       "extensions/beautify-style.ts",
-      "extensions/vscode-bridge.ts",
       "extensions/web-search.ts",
       "extensions/find.ts",
       "extensions/compact.ts"
@@ -55,7 +54,6 @@
     "test:beautify-style": "pnpm --filter @tian.zuo/pi-beautify-style test",
     "test:image-cache": "pnpm --filter @tian.zuo/pi-image-cache test",
     "test:background-terminals": "pnpm --filter @tian.zuo/pi-background-terminals test",
-    "test:vscode-bridge": "pnpm --filter @tian.zuo/pi-vscode-bridge test",
     "test:web-search": "pnpm --filter @tian.zuo/pi-web-search test",
     "test:find": "pnpm --filter @tian.zuo/pi-find test",
     "changeset": "changeset",

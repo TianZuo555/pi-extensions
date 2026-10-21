@@ -9,7 +9,12 @@
     "includes": [
       "packages/**",
       "extensions/**",
-      "tests/**"
+      "tests/**",
+      "!packages/pi-edit-safe",
+      "!packages/pi-goal",
+      "!packages/pi-subagents",
+      "!packages/pi-todo",
+      "!packages/pi-vscode-bridge"
     ],
     "ignoreUnknown": false
   },
@@ -48,11 +53,7 @@
   },
   "overrides": [
     {
-      "includes": [
-        "**/test/**",
-        "**/*.test.ts",
-        "**/*.test.mjs"
-      ],
+      "includes": ["**/test/**", "**/*.test.ts", "**/*.test.mjs"],
       "linter": {
         "rules": {
           "complexity": {
@@ -68,9 +69,7 @@
       }
     },
     {
-      "includes": [
-        "packages/pi-beautify-style/**"
-      ],
+      "includes": ["packages/pi-beautify-style/**"],
       "formatter": {
         "enabled": false
       },

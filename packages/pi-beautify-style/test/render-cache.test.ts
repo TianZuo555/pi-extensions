@@ -7,12 +7,20 @@ import {
 	SHOW_MORE_LABEL,
 } from "../extensions/renderer/index.ts";
 import { initTheme } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@earendil-works/pi-tui";
+import {
+	setCapabilities,
+	truncateToWidth,
+	visibleWidth,
+	wrapTextWithAnsi,
+} from "@earendil-works/pi-tui";
 import { formatToolInputBody } from "../extensions/renderer/tool/tool-io.ts";
 import { toolViewportWidth } from "../extensions/renderer/tool/result.ts";
 
 // cli-highlight 打底要读全局主题；正式运行由 pi 初始化
 initTheme("dark");
+// 语法着色在 256 色终端上输出 `38;5;N`，在真彩终端上输出 `38;2;r;g;b`。
+// CI 的 TERM 没有真彩提示，本地通常有；固定成真彩，断言才与终端无关。
+setCapabilities({ images: null, trueColor: true, hyperlinks: false });
 
 function expectedExpandedLines(text: string, prefix: string, width: number): string[] {
 	const normalized = text.replace(/\t/g, "   ").replace(/\n+$/, "");
@@ -105,11 +113,11 @@ test("展开卡 Input：代码块语法着色，折行续行跟着源码缩进",
 	assert.ok(!plain.some((line) => line.includes("code:")), "不再显示 code: 标签");
 
 	// 代码行按语法上色（打底用 cli-highlight 的语法色），不再整行单色。
-	// shiki 的异步升级可能在首帧之前或之后落地（CI 上常在 setInputCode 与 render
-	// 之间完成），两者都算通过：断言的是「有多于一种语法色」，不是具体的色值。
-	const codeRows = plain.slice(1, 5).map((_, index) => rows[index + 1]!);
+	// 两个环境差异都要容忍：shiki 的异步升级可能在首帧前后落地；256 色终端输出
+	// `38;5;N` 而不是 `38;2;r;g;b`。断言的是「有多于一种语法色」，不是具体色值。
+	const codeRows = rows.slice(1, 5);
 	const spans = new Set(
-		codeRows.flatMap((row) => row.match(/\x1b\[38;2;\d+;\d+;\d+m/g) ?? []),
+		codeRows.flatMap((row) => row.match(/\x1b\[3[89];[0-9;]+m/g) ?? []),
 	);
 	assert.ok(spans.size > 1, `代码行应有多种语法色: ${[...spans].join(" ")}`);
 
