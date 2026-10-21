@@ -104,8 +104,13 @@ test("展开卡 Input：代码块语法着色，折行续行跟着源码缩进",
 	assert.equal(plain[4], ' │     if (a) return "x"');
 	assert.ok(!plain.some((line) => line.includes("code:")), "不再显示 code: 标签");
 
-	// 代码行按语法上色（打底用 cli-highlight 的语法色），不再整行单色
-	const spans = new Set(rows[1]!.match(/\x1b\[38;2;\d+;\d+;\d+m/g) ?? []);
+	// 代码行按语法上色（打底用 cli-highlight 的语法色），不再整行单色。
+	// shiki 的异步升级可能在首帧之前或之后落地（CI 上常在 setInputCode 与 render
+	// 之间完成），两者都算通过：断言的是「有多于一种语法色」，不是具体的色值。
+	const codeRows = plain.slice(1, 5).map((_, index) => rows[index + 1]!);
+	const spans = new Set(
+		codeRows.flatMap((row) => row.match(/\x1b\[38;2;\d+;\d+;\d+m/g) ?? []),
+	);
 	assert.ok(spans.size > 1, `代码行应有多种语法色: ${[...spans].join(" ")}`);
 
 	// 全量预览用：整段就是代码时给出围栏信息

@@ -6,7 +6,12 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["packages/**", "extensions/**", "tests/**"]
+    "includes": [
+      "packages/**",
+      "extensions/**",
+      "tests/**"
+    ],
+    "ignoreUnknown": false
   },
   "formatter": {
     "enabled": true,
@@ -43,7 +48,11 @@
   },
   "overrides": [
     {
-      "includes": ["**/test/**", "**/*.test.ts", "**/*.test.mjs"],
+      "includes": [
+        "**/test/**",
+        "**/*.test.ts",
+        "**/*.test.mjs"
+      ],
       "linter": {
         "rules": {
           "complexity": {
@@ -56,6 +65,17 @@
             "noNonNullAssertion": "off"
           }
         }
+      }
+    },
+    {
+      "includes": [
+        "packages/pi-beautify-style/**"
+      ],
+      "formatter": {
+        "enabled": false
+      },
+      "linter": {
+        "enabled": false
       }
     }
   ],

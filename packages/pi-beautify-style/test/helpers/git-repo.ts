@@ -67,7 +67,21 @@ export function repository(t: test.TestContext, initialBranch = "main") {
 	const write = (name: string, content: string) => writeFileSync(join(cwd, name), content);
 	const commit = () => {
 		git("add", ".");
-		git("commit", "--quiet", "-m", "fixture");
+		// CI runners have no global git identity. `git clone` does not copy the
+		// template's local user.name/user.email, so pass them per commit rather
+		// than relying on the developer's ~/.gitconfig.
+		git(
+			"-c",
+			"user.name=Footer Test",
+			"-c",
+			"user.email=footer@example.invalid",
+			"-c",
+			"commit.gpgsign=false",
+			"commit",
+			"--quiet",
+			"-m",
+			"fixture",
+		);
 	};
 	return { cwd, git, write, commit };
 }
