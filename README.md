@@ -21,7 +21,7 @@ Each extension has its own package and its own README under
 | [pi-edit-safe (deprecated)](packages/pi-edit-safe/README.md) | overrides tool `edit` | Historical stricter edit override; use Pi’s built-in `edit` tool. |
 | [pi-find](packages/pi-find/README.md) | overrides tools `grep`/`find` | Simple, bounded regex and file-glob search. |
 | [pi-subagents (deprecated)](packages/pi-subagents/README.md) | tool `subagent`, `/agents` | Historical isolated subagent runs; no longer recommended or actively developed. |
-| [pi-compact-output](packages/pi-compact-output/README.md) | (TUI only) | Compact tool status blocks; Ctrl+O restores full output. |
+| [pi-beautify-style](packages/pi-beautify-style/README.md) | `/ccstyle`, `/context`, `@` | Claude Code-style TUI: tool cards, rich diffs, compact mode, footer chips. Integrates this repo's `ask_user`, background terminals, and usage. |
 | [pi-goal (deprecated)](packages/pi-goal/README.md) | `/goal`, tools `get_goal`/`update_goal` | Historical goal-mode loop; no longer recommended or actively developed. |
 | [pi-todo (deprecated)](packages/pi-todo/README.md) | tool `todo` | Historical session-local checklist; prefer model-managed plans for simple work. |
 | [pi-web-search](packages/pi-web-search/README.md) | tools `web_search`/`web_fetch`, `/websearch-order` | Web search and fetch with tabbed fallback-order configuration across ten providers plus direct fetch. |

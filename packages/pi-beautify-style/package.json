@@ -1,0 +1,62 @@
+{
+  "name": "@tian.zuo/pi-beautify-style",
+  "version": "0.1.0",
+  "description": "Claude Code-style TUI for the pi coding agent: tool cards, rich diffs, compact mode, footer chips, and integrations for this repo's ask-user, background-terminals, and usage extensions.",
+  "type": "module",
+  "keywords": [
+    "pi",
+    "pi-package",
+    "pi-extension",
+    "pi-coding-agent",
+    "tui",
+    "claude-code",
+    "diff",
+    "compact",
+    "footer"
+  ],
+  "author": "Tian Zuo",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TianZuo555/pi-extensions.git",
+    "directory": "packages/pi-beautify-style"
+  },
+  "homepage": "https://github.com/TianZuo555/pi-extensions#pi-beautify-style",
+  "bugs": {
+    "url": "https://github.com/TianZuo555/pi-extensions/issues"
+  },
+  "files": [
+    "index.ts",
+    "extensions",
+    "lib",
+    "themes",
+    "README.md",
+    "LICENSE",
+    "ATTRIBUTION.md",
+    "CHANGELOG.md"
+  ],
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "themes": [
+      "./themes/cc-dark.json",
+      "./themes/cc-light.json"
+    ]
+  },
+  "scripts": {
+    "test": "node --test --experimental-strip-types test/*.test.ts"
+  },
+  "dependencies": {
+    "@shikijs/cli": "^4.0.2",
+    "grok-mermaid": "^0.2.2"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
