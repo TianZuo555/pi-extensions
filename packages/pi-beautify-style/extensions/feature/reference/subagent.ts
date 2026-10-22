@@ -8,6 +8,7 @@ import {
 	type AutocompleteSuggestions,
 	fuzzyFilter,
 } from "@earendil-works/pi-tui";
+import { subagentDelegationMessage } from "../../../lib/prompt.ts";
 
 type AgentInfo = {
 	name: string;
@@ -227,11 +228,7 @@ export default function agentAutocompleteExtension(pi: ExtensionAPI): void {
 		return {
 			message: {
 				customType: SUBAGENT_DELEGATION_CUSTOM_TYPE,
-				content:
-					`The user's prompt references these subagent types: ${agentList}. ` +
-					`You MUST use the Agent tool for EACH mentioned subagent to delegate the relevant parts of the request. ` +
-					`Handle different subagents separately — do NOT merge their tasks into a single Agent call. ` +
-					`For example, if the user mentions @subagent:[coder] and @subagent:[explore], make two separate Agent tool calls, one with subagent_type="coder" and another with subagent_type="explore".`,
+				content: subagentDelegationMessage(agentList),
 				display: false,
 			},
 		};
