@@ -37,7 +37,7 @@
     "check": "tsc --noEmit -p ."
   },
   "dependencies": {
-    "effect": "4.0.0-rc.117"
+    "effect": "4.0.5"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
@@ -46,8 +46,8 @@
     "typebox": "*"
   },
   "devDependencies": {
-    "@effect/language-service": "^0.87.4",
-    "@effect/tsgo": "^0.53.2",
+    "@effect/language-service": "^0.87.5",
+    "@effect/tsgo": "^0.56.0",
     "typescript": "^7.0.2"
   },
   "publishConfig": {

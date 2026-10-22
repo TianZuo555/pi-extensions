@@ -11,10 +11,10 @@ overrides:
   "@modelcontextprotocol/sdk": ^1.31.0
   shell-quote: ^1.12.0
   sharp: ^0.35.5
-  "@earendil-works/pi-ai": ^1.3.0
-  "@earendil-works/pi-coding-agent": ^1.3.0
-  "@earendil-works/pi-tui": ^1.3.0
-  "@earendil-works/pi-agent-core": ^1.3.0
+  "@earendil-works/pi-ai": ^1.4.0
+  "@earendil-works/pi-coding-agent": ^1.4.0
+  "@earendil-works/pi-tui": ^1.4.0
+  "@earendil-works/pi-agent-core": ^1.4.0
 
 # Don't install package versions published less than 2 days ago (the
 # built-in default is 1 day). Applies to all deps including transitive
@@ -35,9 +35,15 @@ minimumReleaseAgeStrict: false
 
 # The pi runtime releases in lockstep and we track it closely, so exempt the
 # whole family from minimumReleaseAge rather than listing each fresh pin.
-# Patterns match package names only — name@version entries must be exact.
+# The Effect TypeScript tooling ships several times a day (tsgo plus one
+# platform package per target), so the wildcard keeps a fresh pin from
+# turning main red. Patterns match package names only — name@version entries
+# must be exact.
 minimumReleaseAgeExclude:
   - '@earendil-works/*'
+  - '@effect/tsgo*'
+  - '@xmorse/playwright-core@1.59.14'
+  - playwriter@0.9.0
 
 # Dependencies of the pi runtime whose install scripts npm ran automatically;
 # pnpm 11 denies dependency build scripts unless explicitly allowed here.

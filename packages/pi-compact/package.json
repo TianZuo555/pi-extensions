@@ -46,7 +46,7 @@
     "@earendil-works/pi-coding-agent": "*"
   },
   "devDependencies": {
-    "@effect/language-service": "^0.87.4",
+    "@effect/language-service": "^0.87.5",
     "typescript": "^7.0.2"
   },
   "publishConfig": {

@@ -52,9 +52,9 @@
   },
   "dependencies": {
     "defuddle": "^0.19.5",
-    "effect": "4.0.0-rc.117",
+    "effect": "4.0.5",
     "linkedom": "^0.18.13",
-    "unpdf": "^1.8.1"
+    "unpdf": "^1.9.1"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
@@ -63,7 +63,7 @@
     "typebox": "*"
   },
   "devDependencies": {
-    "@effect/language-service": "^0.87.4",
+    "@effect/language-service": "^0.87.5",
     "typescript": "^7.0.2"
   },
   "publishConfig": {

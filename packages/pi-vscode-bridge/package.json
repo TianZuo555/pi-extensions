@@ -43,7 +43,7 @@
     "package:vscode": "pnpm run compile:vscode && cd vscode && pnpm dlx @vscode/vsce package --no-dependencies"
   },
   "dependencies": {
-    "effect": "4.0.0-rc.117"
+    "effect": "4.0.5"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
@@ -51,7 +51,7 @@
     "@earendil-works/pi-tui": "*"
   },
   "devDependencies": {
-    "@effect/language-service": "^0.87.4",
+    "@effect/language-service": "^0.87.5",
     "@types/node": "^26.6.5",
     "@types/vscode": "^1.140.0",
     "typescript": "^7.0.2"

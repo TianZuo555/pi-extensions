@@ -11,7 +11,7 @@
 
 import { type ChildProcess, spawn } from "node:child_process";
 import { Readable, Writable } from "node:stream";
-import * as acp from "@agentclientprotocol/sdk";
+import * as acp from "@agentclientprotocol/sdk/unstable";
 import { killDetachedDescendantGroups } from "./process-tree.ts";
 
 export type DevinSessionUpdate = acp.SessionUpdate;
