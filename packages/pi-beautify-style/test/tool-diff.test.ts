@@ -673,6 +673,67 @@ test("insetComponent strictly clamps lines within given width even with arrow ma
 	}
 });
 
+test("a second session_start keeps write ownership instead of yielding to itself", () => {
+	// 真实的 Pi 在 resume/fork/new 时会重新派发 session_start，但不会重载扩展模块，
+	// 因此 getAllTools() 里已经是本插件上一轮注册的 write。
+	const ownPath = "/repo/packages/pi-beautify-style/index.ts";
+	const tools: any[] = [{ name: "write", sourceInfo: { source: "builtin", path: "builtin:write" } }];
+	const registered: unknown[] = [];
+	const notices: string[] = [];
+	const pi = {
+		getAllTools: () => tools,
+		registerTool(tool: any) {
+			registered.push(tool);
+			tools[0] = { name: "write", sourceInfo: { source: "local", path: ownPath } };
+		},
+	} as any;
+
+	try {
+		installWriteOverride(pi, new WriteExecutionMetadataStore(), (owner) =>
+			notices.push(owner.path),
+		);
+		assert.equal(ownsWriteTool(), true, "首次注册即拥有 write");
+		assert.equal(notices.length, 0, "首次注册不提示冲突");
+
+		installWriteOverride(pi, new WriteExecutionMetadataStore(), (owner) =>
+			notices.push(owner.path),
+		);
+		assert.equal(ownsWriteTool(), true, "第二次 session_start 不能把自身注册当成冲突");
+		assert.equal(notices.length, 0, "不提示冲突");
+		assert.equal(registered.length, 2, "每轮 session_start 重新注册自己的 write");
+	} finally {
+		restoreBuiltinWriteOwnership();
+	}
+});
+
+test("a third party taking write after us still wins the next session", () => {
+	const ownPath = "/repo/packages/pi-beautify-style/index.ts";
+	// 从无 write 注册的状态开始，让首轮安装记下本插件自己的路径。
+	const tools: any[] = [];
+	const notices: string[] = [];
+	const pi = {
+		getAllTools: () => tools,
+		registerTool() {
+			tools[0] = { name: "write", sourceInfo: { source: "local", path: ownPath } };
+		},
+	} as any;
+
+	try {
+		installWriteOverride(pi, new WriteExecutionMetadataStore());
+		assert.equal(ownsWriteTool(), true);
+
+		// 第三方扩展在下一轮 session_start 里抢到了 write。
+		tools[0] = { name: "write", sourceInfo: { source: "extension", path: "sol-pi/action-fusion" } };
+		installWriteOverride(pi, new WriteExecutionMetadataStore(), (owner) =>
+			notices.push(owner.path),
+		);
+		assert.equal(ownsWriteTool(), false, "第三方占用后让位");
+		assert.deepEqual(notices, ["sol-pi/action-fusion"]);
+	} finally {
+		restoreBuiltinWriteOwnership();
+	}
+});
+
 /** 内置 write 归还所有权，避免影响后续用例。 */
 function restoreBuiltinWriteOwnership(): void {
 	installWriteOverride({

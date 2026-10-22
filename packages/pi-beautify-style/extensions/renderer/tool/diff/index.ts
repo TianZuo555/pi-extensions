@@ -92,6 +92,12 @@ export type ExternalWriteOwner = { source: string; path: string };
 type WriteOwnershipState = {
 	/** write 是否由本插件执行；undefined 表示尚未确认，按拥有处理以保持既有行为。 */
 	owned?: boolean;
+	/**
+	 * 本插件注册 write override 时该扩展的 sourceInfo.path。
+	 * 同一扩展实例里重复执行 session_start（resume、fork、new）不重新加载模块，
+	 * getAllTools() 里已经有本插件上一轮注册的 write；凭这个路径把自身注册和第三方占用区分开。
+	 */
+	registeredPath?: string;
 };
 
 function writeOwnership(): WriteOwnershipState {
@@ -106,8 +112,8 @@ export function ownsWriteTool(): boolean {
 	return writeOwnership().owned !== false;
 }
 
-/** 当前占用 write 的其他扩展；builtin 或未注册时返回 undefined。 */
-function findExternalWriteOwner(pi: ExtensionAPI): ExternalWriteOwner | undefined {
+/** getAllTools() 里 write 的注册来源；builtin、未注册、或取不到时返回 undefined。 */
+function registeredWriteSource(pi: ExtensionAPI): ExternalWriteOwner | undefined {
 	try {
 		const tools = pi.getAllTools() as any[];
 		const write = tools?.find((tool: any) => tool?.name === "write") as any;
@@ -121,6 +127,21 @@ function findExternalWriteOwner(pi: ExtensionAPI): ExternalWriteOwner | undefine
 	}
 }
 
+/**
+ * 已注册的 write 是否属于第三方。
+ *
+ * 只把路径与本插件上一轮记下的 registeredPath 不同当作冲突：同一扩展实例里
+ * 重复执行 session_start 时，工具表里的 write 就是自己上一轮（或本轮加载时）的注册。
+ * registeredPath 未知时宁可让位（回归上游行为），也不抢回第三方持有的 write。
+ */
+function externalWriteOwner(
+	registered: ExternalWriteOwner | undefined,
+	state: WriteOwnershipState,
+): ExternalWriteOwner | undefined {
+	if (!registered) return undefined;
+	return registered.path === state.registeredPath ? undefined : registered;
+}
+
 export function installWriteOverride(
 	pi: ExtensionAPI,
 	store = new WriteExecutionMetadataStore(),
@@ -129,10 +150,11 @@ export function installWriteOverride(
 ): WriteExecutionMetadataStore {
 	if (typeof (pi as any).registerTool !== "function") return store;
 	const state = writeOwnership();
-	const external = findExternalWriteOwner(pi);
+	const external = externalWriteOwner(registeredWriteSource(pi), state);
 	if (external) {
 		// 让位：执行与 diff 都归对方，渲染层据 owned=false 走普通结果行。
 		state.owned = false;
+		state.registeredPath = undefined;
 		onExternalOwner?.(external);
 		return store;
 	}
@@ -150,6 +172,8 @@ export function installWriteOverride(
 			return executeWriteWithMetadata(store, toolCallId, params, signal, ctx.cwd);
 		},
 	});
+	// registerTool 同步刷新工具表，这里读到的是刚注册的自身来源。
+	state.registeredPath = registeredWriteSource(pi)?.path;
 	return store;
 }
 
