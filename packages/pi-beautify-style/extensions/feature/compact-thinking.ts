@@ -638,9 +638,11 @@ function compactThinking(pi: ExtensionAPI) {
 		latestComponent = component;
 		latestComponentTimestamp = message.timestamp;
 
-		// Visible mode is intentionally untouched: Shift+Tab restores Pi's exact
-		// built-in Thinking Markdown renderer, including every OpenAI summary stage.
-		if (!self.hideThinkingBlock) {
+		// Upstream deferred to Pi's own Thinking renderer whenever the user kept
+		// thinking visible, so previewLines only worked with hideThinkingBlock on.
+		// This package owns the collapsed reasoning card, so the preview setting
+		// decides instead: previewLines > 0 takes over, 0 leaves Pi's renderer.
+		if (!self.hideThinkingBlock && config.previewLines <= 0) {
 			originalUpdateContent.call(this, message, self.isStreaming);
 			return;
 		}

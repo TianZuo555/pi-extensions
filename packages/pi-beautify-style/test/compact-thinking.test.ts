@@ -811,3 +811,76 @@ test("thinking preview expands the full body and keeps that state across updateC
 		rmSync(dir, { recursive: true, force: true });
 	}
 });
+
+test("previewLines takes over thinking rendering without Pi's hideThinkingBlock", () => {
+	const dir = mkdtempSync(join(tmpdir(), "pi-compact-thinking-preview-takeover-"));
+	const previousDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = dir;
+	const { emit, pi } = runtime();
+	const ctx = themeCtx();
+	const body = Array.from({ length: 12 }, (_, i) => `line-${i}`).join("\n");
+	try {
+		installCompactThinking(pi, {
+			useSummaryTitlesAsThinkingTitle: false,
+			previewLines: 3,
+			animationIntervalMs: 30,
+		});
+		emit("session_start", {}, ctx);
+		const msg = previewMessage(body);
+		const component = new AssistantMessageComponent(msg, true) as any;
+		// Pi keeps thinking visible by default; the preview setting must still win.
+		component.hideThinkingBlock = false;
+		component.updateContent(msg);
+
+		const lines = renderText(component);
+		assert.ok(
+			lines.some((line) => /more lines/.test(line)),
+			`collapsed preview card replaces Pi's renderer, got: ${JSON.stringify(lines)}`,
+		);
+		assert.equal(
+			lines.filter((line) => /^line-\d+$/.test(line)).length,
+			3,
+			"only previewLines rows of reasoning are visible",
+		);
+		assert.ok(
+			!lines.some((line) => line.includes("line-0")),
+			"the preview shows the tail, not the head",
+		);
+	} finally {
+		emit("session_shutdown", {}, ctx);
+		if (previousDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousDir;
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("previewLines 0 leaves Pi's own thinking renderer in place", () => {
+	const dir = mkdtempSync(join(tmpdir(), "pi-compact-thinking-preview-native-"));
+	const previousDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = dir;
+	const { emit, pi } = runtime();
+	const ctx = themeCtx();
+	const body = Array.from({ length: 12 }, (_, i) => `line-${i}`).join("\n");
+	try {
+		installCompactThinking(pi, {
+			useSummaryTitlesAsThinkingTitle: false,
+			previewLines: 0,
+			animationIntervalMs: 30,
+		});
+		emit("session_start", {}, ctx);
+		const msg = previewMessage(body);
+		const component = new AssistantMessageComponent(msg, true) as any;
+		component.hideThinkingBlock = false;
+		component.updateContent(msg);
+
+		const block = component.contentContainer?.children?.find(
+			(child: unknown) => child instanceof ThinkingPreviewBlock,
+		);
+		assert.equal(block, undefined, "no preview card is mounted");
+	} finally {
+		emit("session_shutdown", {}, ctx);
+		if (previousDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousDir;
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
