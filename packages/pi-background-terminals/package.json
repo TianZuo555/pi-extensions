@@ -41,7 +41,7 @@
     "test": "node --test --test-concurrency=1 --experimental-strip-types test/"
   },
   "dependencies": {
-    "effect": "4.0.0-rc.117",
+    "effect": "4.0.5",
     "koffi": "^3.3.3"
   },
   "peerDependencies": {
@@ -51,8 +51,8 @@
     "typebox": "*"
   },
   "devDependencies": {
-    "@effect/language-service": "^0.87.4",
-    "@effect/tsgo": "^0.53.2",
+    "@effect/language-service": "^0.87.5",
+    "@effect/tsgo": "^0.56.0",
     "typescript": "^7.0.2"
   },
   "publishConfig": {

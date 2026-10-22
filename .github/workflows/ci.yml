@@ -45,6 +45,12 @@ jobs:
       - name: Typecheck monorepo
         run: pnpm run typecheck
 
+      # Rust port of the TS 7 checker (tsrs), run alongside tsc: it catches
+      # the same type errors faster but cannot host the Effect language
+      # service yet (Effect-TS/tsgo#883), so tsc stays the gate.
+      - name: Typecheck with tsrs
+        run: pnpm run typecheck:tsrs
+
       - name: Typecheck Effect packages
         run: pnpm run check
 

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import type { ContentBlock } from "@agentclientprotocol/sdk";
+import type { ContentBlock } from "@agentclientprotocol/sdk/unstable";
 import { getEventListeners } from "node:events";
 import { streamDevin } from "../src/provider.ts";
 import { DevinReplayStore } from "../lib/replay.ts";
