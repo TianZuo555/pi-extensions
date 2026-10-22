@@ -11,8 +11,13 @@ overrides:
   "@modelcontextprotocol/sdk": ^1.31.0
   shell-quote: ^1.12.0
   sharp: ^0.35.5
-  hono: ^4.13.13
+  # Security floors. Both arrive transitively (launch-editor via
+  # @changesets/cli, hono via the pi runtime MCP SDK) and neither parent
+  # declares a range that reaches a patched release.
+  # GHSA-587h-7wmj-h5pm / GHSA-698v-4r3x-3vcv / GHSA-r825-w8mm-5pxw
   launch-editor: ^2.14.2
+  # GHSA-5r4p-p66f-jhc7
+  hono: ^4.13.13
   "@earendil-works/pi-ai": ^1.4.0
   "@earendil-works/pi-coding-agent": ^1.4.0
   "@earendil-works/pi-tui": ^1.4.0
