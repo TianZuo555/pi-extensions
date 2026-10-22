@@ -3,7 +3,7 @@
  * shape for the replay store and the `devin` wrapper card renderer.
  */
 
-import type { ToolCall, ToolCallContent, ToolCallUpdate } from "@agentclientprotocol/sdk";
+import type { ToolCall, ToolCallContent, ToolCallUpdate } from "@agentclientprotocol/sdk/unstable";
 
 export interface DevinToolDiff {
   path: string;

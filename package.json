@@ -41,6 +41,8 @@
   "scripts": {
     "postinstall": "lefthook install --force",
     "typecheck": "tsc --noEmit",
+    "typecheck:tsrs": "node --experimental-strip-types scripts/typecheck-tsrs.ts",
+    "typecheck:all": "pnpm run typecheck && pnpm run typecheck:tsrs",
     "check": "pnpm -r run check",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
@@ -72,12 +74,13 @@
     "@biomejs/biome": "^2.5.15",
     "@changesets/changelog-github": "^1.0.1",
     "@changesets/cli": "^3.0.3",
-    "@earendil-works/pi-ai": "^1.3.0",
-    "@earendil-works/pi-coding-agent": "^1.3.0",
-    "@earendil-works/pi-tui": "^1.3.0",
+    "@earendil-works/pi-ai": "^1.4.0",
+    "@earendil-works/pi-coding-agent": "^1.4.0",
+    "@earendil-works/pi-tui": "^1.4.0",
     "@types/node": "^26.6.5",
     "lefthook": "^2.2.2",
-    "typebox": "^1.4.1",
+    "tsrs": "0.18.0-ts7.1.0-dev.20260929",
+    "typebox": "^1.4.2",
     "typescript": "^7.0.2"
   }
 }

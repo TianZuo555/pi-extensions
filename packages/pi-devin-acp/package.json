@@ -40,11 +40,11 @@
     "test": "node --test --experimental-strip-types test/*.test.ts"
   },
   "dependencies": {
-    "@agentclientprotocol/sdk": "1.9.0",
-    "effect": "4.0.0-rc.117",
+    "@agentclientprotocol/sdk": "2.0.0",
+    "effect": "4.0.5",
     "semver": "^7.8.5",
     "which": "^7.0.0",
-    "zod": "^4.6.5"
+    "zod": "^4.6.7"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
@@ -53,7 +53,7 @@
     "typebox": "*"
   },
   "devDependencies": {
-    "@effect/language-service": "^0.87.4",
+    "@effect/language-service": "^0.87.5",
     "@types/semver": "^7.8.0",
     "@types/which": "^3.0.4",
     "typescript": "^7.0.2"

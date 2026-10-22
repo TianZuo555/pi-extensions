@@ -9,6 +9,7 @@
     "includes": [
       "packages/**",
       "extensions/**",
+      "scripts/**",
       "tests/**",
       "!packages/pi-edit-safe",
       "!packages/pi-goal",

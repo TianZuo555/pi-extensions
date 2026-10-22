@@ -53,15 +53,15 @@
     "test": "node --test --experimental-strip-types test/*.test.ts test/*.mjs"
   },
   "dependencies": {
-    "effect": "4.0.0-rc.117",
-    "playwriter": "0.8.0"
+    "effect": "4.0.5",
+    "playwriter": "0.9.0"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
     "@earendil-works/pi-tui": "*"
   },
   "devDependencies": {
-    "@effect/language-service": "^0.87.4",
+    "@effect/language-service": "^0.87.5",
     "typescript": "^7.0.2"
   },
   "publishConfig": {

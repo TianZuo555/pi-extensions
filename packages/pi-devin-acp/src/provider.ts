@@ -22,7 +22,7 @@ import {
   type SimpleStreamOptions,
   type TranscriptContext,
 } from "@earendil-works/pi-ai";
-import type { ContentBlock } from "@agentclientprotocol/sdk";
+import type { ContentBlock } from "@agentclientprotocol/sdk/unstable";
 import type { DevinPromptRequest, DevinRuntimeInstance, DevinRuntimeShape } from "./runtime.ts";
 import {
   TERMINAL_TOOL_STATUSES,

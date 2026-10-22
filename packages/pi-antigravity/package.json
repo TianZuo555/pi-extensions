@@ -39,7 +39,7 @@
     "test": "node --test --experimental-strip-types test/*.test.ts"
   },
   "dependencies": {
-    "effect": "4.0.0-rc.117",
+    "effect": "4.0.5",
     "proper-lockfile": "4.1.2",
     "semver": "^7.8.5",
     "which": "^7.0.0"
@@ -49,7 +49,7 @@
     "@earendil-works/pi-coding-agent": "*"
   },
   "devDependencies": {
-    "@effect/language-service": "^0.87.4",
+    "@effect/language-service": "^0.87.5",
     "@types/proper-lockfile": "4.1.4",
     "@types/semver": "^7.8.0",
     "@types/which": "^3.0.4",

@@ -43,7 +43,7 @@
     "debug-stats": "node --experimental-strip-types scripts/debug-stats.ts"
   },
   "dependencies": {
-    "effect": "4.0.0-rc.117",
+    "effect": "4.0.5",
     "minimatch": "^10.2.6"
   },
   "peerDependencies": {
@@ -53,7 +53,7 @@
     "typebox": "*"
   },
   "devDependencies": {
-    "@effect/language-service": "^0.87.4",
+    "@effect/language-service": "^0.87.5",
     "typescript": "^7.0.2"
   },
   "publishConfig": {

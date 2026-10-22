@@ -3,7 +3,7 @@
  * provider drains. Kept separate so it is directly unit-testable.
  */
 
-import type { SessionUpdate } from "@agentclientprotocol/sdk";
+import type { SessionUpdate } from "@agentclientprotocol/sdk/unstable";
 import type { DevinConfigOption } from "../lib/acp-client.ts";
 import { mergeDevinTool } from "../lib/tool-content.ts";
 import type { DevinActivity, DevinResponseDimension, DevinUsage } from "./turn.ts";
