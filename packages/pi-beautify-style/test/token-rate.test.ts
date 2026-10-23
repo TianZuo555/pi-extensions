@@ -13,6 +13,7 @@ import {
 	recordProviderUsage,
 	resetTokenRate,
 	resumeTokenRate,
+	RATE_GLYPH,
 	sampleTokenDelta,
 	totalTokens,
 } from "../extensions/feature/shell/token-rate.ts";
@@ -37,21 +38,21 @@ describe("token rate", { concurrency: false }, () => {
 		assert.equal(formatTokenRate(0), "");
 		assert.equal(formatTokenRate(-1), "");
 		assert.equal(formatTokenRate(Number.NaN), "");
-		assert.equal(formatTokenRate(42.4), "avg 42 tok/s");
-		assert.equal(formatTokenRate(99.6), "avg 100 tok/s");
-		assert.equal(formatTokenRate(1234), "avg 1.2k tok/s");
-		assert.equal(formatTokenRate(10500), "avg 10.5k tok/s");
+		assert.equal(formatTokenRate(42.4), `${RATE_GLYPH} 42 tok/s`);
+		assert.equal(formatTokenRate(99.6), `${RATE_GLYPH} 100 tok/s`);
+		assert.equal(formatTokenRate(1234), `${RATE_GLYPH} 1.2k tok/s`);
+		assert.equal(formatTokenRate(10500), `${RATE_GLYPH} 10.5k tok/s`);
 	});
 
 	test("formatTokenRate appends TTFT only when present", () => {
-		assert.equal(formatTokenRate(1200, 0), "avg 1.2k tok/s");
-		assert.equal(formatTokenRate(1200, 812.4), "avg 1.2k tok/s (TTFT: 812ms)");
-		assert.equal(formatTokenRate(1200, -5), "avg 1.2k tok/s");
+		assert.equal(formatTokenRate(1200, 0), `${RATE_GLYPH} 1.2k tok/s`);
+		assert.equal(formatTokenRate(1200, 812.4), `${RATE_GLYPH} 1.2k tok/s (TTFT: 812ms)`);
+		assert.equal(formatTokenRate(1200, -5), `${RATE_GLYPH} 1.2k tok/s`);
 		assert.equal(formatTokenRate(1200, 812, "live"), "live 1.2k tok/s (TTFT: 812ms)");
-		assert.equal(formatTokenRate(1200, 812, "average", false), "avg 1.2k tok/s");
-		assert.equal(formatTokenRate(1200, 999.4), "avg 1.2k tok/s (TTFT: 999ms)");
-		assert.equal(formatTokenRate(1200, 1000), "avg 1.2k tok/s (TTFT: 1.0s)");
-		assert.equal(formatTokenRate(1200, 12_340), "avg 1.2k tok/s (TTFT: 12.3s)");
+		assert.equal(formatTokenRate(1200, 812, "average", false), `${RATE_GLYPH} 1.2k tok/s`);
+		assert.equal(formatTokenRate(1200, 999.4), `${RATE_GLYPH} 1.2k tok/s (TTFT: 999ms)`);
+		assert.equal(formatTokenRate(1200, 1000), `${RATE_GLYPH} 1.2k tok/s (TTFT: 1.0s)`);
+		assert.equal(formatTokenRate(1200, 12_340), `${RATE_GLYPH} 1.2k tok/s (TTFT: 12.3s)`);
 	});
 
 	test("live mode uses the trailing window and holds it through a tool wait", () => {

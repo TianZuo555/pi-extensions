@@ -15,6 +15,9 @@
 
 export type TokenRateMode = "average" | "live";
 
+/** md-flash（Nerd Font，U+F0241），与 pi-token-speed 的速率芯片一致。 */
+export const RATE_GLYPH = "\u{f0241}";
+
 const LIVE_WINDOW_MS = 1_000;
 const MIN_SPAN_MS = 250;
 const CJK_CHARS =
@@ -215,6 +218,7 @@ export function formatTokenRate(
 	const value = rate >= 1000 ? `${(rate / 1000).toFixed(1)}k` : `${Math.round(rate)}`;
 	const ttft =
 		showTtft && Number.isFinite(ttftMs) && ttftMs > 0 ? ` (TTFT: ${formatTtft(ttftMs)})` : "";
-	const label = mode === "live" ? "live" : "avg";
+	// average 用闪电符替代 "avg"；live 保留文字，两个模式在 footer 里仍可区分。
+	const label = mode === "live" ? "live" : RATE_GLYPH;
 	return `${label} ${value} tok/s${ttft}`;
 }

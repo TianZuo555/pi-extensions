@@ -465,11 +465,10 @@ const createCustomFooterFactory =
 					stats = theme.fg("dim", " [") + colorGitStatus(theme, s.status) + theme.fg("dim", "]");
 				if (s && (s.add || s.del))
 					stats +=
-						theme.fg("dim", "(") +
+						theme.fg("dim", " ") +
 						theme.fg("success", `+${s.add}`) +
-						" " +
-						theme.fg("error", `−${s.del}`) +
-						theme.fg("dim", ")");
+						theme.fg("dim", "/") +
+						theme.fg("error", `−${s.del}`);
 				const gitLabel = glyphs.git ? `${glyphs.git} ${branch}` : branch;
 				gitChip = gitColor(gitLabel) + stats;
 			}

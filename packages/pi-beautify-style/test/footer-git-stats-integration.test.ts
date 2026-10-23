@@ -63,14 +63,14 @@ test("active footer switches working → branch → working without recreation o
 			await new Promise((resolve) => setTimeout(resolve, 10));
 		}
 	};
-	await waitForStats("[!](+1 −1)");
+	await waitForStats("[!] +1/−1");
 	Object.assign(config, { ...config, footerGitStatsMode: "branch" });
 	refreshFooterGitStats();
 	assert.doesNotMatch(line(), /\(\+/);
-	await waitForStats("[!](+3 −1)");
+	await waitForStats("[!] +3/−1");
 	Object.assign(config, { ...config, footerGitStatsMode: "working" });
 	refreshFooterGitStats();
-	await waitForStats("[!](+1 −1)");
+	await waitForStats("[!] +1/−1");
 	assert.equal(factoryCalls, 1);
 	// A branch change must drop old numbers even if the mode stays the same.
 	write("source.txt", "one\ntwo\nthree\n");
