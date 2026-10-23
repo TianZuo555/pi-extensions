@@ -23,6 +23,33 @@ export { shouldRenderRichDiff } from "./tool/ccstyle-tool.ts";
 // pi-subagents 等扩展为 Agent 提供专用渲染器，ccstyle 必须保留。
 const DEDICATED_RENDERER_TOOLS = new Set(["Agent"]);
 
+/**
+ * `@tian.zuo/pi-background-terminals` owns four tools, and every one of them
+ * ships a renderer that reads its own `details`:
+ *
+ *   bash               yield 后的行带 terminal id + `/ps to inspect`、输出预览、变更文件
+ *   terminal_log_read  预算/tail/offset 后缀、读取范围提示
+ *   terminal_wait      settled/running/alreadyReported 三态汇总
+ *   terminal_stop      停止结果与退出码
+ *
+ * ccstyle 的通用卡片读不到这些字段，会全部压成一句 "N lines returned"，用户
+ * 就看不到终端 id、`/ps` 提示和真实状态。所以这四个工具一律让位。
+ *
+ * 识别用定义自身的特征，不靠包名：bash 看独有的 `yield_time_ms` 参数（内置
+ * bash 只有 command/timeout），其余三个看工具名（这些名字是本包发明的）。
+ */
+const BACKGROUND_TERMINAL_OWNED_TOOLS = new Set([
+	"terminal_log_read",
+	"terminal_wait",
+	"terminal_stop",
+]);
+
+function isBackgroundTerminalTool(definition: any): boolean {
+	const name = definition?.name;
+	if (name === "bash") return definition?.parameters?.properties?.yield_time_ms !== undefined;
+	return typeof name === "string" && BACKGROUND_TERMINAL_OWNED_TOOLS.has(name);
+}
+
 /** 排除名单内且自带 renderer 的工具保留原渲染。 */
 export function preservesOriginalRenderer(
 	extensionDefinition: any,
@@ -30,6 +57,8 @@ export function preservesOriginalRenderer(
 	builtInToolDefinition?: any,
 	excludeRenderers: readonly string[] = config.excludeRenderers,
 ): boolean {
+	// 后台终端的卡片依赖自己的 details，ccstyle 无法等价重绘。
+	if (isBackgroundTerminalTool(extensionDefinition)) return true;
 	if (!excludeRenderers.includes(toolName)) return false;
 	return [extensionDefinition, builtInToolDefinition].some(
 		(definition) =>

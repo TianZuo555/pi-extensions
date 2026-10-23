@@ -565,6 +565,41 @@ test("ccstyle is the default renderer and exclusions preserve dedicated renderer
 	assert.equal(preservesOriginalRenderer(undefined, "Agent"), false);
 });
 
+test("background-terminal tools keep their own renderers without an exclude entry", () => {
+	// 该包的 bash 靠独有的 yield_time_ms 参数识别；内置 bash 只有 command/timeout。
+	const backgroundBash = {
+		name: "bash",
+		parameters: { properties: { command: {}, timeout: {}, yield_time_ms: {} } },
+		renderCall() {},
+		renderResult() {},
+	};
+	const builtinBash = {
+		name: "bash",
+		parameters: { properties: { command: {}, timeout: {} } },
+		renderCall() {},
+		renderResult() {},
+	};
+
+	assert.equal(
+		preservesOriginalRenderer(backgroundBash, "bash", builtinBash, []),
+		true,
+		"background bash keeps its terminal id / /ps row",
+	);
+	assert.equal(
+		preservesOriginalRenderer(builtinBash, "bash", builtinBash, []),
+		false,
+		"Pi's own bash still gets the ccstyle card",
+	);
+
+	for (const name of ["terminal_log_read", "terminal_wait", "terminal_stop"]) {
+		assert.equal(
+			preservesOriginalRenderer({ name, renderResult() {} }, name, undefined, []),
+			true,
+			`${name} keeps its own renderer`,
+		);
+	}
+});
+
 test("Agent keeps its dedicated renderer under ccstyle", async () => {
 	const events = new Map<string, Function>();
 	const pi = {
