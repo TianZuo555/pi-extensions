@@ -21,12 +21,12 @@ Each extension has its own package and its own README under
 | [pi-edit-safe (deprecated)](packages/pi-edit-safe/README.md) | overrides tool `edit` | Historical stricter edit override; use Pi’s built-in `edit` tool. |
 | [pi-find](packages/pi-find/README.md) | overrides tools `grep`/`find` | Simple, bounded regex and file-glob search. |
 | [pi-subagents (deprecated)](packages/pi-subagents/README.md) | tool `subagent`, `/agents` | Historical isolated subagent runs; no longer recommended or actively developed. |
-| [pi-compact-output](packages/pi-compact-output/README.md) | (TUI only) | Compact tool status blocks; Ctrl+O restores full output. |
+| [pi-beautify-style](packages/pi-beautify-style/README.md) | `/ccstyle`, `/context`, `@` | Claude Code-style TUI: tool cards, rich diffs, compact mode, footer chips. Integrates this repo's `ask_user`, background terminals, and usage. |
 | [pi-goal (deprecated)](packages/pi-goal/README.md) | `/goal`, tools `get_goal`/`update_goal` | Historical goal-mode loop; no longer recommended or actively developed. |
 | [pi-todo (deprecated)](packages/pi-todo/README.md) | tool `todo` | Historical session-local checklist; prefer model-managed plans for simple work. |
 | [pi-web-search](packages/pi-web-search/README.md) | tools `web_search`/`web_fetch`, `/websearch-order` | Web search and fetch with tabbed fallback-order configuration across ten providers plus direct fetch. |
 | [pi-antigravity](packages/pi-antigravity/README.md) | `/agy`, `/agy-tasks`, `/agy-artifacts`, `/agy-usage` | Google Antigravity (`agy`) models inside pi via stream-json RPC. |
-| [pi-vscode-bridge](packages/pi-vscode-bridge/README.md) | `/vscode-connect` | Send file/line/diff-hunk refs from VS Code into pi's editor. |
+| [pi-vscode-bridge (deprecated)](packages/pi-vscode-bridge/README.md) | `/vscode-connect` | Historical VS Code ref bridge; no longer recommended or actively developed. |
 | [pi-compact](packages/pi-compact/README.md) | intercepts `/compact` | GPT-6 Luna compaction: opaque Codex checkpoints or text summaries for new OpenAI OAuth. |
 | [pi-devin-acp](packages/pi-devin-acp/README.md) | models `devin/*`, `/devin`, `/devin-<sub>` | Devin models inside pi by driving the Devin CLI as an ACP server. |
 
@@ -71,10 +71,15 @@ pnpm run check       # Effect checks
 pnpm test            # extension test suites (deprecated packages excluded)
 ```
 
-The deprecated `pi-todo`, `pi-subagents`, `pi-edit-safe`, and `pi-goal`
-packages declare no `test` script, so both local recursive runs and CI
-(full-suite and changed-package runs) skip their archived tests. These
-deprecated packages are not loaded by the root package.
+The deprecated `pi-todo`, `pi-subagents`, `pi-edit-safe`, `pi-goal`, and
+`pi-vscode-bridge` packages declare no `test` script, so both local recursive
+runs and CI (full-suite and changed-package runs) skip their archived tests.
+These deprecated packages are not loaded by the root package, and
+`pi-vscode-bridge` is no longer compiled or packaged as a VS Code extension.
+
+`pnpm run lint` skips the same five packages, so archived reference code cannot
+fail CI. Add a package to the `files.includes` negation list in `biome.json`
+when you deprecate it.
 
 Try a single extension from a checkout:
 

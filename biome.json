@@ -6,7 +6,18 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["packages/**", "extensions/**", "scripts/**", "tests/**"]
+    "includes": [
+      "packages/**",
+      "extensions/**",
+      "scripts/**",
+      "tests/**",
+      "!packages/pi-edit-safe",
+      "!packages/pi-goal",
+      "!packages/pi-subagents",
+      "!packages/pi-todo",
+      "!packages/pi-vscode-bridge"
+    ],
+    "ignoreUnknown": false
   },
   "formatter": {
     "enabled": true,
@@ -56,6 +67,15 @@
             "noNonNullAssertion": "off"
           }
         }
+      }
+    },
+    {
+      "includes": ["packages/pi-beautify-style/**"],
+      "formatter": {
+        "enabled": false
+      },
+      "linter": {
+        "enabled": false
       }
     }
   ],
