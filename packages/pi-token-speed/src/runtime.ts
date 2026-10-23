@@ -23,6 +23,9 @@ export const MODES: DisplayMode[] = ["live", "final", "off"];
 export const CONFIG_FILE = path.join(piConfigDir("token-speed"), "config.json");
 export const STATUS_KEY = "token-speed";
 
+/** md-flash（Nerd Font，U+F0241）；没有 Nerd Font 时退回 ⚡。 */
+export const SPEED_GLYPH = "\u{f0241}";
+
 export const WINDOW_MS = 5_000;
 export const MIN_SPAN_MS = 250;
 export const CHARS_PER_TOKEN = 4;
@@ -35,7 +38,14 @@ export interface Sample {
 
 export interface StreamState {
   samples: Sample[];
+  /** assistant 消息开始（beginStream）的时刻；作为生成阶段起点。 */
   startedAt: number;
+  /**
+   * 用户提交 prompt 的时刻（before_agent_start）。
+   * TTFT 必须从这里算——从 startedAt 算只会得到「流内首 delta 延迟」，
+   * 丢掉排队和 prefill，实机上会显示成 1ms 这种无意义的值。
+   */
+  submittedAt?: number;
   firstTokenAt?: number;
   estimatedTokens: number;
   streaming: boolean;
@@ -87,6 +97,8 @@ export interface TokenSpeedRuntimeShape {
   readonly getMode: Effect.Effect<DisplayMode>;
   readonly setMode: (mode: DisplayMode) => Effect.Effect<DisplayMode, TokenSpeedConfigError>;
   readonly cycleMode: Effect.Effect<DisplayMode, TokenSpeedConfigError>;
+  /** 用户提交 prompt 的时刻，TTFT 的起点。 */
+  readonly markSubmitted: (now: number) => Effect.Effect<void>;
   readonly beginStream: (now: number) => Effect.Effect<void>;
   readonly getWindowSampleCount: Effect.Effect<number>;
   readonly recordDelta: (
@@ -156,10 +168,19 @@ const makeTokenSpeedRuntime = Effect.gen(function* () {
       stream: {
         samples: [],
         startedAt: now,
+        // before_agent_start 已经记下用户提交时刻；没有就退回 now。
+        submittedAt: s.stream.submittedAt ?? now,
         firstTokenAt: undefined,
         estimatedTokens: 0,
         streaming: true,
       },
+    }));
+
+  /** 用户提交 prompt：TTFT 的起点。早于 assistant 消息开始。 */
+  const markSubmitted = (now: number): Effect.Effect<void> =>
+    SynchronizedRef.update(ref, (s) => ({
+      ...s,
+      stream: { ...s.stream, submittedAt: now },
     }));
 
   const getWindowSampleCount: Effect.Effect<number> = SynchronizedRef.get(ref).pipe(
@@ -193,7 +214,7 @@ const makeTokenSpeedRuntime = Effect.gen(function* () {
         }
 
         const rate = computeRate(stream, now);
-        const statusText = `⚡ ${formatRate(rate)} tok/s`;
+        const statusText = `${SPEED_GLYPH} ${formatRate(rate)} tok/s`;
         return [
           { shouldRender: true, statusText },
           { ...s, lastRender: now, stream },
@@ -217,9 +238,12 @@ const makeTokenSpeedRuntime = Effect.gen(function* () {
       }
 
       const avgRate = computeAverageRate(stream, tokens, now);
-      const parts = [`⚡ ${formatRate(avgRate)} tok/s avg`, `${formatCount(tokens)} tok`];
+      const parts = [
+        `${SPEED_GLYPH} ${formatRate(avgRate)} tok/s avg`,
+        `${formatCount(tokens)} tok`,
+      ];
       if (stream.firstTokenAt !== undefined) {
-        const ttft = stream.firstTokenAt - stream.startedAt;
+        const ttft = stream.firstTokenAt - (stream.submittedAt ?? stream.startedAt);
         parts.push(`TTFT ${formatDuration(ttft)}`);
       }
       const summary = parts.join(" · ");
@@ -242,6 +266,7 @@ const makeTokenSpeedRuntime = Effect.gen(function* () {
     getMode,
     setMode,
     cycleMode,
+    markSubmitted,
     beginStream,
     getWindowSampleCount,
     recordDelta,

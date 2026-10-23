@@ -55,6 +55,13 @@ export default function tokenSpeedExtension(pi: ExtensionAPI): void {
     clearStatus(ctx);
   });
 
+  // 用户提交 prompt 的时刻是 TTFT 的起点；message_start 只到 assistant 消息开始，
+  // 从那里算会把排队和 prefill 全丢掉（实机上显示成 1ms）。
+  pi.on("before_agent_start", async (event) => {
+    if (!("prompt" in event)) return;
+    await runTokenSpeed(runtime, service.markSubmitted(Date.now()));
+  });
+
   pi.on("message_start", async (event, ctx) => {
     if (!isAssistant(event.message)) return;
     await runTokenSpeed(runtime, service.beginStream(Date.now()));

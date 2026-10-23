@@ -8,6 +8,7 @@ import {
   formatDuration,
   formatRate,
   runTokenSpeed,
+  SPEED_GLYPH,
   TokenSpeedRuntime,
 } from "../src/runtime.ts";
 
@@ -54,7 +55,7 @@ test("TokenSpeedRuntime stream lifecycle and mode cycling", async () => {
   // First delta after stream start renders immediately
   const d1 = await runTokenSpeed(runtime, service.recordDelta("hello world", 1050));
   assert.equal(d1.shouldRender, true);
-  assert.match(d1.statusText ?? "", /⚡/);
+  assert.ok(d1.statusText?.startsWith(SPEED_GLYPH), `got: ${d1.statusText}`);
 
   // Rapid delta < 100ms throttled
   const d2 = await runTokenSpeed(runtime, service.recordDelta(" foo", 1080));
@@ -63,7 +64,7 @@ test("TokenSpeedRuntime stream lifecycle and mode cycling", async () => {
   // Delta after 100ms interval renders
   const d3 = await runTokenSpeed(runtime, service.recordDelta(" more text streaming in", 1200));
   assert.equal(d3.shouldRender, true);
-  assert.match(d3.statusText ?? "", /⚡/);
+  assert.ok(d3.statusText?.startsWith(SPEED_GLYPH), `got: ${d3.statusText}`);
 
   const end = await runTokenSpeed(runtime, service.endStream(25, 2000));
   assert.equal(end.shouldRender, true);
@@ -114,6 +115,41 @@ test("sliding-window samples stay bounded across a long stream", async () => {
   const count = await runTokenSpeed(runtime, service.getWindowSampleCount);
   // Exactly one window: samples at t ∈ [55000, 60000] every 50ms = 101.
   assert.equal(count, 101, `expected exactly one 5s window of samples, got ${count}`);
+
+  await runtime.dispose();
+});
+
+test("TTFT measures from prompt submission, not from the stream start", async () => {
+  const runtime = createTokenSpeedRuntime();
+  const service = runtime.runSync(TokenSpeedRuntime);
+
+  await runTokenSpeed(runtime, service.setMode("live"));
+  // User submits at t=1000; Pi takes 900ms to queue and prefill, so the
+  // assistant message does not start until t=1900.
+  await runTokenSpeed(runtime, service.markSubmitted(1000));
+  await runTokenSpeed(runtime, service.beginStream(1900));
+  // First content block lands 100ms later.
+  await runTokenSpeed(runtime, service.recordDelta("hello", 2000));
+
+  const end = await runTokenSpeed(runtime, service.endStream(10, 3000));
+  // Real TTFT is 1000ms (submit → first token). Measuring from startedAt
+  // would report 100ms and hide the queue and prefill time entirely.
+  assert.match(end.summary, /TTFT 1\.0s/, `got: ${end.summary}`);
+
+  await runtime.dispose();
+});
+
+test("without a submitted timestamp TTFT falls back to the stream start", async () => {
+  const runtime = createTokenSpeedRuntime();
+  const service = runtime.runSync(TokenSpeedRuntime);
+
+  await runTokenSpeed(runtime, service.setMode("live"));
+  // No before_agent_start (an SDK or RPC caller that skipped it).
+  await runTokenSpeed(runtime, service.beginStream(1000));
+  await runTokenSpeed(runtime, service.recordDelta("hello", 1250));
+
+  const end = await runTokenSpeed(runtime, service.endStream(10, 2000));
+  assert.match(end.summary, /TTFT 250ms/, `got: ${end.summary}`);
 
   await runtime.dispose();
 });
