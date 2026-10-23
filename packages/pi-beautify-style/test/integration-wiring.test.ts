@@ -75,19 +75,19 @@ test("the package has no runtime configuration surface", () => {
   assert.doesNotMatch(renderer, /showCcstylePanel/);
 });
 
-test("the package ships the vendored tree, themes, and both licenses", () => {
+test("the package ships the vendored tree and both licenses", () => {
   const manifest = JSON.parse(readSource("package.json")) as {
     name: string;
     files: string[];
-    pi: { extensions: string[]; themes: string[] };
+    pi: { extensions: string[] };
     dependencies: Record<string, string>;
   };
   assert.equal(manifest.name, "@tian.zuo/pi-beautify-style");
-  for (const entry of ["index.ts", "extensions", "lib", "themes", "ATTRIBUTION.md"]) {
+  for (const entry of ["index.ts", "extensions", "lib", "ATTRIBUTION.md"]) {
     assert.ok(manifest.files.includes(entry), `files is missing ${entry}`);
   }
   assert.deepEqual(manifest.pi.extensions, ["./index.ts"]);
-  assert.deepEqual(manifest.pi.themes, ["./themes/cc-dark.json", "./themes/cc-light.json"]);
+  assert.equal("themes" in manifest.pi, false, "the package ships no theme files");
   // Vendored renderer imports @shikijs/cli lazily; it must be a real dependency.
   assert.ok(manifest.dependencies["@shikijs/cli"], "@shikijs/cli dependency missing");
 });

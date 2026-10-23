@@ -46,7 +46,6 @@ pi -e ./packages/pi-beautify-style
   subagent.
 - **Fullscreen extras**: click-to-expand cards, hover highlighting, sticky user
   message, and a back-to-bottom button (`--tui-mode fullscreen`).
-- **Themes**: bundled `cc-dark` and `cc-light`.
 
 ## Integration with this repo
 
@@ -104,7 +103,7 @@ load extension modules through `jiti`, which this repo does not depend on.
 
 ## Attribution
 
-- Rendering stack, themes, and most of `extensions/`: `minuque/pi-cc-extensions`
+- Rendering stack and most of `extensions/`: `minuque/pi-cc-extensions`
   (MIT).
 - Rich diff renderer: `MasuRii/pi-tool-display` (MIT).
 

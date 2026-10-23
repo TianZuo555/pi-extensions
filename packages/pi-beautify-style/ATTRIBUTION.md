@@ -7,7 +7,7 @@ verbatim from upstream projects and then adapted to this monorepo.
 
 The Claude Code-style TUI — tool cards, compact mode, rich diffs, footer chips,
 `/context`, session/subagent references, mouse interaction, and the bundled
-`cc-dark`/`cc-light` themes — comes from
+Rendering approach — comes from
 [minuque/pi-cc-extensions](https://github.com/minuque/pi-cc-extensions)
 (commit `4b93074`), Copyright (c) 2026 minuque, used under the MIT License.
 

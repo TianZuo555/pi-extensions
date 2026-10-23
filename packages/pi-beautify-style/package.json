@@ -29,7 +29,6 @@
     "index.ts",
     "extensions",
     "lib",
-    "themes",
     "README.md",
     "LICENSE",
     "ATTRIBUTION.md",
@@ -38,10 +37,6 @@
   "pi": {
     "extensions": [
       "./index.ts"
-    ],
-    "themes": [
-      "./themes/cc-dark.json",
-      "./themes/cc-light.json"
     ]
   },
   "scripts": {
