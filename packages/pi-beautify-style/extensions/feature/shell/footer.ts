@@ -31,6 +31,7 @@ import {
 	FOOTER_GIT_KEY,
 	FOOTER_MODEL_KEY,
 	FOOTER_RATE_KEY,
+	LOCAL_USAGE_STATUS_KEY,
 	PI_USAGE_KEY,
 	isBuiltinFooterKey,
 	isSkippedFooterStatusKey,
@@ -179,7 +180,12 @@ function rememberExtensionStatuses(entries: Iterable<[string, string]>): void {
 function pluginTextsForRender(localUsageChip: string): Map<string, string> {
 	cachedLocalUsageText = stripAnsi(localUsageChip.replace(/[\r\n\t]+/g, " ").trim());
 	const texts = new Map<string, string>(cachedExtensionStatuses);
+	// 本仓库 @tian.zuo/pi-usage 用 `usage` 作 status key：折进 pi-usage 槽位，
+	// 单独成键会把同一份用量画成两个芯片。
+	const usageAlias = texts.get(LOCAL_USAGE_STATUS_KEY)?.trim() ?? "";
+	texts.delete(LOCAL_USAGE_STATUS_KEY);
 	if (cachedLocalUsageText) texts.set(PI_USAGE_KEY, cachedLocalUsageText);
+	else if (usageAlias) texts.set(PI_USAGE_KEY, usageAlias);
 	else texts.delete(PI_USAGE_KEY);
 	return texts;
 }
@@ -439,6 +445,10 @@ const createCustomFooterFactory =
 			const pluginTexts = pluginTextsForRender(localUsageChip);
 			const mcpChip = ownMcpChip();
 			if (mcpChip) pluginTexts.set(MCP_STATUS_KEY, mcpChip);
+			// pi-token-speed 与内置 rate 芯片同一信息：有 token-speed 状态时由它填
+			// rate 槽位，不再单列一个插件芯片。
+			const tokenSpeedText = pluginTexts.get("token-speed")?.trim() ?? "";
+			if (tokenSpeedText) pluginTexts.delete("token-speed");
 			const layout = resolveFooterChipLayout(layoutFromConfig(), [...pluginTexts.keys()]);
 			const dimPlugin = (text: string) => colorUsageChip(theme, text);
 
@@ -496,7 +506,14 @@ const createCustomFooterFactory =
 					barGauge(percent ?? 0) + theme.fg("dim", ` ${pctLabel}/${fmt(contextWindow)}`),
 				],
 				[FOOTER_CACHE_KEY, cacheLabel ? theme.fg("dim", cacheLabel) : ""],
-				[FOOTER_RATE_KEY, rateLabel ? theme.fg("dim", rateLabel) : ""],
+				[
+					FOOTER_RATE_KEY,
+					tokenSpeedText
+						? dimPlugin(tokenSpeedText)
+						: rateLabel
+							? theme.fg("dim", rateLabel)
+							: "",
+				],
 				[FOOTER_COST_KEY, costChip],
 				[FOOTER_CWD_KEY, place],
 				[FOOTER_GIT_KEY, gitChip],

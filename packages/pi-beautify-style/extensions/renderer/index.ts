@@ -23,7 +23,6 @@ import {
 } from "./mouse/interaction.ts";
 import { getToolMouseTui, noteNewTranscriptItem } from "./mouse/scroll.ts";
 import {
-	disposeStickyPromptPatches,
 	installStickyPromptPatches,
 	setStickyPromptTheme,
 } from "./mouse/sticky-prompt.ts";
@@ -80,6 +79,7 @@ export default function (
 				disposeMessageDisplay: () => void;
 				disposeToolExpandedBackground: () => void;
 				disposeMainScreenPatch: () => void;
+				disposeStickyPrompt: () => void;
 		  }
 		| undefined;
 
@@ -91,7 +91,7 @@ export default function (
 		// regular 主屏的差分渲染补丁：视口上方变化不再触发清回滚的 fullRender。
 		const disposeMainScreenPatch = installMainScreenDoRenderPatch();
 		// 粘性用户消息头：标记注入 + fullscreen 帧合成。
-		installStickyPromptPatches();
+		const disposeStickyPrompt = installStickyPromptPatches();
 		const defaultMode = installDefaultMode(writeExecutionMetadata);
 		const toolGrouping = installToolGrouping(() => config.mode === "on");
 		const compactMode = installCompactMode({
@@ -109,6 +109,7 @@ export default function (
 			disposeMessageDisplay,
 			disposeToolExpandedBackground,
 			disposeMainScreenPatch,
+			disposeStickyPrompt,
 		};
 		return installation;
 	};
@@ -145,15 +146,19 @@ export default function (
 		// 延后一拍再确认 write 归属：其他扩展同样在各自的 session_start 里注册工具，
 		// 本 handler 执行时可能还看不到对方，此时注册会与对方撞名（注册表先到先得），
 		// 对方的 write 会被静默丢弃。等所有 session_start 跑完，检测结果才是权威的。
-		setTimeout(() => {
-			installWriteOverride(pi, writeExecutionMetadata, (owner) => {
-				// 冲突可见：对方接管 write 后本插件不再提供富 diff。
-				ctx.ui?.notify?.(
-					`ccstyle: write 工具已被 ${owner.path || owner.source} 占用，富 diff 已让位`,
-					"warning",
-				);
-			});
-		}, 0);
+		// write override 只在 TUI 会话安装：print/headless 没有工具卡可渲染，
+		// 注册只会抢占共享工具表里的 write。
+		if (ctx?.mode === "tui" && ctx?.hasUI) {
+			setTimeout(() => {
+				installWriteOverride(pi, writeExecutionMetadata, (owner) => {
+					// 冲突可见：对方接管 write 后本插件不再提供富 diff。
+					ctx.ui?.notify?.(
+						`beautify-style: another extension owns the write tool (${owner.path || owner.source}); rich write diffs are off.`,
+						"warning",
+					);
+				});
+			}, 0);
+		}
 		const hooks = ensureTuiInstallation(ctx);
 		// 鼠标交互独立于渲染层：fullscreen 渲染层让位（hooks undefined）但
 		// 工具点击/回到底部适配仍需安装；保持在渲染层安装之后以维持原顺序。
@@ -218,19 +223,22 @@ export default function (
 		// 但 onTerminalInput 监听与 handleViewportInput 包装仍需释放。
 		teardownToolMouseInteraction(mouseOwner);
 		const current = installation;
-		if (!current || !current.defaultMode.isOwner()) return;
+		if (!current) return;
+		// 先清空安装引用：每个 disposer 只还原仍由本安装持有的槽位，
+		// 被新安装接管时是无害空转；下一次 session_start 必须重装而不是
+		// 复用这套已失活的补丁。
+		installation = undefined;
+		compactModeHooks = undefined;
 		current.defaultMode.shutdown();
 		current.toolGrouping.shutdown();
 		current.disposeToolExpandedBackground();
 		current.compactMode.shutdown();
-		compactModeHooks = undefined;
 		current.disposeMessageDisplay();
 		// 原型补丁要在 shutdown 还原，否则卸载扩展后 stale-scrollback 行为
 		// 会留到进程重启。
 		current.disposeMainScreenPatch();
-		disposeStickyPromptPatches();
+		current.disposeStickyPrompt();
 		clearAllAnimations();
-		installation = undefined;
 	});
 }
 
