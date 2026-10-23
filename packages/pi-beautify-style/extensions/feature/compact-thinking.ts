@@ -23,6 +23,7 @@ import { isToolTuiFullscreen } from "../renderer/tool/names.ts";
 import {
 	animateCompactThinkingText,
 	formatThoughtDuration,
+	styleCompactThinkingBody,
 	styleCompactThinkingText,
 } from "../renderer/compact-mode.ts";
 import { refreshMountedTranscript } from "../renderer/transcript-refresh.ts";
@@ -594,6 +595,11 @@ function compactThinking(pi: ExtensionAPI) {
 		return styleCompactThinkingText(text, activeTheme);
 	}
 
+	/** 正文用 Pi 的 thinkingText slot，标题仍用 dim。 */
+	function thinkingBodyStyle(text: string) {
+		return styleCompactThinkingBody(text, activeTheme);
+	}
+
 	function summaryTitleStyle(text: string) {
 		return styleCompactThinkingText(text, activeTheme, true);
 	}
@@ -758,7 +764,7 @@ function compactThinking(pi: ExtensionAPI) {
 					previewSource,
 					self.outputPad,
 					message.timestamp,
-					thinkingStyle,
+					thinkingBodyStyle,
 					activeTheme,
 					runStartIndex,
 				),

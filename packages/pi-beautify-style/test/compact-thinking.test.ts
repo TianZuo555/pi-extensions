@@ -642,7 +642,8 @@ test("thinking preview counts wrapped hidden lines and does not restyle from cac
 		const hint = firstPlain.find((line: string) => /Thought/.test(line) && /more lines/.test(line));
 		assert.ok(hint, `expected hidden-line hint after Thought, got: ${JSON.stringify(firstPlain)}`);
 		assert.match(hint, /<dim> · \d+ more lines/);
-		const bodyToken = "dim";
+		// 正文走 Pi 的 thinkingText slot，标题/元信息仍走 dim。
+		const bodyToken = "thinkingText";
 		assert.ok(
 			!firstPlain.some(
 				(line: string) => new RegExp(`^<${bodyToken}>x+`).test(line) && /more line/.test(line),
@@ -681,7 +682,8 @@ test("thinking preview counts wrapped hidden lines and does not restyle from cac
 		);
 		assert.ok(
 			secondPlain.every(
-				(line: string) => !line.includes("<thinkingText>") && !line.includes("<dim>"),
+				(line: string) =>
+					!line.includes(`<${bodyToken}>`) && !line.includes("<dim>"),
 			),
 			"cached wrap must not keep the previous theme's markup",
 		);

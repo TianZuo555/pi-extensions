@@ -115,7 +115,7 @@ const FOLD_SETTLE_MS = 250;
 
 type CompactThinkingTheme = Pick<Theme, "fg" | "italic" | "bold">;
 
-/** 与 compact-thinking 主渲染器共用的静态文字样式。 */
+/** 与 compact-thinking 主渲染器共用的静态文字样式（标题、元信息）。 */
 export function styleCompactThinkingText(
 	text: string,
 	theme: CompactThinkingTheme | undefined,
@@ -125,6 +125,21 @@ export function styleCompactThinkingText(
 	const colored = typeof theme.fg === "function" ? theme.fg("dim", text) : text;
 	const weighted = bold && typeof theme.bold === "function" ? theme.bold(colored) : colored;
 	return typeof theme.italic === "function" ? theme.italic(weighted) : weighted;
+}
+
+/**
+ * Reasoning 正文的静态样式。
+ *
+ * 用 Pi 的 `thinkingText` slot——它就是「Thinking block text color」，Pi 自己
+ * 渲染 thinking 时用的也是它，所以换主题时 reasoning 跟着变，和内置行为一致。
+ */
+export function styleCompactThinkingBody(
+	text: string,
+	theme: CompactThinkingTheme | undefined,
+): string {
+	if (!theme) return text;
+	const colored = typeof theme.fg === "function" ? theme.fg("thinkingText", text) : text;
+	return typeof theme.italic === "function" ? theme.italic(colored) : colored;
 }
 
 /** 与 compact-thinking 主渲染器共用的活动思考扫光动画。 */
