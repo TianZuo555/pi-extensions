@@ -11,7 +11,6 @@ import {
 	config,
 	DEFAULT_TOOL_DISPLAY_CONFIG,
 	DIFF_COLLAPSED_LINES_VALUES,
-	normalizeConfig,
 	type ToolDisplayConfig,
 } from "../extensions/config/config.ts";
 import { installDefaultMode } from "../extensions/renderer/default-mode.ts";
@@ -60,18 +59,6 @@ function plainLines(component: Component, width = 100): string[] {
 		.map(stripVTControlCharacters)
 		.map((line) => line.trim());
 }
-
-test("edit collapsed lines accepts zero without changing the default or write setting", () => {
-	assert.equal(normalizeConfig({}).editDiffCollapsedLines, 24);
-	assert.equal(normalizeConfig({ editDiffCollapsedLines: 0 }).editDiffCollapsedLines, 0);
-	assert.equal(normalizeConfig({ editDiffCollapsedLines: "0" }).editDiffCollapsedLines, 0);
-	assert.equal(normalizeConfig({ editDiffCollapsedLines: -3 }).editDiffCollapsedLines, 0);
-	assert.equal(normalizeConfig({ editDiffCollapsedLines: 1 }).editDiffCollapsedLines, 1);
-	assert.equal(normalizeConfig({ editDiffCollapsedLines: 999 }).editDiffCollapsedLines, 500);
-	assert.equal(normalizeConfig({ editDiffCollapsedLines: "invalid" }).editDiffCollapsedLines, 24);
-	assert.equal(normalizeConfig({ editDiffCollapsedLines: 0 }).writeDiffCollapsedLines, 0);
-	assert.ok(DIFF_COLLAPSED_LINES_VALUES.includes("0"), "the settings panel offers summary-only");
-});
 
 test("zero edit preview is one width-safe summary row in every diff layout", () => {
 	for (const diffViewMode of ["auto", "unified", "split"] as const) {

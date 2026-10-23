@@ -13,16 +13,7 @@ import {
 	type DefaultModeHooks,
 } from "./default-mode.ts";
 import { installMainScreenDoRenderPatch, isLazyProxyTui } from "../utils/fullscreen-detect.ts";
-import { showCcstylePanel } from "../config/panel.ts";
-import {
-	config,
-	formatConfigStatus,
-	normalizeConfig,
-	setConfig,
-	updateConfig,
-	type CompactStyleMode,
-	type Config,
-} from "../config/config.ts";
+import { config } from "../config/config.ts";
 import {
 	installToolMouseInteraction,
 	resetToolHoverState,
@@ -75,40 +66,10 @@ function syncCompactMode(ctx: any): void {
 	compactModeHooks?.sync(ctx);
 }
 
-function applyStyleMode(mode: CompactStyleMode, ctx: any, toolGrouping?: ToolGroupingHooks): void {
-	updateConfig({ mode });
-	if (mode === "off") {
-		// Native rendering：清 hover/click，关闭鼠标上报以恢复终端默认滚轮。
-		resetToolHoverState();
-		setHoveredToolGroup(null);
-		setHoveredToolIo(null, null);
-		// 惰性 Proxy（regular/fullscreen）不持有 reporting：regular 保终端回滚，
-		// fullscreen 归官方所有，均不能在此关闭。
-		const tui = getToolMouseTui();
-		if (tui && !isLazyProxyTui(tui)) {
-			tui.terminal?.write?.(TOOL_MOUSE_DISABLE);
-		}
-	} else if (mode === "compact") {
-		// 切入 compact：先收集当前 transcript，再同步全局展开状态和补丁所有权。
-		syncCompactMode(ctx);
-	}
-	// 立即重塑一次；再延迟一帧（与 session_start 同款），等面板/custom
-	// 卸下、主 transcript 重新挂载后再扫树，避免必须 /reload。
-	refreshCurrentTranscript(ctx, toolGrouping);
-	scheduleSessionRender(() => {
-		if (mode === "compact") syncCompactMode(ctx);
-		refreshCurrentTranscript(ctx, toolGrouping);
-	});
-	ctx.ui.notify(`Claude Code style: ${mode}`, "info");
-}
-
 export default function (
 	pi: ExtensionAPI,
-	configOverride?: Partial<Config>,
 	compactThinking?: CompactThinkingController,
 ) {
-	// 可选 override：集成测试不依赖用户全局配置。
-	if (configOverride) setConfig(normalizeConfig({ ...config, ...configOverride }));
 	const writeExecutionMetadata = new WriteExecutionMetadataStore();
 	const mouseOwner = {};
 	let installation:
@@ -149,51 +110,6 @@ export default function (
 		};
 		return installation;
 	};
-
-	pi.registerCommand("ccstyle", {
-		description: "Configure Claude Code style and rich diff options",
-		getArgumentCompletions: (prefix) => {
-			const topLevel = [
-				{ value: "on", label: "on", description: "Enable Claude Code style" },
-				{
-					value: "compact",
-					label: "compact",
-					description: "One summary line per assistant message",
-				},
-				{ value: "off", label: "off", description: "Use Pi's native renderer" },
-				{ value: "status", label: "status", description: "Show full configuration" },
-				{ value: "panel", label: "panel", description: "Open interactive settings panel" },
-			];
-			return topLevel.filter((item) => item.value.startsWith(prefix));
-		},
-		handler: async (args, ctx) => {
-			const arg = args.trim().toLowerCase();
-			if (!arg || arg === "panel" || arg === "on" || arg === "compact" || arg === "off") {
-				if (ctx?.mode !== "tui" || !ctx?.hasUI) {
-					ctx.ui?.notify?.("/ccstyle requires TUI mode", "warning");
-					return;
-				}
-				const hooks = ensureTuiInstallation(ctx);
-				if (!hooks) return;
-				if (!arg || arg === "panel") {
-					await showCcstylePanel(
-						ctx,
-						{ applyStyleMode, refreshCurrentTranscript },
-						hooks.toolGrouping,
-						compactThinking,
-					);
-				} else {
-					applyStyleMode(arg as CompactStyleMode, ctx, hooks.toolGrouping);
-				}
-				return;
-			}
-			if (arg === "status") {
-				ctx.ui.notify(`Claude Code style: ${formatConfigStatus(config)}`, "info");
-				return;
-			}
-			ctx.ui.notify("Usage: /ccstyle [on|compact|off|status|panel]", "warning");
-		},
-	});
 
 	pi.on("message_update", async (event) => {
 		// 声明期（assistant 消息结束前）就记住工具 id：这段工具行已在等启动，

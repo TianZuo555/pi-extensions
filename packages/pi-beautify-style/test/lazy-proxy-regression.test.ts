@@ -16,7 +16,9 @@ import claudeCodeStyleExtension, {
 	SHOW_MORE_LABEL,
 } from "../extensions/renderer/index.ts";
 import { showTextPreview } from "../extensions/feature/context.ts";
-import { config } from "../extensions/config/config.ts";
+import {
+	config,
+} from "../extensions/config/config.ts";
 import { sharedToolHoverState, isToolCallHovered } from "../extensions/renderer/mouse/hover.ts";
 import { getScrollButtonVisible } from "../extensions/renderer/mouse/scroll.ts";
 import { createLazyProxy } from "./fixtures/lazy-tui.ts";
@@ -189,7 +191,8 @@ test("lazy-proxy tui: regular stands down without mouse reporting (terminal scro
 	const tui = createLazyProxy(() => renderer);
 	const ui = createUi(tui);
 	const { pi, events } = runtime();
-	claudeCodeStyleExtension(pi as any, { mode: "on" });
+	Object.assign(config, { mode: "on" });
+		claudeCodeStyleExtension(pi as any);
 	await events.get("session_start")?.({}, ui.ctx);
 
 	assert.equal(ui.terminalInputCalls, 1);

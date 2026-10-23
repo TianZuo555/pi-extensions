@@ -3,8 +3,8 @@
 Release notes: [changelog](https://github.com/TianZuo555/pi-extensions/blob/main/packages/pi-beautify-style/CHANGELOG.md) · [GitHub releases](https://github.com/TianZuo555/pi-extensions/releases)
 
 A Claude Code-style TUI for the [pi coding agent](https://pi.dev): tool cards,
-rich diffs, compact mode, a status footer, and `/context`. It also knows about
-this repository's `ask_user`, background-terminal, and usage extensions.
+rich diffs, a status footer, and `/context`. It also knows about this
+repository's `ask_user`, background-terminal, and usage extensions.
 
 This package is a maintained fork of
 [minuque/pi-cc-extensions](https://github.com/minuque/pi-cc-extensions) (MIT).
@@ -63,60 +63,15 @@ The fork adapts upstream's renderers to the sibling packages:
 prefer the built-in rate chip instead, disable one of the two.
 
 `@tian.zuo/pi-compact-output` is superseded by this package — its compact tool
-blocks and reasoning boxes are what `mode: "compact"` renders here. Do not run
-both.
+blocks and reasoning boxes are what this package renders. Do not run both.
 
 ## Configuration
 
-`/ccstyle` opens a six-tab settings panel (`Style / Features / UI / Diff /
-Thinking / Footer`). Settings persist to `~/.pi/agent/pi-beautify-style.json`.
-
-```jsonc
-{
-  "mode": "on",                            // on / compact / off
-  "excludeRenderers": [],                  // tools that keep their native renderer
-
-  "enableSessionReference": true,          // @ session references
-  "enableSubagentAutocomplete": true,      // @subagent:[name]
-  "enableContextCommand": true,            // /context
-  "enableAgentSummary": true,              // per-round tool summary
-  "enableWorkingMessage": true,            // Working... line
-  "enableAliases": true,                   // /clear, /exit
-  "enableMarkdownEnhance": true,           // mermaid dialects, circled digits
-  "enableEditorPrefix": true,              // ❯ prompt prefix
-
-  "expandedInputMaxLines": 5,
-  "expandedOutputMaxLines": 10,
-  "expandedPreviewMaxLines": 40,
-  "toolLabelClip": 0,                      // 0 = fit available width
-  "stickyUserMessage": true,               // fullscreen
-  "scrollButtonMode": "dock",              // dock / native
-
-  "diffViewMode": "auto",                  // auto / split / unified
-  "diffIndicatorMode": "bars",             // bars / classic / none
-  "diffSplitMinWidth": 120,
-  "editDiffCollapsedLines": 24,
-  "writeDiffCollapsedLines": 0,
-  "diffWordWrap": true,
-
-  "useSummaryTitlesAsThinkingTitle": true,
-  "previewLines": 3,
-  "animationIntervalMs": 90,
-
-  "enableCustomFooter": true,
-  "footerTokenRate": true,
-  "footerTokenRateMode": "average",        // average / live
-  "footerTokenRateTtft": true,
-  "footerCurrency": "USD",
-  "footerCurrencyRate": null,
-  "footerNerdIcons": true,
-  "footerGitStatsMode": "working",         // working / branch
-  "footerHiddenKeys": [],
-  "footerLine1Keys": ["model", "context", "cache", "rate", "cost", "pi-usage"],
-  "footerLine2Keys": ["cwd", "git"],
-  "footerLine3Keys": []
-}
-```
+There is none. This package ships no `/ccstyle` command, no settings panel, and
+no JSON file. Every knob — render mode, diff layout, footer chips, reasoning
+preview length — is a source constant in
+[`extensions/config/config.ts`](./extensions/config/config.ts). Edit that file
+and restart Pi to change behavior.
 
 > [!TIP]
 > In fullscreen mode, click `click to show more` to expand a tool card, a

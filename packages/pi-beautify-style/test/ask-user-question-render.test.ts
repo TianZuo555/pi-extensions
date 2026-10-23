@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { ToolExecutionComponent, initTheme } from "@earendil-works/pi-coding-agent";
 
-import { config } from "../extensions/config/config.ts";
+import {
+	config,
+} from "../extensions/config/config.ts";
 import { installDefaultMode } from "../extensions/renderer/default-mode.ts";
 import { installToolGrouping, ToolGroupComponent } from "../extensions/renderer/tool/grouping.ts";
 import { WriteExecutionMetadataStore } from "../extensions/renderer/tool/diff/index.ts";

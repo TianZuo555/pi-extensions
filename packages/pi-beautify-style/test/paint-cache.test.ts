@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { ToolExecutionComponent, initTheme } from "@earendil-works/pi-coding-agent";
-import { config } from "../extensions/config/config.ts";
+import {
+	config,
+} from "../extensions/config/config.ts";
 import { installCompactMode } from "../extensions/renderer/compact-mode.ts";
 import { installDefaultMode } from "../extensions/renderer/default-mode.ts";
 import { setHoveredToolCallId } from "../extensions/renderer/mouse/hover.ts";

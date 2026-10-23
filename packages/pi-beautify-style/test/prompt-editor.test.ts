@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { config } from "../extensions/config/config.ts";
+import {
+	config,
+} from "../extensions/config/config.ts";
 import { applyPromptEditor, clearPromptEditor } from "../extensions/feature/shell/prompt-editor.ts";
 
 type EditorFactory = (tui: unknown, theme: unknown, keybindings: unknown) => unknown;

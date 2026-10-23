@@ -18,7 +18,9 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Container, visibleWidth } from "@earendil-works/pi-tui";
 
-import { config, formatConfigStatus, normalizeConfig } from "../extensions/config/config.ts";
+import {
+	config,
+} from "../extensions/config/config.ts";
 import { installCompactThinking } from "../extensions/feature/compact-thinking.ts";
 import { installDefaultMode } from "../extensions/renderer/default-mode.ts";
 import {
@@ -197,50 +199,6 @@ test("buildMessageSummary: duration first, read dedup by path, counts, first-see
 		),
 		/[\x1b\x07]/,
 	);
-});
-
-test("config normalize keeps compact, defaults to on, command completions order on,compact,off", () => {
-	assert.equal(normalizeConfig({ mode: "compact" }).mode, "compact");
-	assert.equal(normalizeConfig({}).mode, "on");
-	assert.equal(normalizeConfig({ mode: "invalid" }).mode, "on");
-	assert.equal(normalizeConfig({}).enableMarkdownEnhance, true);
-	assert.equal(normalizeConfig({ enableMarkdownEnhance: false }).enableMarkdownEnhance, false);
-	assert.match(formatConfigStatus(normalizeConfig({})), /markdownEnhance=on/);
-	assert.equal(normalizeConfig({}).writeDiffCollapsedLines, 0);
-	assert.equal(normalizeConfig({ writeDiffCollapsedLines: 0 }).writeDiffCollapsedLines, 0);
-	assert.equal(normalizeConfig({}).toolLabelClip, 0);
-	assert.equal(normalizeConfig({ toolLabelClip: 40 }).toolLabelClip, 40);
-	assert.equal(normalizeConfig({ toolLabelClip: "0" }).toolLabelClip, 0);
-	assert.equal(normalizeConfig({ toolLabelClip: 3 }).toolLabelClip, 8);
-	assert.equal(normalizeConfig({ toolLabelClip: 9999 }).toolLabelClip, 500);
-	// 旧配置键 inputClip 自动迁移
-	assert.equal(normalizeConfig({ inputClip: 60 }).toolLabelClip, 60);
-	assert.match(formatConfigStatus(normalizeConfig({})), /toolLabelClip=0/);
-	assert.equal(normalizeConfig({}).expandedInputMaxLines, 5);
-	assert.equal(normalizeConfig({}).expandedOutputMaxLines, 10);
-	assert.equal(normalizeConfig({ expandedInputMaxLines: 20 }).expandedInputMaxLines, 20);
-	assert.equal(normalizeConfig({ expandedOutputMaxLines: 40 }).expandedOutputMaxLines, 40);
-	assert.match(formatConfigStatus(normalizeConfig({})), /expandedInput=5/);
-	assert.match(formatConfigStatus(normalizeConfig({})), /expandedOutput=10/);
-
-	let completions: Array<{ value: string }> = [];
-	const pi: any = {
-		registerCommand(name: string, options: any) {
-			if (name === "ccstyle") completions = options.getArgumentCompletions("");
-		},
-		registerTool() {},
-		on() {},
-	};
-	const previousMode = config.mode;
-	try {
-		claudeCodeStyleExtension(pi, { mode: "on" });
-		assert.deepEqual(
-			completions.map((item) => item.value),
-			["on", "compact", "off", "status", "panel"],
-		);
-	} finally {
-		config.mode = previousMode;
-	}
 });
 
 test("tool path summaries relativize cwd paths and preserve filenames when clipped", () => {
@@ -2921,7 +2879,8 @@ test("refreshMountedTranscript asserts compact ownership before redraw (resume w
 	config.mode = "compact";
 	const { pi, ctx, emit } = extensionRuntime();
 	try {
-		claudeCodeStyleExtension(pi, { mode: "compact" });
+		Object.assign(config, { mode: "compact" });
+		claudeCodeStyleExtension(pi);
 		installCompactThinking(pi, {
 			useSummaryTitlesAsThinkingTitle: false,
 			previewLines: 0,
@@ -2959,7 +2918,8 @@ test("session_start and session_tree keep the compact patch outermost over compa
 	const originalUpdateContent = assistantPrototype.updateContent;
 	const originalToolUpdateDisplay = toolPrototype.updateDisplay;
 	try {
-		claudeCodeStyleExtension(pi, { mode: "compact" });
+		Object.assign(config, { mode: "compact" });
+		claudeCodeStyleExtension(pi);
 		installCompactThinking(pi, {
 			useSummaryTitlesAsThinkingTitle: false,
 			previewLines: 0,
@@ -3010,7 +2970,8 @@ test("isStreaming survives the compact + compact-thinking patch chain (mermaid f
 	const originalUpdateContent = assistantPrototype.updateContent;
 	try {
 		config.mode = "on";
-		claudeCodeStyleExtension(pi, { mode: "on" });
+		Object.assign(config, { mode: "on" });
+		claudeCodeStyleExtension(pi);
 		installCompactThinking(pi, {
 			useSummaryTitlesAsThinkingTitle: false,
 			previewLines: 0,

@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { config } from "../extensions/config/config.ts";
+import {
+	config,
+} from "../extensions/config/config.ts";
 import {
 	displayPath,
 	formatDisplayPath,

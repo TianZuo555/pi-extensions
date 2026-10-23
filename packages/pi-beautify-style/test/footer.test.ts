@@ -2,9 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
 	config,
-	formatConfigStatus,
-	normalizeConfig,
-	setConfig,
 } from "../extensions/config/config.ts";
 import {
 	FOOTER_NERD_ICON_CACHE,
@@ -38,48 +35,6 @@ import {
 	visibleFooterPluginTexts,
 } from "../extensions/feature/shell/footer-layout.ts";
 
-test("normalizeConfig defaults enableCustomFooter on and honors explicit off", () => {
-	assert.equal(normalizeConfig({}).enableCustomFooter, true);
-	assert.equal(normalizeConfig({ enableCustomFooter: false }).enableCustomFooter, false);
-	assert.match(formatConfigStatus(normalizeConfig({})), /footer=on/);
-	assert.match(formatConfigStatus(normalizeConfig({ enableCustomFooter: false })), /footer=off/);
-	assert.equal(normalizeConfig({}).footerNerdIcons, true);
-	assert.equal(normalizeConfig({ footerNerdIcons: false }).footerNerdIcons, false);
-	assert.match(formatConfigStatus(normalizeConfig({})), /footerIcons=nerd/);
-	assert.match(
-		formatConfigStatus(normalizeConfig({ footerNerdIcons: false })),
-		/footerIcons=plain/,
-	);
-	assert.equal(normalizeConfig({}).footerTokenRate, true);
-	assert.equal(normalizeConfig({ footerTokenRate: false }).footerTokenRate, false);
-	assert.equal(normalizeConfig({}).footerTokenRateMode, "average");
-	assert.equal(normalizeConfig({ footerTokenRateMode: "live" }).footerTokenRateMode, "live");
-	assert.equal(normalizeConfig({ footerTokenRateMode: "instant" }).footerTokenRateMode, "average");
-	assert.match(formatConfigStatus(normalizeConfig({})), /footerTokenRate=on/);
-	assert.match(formatConfigStatus(normalizeConfig({})), /footerTokenRateMode=average/);
-	assert.equal(normalizeConfig({}).footerTokenRateTtft, true);
-	assert.equal(normalizeConfig({ footerTokenRateTtft: false }).footerTokenRateTtft, false);
-	assert.match(formatConfigStatus(normalizeConfig({})), /footerTokenRateTtft=on/);
-	assert.match(
-		formatConfigStatus(normalizeConfig({ footerTokenRateTtft: false })),
-		/footerTokenRateTtft=off/,
-	);
-});
-
-test("footerGitStatsMode defaults to working and accepts only known modes", () => {
-	assert.equal(normalizeConfig({}).footerGitStatsMode, "working");
-	assert.equal(normalizeConfig({ footerGitStatsMode: "working" }).footerGitStatsMode, "working");
-	assert.equal(normalizeConfig({ footerGitStatsMode: "branch" }).footerGitStatsMode, "branch");
-	for (const value of ["invalid", "", true, 42, null]) {
-		assert.equal(normalizeConfig({ footerGitStatsMode: value }).footerGitStatsMode, "working");
-	}
-	assert.match(formatConfigStatus(normalizeConfig({})), /footerGitStats=working/);
-	assert.match(
-		formatConfigStatus(normalizeConfig({ footerGitStatsMode: "branch" })),
-		/footerGitStats=branch/,
-	);
-});
-
 test("model chip joins effort with a circle instead of a separator dot", () => {
 	const theme = {
 		fg: (color: string, text: string) => `{${color}}${text}{/}`,
@@ -110,25 +65,6 @@ test("footerGlyphs drops Nerd Font icons when disabled", () => {
 		mcp: FOOTER_NERD_ICON_MCP,
 	});
 	assert.deepEqual(footerGlyphs(false), { git: "", cache: "", mcp: "" });
-});
-
-test("normalizeConfig defaults builtin chips on their original lines", () => {
-	const next = normalizeConfig({});
-	assert.deepEqual(next.footerHiddenKeys, []);
-	assert.deepEqual(next.footerLine1Keys, [...DEFAULT_FOOTER_LINE1_KEYS]);
-	assert.deepEqual(next.footerLine2Keys, [...DEFAULT_FOOTER_LINE2_KEYS]);
-	assert.deepEqual(next.footerLine3Keys, []);
-	assert.match(formatConfigStatus(next), /hidden=0/);
-});
-
-test("normalizeConfig keeps explicit empty hiddenKeys and inserts builtins around pi-usage", () => {
-	const next = normalizeConfig({
-		footerHiddenKeys: [],
-		footerLine1Keys: [PI_USAGE_KEY],
-	});
-	assert.deepEqual(next.footerHiddenKeys, []);
-	assert.deepEqual(next.footerLine1Keys, [...DEFAULT_FOOTER_LINE1_KEYS]);
-	assert.deepEqual(next.footerLine2Keys, [...DEFAULT_FOOTER_LINE2_KEYS]);
 });
 
 test("normalizeFooterChipLayout migrates old plugin-only lines and keeps an explicit model slot", () => {
@@ -194,14 +130,14 @@ test("disabled custom footer leaves another extension's footer untouched", () =>
 	};
 
 	try {
-		setConfig(normalizeConfig({ enableCustomFooter: false }));
+		Object.assign(config, { enableCustomFooter: false });
 		applyCustomFooter(ctx as never);
 		assert.deepEqual(calls, []);
 
 		clearCustomFooter(ctx as never);
 		assert.deepEqual(calls, [undefined]);
 	} finally {
-		setConfig(previous);
+		Object.assign(config, previous);
 	}
 });
 

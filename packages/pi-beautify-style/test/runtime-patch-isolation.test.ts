@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import { ToolExecutionComponent, initTheme } from "@earendil-works/pi-coding-agent";
+import {
+	config,
+} from "../extensions/config/config.ts";
 import { Container } from "@earendil-works/pi-tui";
 import claudeCodeStyleExtension from "../extensions/renderer/index.ts";
 import { ToolGroupComponent } from "../extensions/renderer/tool/grouping.ts";
@@ -51,9 +54,11 @@ test("stale TUI shutdown leaves the replacement runtime active", async () => {
 	} as any;
 
 	try {
-		claudeCodeStyleExtension(runtimeA.pi as any, { mode: "on" });
+		Object.assign(config, { mode: "on" });
+		claudeCodeStyleExtension(runtimeA.pi as any);
 		await runtimeA.events.get("session_start")?.({}, ctx);
-		claudeCodeStyleExtension(runtimeB.pi as any, { mode: "on" });
+		Object.assign(config, { mode: "on" });
+		claudeCodeStyleExtension(runtimeB.pi as any);
 		await runtimeB.events.get("session_start")?.({}, ctx);
 		const replacementContainer = Object.fromEntries(
 			containerMethods.map((name) => [name, containerPrototype[name]]),
@@ -141,7 +146,8 @@ test("reload regroups the mounted transcript instead of leaving single tools", a
 		},
 	} as any;
 	try {
-		claudeCodeStyleExtension(first.pi as any, { mode: "on" });
+		Object.assign(config, { mode: "on" });
+		claudeCodeStyleExtension(first.pi as any);
 		await first.events.get("session_start")?.({}, ctx);
 		for (const name of ["read", "bash"]) {
 			const component = new ToolExecutionComponent(
@@ -161,7 +167,8 @@ test("reload regroups the mounted transcript instead of leaving single tools", a
 		await first.events.get("session_shutdown")?.({ reason: "reload" }, ctx);
 		assert.equal(parent.children.length, 2, "old patch releases its group");
 
-		claudeCodeStyleExtension(second.pi as any, { mode: "on" });
+		Object.assign(config, { mode: "on" });
+		claudeCodeStyleExtension(second.pi as any);
 		await second.events.get("session_start")?.({ reason: "reload" }, ctx);
 		await new Promise<void>((resolve) => setTimeout(resolve, 0));
 		assert.ok(parent.children[0] instanceof ToolGroupComponent);
@@ -200,7 +207,8 @@ test("headless runtimes do not replace or shut down main TUI patches", async () 
 	} as any;
 
 	try {
-		claudeCodeStyleExtension(mainStyle.pi as any, { mode: "on" });
+		Object.assign(config, { mode: "on" });
+		claudeCodeStyleExtension(mainStyle.pi as any);
 		await mainStyle.events.get("session_start")?.({}, tuiCtx);
 
 		const mainContainerAdd = containerPrototype.addChild;
@@ -208,7 +216,8 @@ test("headless runtimes do not replace or shut down main TUI patches", async () 
 		assert.notEqual(mainContainerAdd, originalContainerAdd);
 		assert.notEqual(mainToolCallRenderer, originalToolCallRenderer);
 
-		claudeCodeStyleExtension(headlessStyle.pi as any, { mode: "on" });
+		Object.assign(config, { mode: "on" });
+		claudeCodeStyleExtension(headlessStyle.pi as any);
 		await headlessStyle.events.get("session_start")?.({}, headlessCtx);
 		for (const name of [
 			"session_compact",

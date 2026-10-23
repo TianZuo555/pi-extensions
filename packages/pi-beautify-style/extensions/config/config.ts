@@ -1,12 +1,5 @@
 import type { CompactThinkingConfig } from "../feature/compact-thinking.ts";
-import {
-	DEFAULT_FOOTER_CHIP_LAYOUT,
-	formatFooterChipSummary,
-	normalizeFooterChipLayout,
-} from "../feature/shell/footer-layout.ts";
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
-import { join } from "node:path";
+import { DEFAULT_FOOTER_CHIP_LAYOUT } from "../feature/shell/footer-layout.ts";
 
 export type CompactStyleMode = "on" | "compact" | "off";
 
@@ -96,17 +89,6 @@ export type Config = {
 	footerLine3Keys: string[];
 };
 
-const AGENT_DIR = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".pi", "agent");
-export const CONFIG_PATH = join(AGENT_DIR, "pi-beautify-style.json");
-/**
- * Earlier names, newest first. A user migrating from upstream
- * `pi-cc-extensions` keeps their settings instead of silently getting defaults.
- */
-const LEGACY_CONFIG_PATHS = [
-	join(AGENT_DIR, "pi-cc-extensions.json"),
-	join(AGENT_DIR, "claude-code-style.json"),
-];
-
 export const DIFF_VIEW_MODES: DiffViewMode[] = ["auto", "split", "unified"];
 export const DIFF_INDICATOR_MODES: DiffIndicatorMode[] = ["bars", "classic", "none"];
 export const FOOTER_GIT_STATS_MODES: FooterGitStatsMode[] = ["working", "branch"];
@@ -126,7 +108,7 @@ export const EXPANDED_OUTPUT_MAX_LINES_VALUES = ["10", "20", "40", "80", "120"];
 export const TOOL_LABEL_CLIP_VALUES = ["0", "40", "60", "80", "100", "120", "160"];
 export const THINKING_PREVIEW_LINES_VALUES = ["0", "1", "3", "5", "10"];
 export const THINKING_ANIMATION_INTERVAL_VALUES = ["40", "60", "90", "120", "180"];
-/** Tools commonly toggled in excludeRenderers via the settings panel. */
+/** Tools commonly excluded from ccstyle rendering. */
 export const EXCLUDE_RENDERER_CANDIDATES = [
 	"bash",
 	"powershell",
@@ -177,147 +159,14 @@ export const DEFAULT_CONFIG: Config = {
 	...DEFAULT_FOOTER_CHIP_LAYOUT,
 };
 
-function pickEnum<T extends string>(value: unknown, allowed: readonly T[], fallback: T): T {
-	return typeof value === "string" && (allowed as readonly string[]).includes(value)
-		? (value as T)
-		: fallback;
-}
-
-export function pickPositiveInt(value: unknown, fallback: number, min = 1, max = 100_000): number {
-	const n = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
-	if (!Number.isFinite(n)) return fallback;
-	return Math.min(max, Math.max(min, Math.floor(n)));
-}
-
-/** toolLabelClip：0 表示按宽度自适应，其余夹到 8..500。 */
-export function pickToolLabelClip(value: unknown): number {
-	const n = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
-	return n === 0 ? 0 : pickPositiveInt(value, DEFAULT_CONFIG.toolLabelClip, 8, 500);
-}
-
-export function pickPositiveNumber(value: unknown, fallback: number, min = 1): number {
-	const n = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
-	return Number.isFinite(n) ? Math.max(min, n) : fallback;
-}
-
-function normalizeCurrency(value: unknown): string {
-	return typeof value === "string" && /^[A-Za-z]{3}$/.test(value.trim())
-		? value.trim().toUpperCase()
-		: "USD";
-}
-
-/** 缺失、空串、非正数都视为不换算。 */
-function normalizeFooterCurrencyRate(value: unknown): number | null {
-	if (value === undefined || value === null || value === "") return null;
-	const n = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
-	return Number.isFinite(n) && n > 0 ? n : null;
-}
-
-export function normalizeConfig(input: unknown): Config {
-	const source = (input && typeof input === "object" ? input : {}) as Record<string, unknown>;
-	const mode = pickEnum(source.mode, ["on", "compact", "off"], DEFAULT_CONFIG.mode);
-	const excludeRenderers = Array.isArray(source.excludeRenderers)
-		? [
-				...new Set(
-					source.excludeRenderers.filter(
-						(name): name is string => typeof name === "string" && name.length > 0,
-					),
-				),
-			]
-		: [];
-	return {
-		mode,
-		excludeRenderers,
-		diffViewMode: pickEnum(source.diffViewMode, DIFF_VIEW_MODES, DEFAULT_CONFIG.diffViewMode),
-		diffIndicatorMode: pickEnum(
-			source.diffIndicatorMode,
-			DIFF_INDICATOR_MODES,
-			DEFAULT_CONFIG.diffIndicatorMode,
-		),
-		diffSplitMinWidth: pickPositiveInt(
-			source.diffSplitMinWidth,
-			DEFAULT_CONFIG.diffSplitMinWidth,
-			40,
-			300,
-		),
-		editDiffCollapsedLines: pickPositiveInt(
-			source.editDiffCollapsedLines,
-			DEFAULT_CONFIG.editDiffCollapsedLines,
-			0,
-			500,
-		),
-		writeDiffCollapsedLines: pickPositiveInt(
-			source.writeDiffCollapsedLines,
-			DEFAULT_CONFIG.writeDiffCollapsedLines,
-			0,
-			500,
-		),
-		diffWordWrap: source.diffWordWrap !== false,
-		expandedPreviewMaxLines: pickPositiveInt(
-			source.expandedPreviewMaxLines,
-			DEFAULT_CONFIG.expandedPreviewMaxLines,
-			10,
-			50_000,
-		),
-		expandedInputMaxLines: pickPositiveInt(
-			source.expandedInputMaxLines,
-			DEFAULT_CONFIG.expandedInputMaxLines,
-			1,
-			5_000,
-		),
-		expandedOutputMaxLines: pickPositiveInt(
-			source.expandedOutputMaxLines,
-			DEFAULT_CONFIG.expandedOutputMaxLines,
-			1,
-			5_000,
-		),
-		toolLabelClip: pickToolLabelClip(
-			source.toolLabelClip ?? source.inputClip, // 兼容旧配置键
-		),
-		useSummaryTitlesAsThinkingTitle: source.useSummaryTitlesAsThinkingTitle !== false,
-		previewLines: pickPositiveInt(
-			source.previewLines,
-			DEFAULT_CONFIG.previewLines,
-			0,
-			Number.MAX_SAFE_INTEGER,
-		),
-		animationIntervalMs: pickPositiveNumber(
-			source.animationIntervalMs,
-			DEFAULT_CONFIG.animationIntervalMs,
-		),
-		stickyUserMessage: source.stickyUserMessage !== false,
-		scrollButtonMode: pickEnum(
-			source.scrollButtonMode,
-			SCROLL_BUTTON_MODES,
-			DEFAULT_CONFIG.scrollButtonMode,
-		),
-		enableSessionReference: source.enableSessionReference !== false,
-		enableSubagentAutocomplete: source.enableSubagentAutocomplete !== false,
-		enableContextCommand: source.enableContextCommand !== false,
-		enableAgentSummary: source.enableAgentSummary !== false,
-		enableWorkingMessage: source.enableWorkingMessage !== false,
-		enableAliases: source.enableAliases !== false,
-		enableMarkdownEnhance: source.enableMarkdownEnhance !== false,
-		enableEditorPrefix: (source.enableEditorPrefix ?? source.enableInputPrompt) !== false, // 兼容旧配置键
-		enableCustomFooter: source.enableCustomFooter !== false,
-		footerTokenRate: source.footerTokenRate !== false,
-		footerTokenRateMode: pickEnum(
-			source.footerTokenRateMode,
-			FOOTER_TOKEN_RATE_MODES,
-			DEFAULT_CONFIG.footerTokenRateMode,
-		),
-		footerTokenRateTtft: source.footerTokenRateTtft !== false,
-		footerCurrency: normalizeCurrency(source.footerCurrency),
-		footerCurrencyRate: normalizeFooterCurrencyRate(source.footerCurrencyRate),
-		footerNerdIcons: source.footerNerdIcons !== false,
-		footerGitStatsMode: pickEnum(
-			source.footerGitStatsMode,
-			FOOTER_GIT_STATS_MODES,
-			DEFAULT_CONFIG.footerGitStatsMode,
-		),
-		...normalizeFooterChipLayout(source),
-	};
-}
+/**
+ * Frozen render/feature constants.
+ *
+ * This package has no runtime configuration: no `/ccstyle` command, no settings
+ * panel, no JSON file. Every knob below is a source constant. Edit this file and
+ * restart Pi to change behavior.
+ */
+export const config: Config = { ...DEFAULT_CONFIG };
 
 export function getCompactThinkingConfig(source: Config = config): CompactThinkingConfig {
 	return {
@@ -339,88 +188,3 @@ export function getToolDisplayConfig(source: Config = config): ToolDisplayConfig
 	};
 }
 
-export function formatExcludeRenderers(names: readonly string[]): string {
-	return names.length === 0 ? "none" : names.join(", ");
-}
-
-export function formatConfigStatus(source: Config = config): string {
-	return [
-		`mode=${source.mode}`,
-		`exclude=[${source.excludeRenderers.join(", ") || "none"}]`,
-		`diffView=${source.diffViewMode}`,
-		`diffIndicator=${source.diffIndicatorMode}`,
-		`diffSplitMin=${source.diffSplitMinWidth}`,
-		`editCollapsed=${source.editDiffCollapsedLines}`,
-		`writeCollapsed=${source.writeDiffCollapsedLines}`,
-		`diffWordWrap=${source.diffWordWrap ? "on" : "off"}`,
-		`expandedMax=${source.expandedPreviewMaxLines}`,
-		`expandedInput=${source.expandedInputMaxLines}`,
-		`expandedOutput=${source.expandedOutputMaxLines}`,
-		`toolLabelClip=${source.toolLabelClip}`,
-		`thinkingTitle=${source.useSummaryTitlesAsThinkingTitle ? "summary" : "default"}`,
-		`thinkingPreview=${source.previewLines}`,
-		`thinkingAnimation=${source.animationIntervalMs}ms`,
-		`stickyUserMessage=${source.stickyUserMessage ? "on" : "off"}`,
-		`scrollButton=${source.scrollButtonMode}`,
-		`sessionRef=${source.enableSessionReference ? "on" : "off"}`,
-		`subagentAuto=${source.enableSubagentAutocomplete ? "on" : "off"}`,
-		`context=${source.enableContextCommand ? "on" : "off"}`,
-		`agentSummary=${source.enableAgentSummary ? "on" : "off"}`,
-		`workingMsg=${source.enableWorkingMessage ? "on" : "off"}`,
-		`aliases=${source.enableAliases ? "on" : "off"}`,
-		`markdownEnhance=${source.enableMarkdownEnhance ? "on" : "off"}`,
-		`editorPrefix=${source.enableEditorPrefix ? "on" : "off"}`,
-		`footer=${source.enableCustomFooter ? "on" : "off"}`,
-		`footerTokenRate=${source.footerTokenRate ? "on" : "off"}`,
-		`footerTokenRateMode=${source.footerTokenRateMode}`,
-		`footerTokenRateTtft=${source.footerTokenRateTtft ? "on" : "off"}`,
-		`footerCurrency=${source.footerCurrency}`,
-		`footerRate=${source.footerCurrencyRate ?? "-"}`,
-		`footerIcons=${source.footerNerdIcons ? "nerd" : "plain"}`,
-		`footerGitStats=${source.footerGitStatsMode}`,
-		formatFooterChipSummary(source),
-	].join(" · ");
-}
-
-/** 进程内唯一的活动配置对象。读取直接用 `config.xxx`；写入必须走 `updateConfig`。 */
-export const config: Config = loadConfig();
-
-function loadConfig(): Config {
-	try {
-		const legacyPath = existsSync(CONFIG_PATH)
-			? undefined
-			: LEGACY_CONFIG_PATHS.find((path) => existsSync(path));
-		const rawPath = legacyPath ?? (existsSync(CONFIG_PATH) ? CONFIG_PATH : null);
-		const source = rawPath
-			? (JSON.parse(readFileSync(rawPath, "utf8")) as Record<string, unknown>)
-			: {};
-		const next = normalizeConfig(source);
-		if (legacyPath) {
-			try {
-				writeFileSync(CONFIG_PATH, JSON.stringify(next, null, 2));
-				rmSync(legacyPath, { force: true });
-			} catch {
-				// 新路径写失败时仍使用已读到的旧配置，旧文件保留。
-			}
-		}
-		return next;
-	} catch {
-		// Ignore bad config and fall back to defaults.
-	}
-	return { ...DEFAULT_CONFIG };
-}
-
-export function saveConfig() {
-	writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
-}
-
-/** 运行时配置写入的唯一入口：合并 + 规范化 + 持久化。 */
-export function updateConfig(partial: Partial<Config>): void {
-	Object.assign(config, normalizeConfig({ ...config, ...partial }));
-	saveConfig();
-}
-
-/** 整体替换配置（default export 的 configOverride 注入路径；就地覆盖，不持久化）。 */
-export function setConfig(next: Config): void {
-	Object.assign(config, next);
-}

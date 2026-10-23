@@ -4,6 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { ToolExecutionComponent, initTheme } from "@earendil-works/pi-coding-agent";
+import {
+	config,
+} from "../extensions/config/config.ts";
 import { Container } from "@earendil-works/pi-tui";
 import claudeCodeStyle, { getCompactThinkingConfig } from "../extensions/renderer/index.ts";
 import { installCompactThinking } from "../extensions/feature/compact-thinking.ts";
@@ -83,7 +86,8 @@ test("tool built before patch stays visible after resume (mounted scan refreshes
 
 	const first = runtime();
 	try {
-		claudeCodeStyle(first.pi as any, { mode: "on" }, undefined as any);
+		Object.assign(config, { mode: "on" });
+		claudeCodeStyle(first.pi as any, undefined as any);
 		installCompactThinking(first.pi, getCompactThinkingConfig());
 		first.emit("session_start", {}, ctx);
 		first.emit("session_shutdown", { reason: "resume" }, ctx);
@@ -105,7 +109,8 @@ test("tool built before patch stays visible after resume (mounted scan refreshes
 		// new extension instance: session_start installs patches; mounted scan must
 		// re-trigger updateDisplay so content lands in the self-render container
 		const second = runtime();
-		claudeCodeStyle(second.pi as any, { mode: "on" }, undefined as any);
+		Object.assign(config, { mode: "on" });
+		claudeCodeStyle(second.pi as any, undefined as any);
 		installCompactThinking(second.pi, getCompactThinkingConfig());
 		second.emit("session_start", { reason: "resume" }, ctx);
 		await new Promise((resolve) => setTimeout(resolve, 20));

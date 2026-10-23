@@ -63,11 +63,16 @@ test("the footer folds this repo's usage status key into the usage chip", () => 
   assert.match(source, /new Set\(\["localUsage", "piUsage", LOCAL_USAGE_STATUS_KEY\]\)/);
 });
 
-test("config lives at pi-beautify-style.json and migrates the upstream file", () => {
-  const source = readSource("extensions/config/config.ts");
-  assert.match(source, /join\(AGENT_DIR, "pi-beautify-style\.json"\)/);
-  assert.match(source, /join\(AGENT_DIR, "pi-cc-extensions\.json"\)/);
-  assert.match(source, /join\(AGENT_DIR, "claude-code-style\.json"\)/);
+test("the package has no runtime configuration surface", () => {
+  // No settings panel, no /ccstyle command, no JSON file: every knob is a
+  // source constant in extensions/config/config.ts.
+  const config = readSource("extensions/config/config.ts");
+  assert.doesNotMatch(config, /readFileSync|writeFileSync|CONFIG_PATH/);
+  assert.doesNotMatch(config, /normalizeConfig|setConfig|updateConfig/);
+
+  const renderer = readSource("extensions/renderer/index.ts");
+  assert.doesNotMatch(renderer, /registerCommand\("ccstyle"/);
+  assert.doesNotMatch(renderer, /showCcstylePanel/);
 });
 
 test("the package ships the vendored tree, themes, and both licenses", () => {
@@ -89,6 +94,6 @@ test("the package ships the vendored tree, themes, and both licenses", () => {
 
 test("the entry point boots the vendored style and exports the bridges", () => {
   const source = readSource("index.ts");
-  assert.match(source, /claudeCodeStyle\(pi, undefined, installCompactThinking/);
+  assert.match(source, /claudeCodeStyle\(pi, installCompactThinking/);
   assert.match(source, /export \{[\s\S]*normalizeAnswers[\s\S]*\} from "\.\/lib\/our-tools\.ts"/);
 });

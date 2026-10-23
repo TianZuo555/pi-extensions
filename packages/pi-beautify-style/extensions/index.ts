@@ -34,7 +34,7 @@ export default function (pi: ExtensionAPI): void {
 	// render stack：thinking controller 直接交给 style 作 query
 	// markdownEnhance 单独开关：其他扩展也注册 transformer 时会互相改写输出。
 	if (config.enableMarkdownEnhance) markdownEnhance(pi);
-	claudeCodeStyle(pi, undefined, installCompactThinking(pi, getCompactThinkingConfig()));
+	claudeCodeStyle(pi, installCompactThinking(pi, getCompactThinkingConfig()));
 
 	// features
 	if (config.enableContextCommand) context(pi);

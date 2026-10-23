@@ -2,8 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
 	config,
-	normalizeConfig,
-	setConfig,
 	type FooterGitStatsMode,
 } from "../extensions/config/config.ts";
 import { applyCustomFooter, refreshFooterGitStats } from "../extensions/feature/shell/footer.ts";
@@ -17,8 +15,8 @@ test("active footer switches working → branch → working without recreation o
 	commit();
 	write("source.txt", "one\nchanged\nthree\n");
 	const previous = { ...config };
-	setConfig(normalizeConfig({ footerGitStatsMode: "working", footerNerdIcons: false }));
-	t.after(() => setConfig(previous));
+	Object.assign(config, { footerGitStatsMode: "working", footerNerdIcons: false });
+	t.after(() => Object.assign(config, previous));
 	let footer!: { render: (width: number) => string[]; dispose: () => void };
 	let factoryCalls = 0;
 	let branchChanged!: () => void;
@@ -66,11 +64,11 @@ test("active footer switches working → branch → working without recreation o
 		}
 	};
 	await waitForStats("[!](+1 −1)");
-	setConfig(normalizeConfig({ ...config, footerGitStatsMode: "branch" }));
+	Object.assign(config, { ...config, footerGitStatsMode: "branch" });
 	refreshFooterGitStats();
 	assert.doesNotMatch(line(), /\(\+/);
 	await waitForStats("[!](+3 −1)");
-	setConfig(normalizeConfig({ ...config, footerGitStatsMode: "working" }));
+	Object.assign(config, { ...config, footerGitStatsMode: "working" });
 	refreshFooterGitStats();
 	await waitForStats("[!](+1 −1)");
 	assert.equal(factoryCalls, 1);

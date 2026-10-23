@@ -53,7 +53,7 @@ export default function beautifyStyle(pi: ExtensionAPI): void {
   // markdownEnhance has its own switch because other extensions that register
   // transformers would otherwise rewrite each other's output.
   if (config.enableMarkdownEnhance) markdownEnhance(pi);
-  claudeCodeStyle(pi, undefined, installCompactThinking(pi, getCompactThinkingConfig()));
+  claudeCodeStyle(pi, installCompactThinking(pi, getCompactThinkingConfig()));
 
   // features
   if (config.enableContextCommand) context(pi);
@@ -77,10 +77,5 @@ export {
   terminalToolDetail,
   terminalToolLineCount,
 } from "./lib/our-tools.ts";
-export {
-  config,
-  DEFAULT_CONFIG,
-  formatConfigStatus,
-  updateConfig,
-} from "./extensions/config/config.ts";
+export { config, DEFAULT_CONFIG } from "./extensions/config/config.ts";
 export { isAskUserTool } from "./extensions/renderer/tool/ask-user-question.ts";

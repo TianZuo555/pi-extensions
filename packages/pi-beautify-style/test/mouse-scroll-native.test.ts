@@ -12,7 +12,9 @@ import {
 	Text,
 	truncateToWidth,
 } from "@earendil-works/pi-tui";
-import { config } from "../extensions/config/config.ts";
+import {
+	config,
+} from "../extensions/config/config.ts";
 import {
 	installToolMouseInteraction,
 	teardownToolMouseInteraction,

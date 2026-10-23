@@ -12,13 +12,14 @@ import {
 	initTheme,
 } from "@earendil-works/pi-coding-agent";
 import { shouldRenderRichDiff } from "../extensions/renderer/index.ts";
-import { config } from "../extensions/config/config.ts";
+import {
+	config,
+} from "../extensions/config/config.ts";
 import { installDefaultMode } from "../extensions/renderer/default-mode.ts";
 import {
 	renderEditDiffResult,
 	renderWriteDiffResult,
 } from "../extensions/renderer/tool/diff/diff-renderer.ts";
-import { normalizeConfig } from "../extensions/config/config.ts";
 
 initTheme("dark");
 import {
@@ -617,14 +618,6 @@ test("default-mode write collapsed uses title stats and created hint", () => {
 		config.mode = previousMode;
 		hooks.shutdown();
 	}
-});
-
-test("normalizeConfig defaults writeDiffCollapsedLines to 0 and allows explicit values", () => {
-	assert.equal(normalizeConfig({}).writeDiffCollapsedLines, 0);
-	assert.equal(normalizeConfig({ writeDiffCollapsedLines: 0 }).writeDiffCollapsedLines, 0);
-	assert.equal(normalizeConfig({ writeDiffCollapsedLines: 12 }).writeDiffCollapsedLines, 12);
-	assert.equal(normalizeConfig({ editDiffCollapsedLines: 48 }).writeDiffCollapsedLines, 0);
-	assert.equal(normalizeConfig({ writeDiffCollapsedLines: -3 }).writeDiffCollapsedLines, 0);
 });
 
 test("third-party write ownership prevents registration", () => {

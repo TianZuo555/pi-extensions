@@ -11,7 +11,9 @@ import {
 	initTheme,
 } from "@earendil-works/pi-coding-agent";
 
-import { config } from "../extensions/config/config.ts";
+import {
+	config,
+} from "../extensions/config/config.ts";
 import {
 	installCompactMode,
 	refreshCompactModeComponents,

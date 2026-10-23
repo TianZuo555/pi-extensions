@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { ToolExecutionComponent, initTheme } from "@earendil-works/pi-coding-agent";
+import {
+	config,
+} from "../extensions/config/config.ts";
 import { Container } from "@earendil-works/pi-tui";
 import claudeCodeStyleExtension from "../extensions/renderer/index.ts";
 import { installToolGrouping, ToolGroupComponent } from "../extensions/renderer/tool/grouping.ts";
@@ -66,9 +69,7 @@ async function bootExtension(ui: any) {
 			on(name: string, handler: Function) {
 				events.set(name, handler);
 			},
-		} as any,
-		{ mode: "on" },
-	);
+		} as any);
 	const ctx = { mode: "tui", hasUI: true, ui } as any;
 	await events.get("session_start")?.({}, ctx);
 	return async () => {

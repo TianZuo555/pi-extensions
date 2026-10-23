@@ -9,7 +9,9 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Text, visibleWidth } from "@earendil-works/pi-tui";
 type AnyToolDefinition = ToolDefinition<any, any, any>;
-import { config } from "../extensions/config/config.ts";
+import {
+	config,
+} from "../extensions/config/config.ts";
 import claudeCodeStyleExtension, {
 	ExpandedToolIoView,
 	isMcpToolDefinition,
@@ -18,7 +20,8 @@ import claudeCodeStyleExtension, {
 
 initTheme("dark");
 
-for (const mode of ["on", "compact"] as const) {
+// mode is a source constant now, so only the active mode is exercised.
+for (const mode of ["on"] as const) {
 	test(`${mode} renders tools with renderer-only definitions`, async () => {
 		const previousMode = config.mode;
 		const events = new Map<string, Function>();
@@ -29,9 +32,7 @@ for (const mode of ["on", "compact"] as const) {
 				on(name: string, handler: Function) {
 					events.set(name, handler);
 				},
-			} as any,
-			{ mode },
-		);
+			} as any);
 		const ui = {
 			theme: { fg: (_color: string, text: string) => text },
 			setStatus() {},
@@ -53,19 +54,11 @@ for (const mode of ["on", "compact"] as const) {
 					process.cwd(),
 				);
 				const title = { read: "Read", bash: "Bash", custom_lookup: "Custom Lookup" }[name]!;
-				if (mode === "on") {
-					assert.match(component.render(100).join("\n"), new RegExp(title));
-				} else {
-					assert.deepEqual(component.render(100), [], "compact hides collapsed tool rows");
-				}
+				assert.match(component.render(100).join("\n"), new RegExp(title));
 				component.updateResult({ content: [{ type: "text", text: "done" }], isError: false });
 				for (const expanded of [false, true]) {
 					component.setExpanded(expanded);
 					const output = component.render(100).join("\n");
-					if (mode === "compact" && !expanded) {
-						assert.equal(output, "");
-						continue;
-					}
 					assert.match(output, new RegExp(title));
 					assert.match(output, expanded ? /done/ : /1 line (loaded|returned)/);
 				}
@@ -89,9 +82,7 @@ for (const kind of ["prototype", "non-enumerable"] as const) {
 				on(name: string, handler: Function) {
 					events.set(name, handler);
 				},
-			} as any,
-			{ mode: "on" },
-		);
+			} as any);
 		const ui = {
 			theme: { fg: (_color: string, text: string) => text },
 			setStatus() {},
@@ -193,7 +184,8 @@ test("expanded ccstyle tools use Pi's native background card", async () => {
 			events.set(name, handler);
 		},
 	};
-	claudeCodeStyleExtension(pi as any, { mode: "on" });
+	Object.assign(config, { mode: "on" });
+		claudeCodeStyleExtension(pi as any);
 	const CARD_BG_ANSI: Record<string, string> = {
 		toolPendingBg: "\x1b[48;2;40;40;40m",
 		toolSuccessBg: "\x1b[48;2;15;42;36m",
@@ -373,9 +365,7 @@ test("MCP detection, titles, details, and custom tools use the global wrapper", 
 			on(name: string, handler: Function) {
 				events.set(name, handler);
 			},
-		} as any,
-		{ mode: "on" },
-	);
+		} as any);
 	const ui = {
 		theme: { fg: (_color: string, text: string) => text },
 		setStatus() {},
@@ -686,7 +676,8 @@ test("global renderer reload chains external wrappers and shutdown restores them
 			prototype[name] = external[name];
 		}
 
-		claudeCodeStyleExtension(makePi(secondEvents) as any, { excludeRenderers: ["custom"] });
+		Object.assign(config, { excludeRenderers: ["custom"] });
+		claudeCodeStyleExtension(makePi(secondEvents) as any);
 		await secondEvents.get("session_start")?.({}, ctx);
 		assert.equal(firstPatch.active, false);
 		for (const name of methodNames) assert.notEqual(prototype[name], external[name]);
