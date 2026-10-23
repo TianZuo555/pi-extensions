@@ -238,7 +238,10 @@ const makeTokenSpeedRuntime = Effect.gen(function* () {
       }
 
       const avgRate = computeAverageRate(stream, tokens, now);
-      const parts = [`${SPEED_GLYPH} ${formatRate(avgRate)} tok/s avg`, `${formatCount(tokens)} tok`];
+      const parts = [
+        `${SPEED_GLYPH} ${formatRate(avgRate)} tok/s avg`,
+        `${formatCount(tokens)} tok`,
+      ];
       if (stream.firstTokenAt !== undefined) {
         const ttft = stream.firstTokenAt - (stream.submittedAt ?? stream.startedAt);
         parts.push(`TTFT ${formatDuration(ttft)}`);
