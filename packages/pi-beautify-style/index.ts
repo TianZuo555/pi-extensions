@@ -20,7 +20,7 @@ import { config } from "./extensions/config/config.ts";
 
 // shell
 import piAliases from "./extensions/feature/shell/aliases.ts";
-import { installFlushDockedBash } from "./extensions/feature/shell/flush-docked-bash.ts";
+import { registerFlushDockedBash } from "./extensions/feature/shell/flush-docked-bash.ts";
 import customFooter from "./extensions/feature/shell/footer.ts";
 import { applyPromptEditor } from "./extensions/feature/shell/prompt-editor.ts";
 import workingMessage from "./extensions/feature/shell/working-message.ts";
@@ -39,7 +39,7 @@ import markdownEnhance from "./extensions/renderer/markdown-enhance.ts";
 export default function beautifyStyle(pi: ExtensionAPI): void {
   // shell chrome
   if (config.enableAliases) piAliases(pi);
-  installFlushDockedBash();
+  registerFlushDockedBash(pi);
   if (config.enableWorkingMessage) workingMessage(pi);
   customFooter(pi);
 

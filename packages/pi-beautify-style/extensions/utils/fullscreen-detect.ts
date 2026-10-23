@@ -64,8 +64,9 @@ export function installMainScreenDoRenderPatch(): () => void {
 	// 别人重新包装时把 ours 拆掉。
 	return () => {
 		patch.active = false;
-		if (prototype.applyLineResets !== patch.installed) return;
-		prototype.applyLineResets = patch.original;
+		if (prototype.applyLineResets === patch.installed) {
+			prototype.applyLineResets = patch.original;
+		}
 		patchRegistry.dispose(MAIN_SCREEN_DO_RENDER_PATCH, patch);
 	};
 }

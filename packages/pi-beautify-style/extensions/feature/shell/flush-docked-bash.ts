@@ -3,7 +3,7 @@
  * 官方只在下次普通 submit 才 flushPendingBashComponents，命令结束后卡钉在输入框上方。
  * 在 handleBashCommand 收尾补一次 flush。
  */
-import { InteractiveMode } from "@earendil-works/pi-coding-agent";
+import { InteractiveMode, type ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { FLUSH_DOCKED_BASH_PATCH, patchRegistry } from "../../utils/patch-keys.ts";
 
 type Patch = {
@@ -13,7 +13,7 @@ type Patch = {
 	installed: (...args: any[]) => unknown;
 };
 
-export function installFlushDockedBash(): void {
+export function installFlushDockedBash(): () => void {
 	const prototype = InteractiveMode.prototype as any;
 	const previous = patchRegistry.get<Patch>(FLUSH_DOCKED_BASH_PATCH);
 	if (previous) previous.active = false;
@@ -33,4 +33,23 @@ export function installFlushDockedBash(): void {
 	};
 	prototype.handleBashCommand = patch.installed;
 	patchRegistry.install(FLUSH_DOCKED_BASH_PATCH, patch);
+	return () => {
+		patch.active = false;
+		if (prototype.handleBashCommand === patch.installed) {
+			prototype.handleBashCommand = patch.original;
+		}
+		patchRegistry.dispose(FLUSH_DOCKED_BASH_PATCH, patch);
+	};
+}
+
+/** Keep the global patch scoped to an active interactive session. */
+export function registerFlushDockedBash(pi: ExtensionAPI): void {
+	let dispose: (() => void) | undefined;
+	pi.on("session_start", (_event, ctx) => {
+		if (ctx.mode === "tui" && ctx.hasUI) dispose ??= installFlushDockedBash();
+	});
+	pi.on("session_shutdown", () => {
+		dispose?.();
+		dispose = undefined;
+	});
 }

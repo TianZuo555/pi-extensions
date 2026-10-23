@@ -5,6 +5,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { TuiMainScreen } from "@earendil-works/pi-tui";
 import { installMainScreenDoRenderPatch } from "../extensions/utils/fullscreen-detect.ts";
+import { MAIN_SCREEN_DO_RENDER_PATCH, patchRegistry } from "../extensions/utils/patch-keys.ts";
 
 function createTerminal(columns: number, rows: number) {
 	const writes: string[] = [];
@@ -90,6 +91,11 @@ test("disposer 不拆掉别人后装的包装", () => {
 	try {
 		dispose();
 		assert.equal(prototype.applyLineResets, external, "所有权守卫：不动别人的包装");
+		assert.equal(patchRegistry.get(MAIN_SCREEN_DO_RENDER_PATCH), undefined);
+		const lines = ["new"];
+		const screen = { previousLines: ["old"], previousViewportTop: 1 };
+		external.call(screen, lines);
+		assert.deepEqual(screen.previousLines, ["old"], "disposed wrapper is inactive");
 	} finally {
 		prototype.applyLineResets = before;
 	}

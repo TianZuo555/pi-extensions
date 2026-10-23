@@ -3,7 +3,7 @@ import { config } from "./config/config.ts";
 
 // shell
 import piAliases from "./feature/shell/aliases.ts";
-import { installFlushDockedBash } from "./feature/shell/flush-docked-bash.ts";
+import { registerFlushDockedBash } from "./feature/shell/flush-docked-bash.ts";
 import customFooter from "./feature/shell/footer.ts";
 import { applyPromptEditor } from "./feature/shell/prompt-editor.ts";
 import workingMessage from "./feature/shell/working-message.ts";
@@ -22,7 +22,7 @@ import markdownEnhance from "./renderer/markdown-enhance.ts";
 export default function (pi: ExtensionAPI): void {
 	// shell chrome
 	if (config.enableAliases) piAliases(pi);
-	installFlushDockedBash();
+	registerFlushDockedBash(pi);
 	if (config.enableWorkingMessage) workingMessage(pi);
 	customFooter(pi);
 
