@@ -8,6 +8,7 @@ import {
   formatDuration,
   formatRate,
   runTokenSpeed,
+  SPEED_GLYPH,
   TokenSpeedRuntime,
 } from "../src/runtime.ts";
 
@@ -54,7 +55,7 @@ test("TokenSpeedRuntime stream lifecycle and mode cycling", async () => {
   // First delta after stream start renders immediately
   const d1 = await runTokenSpeed(runtime, service.recordDelta("hello world", 1050));
   assert.equal(d1.shouldRender, true);
-  assert.match(d1.statusText ?? "", /⚡/);
+  assert.ok(d1.statusText?.startsWith(SPEED_GLYPH), `got: ${d1.statusText}`);
 
   // Rapid delta < 100ms throttled
   const d2 = await runTokenSpeed(runtime, service.recordDelta(" foo", 1080));
@@ -63,7 +64,7 @@ test("TokenSpeedRuntime stream lifecycle and mode cycling", async () => {
   // Delta after 100ms interval renders
   const d3 = await runTokenSpeed(runtime, service.recordDelta(" more text streaming in", 1200));
   assert.equal(d3.shouldRender, true);
-  assert.match(d3.statusText ?? "", /⚡/);
+  assert.ok(d3.statusText?.startsWith(SPEED_GLYPH), `got: ${d3.statusText}`);
 
   const end = await runTokenSpeed(runtime, service.endStream(25, 2000));
   assert.equal(end.shouldRender, true);

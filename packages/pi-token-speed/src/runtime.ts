@@ -23,6 +23,9 @@ export const MODES: DisplayMode[] = ["live", "final", "off"];
 export const CONFIG_FILE = path.join(piConfigDir("token-speed"), "config.json");
 export const STATUS_KEY = "token-speed";
 
+/** md-flash（Nerd Font，U+F0241）；没有 Nerd Font 时退回 ⚡。 */
+export const SPEED_GLYPH = "\u{f0241}";
+
 export const WINDOW_MS = 5_000;
 export const MIN_SPAN_MS = 250;
 export const CHARS_PER_TOKEN = 4;
@@ -211,7 +214,7 @@ const makeTokenSpeedRuntime = Effect.gen(function* () {
         }
 
         const rate = computeRate(stream, now);
-        const statusText = `⚡ ${formatRate(rate)} tok/s`;
+        const statusText = `${SPEED_GLYPH} ${formatRate(rate)} tok/s`;
         return [
           { shouldRender: true, statusText },
           { ...s, lastRender: now, stream },
@@ -235,7 +238,7 @@ const makeTokenSpeedRuntime = Effect.gen(function* () {
       }
 
       const avgRate = computeAverageRate(stream, tokens, now);
-      const parts = [`⚡ ${formatRate(avgRate)} tok/s avg`, `${formatCount(tokens)} tok`];
+      const parts = [`${SPEED_GLYPH} ${formatRate(avgRate)} tok/s avg`, `${formatCount(tokens)} tok`];
       if (stream.firstTokenAt !== undefined) {
         const ttft = stream.firstTokenAt - (stream.submittedAt ?? stream.startedAt);
         parts.push(`TTFT ${formatDuration(ttft)}`);
