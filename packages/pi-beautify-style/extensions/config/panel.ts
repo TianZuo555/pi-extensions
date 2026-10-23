@@ -29,7 +29,6 @@ import {
 	type FooterChipLayout,
 } from "../feature/shell/footer-layout.ts";
 import { applyPromptEditor, clearPromptEditor } from "../feature/shell/prompt-editor.ts";
-import { applyStartupHeader, clearStartupHeader } from "../feature/shell/startup-header.ts";
 import type { ToolGroupingHooks } from "../renderer/tool/grouping.ts";
 import {
 	config,
@@ -584,15 +583,6 @@ export async function showCcstylePanel(
 			submenu: (_current: string, closeSubmenu: (selected?: string) => void) =>
 				buildNumberInputSubmenu(theme, thinkingAnimationSetting, closeSubmenu),
 		};
-		const startupHeaderSetting = {
-			id: "showStartupHeader",
-			label: "Startup header",
-			description: config.showStartupHeader
-				? "Show the custom startup header (logo + tips) on new sessions."
-				: "Use Pi's native startup header instead.",
-			currentValue: config.showStartupHeader ? "on" : "off",
-			values: ["on", "off"],
-		};
 		const stickyUserMessageSetting = {
 			id: "stickyUserMessage",
 			label: "Sticky user message",
@@ -1023,16 +1013,6 @@ export async function showCcstylePanel(
 							: "Fullscreen: show the same Back to bottom text in Pi's native floating overlay.";
 					break;
 				}
-				case "showStartupHeader": {
-					const enabled = value === "on";
-					updateConfig({ showStartupHeader: enabled });
-					startupHeaderSetting.description = config.showStartupHeader
-						? "Show the custom startup header (logo + tips) on new sessions."
-						: "Use Pi's native startup header instead.";
-					if (enabled) applyStartupHeader(ctx);
-					else clearStartupHeader(ctx);
-					break;
-				}
 				default:
 					return;
 			}
@@ -1070,7 +1050,6 @@ export async function showCcstylePanel(
 					toolLabelClipSetting,
 					stickyUserMessageSetting,
 					scrollButtonSetting,
-					startupHeaderSetting,
 					editorPrefixSetting,
 				],
 			},

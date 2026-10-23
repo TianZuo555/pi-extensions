@@ -23,9 +23,6 @@ import piAliases from "./extensions/feature/shell/aliases.ts";
 import { installFlushDockedBash } from "./extensions/feature/shell/flush-docked-bash.ts";
 import customFooter from "./extensions/feature/shell/footer.ts";
 import { applyPromptEditor } from "./extensions/feature/shell/prompt-editor.ts";
-import piStartupHeader, {
-  installEarlyStartupHeader,
-} from "./extensions/feature/shell/startup-header.ts";
 import workingMessage from "./extensions/feature/shell/working-message.ts";
 
 // feature
@@ -43,8 +40,6 @@ export default function beautifyStyle(pi: ExtensionAPI): void {
   // shell chrome
   if (config.enableAliases) piAliases(pi);
   installFlushDockedBash();
-  installEarlyStartupHeader();
-  piStartupHeader(pi);
   if (config.enableWorkingMessage) workingMessage(pi);
   customFooter(pi);
 

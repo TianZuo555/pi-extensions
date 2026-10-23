@@ -63,7 +63,6 @@ export type Config = {
 	useSummaryTitlesAsThinkingTitle: boolean;
 	previewLines: number;
 	animationIntervalMs: number;
-	showStartupHeader: boolean;
 	/** fullscreen：userMessage 正文首行滚出视口上沿后钉住，直到下一条指令接手。 */
 	stickyUserMessage: boolean;
 	/** fullscreen 回到底部按钮：扩展 dock 行，或 Pi 原生浮层；两者文案相同。 */
@@ -157,7 +156,6 @@ export const DEFAULT_CONFIG: Config = {
 	useSummaryTitlesAsThinkingTitle: true,
 	previewLines: 3,
 	animationIntervalMs: 90,
-	showStartupHeader: true,
 	stickyUserMessage: true,
 	scrollButtonMode: "dock",
 	enableSessionReference: true,
@@ -287,7 +285,6 @@ export function normalizeConfig(input: unknown): Config {
 			source.animationIntervalMs,
 			DEFAULT_CONFIG.animationIntervalMs,
 		),
-		showStartupHeader: source.showStartupHeader !== false,
 		stickyUserMessage: source.stickyUserMessage !== false,
 		scrollButtonMode: pickEnum(
 			source.scrollButtonMode,
@@ -363,7 +360,6 @@ export function formatConfigStatus(source: Config = config): string {
 		`thinkingTitle=${source.useSummaryTitlesAsThinkingTitle ? "summary" : "default"}`,
 		`thinkingPreview=${source.previewLines}`,
 		`thinkingAnimation=${source.animationIntervalMs}ms`,
-		`startupHeader=${source.showStartupHeader ? "on" : "off"}`,
 		`stickyUserMessage=${source.stickyUserMessage ? "on" : "off"}`,
 		`scrollButton=${source.scrollButtonMode}`,
 		`sessionRef=${source.enableSessionReference ? "on" : "off"}`,

@@ -89,7 +89,6 @@ Thinking / Footer`). Settings persist to `~/.pi/agent/pi-beautify-style.json`.
   "expandedOutputMaxLines": 10,
   "expandedPreviewMaxLines": 40,
   "toolLabelClip": 0,                      // 0 = fit available width
-  "showStartupHeader": true,
   "stickyUserMessage": true,               // fullscreen
   "scrollButtonMode": "dock",              // dock / native
 
