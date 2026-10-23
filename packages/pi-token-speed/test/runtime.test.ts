@@ -117,3 +117,38 @@ test("sliding-window samples stay bounded across a long stream", async () => {
 
   await runtime.dispose();
 });
+
+test("TTFT measures from prompt submission, not from the stream start", async () => {
+  const runtime = createTokenSpeedRuntime();
+  const service = runtime.runSync(TokenSpeedRuntime);
+
+  await runTokenSpeed(runtime, service.setMode("live"));
+  // User submits at t=1000; Pi takes 900ms to queue and prefill, so the
+  // assistant message does not start until t=1900.
+  await runTokenSpeed(runtime, service.markSubmitted(1000));
+  await runTokenSpeed(runtime, service.beginStream(1900));
+  // First content block lands 100ms later.
+  await runTokenSpeed(runtime, service.recordDelta("hello", 2000));
+
+  const end = await runTokenSpeed(runtime, service.endStream(10, 3000));
+  // Real TTFT is 1000ms (submit → first token). Measuring from startedAt
+  // would report 100ms and hide the queue and prefill time entirely.
+  assert.match(end.summary, /TTFT 1\.0s/, `got: ${end.summary}`);
+
+  await runtime.dispose();
+});
+
+test("without a submitted timestamp TTFT falls back to the stream start", async () => {
+  const runtime = createTokenSpeedRuntime();
+  const service = runtime.runSync(TokenSpeedRuntime);
+
+  await runTokenSpeed(runtime, service.setMode("live"));
+  // No before_agent_start (an SDK or RPC caller that skipped it).
+  await runTokenSpeed(runtime, service.beginStream(1000));
+  await runTokenSpeed(runtime, service.recordDelta("hello", 1250));
+
+  const end = await runTokenSpeed(runtime, service.endStream(10, 2000));
+  assert.match(end.summary, /TTFT 250ms/, `got: ${end.summary}`);
+
+  await runtime.dispose();
+});
