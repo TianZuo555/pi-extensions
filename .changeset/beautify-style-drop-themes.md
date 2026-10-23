@@ -1,5 +1,5 @@
 ---
-"@tian.zuo/pi-beautify-style": major
+"@tian.zuo/pi-beautify-style": minor
 ---
 
 Remove the bundled `cc-dark` and `cc-light` themes.
