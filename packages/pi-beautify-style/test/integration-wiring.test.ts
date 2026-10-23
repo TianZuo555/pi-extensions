@@ -63,6 +63,21 @@ test("the footer folds this repo's usage status key into the usage chip", () => 
   assert.match(source, /new Set\(\["localUsage", "piUsage", LOCAL_USAGE_STATUS_KEY\]\)/);
 });
 
+test("model-facing reference text lives in lib/prompt.ts", () => {
+  const prompt = readSource("lib/prompt.ts");
+  assert.match(prompt, /export function subagentDelegationMessage/);
+  assert.match(prompt, /export const SESSION_REFERENCE_HEADER/);
+
+  // 运行时文件只做拼接，不再内嵌提示文本。
+  const subagent = readSource("extensions/feature/reference/subagent.ts");
+  assert.match(subagent, /subagentDelegationMessage\(agentList\)/);
+  assert.doesNotMatch(subagent, /You MUST use the Agent tool/);
+
+  const session = readSource("extensions/feature/reference/session.ts");
+  assert.match(session, /SESSION_REFERENCE_HEADER/);
+  assert.doesNotMatch(session, /untrusted background context/);
+});
+
 test("the package has no runtime configuration surface", () => {
   // No settings panel, no /ccstyle command, no JSON file: every knob is a
   // source constant in extensions/config/config.ts.

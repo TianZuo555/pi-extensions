@@ -32,9 +32,10 @@ type MainScreenDoRenderPatch = {
  * 把 previousLines 的视口上方前缀直接对齐新帧，差分只看到可写区域，照常增量
  * 绘制。代价仅是 scrollback 里那几行停留在最后一次实际写入的内容。
  */
-export function installMainScreenDoRenderPatch(): void {
+export function installMainScreenDoRenderPatch(): () => void {
+	const noop = () => {};
 	const prototype = TuiMainScreen.prototype as any;
-	if (typeof prototype?.applyLineResets !== "function") return;
+	if (typeof prototype?.applyLineResets !== "function") return noop;
 	const previous = patchRegistry.get<MainScreenDoRenderPatch>(MAIN_SCREEN_DO_RENDER_PATCH);
 	if (previous) previous.active = false;
 	const original =
@@ -59,4 +60,12 @@ export function installMainScreenDoRenderPatch(): void {
 	};
 	prototype.applyLineResets = patch.installed;
 	patchRegistry.install(MAIN_SCREEN_DO_RENDER_PATCH, patch);
+	// 所有权守卫：/reload 后旧模块不能还原新模块的补丁，也不能在原型已被
+	// 别人重新包装时把 ours 拆掉。
+	return () => {
+		patch.active = false;
+		if (prototype.applyLineResets !== patch.installed) return;
+		prototype.applyLineResets = patch.original;
+		patchRegistry.dispose(MAIN_SCREEN_DO_RENDER_PATCH, patch);
+	};
 }

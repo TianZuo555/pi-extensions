@@ -79,6 +79,7 @@ export default function (
 				compactMode: CompactModeHooks;
 				disposeMessageDisplay: () => void;
 				disposeToolExpandedBackground: () => void;
+				disposeMainScreenPatch: () => void;
 		  }
 		| undefined;
 
@@ -88,7 +89,7 @@ export default function (
 		// 同样渲染这些组件，因此两种模式都安装。
 		if (installation) return installation;
 		// regular 主屏的差分渲染补丁：视口上方变化不再触发清回滚的 fullRender。
-		installMainScreenDoRenderPatch();
+		const disposeMainScreenPatch = installMainScreenDoRenderPatch();
 		// 粘性用户消息头：标记注入 + fullscreen 帧合成。
 		installStickyPromptPatches();
 		const defaultMode = installDefaultMode(writeExecutionMetadata);
@@ -107,6 +108,7 @@ export default function (
 			compactMode,
 			disposeMessageDisplay,
 			disposeToolExpandedBackground,
+			disposeMainScreenPatch,
 		};
 		return installation;
 	};
@@ -223,6 +225,9 @@ export default function (
 		current.compactMode.shutdown();
 		compactModeHooks = undefined;
 		current.disposeMessageDisplay();
+		// 原型补丁要在 shutdown 还原，否则卸载扩展后 stale-scrollback 行为
+		// 会留到进程重启。
+		current.disposeMainScreenPatch();
 		disposeStickyPromptPatches();
 		clearAllAnimations();
 		installation = undefined;

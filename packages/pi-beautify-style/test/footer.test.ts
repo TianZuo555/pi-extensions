@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import {
 	config,
 } from "../extensions/config/config.ts";
@@ -8,6 +9,7 @@ import {
 	FOOTER_NERD_ICON_GIT,
 	FOOTER_NERD_ICON_MCP,
 	applyCustomFooter,
+	indentFooterLine,
 	clearCustomFooter,
 	colorGitStatus,
 	footerGlyphs,
@@ -301,4 +303,18 @@ test("parseGitStats sums numstat add/delete columns", () => {
 		add: 75,
 		del: 9,
 	});
+});
+
+test("indentFooterLine never exceeds the renderer width", () => {
+	// 缩进 2 列是默认值（editorPaddingX 0 + `❯ ` 2 列）。窄于缩进时必须先截缩进。
+	for (const width of [0, 1, 2, 3, 4, 10, 80]) {
+		const line = indentFooterLine("abcdef", width, 2);
+		assert.ok(
+			visibleWidth(line) <= width,
+			`width=${width} produced ${visibleWidth(line)} columns: ${JSON.stringify(line)}`,
+		);
+	}
+	assert.equal(indentFooterLine("abc", 10, 2), "  abc");
+	assert.equal(indentFooterLine("abc", 1, 2), " ", "缩进被截到 width");
+	assert.equal(indentFooterLine("abc", 0, 2), "", "零宽度不输出任何内容");
 });

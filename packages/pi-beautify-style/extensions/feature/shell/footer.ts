@@ -234,6 +234,19 @@ let refreshCurrentMcpChip: (() => void) | undefined;
 /** 工具/命令列表在 pi API 上，而 footer 工厂只拿得到 ctx，加载时记下来。 */
 let extensionApi: Pick<ExtensionAPI, "getAllTools" | "getCommands"> | undefined;
 
+/**
+ * 按输入框起始列缩进 footer 行。
+ *
+ * 缩进本身也受 width 约束：宽度小于缩进时先截缩进，再给内容留 0 列。
+ * 否则 `indent + 至少 1 列` 会超出 renderer 宽度（`render(1)` 输出 3 列），
+ * 违反「visibleWidth(line) <= width」。
+ */
+export function indentFooterLine(line: string, width: number, indent: number): string {
+	const indentWidth = Math.max(0, Math.min(indent, width));
+	const payloadWidth = Math.max(0, width - indentWidth);
+	return " ".repeat(indentWidth) + truncateToWidth(line, payloadWidth);
+}
+
 const createCustomFooterFactory =
 	(ctx: ExtensionContext) => (tui: any, theme: any, footerData: any) => {
 		currentTui = tui;
@@ -503,10 +516,7 @@ const createCustomFooterFactory =
 			const line2 = lineOf(layout.footerLine2Keys);
 			const line3 = lineOf(layout.footerLine3Keys);
 
-			// 对齐输入文本起始列：editorPaddingX + `❯ ` 的 2 列（随编辑器 render 实时更新）。
-			const indent = " ".repeat(inputTextIndent());
-			const fit = (line: string) =>
-				indent + truncateToWidth(line, Math.max(1, width - indent.length));
+			const fit = (line: string) => indentFooterLine(line, width, inputTextIndent());
 
 			return [fit(line1), ...(line2 ? [fit(line2)] : []), ...(line3 ? [fit(line3)] : [])];
 		};
