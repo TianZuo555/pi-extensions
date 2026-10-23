@@ -65,7 +65,6 @@ export type Config = {
 	enableContextCommand: boolean;
 	enableAgentSummary: boolean;
 	enableWorkingMessage: boolean;
-	enableAliases: boolean;
 	/** markdown 转换：Mermaid 方言渲染、圈数字转半角括号。关掉让位给其他扩展。 */
 	enableMarkdownEnhance: boolean;
 	/** 输入框 `❯ ` 前缀（占左侧 2 列，颜色随 thinking/bash mode 联动）。 */
@@ -145,7 +144,6 @@ export const DEFAULT_CONFIG: Config = {
 	enableContextCommand: true,
 	enableAgentSummary: true,
 	enableWorkingMessage: true,
-	enableAliases: true,
 	enableMarkdownEnhance: true,
 	enableEditorPrefix: true,
 	enableCustomFooter: true,
@@ -160,11 +158,12 @@ export const DEFAULT_CONFIG: Config = {
 };
 
 /**
- * Frozen render/feature constants.
+ * Source constants for the render and feature switches.
  *
- * This package has no runtime configuration: no `/ccstyle` command, no settings
- * panel, no JSON file. Every knob below is a source constant. Edit this file and
- * restart Pi to change behavior.
+ * This package has no runtime configuration surface: no `/ccstyle` command, no
+ * settings panel, no JSON file. The object is mutable only so tests can
+ * override fields; production code must treat it as read-only. Edit
+ * `DEFAULT_CONFIG` and restart Pi to change behavior.
  */
 export const config: Config = { ...DEFAULT_CONFIG };
 

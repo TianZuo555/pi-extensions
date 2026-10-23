@@ -54,12 +54,12 @@ The fork adapts upstream's renderers to the sibling packages:
 | Package | What changes |
 | --- | --- |
 | `@tian.zuo/pi-ask-user` | The `ask_user` card uses the same answer tree as upstream's `ask_user_question`, including `choice: { label, wasCustom }` answers, the question-count suffix, and custom ("Other") text. |
-| `@tian.zuo/pi-background-terminals` | `terminal_wait`, `terminal_stop`, and `terminal_log_read` get shell-style cards: the terminal id as the title payload, a live elapsed timer, and collapsed output. |
+| `@tian.zuo/pi-background-terminals` | Its `bash` and `terminal_wait`/`terminal_stop`/`terminal_log_read` tools use the same beautify card as every other tool: a live elapsed timer, and the terminal id in the title of the `terminal_*` cards. |
 | `@tian.zuo/pi-usage` | The footer treats `setStatus("usage")` as the usage chip. Upstream only recognized `pi-usage`/`localUsage`, so this package's chip used to stay empty. |
 
-`@tian.zuo/pi-token-speed` needs no integration: it publishes a normal
-`setStatus("token-speed")` chip, which the footer picks up automatically. If you
-prefer the built-in rate chip instead, disable one of the two.
+`@tian.zuo/pi-token-speed` needs no integration either: its
+`setStatus("token-speed")` text fills the footer's built-in rate chip instead of
+adding a second one.
 
 `@tian.zuo/pi-compact-output` is superseded by this package — its compact tool
 blocks and reasoning boxes are what this package renders. Do not run both.

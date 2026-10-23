@@ -134,7 +134,7 @@ for (const kind of ["prototype", "non-enumerable"] as const) {
 	});
 }
 
-test("claude-code-style registers the write override at session_start", async () => {
+test("claude-code-style registers the write override only in TUI sessions", async () => {
 	const registeredTools: unknown[] = [];
 	const events = new Map<string, Function[]>();
 	const pi = {
@@ -161,18 +161,37 @@ test("claude-code-style registers the write override at session_start", async ()
 		registeredTools.map((tool: any) => tool.name),
 		[],
 	);
+
+	// print/headless 会话不抢共享工具表里的 write。
 	await emit("session_start", {}, { mode: "print", hasUI: false });
+	await new Promise((resolve) => setTimeout(resolve, 0));
+	assert.deepEqual(
+		registeredTools.map((tool: any) => tool.name),
+		[],
+		"print sessions never register the write override",
+	);
+
+	// TUI 会话延后一拍注册：等所有扩展的 session_start 跑完，确认没有外部 write。
+	const tuiCtx = {
+		mode: "tui",
+		hasUI: true,
+		ui: {
+			theme: { fg: (_color: string, text: string) => text },
+			setStatus() {},
+			requestRender() {},
+		},
+	};
+	await emit("session_start", {}, tuiCtx);
 	assert.deepEqual(
 		registeredTools.map((tool: any) => tool.name),
 		[],
 	);
-	// 延后一拍：等所有扩展的 session_start 跑完，确认没有外部 write 后才注册。
 	await new Promise((resolve) => setTimeout(resolve, 0));
 	assert.deepEqual(
 		registeredTools.map((tool: any) => tool.name),
 		["write"],
 	);
-	await emit("session_shutdown", {}, { ui: { setStatus() {} } });
+	await emit("session_shutdown", {}, tuiCtx);
 });
 
 test("expanded ccstyle tools use Pi's native background card", async () => {
@@ -555,8 +574,9 @@ test("ccstyle is the default renderer and exclusions preserve dedicated renderer
 	assert.equal(preservesOriginalRenderer(undefined, "Agent"), false);
 });
 
-test("background-terminal tools keep their own renderers without an exclude entry", () => {
-	// 该包的 bash 靠独有的 yield_time_ms 参数识别；内置 bash 只有 command/timeout。
+test("background-terminal tools get the ccstyle card like every other tool", () => {
+	// 该包的 bash 带独有的 yield_time_ms 参数；内置 bash 只有 command/timeout。
+	// 特征差异不再影响渲染归属：所有工具统一走 ccstyle 卡片。
 	const backgroundBash = {
 		name: "bash",
 		parameters: { properties: { command: {}, timeout: {}, yield_time_ms: {} } },
@@ -572,20 +592,20 @@ test("background-terminal tools keep their own renderers without an exclude entr
 
 	assert.equal(
 		preservesOriginalRenderer(backgroundBash, "bash", builtinBash, []),
-		true,
-		"background bash keeps its terminal id / /ps row",
+		false,
+		"background bash uses the ccstyle card",
 	);
 	assert.equal(
 		preservesOriginalRenderer(builtinBash, "bash", builtinBash, []),
 		false,
-		"Pi's own bash still gets the ccstyle card",
+		"Pi's own bash uses the ccstyle card",
 	);
 
 	for (const name of ["terminal_log_read", "terminal_wait", "terminal_stop"]) {
 		assert.equal(
 			preservesOriginalRenderer({ name, renderResult() {} }, name, undefined, []),
-			true,
-			`${name} keeps its own renderer`,
+			false,
+			`${name} uses the ccstyle card`,
 		);
 	}
 });

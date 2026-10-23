@@ -1,11 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { ToolExecutionComponent, initTheme } from "@earendil-works/pi-coding-agent";
+import {
+	ToolExecutionComponent,
+	initTheme,
+	UserMessageComponent,
+} from "@earendil-works/pi-coding-agent";
 import {
 	config,
 } from "../extensions/config/config.ts";
-import { Container } from "@earendil-works/pi-tui";
+import { Container, TuiAltScreen } from "@earendil-works/pi-tui";
 import claudeCodeStyleExtension from "../extensions/renderer/index.ts";
 import { ToolGroupComponent } from "../extensions/renderer/tool/grouping.ts";
 
@@ -68,6 +72,9 @@ test("stale TUI shutdown leaves the replacement runtime active", async () => {
 		) as Record<string, Function>;
 		const patchKey = Symbol.for("pi.ccstyle.global-tool-render-patch");
 		const replacementPatch = (globalThis as any)[patchKey];
+		// 粘性补丁也是原型补丁；module 级释放曾按注册表停掉接管方的补丁。
+		const replacementMarker = (UserMessageComponent.prototype as any).render;
+		const replacementFrame = (TuiAltScreen.prototype as any).compositeScrollToEndIndicator;
 
 		await runtimeA.events.get("session_shutdown")?.({}, ctx);
 		assert.equal((globalThis as any)[patchKey], replacementPatch);
@@ -75,6 +82,16 @@ test("stale TUI shutdown leaves the replacement runtime active", async () => {
 		for (const name of containerMethods)
 			assert.equal(containerPrototype[name], replacementContainer[name]);
 		for (const name of toolMethods) assert.equal(toolPrototype[name], replacementTool[name]);
+		assert.equal(
+			(UserMessageComponent.prototype as any).render,
+			replacementMarker,
+			"stale shutdown keeps the replacement sticky marker patch",
+		);
+		assert.equal(
+			(TuiAltScreen.prototype as any).compositeScrollToEndIndicator,
+			replacementFrame,
+			"stale shutdown keeps the replacement sticky frame patch",
+		);
 
 		const parent = new Container() as any;
 		for (const name of ["read", "bash"]) {
@@ -91,6 +108,17 @@ test("stale TUI shutdown leaves the replacement runtime active", async () => {
 			parent.addChild(tool);
 		}
 		assert.ok(parent.children[0] instanceof ToolGroupComponent);
+
+		// 陈旧安装的引用已清：A 的下一个 session_start 重新装自己的补丁，
+		// 而不是复用一套已失活的 installation。
+		await runtimeA.events.get("session_start")?.({}, ctx);
+		assert.notEqual(
+			containerPrototype.addChild,
+			replacementContainer.addChild,
+			"the stale instance reinstalls its own grouping patch",
+		);
+		assert.notEqual(containerPrototype.addChild, originalContainer.addChild);
+		await runtimeA.events.get("session_shutdown")?.({}, ctx);
 
 		await runtimeB.events.get("session_shutdown")?.({}, ctx);
 		for (const name of containerMethods)
