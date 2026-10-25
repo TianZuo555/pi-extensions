@@ -65,6 +65,18 @@ export function footerGlyphs(nerdIcons: boolean): { git: string; cache: string; 
 }
 
 /**
+ * 截断 session / 分支名，保留开头并以 `…` 收尾。
+ * 按字符数而不是显示宽度：两者都是短标签，尾部还有状态与统计要留位置。
+ * clip <= 0 不截断。
+ */
+export function clipFooterLabel(label: string, clip: number): string {
+	if (clip <= 0) return label;
+	const chars = Array.from(label);
+	if (chars.length <= clip) return label;
+	return `${chars.slice(0, clip).join("")}…`;
+}
+
+/**
  * 思考等级的填充圆标：等级越高填得越满。
  * 全部取自同一圆径的几何圆，避开占位虚线圆和偏小的半圆。
  */
@@ -474,12 +486,15 @@ const createCustomFooterFactory =
 				: "";
 
 			const gitColor = theme.getThinkingBorderColor("medium");
+			const clip = config.footerLabelClip;
 			let place = theme.fg("accent", cwdLabel);
 			const sessionName = ctx.sessionManager.getSessionName();
 			if (sessionName) {
-				place += theme.fg("muted", " in ") + theme.fg("success", sessionName);
+				place +=
+					theme.fg("muted", " in ") + theme.fg("success", clipFooterLabel(sessionName, clip));
 			}
 			const branch = footerData.getGitBranch();
+			const branchLabel = branch ? clipFooterLabel(branch, clip) : "";
 			let gitChip = "";
 			if (branch) {
 				const s = gitStats;
@@ -492,7 +507,7 @@ const createCustomFooterFactory =
 						theme.fg("success", `+${s.add}`) +
 						theme.fg("dim", "/") +
 						theme.fg("error", `−${s.del}`);
-				const gitLabel = glyphs.git ? `${glyphs.git} ${branch}` : branch;
+				const gitLabel = glyphs.git ? `${glyphs.git} ${branchLabel}` : branchLabel;
 				gitChip = gitColor(gitLabel) + stats;
 			}
 

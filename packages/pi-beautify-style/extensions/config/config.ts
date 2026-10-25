@@ -54,7 +54,12 @@ export type Config = {
 	expandedOutputMaxLines: number;
 	toolLabelClip: number;
 	useSummaryTitlesAsThinkingTitle: boolean;
-	previewLines: number;
+	/**
+	 * Max reasoning rows shown **while** a run streams; longer text scrolls inside the
+	 * window and the newest row stays at the bottom. A finished run hides the body
+	 * entirely (heading only) until `app.thinking.toggle` (ctrl+t) expands it.
+	 */
+	liveThinkingLines: number;
 	animationIntervalMs: number;
 	/** fullscreen：userMessage 正文首行滚出视口上沿后钉住，直到下一条指令接手。 */
 	stickyUserMessage: boolean;
@@ -81,6 +86,8 @@ export type Config = {
 	/** 1 单位费用对应的显示币种数量。null 只换符号、不乘倍率。 */
 	footerCurrencyRate: number | null;
 	footerNerdIcons: boolean;
+	/** Session name and branch name cap, in characters. 0 = no cap. */
+	footerLabelClip: number;
 	footerGitStatsMode: FooterGitStatsMode;
 	footerHiddenKeys: string[];
 	footerLine1Keys: string[];
@@ -105,7 +112,7 @@ export const EXPANDED_INPUT_MAX_LINES_VALUES = ["5", "10", "20", "40", "80"];
 export const EXPANDED_OUTPUT_MAX_LINES_VALUES = ["10", "20", "40", "80", "120"];
 /** 工具摘要里 path/command 等输入的折叠字符数；0 = 只按可用宽度截断。 */
 export const TOOL_LABEL_CLIP_VALUES = ["0", "40", "60", "80", "100", "120", "160"];
-export const THINKING_PREVIEW_LINES_VALUES = ["0", "1", "3", "5", "10"];
+export const THINKING_LIVE_LINES_VALUES = ["1", "3", "5", "8", "10"];
 export const THINKING_ANIMATION_INTERVAL_VALUES = ["40", "60", "90", "120", "180"];
 /** Tools commonly excluded from ccstyle rendering. */
 export const EXCLUDE_RENDERER_CANDIDATES = [
@@ -135,7 +142,7 @@ export const DEFAULT_CONFIG: Config = {
 	expandedOutputMaxLines: 10,
 	toolLabelClip: 0,
 	useSummaryTitlesAsThinkingTitle: true,
-	previewLines: 3,
+	liveThinkingLines: 5,
 	animationIntervalMs: 90,
 	stickyUserMessage: true,
 	scrollButtonMode: "dock",
@@ -153,6 +160,7 @@ export const DEFAULT_CONFIG: Config = {
 	footerCurrency: "USD",
 	footerCurrencyRate: null,
 	footerNerdIcons: true,
+	footerLabelClip: 16,
 	footerGitStatsMode: "working",
 	...DEFAULT_FOOTER_CHIP_LAYOUT,
 };
@@ -170,7 +178,7 @@ export const config: Config = { ...DEFAULT_CONFIG };
 export function getCompactThinkingConfig(source: Config = config): CompactThinkingConfig {
 	return {
 		useSummaryTitlesAsThinkingTitle: source.useSummaryTitlesAsThinkingTitle,
-		previewLines: source.previewLines,
+		liveThinkingLines: source.liveThinkingLines,
 		animationIntervalMs: source.animationIntervalMs,
 	};
 }

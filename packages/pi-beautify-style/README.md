@@ -68,7 +68,7 @@ blocks and reasoning boxes are what this package renders. Do not run both.
 
 There is none. This package ships no `/ccstyle` command, no settings panel, and
 no JSON file. Every knob — render mode, diff layout, footer chips, reasoning
-preview length — is a source constant in
+window height — is a source constant in
 [`extensions/config/config.ts`](./extensions/config/config.ts). Edit that file
 and restart Pi to change behavior.
 
@@ -76,6 +76,10 @@ and restart Pi to change behavior.
 > In fullscreen mode, click `click to show more` to expand a tool card, a
 > reasoning block, or a compact summary. Expanded cards show the full diff;
 > Input/Output past their line limit open a full preview.
+>
+> Reasoning streams in a five-row window and hides completely once the run
+> ends (`Thought for 8s · ctrl+t to expand`). Press `ctrl+t` to open every
+> finished reasoning block; press it again to hide them.
 
 > [!NOTE]
 > For Mermaid diagrams, set `markdown.mermaid` to `final` in

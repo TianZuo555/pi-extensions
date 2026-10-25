@@ -21,7 +21,10 @@ import { Container, visibleWidth } from "@earendil-works/pi-tui";
 import {
 	config,
 } from "../extensions/config/config.ts";
-import { installCompactThinking } from "../extensions/feature/compact-thinking.ts";
+import {
+	installCompactThinking,
+	setAllThinkingExpanded,
+} from "../extensions/feature/compact-thinking.ts";
 import { installDefaultMode } from "../extensions/renderer/default-mode.ts";
 import {
 	buildMessageSummary,
@@ -624,7 +627,7 @@ test("expanded running round keeps thinking and tools in transcript order", () =
 	const { pi, ctx, emit } = extensionRuntime();
 	installCompactThinking(pi, {
 		useSummaryTitlesAsThinkingTitle: false,
-		previewLines: 3,
+		liveThinkingLines: 3,
 		animationIntervalMs: 30,
 	});
 	emit("session_start", {}, ctx);
@@ -655,6 +658,8 @@ test("expanded running round keeps thinking and tools in transcript order", () =
 		const grep = tool("grep", "g1", { pattern: "needle" });
 		grep.updateResult({ content: [{ type: "text", text: "hit" }], isError: false });
 		assistant1.setExpanded(true);
+		setAllThinkingExpanded(true);
+		assistant1.updateContent(message1);
 		const text = renderText(assistant1).join("\n");
 		const planOne = text.indexOf("plan-one");
 		const echoOne = text.indexOf("echo-one");
@@ -665,6 +670,7 @@ test("expanded running round keeps thinking and tools in transcript order", () =
 		assert.ok(echoOne < planTwo, `tool 1 must precede thinking 2, got: ${text}`);
 		assert.ok(planTwo < needle, `thinking 2 must precede its tool, got: ${text}`);
 	} finally {
+		setAllThinkingExpanded(false);
 		hooks.shutdown();
 		config.mode = previousMode;
 		emit("session_shutdown", {}, ctx);
@@ -692,7 +698,7 @@ test("compact 整回合展开卡内工具可单击二次展开", () => {
 	const { pi, ctx, emit } = extensionRuntime();
 	installCompactThinking(pi, {
 		useSummaryTitlesAsThinkingTitle: false,
-		previewLines: 3,
+		liveThinkingLines: 3,
 		animationIntervalMs: 30,
 	});
 	emit("session_start", {}, ctx);
@@ -776,7 +782,7 @@ test("compact 面板收起时，卡内被点开的工具一起收回", async () 
 	const { pi, ctx, emit } = extensionRuntime();
 	installCompactThinking(pi, {
 		useSummaryTitlesAsThinkingTitle: false,
-		previewLines: 3,
+		liveThinkingLines: 3,
 		animationIntervalMs: 30,
 	});
 	emit("session_start", {}, ctx);
@@ -842,7 +848,7 @@ test("compact live: one thinking preview, one tool slot, folds after the settle 
 	const { pi, ctx, emit } = extensionRuntime();
 	installCompactThinking(pi, {
 		useSummaryTitlesAsThinkingTitle: false,
-		previewLines: 3,
+		liveThinkingLines: 3,
 		animationIntervalMs: 30,
 	});
 	emit("session_start", {}, ctx);
@@ -899,6 +905,11 @@ test("compact live: one thinking preview, one tool slot, folds after the settle 
 		};
 		const assistant3 = new AssistantMessageComponent(message3 as any, true) as any;
 		assistant3.updateContent(message3);
+		// 活动思考由 thinking_start 标记；compact 只把仍在长的思考放进槽位。
+		await emit("message_update", {
+			message: message3 as any,
+			assistantMessageEvent: { type: "thinking_start", contentIndex: 0 },
+		});
 
 		text = renderText(assistant1).join("\n");
 		assert.match(text, /plan-three/, `活动思考应预览: ${text}`);
@@ -984,7 +995,7 @@ test("compact live: a superseding round folds the previous one immediately", () 
 	const { pi, ctx, emit } = extensionRuntime();
 	installCompactThinking(pi, {
 		useSummaryTitlesAsThinkingTitle: false,
-		previewLines: 3,
+		liveThinkingLines: 3,
 		animationIntervalMs: 30,
 	});
 	emit("session_start", {}, ctx);
@@ -1763,7 +1774,7 @@ test("compact 尾行：TUI 切换后容器过期，refresh 不另起摘要行", 
 	}
 });
 
-test("compact live: 槽位卡内不重复展开入口，摘要行自己的 hint 保留", () => {
+test("compact live: 槽位卡内不重复展开入口，摘要行自己的 hint 保留", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "pi-compact-live-hint-"));
 	const previousDir = process.env.PI_CODING_AGENT_DIR;
 	process.env.PI_CODING_AGENT_DIR = dir;
@@ -1772,7 +1783,7 @@ test("compact live: 槽位卡内不重复展开入口，摘要行自己的 hint 
 	const { pi, ctx, emit } = extensionRuntime();
 	installCompactThinking(pi, {
 		useSummaryTitlesAsThinkingTitle: false,
-		previewLines: 3,
+		liveThinkingLines: 3,
 		animationIntervalMs: 30,
 	});
 	emit("session_start", {}, ctx);
@@ -1800,11 +1811,16 @@ test("compact live: 槽位卡内不重复展开入口，摘要行自己的 hint 
 		};
 		const member = new AssistantMessageComponent(memberMessage as any, true) as any;
 		member.updateContent(memberMessage);
+		await emit("message_update", {
+			message: memberMessage as any,
+			assistantMessageEvent: { type: "thinking_start", contentIndex: 0 },
+		});
 
 		const lines = renderText(anchor);
 		const slot = lines.find((line) => line.startsWith("↳"));
 		assert.ok(slot, `槽位卡应存在: ${lines}`);
-		assert.ok(slot.includes("more lines"), `槽位卡保留隐藏行计数: ${lines}`);
+		// 运行中的思考占槽位：窗口只跟最新行，标题上不带任何展开入口。
+		assert.match(slot, /^↳ Thinking/, `槽位卡首行是思考标题: ${slot}`);
 		assert.ok(!slot.includes("click to show more"), `槽位卡不重复展开入口: ${slot}`);
 		assert.ok(
 			lines.some((line) => !line.startsWith("↳") && line.includes("click to show more")),
@@ -1838,7 +1854,7 @@ test("compact 展开卡：thinking 二次展开只多 1 行内卡 padding，工�
 	const { pi, ctx, emit } = extensionRuntime();
 	installCompactThinking(pi, {
 		useSummaryTitlesAsThinkingTitle: false,
-		previewLines: 3,
+		liveThinkingLines: 3,
 		animationIntervalMs: 30,
 	});
 	emit("session_start", {}, ctx);
@@ -1907,6 +1923,7 @@ test("compact 展开卡：thinking 二次展开只多 1 行内卡 padding，工�
 			"工具卡前的最后一行应是内卡下 padding，空行在其外",
 		);
 	} finally {
+		setAllThinkingExpanded(false);
 		hooks.shutdown();
 		setMessageDisplayTheme(previousTheme);
 		config.mode = previousMode;
@@ -1937,7 +1954,7 @@ test("compact 展开卡：助手文本不进面板，工具卡保留底色", () 
 	const { pi, ctx, emit } = extensionRuntime();
 	installCompactThinking(pi, {
 		useSummaryTitlesAsThinkingTitle: false,
-		previewLines: 3,
+		liveThinkingLines: 3,
 		animationIntervalMs: 30,
 	});
 	emit("session_start", {}, ctx);
@@ -2005,7 +2022,7 @@ test("compact 展开面板留在摘要行原位，不跳到 write/edit 上方", 
 	const { pi, ctx, emit } = extensionRuntime();
 	installCompactThinking(pi, {
 		useSummaryTitlesAsThinkingTitle: false,
-		previewLines: 3,
+		liveThinkingLines: 3,
 		animationIntervalMs: 30,
 	});
 	emit("session_start", {}, ctx);
@@ -2089,7 +2106,7 @@ test("compact 展开卡：助手文本排在 thinking 前面，不被思考块�
 	const { pi, ctx, emit } = extensionRuntime();
 	installCompactThinking(pi, {
 		useSummaryTitlesAsThinkingTitle: false,
-		previewLines: 3,
+		liveThinkingLines: 3,
 		animationIntervalMs: 30,
 	});
 	emit("session_start", {}, ctx);
@@ -2112,6 +2129,8 @@ test("compact 展开卡：助手文本排在 thinking 前面，不被思考块�
 		anchor.updateContent(message);
 		bash.updateResult({ content: [{ type: "text", text: "line one" }], isError: false });
 		anchor.setExpanded(true);
+		setAllThinkingExpanded(true);
+		anchor.updateContent(message);
 
 		const raw = anchor
 			.render(120)
@@ -2123,6 +2142,7 @@ test("compact 展开卡：助手文本排在 thinking 前面，不被思考块�
 		assert.ok(textRow >= 0 && thinkRow >= 0, `缺文本或思考: ${raw.join("\n")}`);
 		assert.ok(textRow < thinkRow, "助手文本应排在 thinking 前面，展开后不被思考块盖住");
 	} finally {
+		setAllThinkingExpanded(false);
 		hooks.shutdown();
 		setMessageDisplayTheme(previousTheme);
 		config.mode = previousMode;
@@ -2150,7 +2170,7 @@ test("compact 面板收起后重钉视口，不跳回展开前的位置", () => 
 	const { pi, ctx, emit } = extensionRuntime();
 	installCompactThinking(pi, {
 		useSummaryTitlesAsThinkingTitle: false,
-		previewLines: 3,
+		liveThinkingLines: 3,
 		animationIntervalMs: 30,
 	});
 	emit("session_start", {}, ctx);
@@ -2232,7 +2252,7 @@ test("compact 折叠态工具卡复用 ccstyle 默认样式", () => {
 	const { pi, ctx, emit } = extensionRuntime();
 	installCompactThinking(pi, {
 		useSummaryTitlesAsThinkingTitle: false,
-		previewLines: 3,
+		liveThinkingLines: 3,
 		animationIntervalMs: 30,
 	});
 	emit("session_start", {}, ctx);
@@ -2883,7 +2903,7 @@ test("refreshMountedTranscript asserts compact ownership before redraw (resume w
 		claudeCodeStyleExtension(pi);
 		installCompactThinking(pi, {
 			useSummaryTitlesAsThinkingTitle: false,
-			previewLines: 0,
+			liveThinkingLines: 0,
 			animationIntervalMs: 30,
 		});
 		await emit("session_start", {}, ctx);
@@ -2922,7 +2942,7 @@ test("session_start and session_tree keep the compact patch outermost over compa
 		claudeCodeStyleExtension(pi);
 		installCompactThinking(pi, {
 			useSummaryTitlesAsThinkingTitle: false,
-			previewLines: 0,
+			liveThinkingLines: 0,
 			animationIntervalMs: 30,
 		});
 		await emit("session_start", {}, ctx);
@@ -2974,7 +2994,7 @@ test("isStreaming survives the compact + compact-thinking patch chain (mermaid f
 		claudeCodeStyleExtension(pi);
 		installCompactThinking(pi, {
 			useSummaryTitlesAsThinkingTitle: false,
-			previewLines: 0,
+			liveThinkingLines: 0,
 			animationIntervalMs: 30,
 		});
 		// 真实链序：compact-thinking 先装，compact-mode 在其外层再装。

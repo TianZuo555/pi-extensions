@@ -9,13 +9,15 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import {
 	clearThinkingPreviewCache,
 	installCompactThinking,
+	isAllThinkingExpanded,
 	ThinkingPreviewBlock,
 } from "../extensions/feature/compact-thinking.ts";
+import { DEFAULT_CONFIG } from "../extensions/config/config.ts";
 import { animateCompactThinkingText } from "../extensions/renderer/compact-mode.ts";
 
 const config = {
 	useSummaryTitlesAsThinkingTitle: false,
-	previewLines: 0,
+	liveThinkingLines: 0,
 	animationIntervalMs: 30,
 };
 
@@ -23,7 +25,7 @@ test("collapsed thinking previews memoize complete output until invalidated", ()
 	const originalConfig = { ...config };
 	const { pi } = runtime();
 	const controller = installCompactThinking(pi, { ...originalConfig });
-	controller.updateConfig({ ...originalConfig, previewLines: 1 });
+	controller.updateConfig({ ...originalConfig, liveThinkingLines: 1 });
 	clearThinkingPreviewCache();
 	try {
 		const preview = new ThinkingPreviewBlock(
@@ -42,7 +44,7 @@ test("collapsed thinking previews memoize complete output until invalidated", ()
 
 		assert.notStrictEqual(preview.render(16), first, "width changes recompute output");
 		const beforeConfigChange = preview.render(16);
-		controller.updateConfig({ ...originalConfig, previewLines: 2 });
+		controller.updateConfig({ ...originalConfig, liveThinkingLines: 2 });
 		assert.notStrictEqual(
 			preview.render(16),
 			beforeConfigChange,
@@ -65,7 +67,7 @@ test("collapsed thinking previews memoize complete output until invalidated", ()
 test("thinking 展开态按消息时间戳与 run 序号记，换实例后仍生效", () => {
 	const originalConfig = { ...config };
 	const { pi } = runtime();
-	const controller = installCompactThinking(pi, { ...originalConfig, previewLines: 1 });
+	const controller = installCompactThinking(pi, { ...originalConfig, liveThinkingLines: 1 });
 	clearThinkingPreviewCache();
 	try {
 		const body = "alpha beta gamma delta epsilon";
@@ -604,88 +606,41 @@ function previewMessage(thinking: string) {
 	} as unknown as AssistantMessage;
 }
 
-test("thinking preview counts wrapped hidden lines and does not restyle from cache", () => {
-	const dir = mkdtempSync(join(tmpdir(), "pi-compact-thinking-preview-"));
+test("live thinking keeps a five-row tail window and follows the newest text", () => {
+	const dir = mkdtempSync(join(tmpdir(), "pi-compact-thinking-live-window-"));
 	const previousDir = process.env.PI_CODING_AGENT_DIR;
 	process.env.PI_CODING_AGENT_DIR = dir;
 	const { emit, pi } = runtime();
-	const theme = {
-		fg: (color: string, text: string) => `<${color}>${text}</${color}>`,
-		italic: (text: string) => text,
-		bold: (text: string) => text,
-	};
-	const ctx = {
-		mode: "tui",
-		sessionManager: { getBranch: () => [], getEntries: () => [] },
-		ui: {
-			theme,
-			setWidget() {},
-			requestRender() {},
-		},
-	} as any;
-	const width = 80;
-	const previewLines = 3;
-	const body = "x".repeat(4000);
+	const ctx = themeCtx();
+	const body = Array.from({ length: 20 }, (_, i) => `line-${i}`).join("\n");
 	try {
-		installCompactThinking(pi, {
-			useSummaryTitlesAsThinkingTitle: false,
-			previewLines,
-			animationIntervalMs: 30,
-		});
+		installCompactThinking(pi, { ...config, liveThinkingLines: 5 });
 		emit("session_start", {}, ctx);
-
 		const msg = previewMessage(body);
-		const first = new AssistantMessageComponent(msg, true) as any;
-		first.updateContent(msg);
-		const firstLines = first.render(width) as string[];
-		const firstPlain = firstLines.map((line: string) => line.trim()).filter(Boolean);
-		const hint = firstPlain.find((line: string) => /Thought/.test(line) && /more lines/.test(line));
-		assert.ok(hint, `expected hidden-line hint after Thought, got: ${JSON.stringify(firstPlain)}`);
-		assert.match(hint, /<dim> · \d+ more lines/);
-		// 正文走 Pi 的 thinkingText slot，标题/元信息仍走 dim。
-		const bodyToken = "thinkingText";
-		assert.ok(
-			!firstPlain.some(
-				(line: string) => new RegExp(`^<${bodyToken}>x+`).test(line) && /more line/.test(line),
-			),
-			"preview body must not carry the more-line hint",
-		);
-		const hidden = Number(/(\d+) more lines/.exec(hint)?.[1]);
-		// Raw newline count of the discarded prefix is 0; wrapped count is ~width-based.
-		assert.ok(
-			hidden > 20,
-			`hidden lines should follow wrap width, not raw newlines, got ${hidden}`,
-		);
-		assert.ok(
-			firstPlain.filter((line: string) => new RegExp(`^<${bodyToken}>x+`).test(line)).length <=
-				previewLines,
-			"preview body stays capped at previewLines",
-		);
-		assert.ok(
-			firstPlain.every((line: string) => !/^x{80,}/.test(line)),
-			"full unwrapped paragraph must not leak into the preview",
-		);
+		emit("message_update", {
+			message: msg,
+			assistantMessageEvent: { type: "thinking_start", contentIndex: 0 },
+		});
 
-		theme.fg = (color: string, text: string) => `[${color}]${text}[/${color}]`;
-		const second = new AssistantMessageComponent(msg, true) as any;
-		second.updateContent(msg);
-		const secondPlain = (second.render(width) as string[])
-			.map((line: string) => line.trim())
-			.filter(Boolean);
+		const live = new AssistantMessageComponent(msg, true) as any;
+		live.updateContent(msg);
+		const streaming = renderText(live);
 		assert.ok(
-			secondPlain.some((line: string) => line.includes(`[${bodyToken}]`)),
-			"theme change must restyle preview body, not reuse cached ANSI",
+			streaming.some((line) => /Thinking/.test(line)),
+			`live block keeps the animated heading, got: ${JSON.stringify(streaming)}`,
+		);
+		assert.deepEqual(
+			streaming.filter((line) => /^line-\d+$/.test(line)),
+			["line-15", "line-16", "line-17", "line-18", "line-19"],
+			"only the newest five rows stay; older rows scroll out of the window",
 		);
 		assert.ok(
-			secondPlain.some((line: string) => /\[dim\] · \d+ more lines/.test(line)),
-			"more-line hint uses the dim token after theme change",
+			!streaming.some((line) => line.includes("line-0")),
+			"the head has already scrolled out of view",
 		);
 		assert.ok(
-			secondPlain.every(
-				(line: string) =>
-					!line.includes(`<${bodyToken}>`) && !line.includes("<dim>"),
-			),
-			"cached wrap must not keep the previous theme's markup",
+			!streaming.some((line) => /more line/.test(line)),
+			"no hidden-line hint while the window follows the stream",
 		);
 	} finally {
 		emit("session_shutdown", {}, ctx);
@@ -695,38 +650,26 @@ test("thinking preview counts wrapped hidden lines and does not restyle from cac
 	}
 });
 
-test("previewLines 0 still offers click to show more and expands the body", () => {
-	const dir = mkdtempSync(join(tmpdir(), "pi-compact-thinking-preview-zero-"));
+test("a finished run hides the whole body and only offers the expand hint", () => {
+	const dir = mkdtempSync(join(tmpdir(), "pi-compact-thinking-finished-hide-"));
 	const previousDir = process.env.PI_CODING_AGENT_DIR;
 	process.env.PI_CODING_AGENT_DIR = dir;
 	const { emit, pi } = runtime();
 	const ctx = themeCtx();
-	const body = Array.from({ length: 8 }, (_, i) => `line-${i}`).join("\n");
+	const body = Array.from({ length: 2 }, (_, i) => `line-${i}`).join("\n");
 	try {
-		installCompactThinking(pi, {
-			useSummaryTitlesAsThinkingTitle: false,
-			previewLines: 0,
-			animationIntervalMs: 30,
-		});
+		installCompactThinking(pi, { ...config, liveThinkingLines: 5 });
 		emit("session_start", {}, ctx);
 		const msg = previewMessage(body);
 		const component = new AssistantMessageComponent(msg, true) as any;
 		component.updateContent(msg);
-		const collapsed = renderText(component);
+		const lines = renderText(component);
+		assert.equal(lines.length, 1, `the finished card is a single row: ${JSON.stringify(lines)}`);
+		assert.match(lines[0]!, /^Thought · (click to show more|ctrl\+t to expand)$/);
 		assert.ok(
-			collapsed.some((line) => /Thought.*click to show more/.test(line)),
-			`expected click hint with no preview body, got: ${JSON.stringify(collapsed)}`,
+			!lines.some((line) => /^line-\d+$/.test(line)),
+			"even a short body is hidden once the run ends",
 		);
-		assert.ok(
-			!collapsed.some((line) => /^line-\d+$/.test(line)),
-			"previewLines 0 hides the thinking body",
-		);
-
-		thinkingBlockOf(component).setExpanded(true);
-		const expanded = renderText(component);
-		assert.ok(!expanded.some((line) => line.includes("click to show more")));
-		assert.ok(expanded.some((line) => line.includes("line-0")));
-		assert.ok(expanded.some((line) => line.includes("line-7")));
 	} finally {
 		emit("session_shutdown", {}, ctx);
 		if (previousDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
@@ -743,7 +686,7 @@ function thinkingBlockOf(component: any): ThinkingPreviewBlock {
 	return block;
 }
 
-test("thinking preview expands the full body and keeps that state across updateContent", () => {
+test("the finished card expands to the full body and keeps that state across updateContent", () => {
 	const dir = mkdtempSync(join(tmpdir(), "pi-compact-thinking-preview-expand-"));
 	const previousDir = process.env.PI_CODING_AGENT_DIR;
 	process.env.PI_CODING_AGENT_DIR = dir;
@@ -754,28 +697,18 @@ test("thinking preview expands the full body and keeps that state across updateC
 		bgSlots.push(slot);
 		return `<bg>${text}</bg>`;
 	};
-	const previewLines = 3;
 	const body = Array.from({ length: 20 }, (_, i) => `line-${i}`).join("\n");
 	try {
-		installCompactThinking(pi, {
-			useSummaryTitlesAsThinkingTitle: false,
-			previewLines,
-			animationIntervalMs: 30,
-		});
+		installCompactThinking(pi, { ...config, liveThinkingLines: 5 });
 		emit("session_start", {}, ctx);
 		const msg = previewMessage(body);
 		const component = new AssistantMessageComponent(msg, true) as any;
 		component.updateContent(msg);
 		const collapsed = renderText(component);
-		assert.ok(collapsed.some((line) => /more lines.*click to show more/.test(line)));
+		assert.equal(collapsed.length, 1, "collapsed run is the heading row only");
 		assert.ok(
 			collapsed.every((line) => !line.includes("<bg>")),
 			"collapsed preview is not wrapped in a card",
-		);
-		assert.equal(
-			collapsed.filter((line) => /^line-\d+$/.test(line)).length,
-			previewLines,
-			"collapsed body stays capped",
 		);
 
 		const block = thinkingBlockOf(component);
@@ -789,9 +722,10 @@ test("thinking preview expands the full body and keeps that state across updateC
 		assert.ok(!expanded.some((line) => line.includes("more line")));
 		assert.ok(expanded.some((line) => line.includes("line-0")));
 		assert.ok(expanded.some((line) => line.includes("line-19")));
-		assert.ok(
-			expanded.filter((line) => /line-\d+/.test(line)).length > previewLines,
-			"expanded body shows more than the preview window",
+		assert.equal(
+			expanded.filter((line) => /line-\d+/.test(line)).length,
+			20,
+			"expanded body shows every reasoning row, not just the live window",
 		);
 		assert.ok(
 			bgSlots.includes("toolSuccessBg"),
@@ -804,8 +738,8 @@ test("thinking preview expands the full body and keeps that state across updateC
 
 		thinkingBlockOf(component).setExpanded(false);
 		const recollapsed = renderText(component);
-		assert.ok(recollapsed.some((line) => /more lines.*click to show more/.test(line)));
-		assert.equal(recollapsed.filter((line) => /^line-\d+$/.test(line)).length, previewLines);
+		assert.equal(recollapsed.length, 1, "collapsing returns to the heading row only");
+		assert.match(recollapsed[0]!, /^Thought · /);
 	} finally {
 		emit("session_shutdown", {}, ctx);
 		if (previousDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
@@ -814,7 +748,7 @@ test("thinking preview expands the full body and keeps that state across updateC
 	}
 });
 
-test("previewLines takes over thinking rendering without Pi's hideThinkingBlock", () => {
+test("the reasoning card replaces Pi's renderer even with hideThinkingBlock off", () => {
 	const dir = mkdtempSync(join(tmpdir(), "pi-compact-thinking-preview-takeover-"));
 	const previousDir = process.env.PI_CODING_AGENT_DIR;
 	process.env.PI_CODING_AGENT_DIR = dir;
@@ -822,31 +756,65 @@ test("previewLines takes over thinking rendering without Pi's hideThinkingBlock"
 	const ctx = themeCtx();
 	const body = Array.from({ length: 12 }, (_, i) => `line-${i}`).join("\n");
 	try {
-		installCompactThinking(pi, {
-			useSummaryTitlesAsThinkingTitle: false,
-			previewLines: 3,
-			animationIntervalMs: 30,
-		});
+		installCompactThinking(pi, { ...config, liveThinkingLines: 5 });
 		emit("session_start", {}, ctx);
 		const msg = previewMessage(body);
 		const component = new AssistantMessageComponent(msg, true) as any;
-		// Pi keeps thinking visible by default; the preview setting must still win.
+		// Pi keeps thinking visible by default; the collapsed card must still win.
 		component.hideThinkingBlock = false;
 		component.updateContent(msg);
 
 		const lines = renderText(component);
+		assert.equal(lines.length, 1, `collapsed card replaces Pi's renderer: ${JSON.stringify(lines)}`);
+		assert.match(lines[0]!, /^Thought · /);
+		assert.ok(!lines.some((line) => /^line-\d+$/.test(line)), "no reasoning rows leak through");
+	} finally {
+		emit("session_shutdown", {}, ctx);
+		if (previousDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousDir;
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("liveThinkingLines sizes the streaming window, not the finished card", () => {
+	const dir = mkdtempSync(join(tmpdir(), "pi-compact-thinking-live-lines-"));
+	const previousDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = dir;
+	const { emit, pi } = runtime();
+	const ctx = themeCtx();
+	const body = Array.from({ length: 12 }, (_, i) => `line-${i}`).join("\n");
+	try {
+		installCompactThinking(pi, { ...config, liveThinkingLines: 3 });
+		emit("session_start", {}, ctx);
+		const msg = previewMessage(body);
+		emit("message_update", {
+			message: msg,
+			assistantMessageEvent: { type: "thinking_start", contentIndex: 0 },
+		});
+		const live = new AssistantMessageComponent(msg, true) as any;
+		live.updateContent(msg);
+		assert.equal(
+			renderText(live).filter((line) => /^line-\d+$/.test(line)).length,
+			3,
+			"the live window honours liveThinkingLines",
+		);
+
+		// A finished run always hides the body, whatever the window size.
+		emit("message_update", {
+			message: msg,
+			assistantMessageEvent: { type: "text_start", contentIndex: 1 },
+		});
+		const done = new AssistantMessageComponent(msg, true) as any;
+		done.updateContent(msg);
+		const finished = renderText(done);
 		assert.ok(
-			lines.some((line) => /more lines/.test(line)),
-			`collapsed preview card replaces Pi's renderer, got: ${JSON.stringify(lines)}`,
+			finished.some((line) => /^Thought for/.test(line)),
+			`finished heading replaces the animation, got: ${JSON.stringify(finished)}`,
 		);
 		assert.equal(
-			lines.filter((line) => /^line-\d+$/.test(line)).length,
-			3,
-			"only previewLines rows of reasoning are visible",
-		);
-		assert.ok(
-			!lines.some((line) => line.includes("line-0")),
-			"the preview shows the tail, not the head",
+			finished.filter((line) => /^line-\d+$/.test(line)).length,
+			0,
+			"the finished card hides the body",
 		);
 	} finally {
 		emit("session_shutdown", {}, ctx);
@@ -856,31 +824,520 @@ test("previewLines takes over thinking rendering without Pi's hideThinkingBlock"
 	}
 });
 
-test("previewLines 0 leaves Pi's own thinking renderer in place", () => {
-	const dir = mkdtempSync(join(tmpdir(), "pi-compact-thinking-preview-native-"));
+test("app.thinking.toggle expands every finished card and collapses them again", () => {
+	const dir = mkdtempSync(join(tmpdir(), "pi-compact-thinking-toggle-all-"));
 	const previousDir = process.env.PI_CODING_AGENT_DIR;
 	process.env.PI_CODING_AGENT_DIR = dir;
 	const { emit, pi } = runtime();
-	const ctx = themeCtx();
+	const handlers = new Set<(data: string) => any>();
+	const setWidgetCalls: unknown[] = [];
+	const ctx = {
+		mode: "tui",
+		sessionManager: { getBranch: () => [], getEntries: () => [] },
+		ui: {
+			theme: { fg: (_c: string, t: string) => t, italic: (t: string) => t, bold: (t: string) => t },
+			setWidget() {
+				setWidgetCalls.push(1);
+			},
+			requestRender() {},
+			onTerminalInput(handler: (data: string) => any) {
+				handlers.add(handler);
+				return () => handlers.delete(handler);
+			},
+		},
+	} as any;
 	const body = Array.from({ length: 12 }, (_, i) => `line-${i}`).join("\n");
+	const pressCtrlT = () => {
+		let consumed = false;
+		for (const handler of handlers) {
+			if (handler("\x14")?.consume) consumed = true;
+		}
+		return consumed;
+	};
 	try {
-		installCompactThinking(pi, {
-			useSummaryTitlesAsThinkingTitle: false,
-			previewLines: 0,
-			animationIntervalMs: 30,
-		});
+		installCompactThinking(pi, { ...config, liveThinkingLines: 5 });
 		emit("session_start", {}, ctx);
+		assert.equal(handlers.size, 1, "session start installs one raw input listener");
+
 		const msg = previewMessage(body);
 		const component = new AssistantMessageComponent(msg, true) as any;
-		component.hideThinkingBlock = false;
 		component.updateContent(msg);
+		const collapsed = renderText(component);
+		assert.equal(collapsed.length, 1, "the finished run shows the heading row only");
 
-		const block = component.contentContainer?.children?.find(
-			(child: unknown) => child instanceof ThinkingPreviewBlock,
+		assert.equal(pressCtrlT(), true, "ctrl+t is consumed by the thinking toggle");
+		assert.equal(isAllThinkingExpanded(), true);
+		const expanded = renderText(new AssistantMessageComponent(msg, true) as any);
+		assert.equal(
+			expanded.filter((line) => /^line-\d+$/.test(line)).length,
+			12,
+			"every reasoning row is visible after the toggle",
 		);
-		assert.equal(block, undefined, "no preview card is mounted");
+		assert.ok(!expanded.some((line) => /more line/.test(line)), "no hint while expanded");
+
+		assert.equal(pressCtrlT(), true);
+		assert.equal(isAllThinkingExpanded(), false);
+		const recollapsed = renderText(new AssistantMessageComponent(msg, true) as any);
+		assert.equal(recollapsed.length, 1, "toggling back hides the body again");
 	} finally {
 		emit("session_shutdown", {}, ctx);
+		assert.equal(handlers.size, 0, "shutdown releases the raw input listener");
+		if (previousDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousDir;
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("ctrl+t leaves keys it does not own and dialogs untouched", () => {
+	const dir = mkdtempSync(join(tmpdir(), "pi-compact-thinking-toggle-guard-"));
+	const previousDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = dir;
+	const { emit, pi } = runtime();
+	const handlers = new Set<(data: string) => any>();
+	let composerFocused = false;
+	let tui: any;
+	const ctx = {
+		mode: "tui",
+		sessionManager: { getBranch: () => [], getEntries: () => [] },
+		ui: {
+			theme: { fg: (_c: string, t: string) => t, italic: (t: string) => t, bold: (t: string) => t },
+			setWidget(_key: string, factory: any) {
+				if (typeof factory !== "function") return;
+				// 输入框焦点带 getText；对话框/选择器没有，ctrl+t 要放行给它们。
+				tui = {
+					requestRender() {},
+					focusedComponent: composerFocused ? { actionHandlers: new Map() } : {},
+				};
+				factory(tui, {});
+			},
+			requestRender() {},
+			onTerminalInput(handler: (data: string) => any) {
+				handlers.add(handler);
+				return () => handlers.delete(handler);
+			},
+		},
+	} as any;
+	try {
+		installCompactThinking(pi, { ...config, liveThinkingLines: 5 });
+		emit("session_start", {}, ctx);
+		const handler = [...handlers][0]!;
+		assert.equal(handler("a"), undefined, "ordinary typing passes through");
+		assert.equal(handler("\x1b[<0;1;1M"), undefined, "mouse packets pass through");
+		assert.equal(handler("\x14"), undefined, "dialogs keep their own ctrl+t");
+		assert.equal(isAllThinkingExpanded(), false);
+
+		composerFocused = true;
+		tui.focusedComponent = { actionHandlers: new Map() };
+		assert.deepEqual(handler("\x14"), { consume: true }, "the composer hands ctrl+t over");
+		assert.equal(isAllThinkingExpanded(), true);
+	} finally {
+		emit("session_shutdown", {}, ctx);
+		if (previousDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousDir;
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("a live card re-renders after the global toggle, not a stale memo", () => {
+	const originalConfig = { ...config };
+	const { pi, emit } = runtime();
+	const handlers = new Set<(data: string) => any>();
+	let tui: any;
+	const ctx = {
+		mode: "tui",
+		sessionManager: { getBranch: () => [], getEntries: () => [] },
+		ui: {
+			theme: { fg: (_c: string, t: string) => t, italic: (t: string) => t, bold: (t: string) => t },
+			setWidget(_key: string, factory: any) {
+				if (typeof factory !== "function") return;
+				tui = { requestRender() {}, focusedComponent: { actionHandlers: new Map() } };
+				factory(tui, {});
+			},
+			requestRender() {},
+			onTerminalInput(handler: (data: string) => any) {
+				handlers.add(handler);
+				return () => handlers.delete(handler);
+			},
+		},
+	} as any;
+	try {
+		installCompactThinking(pi, { ...originalConfig, liveThinkingLines: 5 });
+		emit("session_start", {}, ctx);
+		const body = Array.from({ length: 20 }, (_, i) => `line-${i}`).join("\n");
+		const block = new ThinkingPreviewBlock("Thought", body, 0, 11, (text) => text, undefined, 0);
+		const collapsed = block.render(80);
+		assert.equal(collapsed.length, 1, "the mounted card starts collapsed to its heading");
+
+		for (const handler of handlers) handler("\x14");
+		const expanded = block.render(80);
+		assert.notStrictEqual(expanded, collapsed, "the toggle invalidates the render memo");
+		assert.equal(
+			expanded.filter((line) => /^line-\d+$/.test(line.trim())).length,
+			20,
+			"the same instance now paints the whole body",
+		);
+	} finally {
+		emit("session_shutdown", {}, ctx);
+		clearThinkingPreviewCache();
+	}
+});
+
+test("ctrl+t reaches the thinking toggle through Pi's real input chain", async () => {
+	const hostModule = (path: string) =>
+		new URL(path, import.meta.resolve("@earendil-works/pi-coding-agent")).href;
+	const [{ createInteractiveTui }, { CustomEditor }, { getEditorTheme }, { KeybindingsManager }] =
+		await Promise.all([
+			import(hostModule("./modes/interactive/tui-renderer.js")),
+			import(hostModule("./modes/interactive/components/custom-editor.js")),
+			import(hostModule("./modes/interactive/theme/theme.js")),
+			import(hostModule("./core/keybindings.js")),
+		]);
+	const { Container, setKeybindings } = await import("@earendil-works/pi-tui");
+	const bindings = new KeybindingsManager();
+	setKeybindings(bindings);
+	const terminal: any = {
+		columns: 80,
+		rows: 20,
+		isTTY: true,
+		write() {},
+		onData: () => () => {},
+		setRawMode() {},
+		getColorMode: () => "truecolor",
+		start() {},
+		stop() {},
+		showCursor() {},
+		hideCursor() {},
+	};
+	const renderer: any = createInteractiveTui({
+		tuiMode: "regular",
+		showHardwareCursor: false,
+		logDirectory: tmpdir(),
+		terminal,
+	});
+	renderer.requestRender = () => {};
+	const root = new Container();
+	renderer.addChild(root);
+	const editor = new CustomEditor(renderer, getEditorTheme(), bindings, {
+		embedWorkingStatus: true,
+	});
+	root.addChild(editor);
+	renderer.setFocus(editor);
+
+	const dir = mkdtempSync(join(tmpdir(), "pi-compact-thinking-real-input-"));
+	const previousDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = dir;
+	const { emit, pi } = runtime();
+	let piToggleCalls = 0;
+	editor.onAction("app.thinking.toggle", () => {
+		piToggleCalls += 1;
+	});
+	const ctx = {
+		mode: "tui",
+		sessionManager: { getBranch: () => [], getEntries: () => [] },
+		ui: {
+			theme: { fg: (_c: string, t: string) => t, italic: (t: string) => t, bold: (t: string) => t },
+			setWidget() {},
+			requestRender() {},
+			onTerminalInput(handler: (data: string) => any) {
+				return renderer.addInputListener(handler);
+			},
+		},
+	} as any;
+	try {
+		installCompactThinking(pi, { ...config, liveThinkingLines: 5 });
+		emit("session_start", {}, ctx);
+		const body = Array.from({ length: 20 }, (_, i) => `line-${i}`).join("\n");
+		const block = new ThinkingPreviewBlock("Thought", body, 0, 21, (text) => text, undefined, 0);
+		assert.equal(block.expanded, false);
+
+		renderer.handleTerminalInput("\x14");
+		assert.equal(block.expanded, true, "the real chain expands finished thinking");
+		assert.equal(piToggleCalls, 0, "Pi's own toggle never sees the consumed key");
+
+		renderer.handleTerminalInput("\x14");
+		assert.equal(block.expanded, false, "a second press collapses again");
+		assert.equal(piToggleCalls, 0);
+	} finally {
+		emit("session_shutdown", {}, ctx);
+		renderer.stop();
+		if (previousDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousDir;
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+/**
+ * `/reload` 真实顺序：旧 runner 先 session_shutdown，模块以 moduleCache:false 重新求值，
+ * 新 runner 再 session_start。这里用两个独立 install 模拟两个模块实例。
+ */
+test("reload releases the old ctrl+t listener and keeps the new one working", () => {
+	const dir = mkdtempSync(join(tmpdir(), "pi-compact-thinking-reload-listener-"));
+	const previousDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = dir;
+	const listeners = new Set<(data: string) => any>();
+	let tui: any;
+	const ctx = {
+		mode: "tui",
+		sessionManager: { getBranch: () => [], getEntries: () => [] },
+		ui: {
+			theme: { fg: (_c: string, t: string) => t, italic: (t: string) => t, bold: (t: string) => t },
+			setWidget(_key: string, factory: any) {
+				if (typeof factory !== "function") return;
+				tui = { requestRender() {}, focusedComponent: { actionHandlers: new Map() } };
+				factory(tui, {});
+			},
+			requestRender() {},
+			onTerminalInput(handler: (data: string) => any) {
+				listeners.add(handler);
+				// 与 Pi 的 addExtensionTerminalInputListener 一致：返回退订函数。
+				return () => listeners.delete(handler);
+			},
+		},
+	} as any;
+	const first = runtime();
+	const second = runtime();
+	const body = Array.from({ length: 12 }, (_, i) => `line-${i}`).join("\n");
+	const msg = previewMessage(body);
+	const isExpanded = () => thinkingBlockOf(
+		(() => {
+			const component = new AssistantMessageComponent(msg, true) as any;
+			component.updateContent(msg);
+			return component;
+		})(),
+	).expanded;
+	try {
+		installCompactThinking(first.pi, { ...config, liveThinkingLines: 5 });
+		first.emit("session_start", {}, ctx);
+		assert.equal(listeners.size, 1, "the old module installs one listener");
+
+		// 旧模块先收到 shutdown：它的监听必须撤掉，不留悬空闭包。
+		first.emit("session_shutdown", { reason: "reload" }, ctx);
+		assert.equal(listeners.size, 0, "reload releases the old raw-input listener");
+
+		// 新模块实例接管。
+		installCompactThinking(second.pi, { ...config, liveThinkingLines: 5 });
+		second.emit("session_start", { reason: "reload" }, ctx);
+		assert.equal(listeners.size, 1, "the new module installs its own single listener");
+
+		// 只剩一个监听 ⇒ 一次 ctrl+t 只翻转一次状态（重复注册会翻转两次 = 无变化）。
+		assert.equal(isExpanded(), false, "cards start collapsed after reload");
+		second.emit("session_start", { reason: "reload" }, ctx);
+		assert.equal(
+			listeners.size,
+			1,
+			"a second session_start on the same instance replaces, not stacks, the listener",
+		);
+		for (const listener of listeners) listener("\x14");
+		assert.equal(isExpanded(), true, "one ctrl+t expands the cards exactly once");
+	} finally {
+		second.emit("session_shutdown", { reason: "quit" }, ctx);
+		assert.equal(listeners.size, 0, "shutdown releases the listener");
+		if (previousDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousDir;
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("reload clears the global expand state instead of leaking it into the next session", () => {
+	const dir = mkdtempSync(join(tmpdir(), "pi-compact-thinking-reload-state-"));
+	const previousDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = dir;
+	const listeners = new Set<(data: string) => any>();
+	const ctx = {
+		mode: "tui",
+		sessionManager: { getBranch: () => [], getEntries: () => [] },
+		ui: {
+			theme: { fg: (_c: string, t: string) => t, italic: (t: string) => t, bold: (t: string) => t },
+			setWidget(_key: string, factory: any) {
+				if (typeof factory !== "function") return;
+				factory({ requestRender() {}, focusedComponent: { actionHandlers: new Map() } }, {});
+			},
+			requestRender() {},
+			onTerminalInput(handler: (data: string) => any) {
+				listeners.add(handler);
+				return () => listeners.delete(handler);
+			},
+		},
+	} as any;
+	const { pi, emit } = runtime();
+	const body = Array.from({ length: 12 }, (_, i) => `line-${i}`).join("\n");
+	try {
+		installCompactThinking(pi, { ...config, liveThinkingLines: 5 });
+		emit("session_start", {}, ctx);
+		for (const listener of listeners) listener("\x14");
+		assert.equal(isAllThinkingExpanded(), true, "the session expanded its cards");
+
+		emit("session_shutdown", { reason: "reload" }, ctx);
+		assert.equal(
+			isAllThinkingExpanded(),
+			false,
+			"the next module instance must not start expanded",
+		);
+
+		// reload 后的新实例重建卡片：默认收起，不会继承上一会话的展开态。
+		const next = runtime();
+		installCompactThinking(next.pi, { ...config, liveThinkingLines: 5 });
+		next.emit("session_start", { reason: "reload" }, ctx);
+		const msg = previewMessage(body);
+		const component = new AssistantMessageComponent(msg, true) as any;
+		component.updateContent(msg);
+		const lines = renderText(component);
+		assert.equal(lines.length, 1, `rebuilt cards start collapsed: ${JSON.stringify(lines)}`);
+		next.emit("session_shutdown", { reason: "quit" }, ctx);
+	} finally {
+		if (previousDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousDir;
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("reload keeps mounted cards live: ctrl+t still repaints them on screen", () => {
+	const dir = mkdtempSync(join(tmpdir(), "pi-compact-thinking-reload-mounted-"));
+	const previousDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = dir;
+	const listeners = new Set<(data: string) => any>();
+	// 模拟 Pi 的聊天容器：refreshMountedTranscript 从 getMountedRoots 扫到卡片。
+	const mounted: any[] = [];
+	const tui: any = {
+		requestRender() {},
+		focusedComponent: { actionHandlers: new Map() },
+		getMountedRoots: () => mounted,
+		children: mounted,
+	};
+	const ctx = {
+		mode: "tui",
+		sessionManager: { getBranch: () => [], getEntries: () => [] },
+		ui: {
+			theme: { fg: (_c: string, t: string) => t, italic: (t: string) => t, bold: (t: string) => t },
+			setWidget(_key: string, factory: any) {
+				if (typeof factory === "function") factory(tui, {});
+			},
+			requestRender() {},
+			onTerminalInput(handler: (data: string) => any) {
+				listeners.add(handler);
+				return () => listeners.delete(handler);
+			},
+		},
+	} as any;
+	const body = Array.from({ length: 12 }, (_, i) => `line-${i}`).join("\n");
+	const pressCtrlT = () => {
+		for (const listener of listeners) listener("\x14");
+	};
+	try {
+		const first = runtime();
+		installCompactThinking(first.pi, { ...config, liveThinkingLines: 5 });
+		first.emit("session_start", {}, ctx);
+
+		// reload 前挂进容器的卡片（Pi 的 rebuildChatFromMessages 会用原始原型重建它们）。
+		const msg = previewMessage(body);
+		const before = new AssistantMessageComponent(msg, true) as any;
+		before.updateContent(msg);
+		mounted.push(before);
+
+		first.emit("session_shutdown", { reason: "reload" }, ctx);
+		assert.equal(listeners.size, 0, "reload drops the old listener");
+
+		// 新模块实例 + reload 的 session_start：refreshMountedTranscript 重绘已挂载卡片。
+		const second = runtime();
+		installCompactThinking(second.pi, { ...config, liveThinkingLines: 5 });
+		second.emit("session_start", { reason: "reload" }, ctx);
+		assert.equal(listeners.size, 1, "exactly one listener after reload");
+
+		assert.equal(
+			renderText(before).length,
+			1,
+			"the already-mounted card is collapsed again after the reload repaint",
+		);
+
+		pressCtrlT();
+		const expanded = renderText(before);
+		assert.equal(
+			expanded.filter((line) => /^line-\d+$/.test(line)).length,
+			12,
+			`ctrl+t repaints the mounted card after reload: ${JSON.stringify(expanded)}`,
+		);
+
+		pressCtrlT();
+		assert.equal(renderText(before).length, 1, "and collapses it again");
+		second.emit("session_shutdown", { reason: "quit" }, ctx);
+	} finally {
+		mounted.length = 0;
+		if (previousDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousDir;
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+/**
+ * `/reload` 的真实顺序与最小模拟不同：InteractiveMode.handleReloadCommand 先调
+ * resetExtensionUI()（clearExtensionTerminalInputListeners 一次性清掉所有扩展监听），
+ * 之后旧 runner 才发 session_shutdown。所以旧实例的退订发生在已清空之后，
+ * 必须是幂等的，且不能碰新实例的监听。
+ */
+test("reload order (clear listeners first, then shutdown) leaves exactly one working listener", () => {
+	const dir = mkdtempSync(join(tmpdir(), "pi-compact-thinking-reload-order-"));
+	const previousDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = dir;
+	// 复刻 Pi 的订阅表：退订函数可被重复调用，且只移除自己那一项。
+	const subscriptions = new Set<{ handler: (d: string) => any }>();
+	const ctx = {
+		mode: "tui",
+		sessionManager: { getBranch: () => [], getEntries: () => [] },
+		ui: {
+			theme: { fg: (_c: string, t: string) => t, italic: (t: string) => t, bold: (t: string) => t },
+			setWidget(_key: string, factory: any) {
+				if (typeof factory === "function")
+					factory({ requestRender() {}, focusedComponent: { actionHandlers: new Map() } }, {});
+			},
+			requestRender() {},
+			onTerminalInput(handler: (data: string) => any) {
+				const subscription = { handler };
+				subscriptions.add(subscription);
+				return () => subscriptions.delete(subscription);
+			},
+		},
+	} as any;
+	// Pi 的 clearExtensionTerminalInputListeners()：全部退订并清空。
+	const clearListeners = () => {
+		for (const subscription of subscriptions) subscriptions.delete(subscription);
+	};
+	const pressCtrlT = () => {
+		for (const subscription of subscriptions) subscription.handler("\x14");
+	};
+	const body = Array.from({ length: 12 }, (_, i) => `line-${i}`).join("\n");
+	const expandedCount = (component: any) =>
+		renderText(component).filter((line) => /^line-\d+$/.test(line)).length;
+	try {
+		const first = runtime();
+		installCompactThinking(first.pi, { ...config, liveThinkingLines: 5 });
+		first.emit("session_start", {}, ctx);
+		assert.equal(subscriptions.size, 1, "first install registers one listener");
+
+		// --- 真实 reload 顺序 ---
+		clearListeners();
+		assert.equal(subscriptions.size, 0, "resetExtensionUI cleared every extension listener");
+		// 旧实例现在才收到 shutdown，它的退订必须对已清空的表无副作用。
+		first.emit("session_shutdown", { reason: "reload" }, ctx);
+		assert.equal(subscriptions.size, 0, "stale unsubscribe is a no-op on the cleared table");
+
+		const second = runtime();
+		installCompactThinking(second.pi, { ...config, liveThinkingLines: 5 });
+		second.emit("session_start", { reason: "reload" }, ctx);
+		assert.equal(subscriptions.size, 1, "the new module owns exactly one listener");
+
+		// 一次 ctrl+t 只翻转一次：若旧实例的监听复活或重复注册，这里会翻转两次。
+		const msg = previewMessage(body);
+		const component = new AssistantMessageComponent(msg, true) as any;
+		component.updateContent(msg);
+		assert.equal(expandedCount(component), 0, "starts collapsed");
+		pressCtrlT();
+		assert.equal(expandedCount(component), 12, "one press expands exactly once");
+		pressCtrlT();
+		assert.equal(expandedCount(component), 0, "one press collapses exactly once");
+
+		second.emit("session_shutdown", { reason: "quit" }, ctx);
+		assert.equal(subscriptions.size, 0, "shutdown releases the listener");
+	} finally {
 		if (previousDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previousDir;
 		rmSync(dir, { recursive: true, force: true });

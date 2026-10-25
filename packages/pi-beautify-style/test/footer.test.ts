@@ -11,6 +11,7 @@ import {
 	applyCustomFooter,
 	indentFooterLine,
 	clearCustomFooter,
+	clipFooterLabel,
 	colorGitStatus,
 	footerGlyphs,
 	formatXaiFooterChip,
@@ -303,6 +304,55 @@ test("parseGitStats sums numstat add/delete columns", () => {
 		add: 75,
 		del: 9,
 	});
+});
+
+test("clipFooterLabel keeps the head and ends in wide ellipsis, and 0 disables the cap", () => {
+	assert.equal(clipFooterLabel("main", 16), "main");
+	assert.equal(clipFooterLabel("fix/beautify-style-review", 16), "fix/beautify-sty…");
+	assert.equal(clipFooterLabel("x".repeat(16), 16), "x".repeat(16), "at the cap is unchanged");
+	assert.equal(clipFooterLabel("fix/beautify-style-review", 0), "fix/beautify-style-review");
+	assert.equal(clipFooterLabel("修复很长的分支名称中文测试", 4), "修复很长…", "按字符而不是字节");
+});
+
+test("footer clips the session name and the branch but keeps the git stats", () => {
+	const previous = { ...config };
+	let element!: { render: (width: number) => string[]; dispose: () => void };
+	const ctx = {
+		cwd: "/repo/project",
+		hasUI: true,
+		getContextUsage: () => undefined,
+		sessionManager: {
+			getBranch: () => [],
+			getEntries: () => [],
+			getSessionName: () => "a-very-long-session-name",
+		},
+		ui: {
+			setFooter: (factory: (tui: unknown, theme: unknown, data: unknown) => typeof element) => {
+				element = factory(
+					{ requestRender: () => {} },
+					{
+						fg: (_color: string, text: string) => text,
+						getThinkingBorderColor: () => (text: string) => text,
+					},
+					{
+						getGitBranch: () => "feature/an-extremely-long-branch-name",
+						getExtensionStatuses: () => new Map(),
+						onBranchChange: () => () => {},
+					},
+				);
+			},
+		},
+	};
+	try {
+		Object.assign(config, { footerNerdIcons: false, footerGitStatsMode: "off", footerLabelClip: 16 });
+		applyCustomFooter(ctx as never);
+		const line2 = element.render(200)[1]!;
+		assert.match(line2, /project in a-very-long-sess…/);
+		assert.match(line2, /feature\/an-extre…/);
+		assert.ok(element.render(60)[1]!.length <= 60, "clipped line stays inside the width");
+	} finally {
+		Object.assign(config, previous);
+	}
 });
 
 test("indentFooterLine never exceeds the renderer width", () => {
