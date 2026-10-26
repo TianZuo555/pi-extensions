@@ -1343,3 +1343,61 @@ test("reload order (clear listeners first, then shutdown) leaves exactly one wor
 		rmSync(dir, { recursive: true, force: true });
 	}
 });
+
+/**
+ * 有的 provider（实测 flash-models）在流式期间不吐 reasoning：thinking 内容一直是
+ * 空字符串，只在消息结束时才给全文。这种模型运行中只能看到标题行，这是 provider
+ * 的行为，不是渲染丢了内容。此测试锁住：空内容时只显示标题、不崩、留出正文位置。
+ */
+test("a provider that streams no reasoning shows the heading only, then hides on finish", () => {
+	const dir = mkdtempSync(join(tmpdir(), "pi-compact-thinking-empty-reasoning-"));
+	const previousDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = dir;
+	const { emit, pi } = runtime();
+	const ctx = themeCtx();
+	try {
+		installCompactThinking(pi, { ...config, liveThinkingLines: 5 });
+		emit("session_start", {}, ctx);
+		// 流式期间 thinking 为空（flash-models 的 reasoning_content 就是这种）。
+		const emptyPartial = {
+			role: "assistant",
+			timestamp: Date.now(),
+			content: [{ type: "thinking", thinking: "" }],
+		} as unknown as AssistantMessage;
+		emit("message_update", {
+			message: emptyPartial,
+			assistantMessageEvent: { type: "thinking_start", contentIndex: 0 },
+		});
+		const live = new AssistantMessageComponent(emptyPartial, true) as any;
+		live.updateContent(emptyPartial);
+		const streaming = renderText(live);
+		assert.ok(
+			streaming.some((line) => /Thinking/.test(line)),
+			`empty reasoning still shows the animated heading: ${JSON.stringify(streaming)}`,
+		);
+		assert.equal(
+			streaming.filter((line) => /^reason-/.test(line)).length,
+			0,
+			"no body rows exist to draw",
+		);
+
+		// 收尾：正文仍为空。空的、非活动的思考块整条跳过，不占屏幕、也不留空行
+		// （否则每个没有 reasoning 的 provider 都会在 transcript 里留一条空洞）。
+		emit("message_update", {
+			message: emptyPartial,
+			assistantMessageEvent: { type: "toolcall_start", contentIndex: 1 },
+		});
+		const done = new AssistantMessageComponent(emptyPartial, true) as any;
+		done.updateContent(emptyPartial);
+		assert.deepEqual(
+			renderText(done),
+			[],
+			"an empty finished thinking block draws nothing",
+		);
+	} finally {
+		emit("session_shutdown", {}, ctx);
+		if (previousDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousDir;
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
