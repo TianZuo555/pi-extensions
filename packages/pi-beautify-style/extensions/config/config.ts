@@ -1,5 +1,4 @@
 import type { CompactThinkingConfig } from "../feature/compact-thinking.ts";
-import { DEFAULT_FOOTER_CHIP_LAYOUT } from "../feature/shell/footer-layout.ts";
 
 export type CompactStyleMode = "on" | "compact" | "off";
 
@@ -89,10 +88,8 @@ export type Config = {
 	/** Session name and branch name cap, in characters. 0 = no cap. */
 	footerLabelClip: number;
 	footerGitStatsMode: FooterGitStatsMode;
+	/** 第三行的插件芯片里要隐藏的 `setStatus()` key。 */
 	footerHiddenKeys: string[];
-	footerLine1Keys: string[];
-	footerLine2Keys: string[];
-	footerLine3Keys: string[];
 };
 
 export const DIFF_VIEW_MODES: DiffViewMode[] = ["auto", "split", "unified"];
@@ -162,7 +159,7 @@ export const DEFAULT_CONFIG: Config = {
 	footerNerdIcons: true,
 	footerLabelClip: 16,
 	footerGitStatsMode: "working",
-	...DEFAULT_FOOTER_CHIP_LAYOUT,
+	footerHiddenKeys: [],
 };
 
 /**

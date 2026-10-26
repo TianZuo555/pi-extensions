@@ -107,7 +107,7 @@ test("compact mode keeps both ask-user names out of the summary count", () => {
   assert.ok(outerTools[1].includes("ASK_USER_QUESTION_TOOL_NAME"));
 });
 
-test("setStatus('usage') text renders in the pi-usage slot on line 1, once", (t) => {
+test("setStatus('usage') text renders once, on the plugin line", (t) => {
   const previousHidden = config.footerHiddenKeys;
   t.after(() => {
     config.footerHiddenKeys = previousHidden;
@@ -115,9 +115,10 @@ test("setStatus('usage') text renders in the pi-usage slot on line 1, once", (t)
   const footer = footerWithStatuses(new Map([["usage", "Codex 80%"]]));
   t.after(() => footer.dispose());
   const lines = plainLines(footer);
+  assert.equal(lines.length, 3, `usage opens the third row: ${JSON.stringify(lines)}`);
   assert.ok(
-    lines[0]!.includes("Codex 80%"),
-    `usage text must fill the pi-usage slot on line 1, got: ${lines[0]}`,
+    lines[2]!.includes("Codex 80%"),
+    `usage text must render on the plugin line, got: ${lines[2]}`,
   );
   assert.equal(
     countOccurrences(lines, "Codex 80%"),
@@ -125,7 +126,7 @@ test("setStatus('usage') text renders in the pi-usage slot on line 1, once", (t)
     "the usage status must not render as a second chip",
   );
 
-  // Same chip, same slot: hiding pi-usage hides the alias with it.
+  // 隐藏 pi-usage 时别名跟着消失：两者共用同一个槽位。
   config.footerHiddenKeys = ["pi-usage"];
   assert.equal(
     countOccurrences(plainLines(footer), "Codex 80%"),
@@ -143,7 +144,7 @@ test("the usage alias takes the pi-usage slot instead of rendering beside it", (
   );
   t.after(() => footer.dispose());
   const lines = plainLines(footer);
-  assert.ok(lines[0]!.includes("Codex 80%"));
+  assert.ok(lines[2]!.includes("Codex 80%"));
   assert.equal(
     countOccurrences(lines, "Codex 80%"),
     1,
@@ -169,6 +170,49 @@ test("setStatus('token-speed') fills the rate chip instead of a second chip", (t
     1,
     "the token-speed status must not render as a separate plugin chip",
   );
+});
+
+test("all plugin chips share line 3 so the first two lines never grow", (t) => {
+  const footer = footerWithStatuses(
+    new Map([
+      ["ponytail", "PONYTAIL"],
+      ["lsp", "LSP"],
+      ["cloud-quota", "QUOTA"],
+      ["usage", "USAGE"],
+    ]),
+  );
+  t.after(() => footer.dispose());
+  const lines = plainLines(footer);
+  assert.equal(lines.length, 3, `footer keeps exactly three rows: ${JSON.stringify(lines)}`);
+  assert.ok(lines[0]!.includes("no-model"), `line1 carries the model chip: ${lines[0]}`);
+  assert.ok(!lines[0]!.includes("PONYTAIL"), `line1 stays free of plugin chips: ${lines[0]}`);
+  assert.ok(lines[1]!.includes("pi-beautify-style"), `line2 carries the cwd: ${lines[1]}`);
+  assert.ok(!lines[1]!.includes("PONYTAIL"), `line2 stays free of plugin chips: ${lines[1]}`);
+  for (const text of ["QUOTA", "LSP", "PONYTAIL", "USAGE"]) {
+    assert.ok(lines[2]!.includes(text), `line3 carries ${text}: ${lines[2]}`);
+  }
+});
+
+test("the MCP chip rides the location row, not the plugin row", () => {
+  // MCP 是位置信息（和 cwd、分支同排），由本包自己画，不走 setStatus 通道。
+  const source = readSource("extensions/feature/shell/footer.ts");
+  assert.match(
+    source,
+    /const line2 = joinChips\(\[\s*builtinLine\(FOOTER_LINE2_KEYS\),\s*mcpChip \?/,
+    "line2 must concatenate the MCP chip after the location chips",
+  );
+  assert.doesNotMatch(
+    source,
+    /pluginTexts\.set\(MCP_STATUS_KEY/,
+    "the MCP chip must not enter the plugin channel that feeds line 3",
+  );
+});
+
+test("line3 disappears entirely when no plugin publishes text", (t) => {
+  const footer = footerWithStatuses(new Map());
+  t.after(() => footer.dispose());
+  const lines = plainLines(footer);
+  assert.equal(lines.length, 2, `two rows without plugins: ${JSON.stringify(lines)}`);
 });
 
 test("model-facing reference text lives in lib/prompt.ts", () => {

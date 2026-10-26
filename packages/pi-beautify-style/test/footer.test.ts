@@ -19,22 +19,13 @@ import {
 	parseGitStats,
 } from "../extensions/feature/shell/footer.ts";
 import {
-	DEFAULT_FOOTER_CHIP_LAYOUT,
-	DEFAULT_FOOTER_LINE1_KEYS,
-	DEFAULT_FOOTER_LINE2_KEYS,
 	FOOTER_GIT_KEY,
+	FOOTER_LINE1_KEYS,
+	FOOTER_LINE2_KEYS,
 	isBuiltinFooterKey,
-	PI_USAGE_KEY,
-	PI_USAGE_SOURCE,
-	defaultFooterLine,
-	footerChipDescription,
 	isSkippedFooterStatusKey,
-	moveFooterKeyToLine,
-	normalizeFooterChipLayout,
-	reorderFooterKey,
-	resolveFooterChipLayout,
-	shiftFooterKeyLine,
-	toggleFooterKeyHidden,
+	PI_USAGE_KEY,
+	footerLine3Keys,
 	visibleFooterPluginTexts,
 } from "../extensions/feature/shell/footer-layout.ts";
 
@@ -70,56 +61,12 @@ test("footerGlyphs drops Nerd Font icons when disabled", () => {
 	assert.deepEqual(footerGlyphs(false), { git: "", cache: "", mcp: "" });
 });
 
-test("normalizeFooterChipLayout migrates old plugin-only lines and keeps an explicit model slot", () => {
-	const migrated = normalizeFooterChipLayout({
-		footerHiddenKeys: ["ponytail", "ponytail"],
-		footerLine1Keys: ["usage", "ponytail"],
-		footerLine2Keys: ["ponytail", "lsp"],
-	});
-	assert.deepEqual(migrated.footerLine1Keys, [
-		"model",
-		"context",
-		"cache",
-		"rate",
-		"cost",
-		PI_USAGE_KEY,
-		"ponytail",
-	]);
-	assert.deepEqual(migrated.footerLine2Keys, ["cwd", "git", "lsp"]);
-	assert.deepEqual(migrated.footerHiddenKeys, ["ponytail"]);
-
-	const explicit = normalizeFooterChipLayout({
-		footerLine1Keys: ["usage"],
-		footerLine3Keys: ["model", "git"],
-	});
-	assert.deepEqual(explicit.footerLine1Keys, [PI_USAGE_KEY]);
-	assert.deepEqual(explicit.footerLine2Keys, []);
-	assert.deepEqual(explicit.footerLine3Keys, ["model", "git"]);
-});
-
-test("normalizeFooterChipLayout rewrites legacy localUsage, piUsage, and this repo's usage key to pi-usage", () => {
-	const fromLocal = normalizeFooterChipLayout({
-		footerHiddenKeys: ["localUsage"],
-		footerLine1Keys: ["localUsage", "usage"],
-		footerLine2Keys: ["localUsage"],
-	});
-	// `@tian.zuo/pi-usage` publishes its chip through setStatus("usage"), so the
-	// fork folds that key into the pi-usage chip instead of adding a second one.
-	assert.deepEqual(fromLocal.footerLine1Keys, [
-		"model",
-		"context",
-		"cache",
-		"rate",
-		"cost",
-		PI_USAGE_KEY,
-	]);
-	assert.deepEqual(fromLocal.footerLine2Keys, [...DEFAULT_FOOTER_LINE2_KEYS]);
-	assert.deepEqual(fromLocal.footerHiddenKeys, [PI_USAGE_KEY]);
-	const fromCamel = normalizeFooterChipLayout({
-		footerLine1Keys: ["piUsage"],
-	});
-	assert.deepEqual(fromCamel.footerLine1Keys, [...DEFAULT_FOOTER_LINE1_KEYS]);
-	assert.deepEqual(fromCamel.footerLine2Keys, [...DEFAULT_FOOTER_LINE2_KEYS]);
+test("line1 holds the builtin stats and line2 holds the location chips", () => {
+	assert.deepEqual([...FOOTER_LINE1_KEYS], ["model", "context", "cache", "rate", "cost"]);
+	assert.deepEqual([...FOOTER_LINE2_KEYS], ["cwd", "git"]);
+	assert.equal(isBuiltinFooterKey(FOOTER_GIT_KEY), true);
+	assert.equal(isBuiltinFooterKey(PI_USAGE_KEY), false);
+	assert.equal(isSkippedFooterStatusKey("model"), true);
 });
 
 test("disabled custom footer leaves another extension's footer untouched", () => {
@@ -144,166 +91,40 @@ test("disabled custom footer leaves another extension's footer untouched", () =>
 	}
 });
 
-test("defaultFooterLine sends usage-like keys to line1, git to line2, and skips extension model status", () => {
-	assert.equal(isSkippedFooterStatusKey("model"), true);
-	assert.equal(defaultFooterLine("usage"), 1);
-	assert.equal(defaultFooterLine("pi-grok-usage"), 1);
-	assert.equal(defaultFooterLine("cloud-quota"), 1);
-	assert.equal(defaultFooterLine(PI_USAGE_KEY), 1);
-	assert.equal(defaultFooterLine(FOOTER_GIT_KEY), 2);
-	assert.equal(defaultFooterLine("ponytail"), 2);
-	assert.equal(defaultFooterLine("lsp"), 2);
-});
-
-test("resolveFooterChipLayout appends unknown live keys to default lines in alpha order", () => {
-	const resolved = resolveFooterChipLayout(DEFAULT_FOOTER_CHIP_LAYOUT, [
-		"ponytail",
-		"usage",
-		"model",
-		"lsp",
-		"cloud-quota",
+test("footerLine3Keys sends every plugin status to line 3 in alpha order", () => {
+	const texts = new Map([
+		["ponytail", "\u26a1 FULL"],
+		["usage", "codex 5%"],
+		["model", "should be skipped"],
+		["lsp", "2 errors"],
+		["cloud-quota", "80%"],
 	]);
-	assert.deepEqual(resolved.footerLine1Keys, [
-		...DEFAULT_FOOTER_LINE1_KEYS,
-		"cloud-quota",
-		"usage",
+	assert.deepEqual(footerLine3Keys([], texts), ["cloud-quota", "lsp", "ponytail", "usage"]);
+});
+
+test("footerLine3Keys drops hidden, empty, and builtin keys", () => {
+	const texts = new Map([
+		["ponytail", "\u26a1 FULL"],
+		["lsp", "   "],
+		[FOOTER_GIT_KEY, "main"],
+		["model", "ignored"],
 	]);
-	assert.deepEqual(resolved.footerLine2Keys, [...DEFAULT_FOOTER_LINE2_KEYS, "lsp", "ponytail"]);
-	assert.deepEqual(resolved.footerLine3Keys, []);
-	assert.deepEqual(resolved.footerHiddenKeys, []);
+	assert.deepEqual(footerLine3Keys([], texts), ["ponytail"]);
+	assert.deepEqual(footerLine3Keys(["ponytail"], texts), []);
 });
 
-test("hidden keys stay on their line and unhide restores the slot", () => {
-	let layout = resolveFooterChipLayout(DEFAULT_FOOTER_CHIP_LAYOUT, ["ponytail", "lsp"]);
-	layout = toggleFooterKeyHidden(layout, "ponytail");
-	assert.ok(layout.footerHiddenKeys.includes("ponytail"));
-	assert.deepEqual(layout.footerLine2Keys, [...DEFAULT_FOOTER_LINE2_KEYS, "lsp", "ponytail"]);
-	layout = toggleFooterKeyHidden(layout, "ponytail");
-	assert.equal(layout.footerHiddenKeys.includes("ponytail"), false);
-	assert.deepEqual(layout.footerLine2Keys, [...DEFAULT_FOOTER_LINE2_KEYS, "lsp", "ponytail"]);
-});
-
-test("moveFooterKeyToLine appends to the target line and clamps shift at the ends", () => {
-	let layout = resolveFooterChipLayout(DEFAULT_FOOTER_CHIP_LAYOUT, ["ponytail", "lsp"]);
-	layout = moveFooterKeyToLine(layout, "ponytail", 3);
-	assert.deepEqual(layout.footerLine3Keys, ["ponytail"]);
-	assert.deepEqual(layout.footerLine2Keys, [...DEFAULT_FOOTER_LINE2_KEYS, "lsp"]);
-	layout = shiftFooterKeyLine(layout, "ponytail", 1);
-	assert.deepEqual(layout.footerLine3Keys, ["ponytail"]);
-	layout = shiftFooterKeyLine(layout, "model", -1);
-	assert.equal(layout.footerLine1Keys[0], "model");
-});
-
-test("reorderFooterKey swaps within a line only", () => {
-	let layout = resolveFooterChipLayout(DEFAULT_FOOTER_CHIP_LAYOUT, ["ponytail", "lsp"]);
-	assert.deepEqual(layout.footerLine2Keys, [...DEFAULT_FOOTER_LINE2_KEYS, "lsp", "ponytail"]);
-	layout = reorderFooterKey(layout, "lsp", 1);
-	assert.deepEqual(layout.footerLine2Keys, [...DEFAULT_FOOTER_LINE2_KEYS, "ponytail", "lsp"]);
-	layout = reorderFooterKey(layout, "lsp", 1);
-	assert.deepEqual(layout.footerLine2Keys, [...DEFAULT_FOOTER_LINE2_KEYS, "ponytail", "lsp"]);
-});
-
-test("visibleFooterPluginTexts skips hidden and empty, keeps configured order", () => {
+test("visibleFooterPluginTexts skips empty text and keeps the given order", () => {
 	const texts = new Map([
 		["usage", "codex 5%"],
 		[PI_USAGE_KEY, "xAI 14%"],
-		["ponytail", "⚡ FULL"],
+		["ponytail", "\u26a1 FULL"],
 		["lsp", ""],
 	]);
-	assert.deepEqual(
-		visibleFooterPluginTexts([PI_USAGE_KEY, "usage", "ghost"], [PI_USAGE_KEY], texts),
-		["codex 5%"],
-	);
-	assert.deepEqual(visibleFooterPluginTexts(["ponytail", "lsp"], [], texts), ["⚡ FULL"]);
-	assert.deepEqual(visibleFooterPluginTexts(["usage"], [], texts), ["codex 5%"]);
-});
-
-test("footerChipDescription names builtin chips and the source extension", () => {
-	assert.equal(footerChipDescription(FOOTER_GIT_KEY, ""), "Branch and change stats");
-	assert.equal(
-		footerChipDescription(FOOTER_GIT_KEY, "main (+1 −0)"),
-		"Branch and change stats · main (+1 −0)",
-	);
-	assert.equal(footerChipDescription(PI_USAGE_KEY, "xAI 14%"), `xAI 14% · from ${PI_USAGE_SOURCE}`);
-	assert.equal(
-		footerChipDescription(PI_USAGE_KEY, ""),
-		`From ${PI_USAGE_SOURCE}. No text right now.`,
-	);
-	assert.equal(footerChipDescription("ponytail", "⚡ FULL"), "⚡ FULL · from ponytail");
-	assert.equal(footerChipDescription("lsp", ""), "inactive · from lsp");
-});
-
-test("pi-usage stays a plugin chip even though it is on the default line", () => {
-	assert.equal(isBuiltinFooterKey(PI_USAGE_KEY), false);
-	assert.equal(isBuiltinFooterKey(FOOTER_GIT_KEY), true);
-});
-
-test("pi-usage and plugin usage can both be visible with no fallback judgment", () => {
-	const texts = new Map([
-		[PI_USAGE_KEY, "xAI 14%"],
-		["usage", "codex 5%"],
-	]);
-	assert.deepEqual(visibleFooterPluginTexts([PI_USAGE_KEY, "usage"], [], texts), [
+	assert.deepEqual(visibleFooterPluginTexts([PI_USAGE_KEY, "usage", "ghost"], texts), [
 		"xAI 14%",
 		"codex 5%",
 	]);
-});
-
-test("git can move to line1 and hide without leaving a fixed second-line slot", () => {
-	let layout = moveFooterKeyToLine(DEFAULT_FOOTER_CHIP_LAYOUT, FOOTER_GIT_KEY, 1);
-	assert.equal(layout.footerLine1Keys.at(-1), FOOTER_GIT_KEY);
-	assert.deepEqual(layout.footerLine2Keys, ["cwd"]);
-	layout = toggleFooterKeyHidden(layout, FOOTER_GIT_KEY);
-	assert.deepEqual(
-		visibleFooterPluginTexts(layout.footerLine1Keys, layout.footerHiddenKeys, new Map()),
-		[],
-	);
-	assert.ok(layout.footerHiddenKeys.includes(FOOTER_GIT_KEY));
-	assert.equal(layout.footerLine2Keys.includes(FOOTER_GIT_KEY), false);
-});
-
-test("line3 paints only when a visible plugin text exists", () => {
-	const layout = moveFooterKeyToLine(
-		resolveFooterChipLayout(DEFAULT_FOOTER_CHIP_LAYOUT, ["ponytail"]),
-		"ponytail",
-		3,
-	);
-	const hidden = visibleFooterPluginTexts(
-		layout.footerLine3Keys,
-		["ponytail"],
-		new Map([["ponytail", "⚡ FULL"]]),
-	);
-	const shown = visibleFooterPluginTexts(
-		layout.footerLine3Keys,
-		[],
-		new Map([["ponytail", "⚡ FULL"]]),
-	);
-	assert.deepEqual(hidden, []);
-	assert.deepEqual(shown, ["⚡ FULL"]);
-});
-
-test("formatXaiFooterChip prefers included percent then prepaid dollars", () => {
-	assert.equal(
-		formatXaiFooterChip({
-			buckets: [{ id: "included-allowance", unit: "percent", used: 14.4 }],
-		}),
-		"xAI 14%",
-	);
-	assert.equal(
-		formatXaiFooterChip({
-			metrics: [{ id: "prepaid-balance", value: 1.5 }],
-		}),
-		"xAI $1.50",
-	);
-});
-
-test("parseGitStats sums numstat add/delete columns", () => {
-	assert.deepEqual(parseGitStats("10\t2\ta.ts\n3\t1\tb.ts\n"), { add: 13, del: 3 });
-	assert.deepEqual(parseGitStats(""), { add: 0, del: 0 });
-	assert.deepEqual(parseGitStats("-\t-\timage.png\n15\t9\tsource.ts\n60\t0\tnew-test.ts\n"), {
-		add: 75,
-		del: 9,
-	});
+	assert.deepEqual(visibleFooterPluginTexts(["ponytail", "lsp"], texts), ["\u26a1 FULL"]);
 });
 
 test("clipFooterLabel keeps the head and ends in wide ellipsis, and 0 disables the cap", () => {

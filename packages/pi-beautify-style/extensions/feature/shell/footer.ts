@@ -31,13 +31,13 @@ import {
 	FOOTER_GIT_KEY,
 	FOOTER_MODEL_KEY,
 	FOOTER_RATE_KEY,
+	FOOTER_LINE1_KEYS,
+	FOOTER_LINE2_KEYS,
 	LOCAL_USAGE_STATUS_KEY,
 	PI_USAGE_KEY,
-	isBuiltinFooterKey,
+	footerLine3Keys,
 	isSkippedFooterStatusKey,
-	resolveFooterChipLayout,
 	visibleFooterPluginTexts,
-	type FooterChipLayout,
 } from "./footer-layout.ts";
 import { createGitStatsRefresher, readGitStats, type GitStats } from "./git-stats.ts";
 import { MCP_STATUS_KEY, buildMcpChip } from "./mcp-chip.ts";
@@ -167,19 +167,6 @@ function ownMcpChip(): string {
 	return cachedMcpChip && !cachedExtensionStatuses.has(MCP_STATUS_KEY) ? cachedMcpChip : "";
 }
 
-/** 面板用：当前 setStatus 文案 + 本包 pi-usage / MCP（无文案时为空字符串）。内置项由配置保证在列表里。 */
-export function getFooterStatusSnapshot(): Map<string, string> {
-	const out = new Map<string, string>();
-	for (const [key, text] of cachedExtensionStatuses) {
-		if (isSkippedFooterStatusKey(key) || isBuiltinFooterKey(key)) continue;
-		out.set(key, text);
-	}
-	out.set(PI_USAGE_KEY, cachedLocalUsageText);
-	const mcpChip = ownMcpChip();
-	if (mcpChip) out.set(MCP_STATUS_KEY, mcpChip);
-	return out;
-}
-
 function rememberExtensionStatuses(entries: Iterable<[string, string]>): void {
 	cachedExtensionStatuses.clear();
 	for (const [key, raw] of entries) {
@@ -200,15 +187,6 @@ function pluginTextsForRender(localUsageChip: string): Map<string, string> {
 	else if (usageAlias) texts.set(PI_USAGE_KEY, usageAlias);
 	else texts.delete(PI_USAGE_KEY);
 	return texts;
-}
-
-function layoutFromConfig(): FooterChipLayout {
-	return {
-		footerHiddenKeys: config.footerHiddenKeys,
-		footerLine1Keys: config.footerLine1Keys,
-		footerLine2Keys: config.footerLine2Keys,
-		footerLine3Keys: config.footerLine3Keys,
-	};
 }
 
 let piUsageMod: any | null | undefined;
@@ -455,13 +433,13 @@ const createCustomFooterFactory =
 				footerData.getExtensionStatuses().entries() as Iterable<[string, string]>,
 			);
 			const pluginTexts = pluginTextsForRender(localUsageChip);
+			// MCP 是位置信息（和 cwd、分支同排），不进第三行的插件通道。
 			const mcpChip = ownMcpChip();
-			if (mcpChip) pluginTexts.set(MCP_STATUS_KEY, mcpChip);
 			// pi-token-speed 与内置 rate 芯片同一信息：有 token-speed 状态时由它填
 			// rate 槽位，不再单列一个插件芯片。
 			const tokenSpeedText = pluginTexts.get("token-speed")?.trim() ?? "";
 			if (tokenSpeedText) pluginTexts.delete("token-speed");
-			const layout = resolveFooterChipLayout(layoutFromConfig(), [...pluginTexts.keys()]);
+			const line3Keys = footerLine3Keys(config.footerHiddenKeys, pluginTexts);
 			const dimPlugin = (text: string) => colorUsageChip(theme, text);
 
 			const pctLabel = percent === null || percent === undefined ? "?" : `${Math.floor(percent)}%`;
@@ -534,19 +512,21 @@ const createCustomFooterFactory =
 				[FOOTER_GIT_KEY, gitChip],
 			]);
 
-			const lineOf = (keys: readonly string[]) =>
+			// 第一行统计、第二行位置、第三行插件：行数固定，插件多了只挤第三行。
+			const builtinLine = (keys: readonly string[]) =>
 				joinChips(
 					keys
-						.filter((key) => !layout.footerHiddenKeys.includes(key))
-						.map((key) => {
-							if (isBuiltinFooterKey(key)) return builtinChips.get(key) ?? "";
-							const text = visibleFooterPluginTexts([key], [], pluginTexts)[0];
-							return text ? dimPlugin(text) : "";
-						}),
+						.filter((key) => !config.footerHiddenKeys.includes(key))
+						.map((key) => builtinChips.get(key) ?? ""),
 				);
-			const line1 = lineOf(layout.footerLine1Keys);
-			const line2 = lineOf(layout.footerLine2Keys);
-			const line3 = lineOf(layout.footerLine3Keys);
+			const line1 = builtinLine(FOOTER_LINE1_KEYS);
+			const line2 = joinChips([
+				builtinLine(FOOTER_LINE2_KEYS),
+				mcpChip ? colorUsageChip(theme, mcpChip) : "",
+			]);
+			const line3 = joinChips(
+				visibleFooterPluginTexts(line3Keys, pluginTexts).map((text) => dimPlugin(text)),
+			);
 
 			const fit = (line: string) => indentFooterLine(line, width, inputTextIndent());
 
