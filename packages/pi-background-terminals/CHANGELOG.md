@@ -1,5 +1,25 @@
 # @tian.zuo/pi-background-terminals
 
+## 0.7.0
+
+### Minor Changes
+
+- [#187](https://github.com/TianZuo555/pi-extensions/pull/187) [`e6b7301`](https://github.com/TianZuo555/pi-extensions/commit/e6b73016520d5c74dd8a923e0e0145ea597c3724) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Remove `terminal_log_read`. A truncated result now gives the path of the full log file, and the model reads it with `read` or `grep`. A yielded result gives the log paths, so the model can check a server. In Code Mode, a truncated `output` adds `full_output_path` for stdout and `full_stderr_path` for stderr.
+  
+  The log files now stay until the session ends, with a total limit of 256 MiB for stopped commands. Past the limit, the oldest files are deleted first.
+  
+  Session data showed that the model read a truncated log in only 19 of 275 cases, ran the command again in 40 cases, and that 15 of 50 `terminal_log_read` calls failed.
+
+### Patch Changes
+
+- [#184](https://github.com/TianZuo555/pi-extensions/pull/184) [`2e579d4`](https://github.com/TianZuo555/pi-extensions/commit/2e579d48c1d7b73188ab078162e789296aa418eb) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Fix a race between `terminal_wait` and the result message. During an agent run, the extension now keeps each background result until the turn ends. Thus a `terminal_wait` in the same tool batch returns the result. It no longer reports "delivered earlier" before the model sees the result.
+  
+  Change the `bash` guidance: keep the default `yield_time_ms` for tests and builds. Lower it only for servers and watchers. Session data showed that a 1 s initial wait moved quick commands to the background, and the model then called `terminal_wait` at once.
+  
+  A `bash` call from a Code Mode script now waits until the command stops, and it does not use `yield_time_ms`. Before this change, 178 of 688 scripts with `bash` ended while a command still ran, so the script did not get the output.
+
+- [#173](https://github.com/TianZuo555/pi-extensions/pull/173) [`5067811`](https://github.com/TianZuo555/pi-extensions/commit/506781181fdc1a9d5009278391312cdf8d47f6ae) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Move the runtime dependency to `effect@4.0.5` (from the `4.0.0-rc.117` release candidate), so installing this extension no longer pulls a pre-release Effect. `pi-usage` also picks up `playwriter@0.9.0` and `pi-web-search` `unpdf@1.9.1`. No API changes on the extension surface.
+
 ## 0.6.0
 
 ### Minor Changes
