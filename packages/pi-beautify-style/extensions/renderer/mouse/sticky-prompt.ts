@@ -361,9 +361,9 @@ let markerPatch: StickyPatch | null = null;
 let framePatch: StickyPatch | null = null;
 
 /** UserMessageComponent.render 注入零宽标记（仅 fullscreen）。 */
-export function installStickyPromptMarkerPatch(): void {
+export function installStickyPromptMarkerPatch(): StickyPatch | null {
 	const prototype = (UserMessageComponent as any)?.prototype;
-	if (typeof prototype?.render !== "function") return;
+	if (typeof prototype?.render !== "function") return null;
 	const previous = patchRegistry.get<StickyPatch>(STICKY_PROMPT_MARKER_PATCH);
 	if (previous) previous.active = false;
 	const original =
@@ -384,12 +384,13 @@ export function installStickyPromptMarkerPatch(): void {
 	prototype.render = patch.installed;
 	patchRegistry.install(STICKY_PROMPT_MARKER_PATCH, patch);
 	markerPatch = patch;
+	return patch;
 }
 
-/** TuiAltScreen.compositeScrollToEndIndicator 包装：合成粘性行。返回是否安装成功。 */
-export function installStickyPromptFramePatch(): boolean {
+/** TuiAltScreen.compositeScrollToEndIndicator 包装：合成粘性行。返回安装的补丁，未安装为 null。 */
+export function installStickyPromptFramePatch(): StickyPatch | null {
 	const prototype = (TuiAltScreen as any)?.prototype;
-	if (typeof prototype?.compositeScrollToEndIndicator !== "function") return false;
+	if (typeof prototype?.compositeScrollToEndIndicator !== "function") return null;
 	const previous = patchRegistry.get<StickyPatch>(STICKY_PROMPT_FRAME_PATCH);
 	if (previous) previous.active = false;
 	const original =
@@ -408,13 +409,36 @@ export function installStickyPromptFramePatch(): boolean {
 	prototype.compositeScrollToEndIndicator = patch.installed;
 	patchRegistry.install(STICKY_PROMPT_FRAME_PATCH, patch);
 	framePatch = patch;
-	return true;
+	return patch;
 }
 
-export function installStickyPromptPatches(): void {
+/**
+ * 安装粘性补丁并返回只停本次安装补丁的 disposer。
+ * 同一模块里后一个安装会顶掉前一个：按注册表 dispose 会把新补丁停掉，
+ * 所以释放必须按安装时捕获的补丁对象走。
+ */
+export function installStickyPromptPatches(): () => void {
 	// 标记必须有消费方：帧合成补丁装不上（上游改名）时不注入，
 	// 否则零宽标记会随帧写进终端。
-	if (installStickyPromptFramePatch()) installStickyPromptMarkerPatch();
+	const frame = installStickyPromptFramePatch();
+	const marker = frame ? installStickyPromptMarkerPatch() : null;
+	return () => {
+		disposeStickyPatch(
+			STICKY_PROMPT_MARKER_PATCH,
+			marker,
+			(UserMessageComponent as any)?.prototype,
+			"render",
+		);
+		disposeStickyPatch(
+			STICKY_PROMPT_FRAME_PATCH,
+			frame,
+			(TuiAltScreen as any)?.prototype,
+			"compositeScrollToEndIndicator",
+		);
+		if (markerPatch === marker) markerPatch = null;
+		if (framePatch === frame) framePatch = null;
+		resetStickyPromptState();
+	};
 }
 
 export function disposeStickyPromptPatches(): void {

@@ -9,4 +9,6 @@ pre-push:
     typecheck:
       run: pnpm typecheck
     test:
-      run: pnpm test
+      # Git exports GIT_DIR to hooks. Tests that run git in a temp repo would
+      # then operate on this repository instead, so clear it first.
+      run: unset GIT_DIR GIT_INDEX_FILE GIT_WORK_TREE && pnpm test
