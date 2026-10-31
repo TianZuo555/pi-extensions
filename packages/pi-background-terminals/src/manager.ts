@@ -22,7 +22,6 @@ import { Context, Deferred, Effect, Exit, FiberSet, Layer, Scope } from "effect"
 import {
   ConcurrencyLimitError,
   SpawnError,
-  TerminalLogUnavailableError,
   UnknownTerminalError,
   type TerminalSnapshot,
   type TerminalStatus,
@@ -30,17 +29,12 @@ import {
 import { OutputBuffer } from "./output.ts";
 import { createDetachedChildTracker } from "./process-tracker.ts";
 import { createChildJob, preloadChildJobSupport, type ChildJobHandle } from "./win32-job.ts";
-import {
-  readLogAuto,
-  readLogPage,
-  readLogTail,
-  searchLogFile,
-  type LogReadBody,
-} from "./log-read.ts";
+import { createLogRetention } from "./log-retention.ts";
 
 import {
   MAX_RUNNING,
   MAX_SLOT_WAIT_MS,
+  MAX_LOG_RETENTION_BYTES,
   MAX_TRACKED,
   MIN_YIELD_TIME_MS,
   MAX_YIELD_TIME_MS,
@@ -48,11 +42,9 @@ import {
   HEAD_RETAINED_PER_STREAM,
   SETTLED_RETAINED_PER_STREAM,
   MAX_SPILL_BYTES_PER_STREAM,
-  MAX_TERMINAL_LOG_READ_BYTES,
   MAX_TERMINAL_WAIT_SECONDS,
 } from "./constants.ts";
 import { TERMINAL_ERRORS } from "./prompt.ts";
-const MAX_ARCHIVE_TOMBSTONES = MAX_TRACKED * 4;
 const ERROR_TEXT_MAX_LENGTH = 4_096;
 const WIN32_CHILD_PATH = fileURLToPath(new URL("./win32-child.mjs", import.meta.url));
 
@@ -132,8 +124,7 @@ function boundedSpillError(error: unknown, spillPath: string) {
     .replaceAll(path.dirname(spillPath), "<private archive directory>");
 }
 
-/** Single source of truth for archive file naming: the spill writer creates it
- * and pruning tombstones recognize it. */
+/** Log file name of one terminal stream. */
 function spillFileName(id: string, stream: TerminalLogStream) {
   return `${id}.${stream}.log`;
 }
@@ -190,17 +181,6 @@ interface Entry {
   settled: Deferred.Deferred<void>;
 }
 
-type ArchiveTombstoneStream = {
-  /** True when this stream owned a spill before pruning removed it. */
-  readonly archived: boolean;
-};
-
-interface ArchiveTombstone {
-  readonly reason: "pruned";
-  readonly stdout: ArchiveTombstoneStream;
-  readonly stderr: ArchiveTombstoneStream;
-}
-
 export interface StartOptions {
   readonly command: string;
   readonly title: string;
@@ -224,25 +204,6 @@ export interface SettlementWaitResult {
 }
 
 export type TerminalLogStream = "stdout" | "stderr";
-
-export type TerminalLogReadRequest = { readonly id: string; readonly stream: TerminalLogStream } & (
-  | { readonly mode: "auto"; readonly limit: number }
-  | { readonly mode: "page"; readonly offset: number; readonly limit: number }
-  | { readonly mode: "tail"; readonly limit: number }
-  | {
-      readonly mode: "search";
-      readonly pattern: RegExp;
-      readonly offset: number;
-      readonly limit: number;
-    }
-);
-
-export interface TerminalLogReadResult extends LogReadBody {
-  readonly id: string;
-  readonly stream: TerminalLogStream;
-  readonly settled: boolean;
-  readonly complete: boolean;
-}
 
 // --- Read model ----------------------------------------------------------------
 
@@ -275,9 +236,6 @@ export interface TerminalManagerShape {
     id: string,
     timeoutMs?: number,
   ): Effect.Effect<SettlementWaitResult, UnknownTerminalError>;
-  readLog(
-    request: TerminalLogReadRequest,
-  ): Effect.Effect<TerminalLogReadResult, UnknownTerminalError | TerminalLogUnavailableError>;
   /** Wait until any of `ids` settles or `timeoutMs` elapses. Targets that settle while
    * registered are consumed (onSettled consumed=true → no follow-up). Returns current
    * snapshots of all targets in `ids` order. Returns immediately, registering no
@@ -452,9 +410,6 @@ const makeManager = (timings: TerminalManagerTimings) =>
     );
 
     const entries = new Map<string, Entry>();
-    /** Metadata-only records for archives removed by the retention cap. This is
-     * bounded and never retains a filesystem path. */
-    const archiveTombstones = new Map<string, ArchiveTombstone>();
     /** Initial bash waits currently entitled to return a settlement. */
     const settlementWaiters = new Map<string, Set<{ consumed: boolean }>>();
     const listeners = new Set<() => void>();
@@ -470,6 +425,7 @@ const makeManager = (timings: TerminalManagerTimings) =>
     }> = [];
     let disposed = false;
     let spillDir: string | undefined | null;
+    const logRetention = createLogRetention(MAX_LOG_RETENTION_BYTES);
     let onSettled: ((snap: TerminalSnapshot, consumed: boolean) => void) | undefined;
 
     const notify = (id?: string) => {
@@ -563,43 +519,24 @@ const makeManager = (timings: TerminalManagerTimings) =>
     const closeEntryScope = (entry: Entry) =>
       Scope.close(entry.scope, Exit.void).pipe(Effect.ignore);
 
-    const streamTombstone = (entry: Entry, stream: TerminalLogStream): ArchiveTombstoneStream => ({
-      archived: entry.spillPaths.some(
-        (candidate) => path.basename(candidate) === spillFileName(entry.snapshot.id, stream),
-      ),
-    });
-
-    const rememberPrunedArchive = (entry: Entry) => {
-      archiveTombstones.set(entry.snapshot.id, {
-        reason: "pruned",
-        stdout: streamTombstone(entry, "stdout"),
-        stderr: streamTombstone(entry, "stderr"),
-      });
-      while (archiveTombstones.size > MAX_ARCHIVE_TOMBSTONES) {
-        const oldest = archiveTombstones.keys().next().value;
-        if (oldest === undefined) break;
-        archiveTombstones.delete(oldest);
-      }
-    };
-
-    const removeEntrySpills = (entry: Entry) =>
-      Effect.sync(() => {
-        // Record only immutable metadata before unlinking. Tombstones never keep
-        // a spill path or file descriptor alive. pruneSettled records first to
-        // close the deletion/read race; this guard covers any later caller.
-        if (!archiveTombstones.has(entry.snapshot.id)) {
-          rememberPrunedArchive(entry);
+    /** Delete log files past the retention limit. A tracked entry stops
+     * pointing at them, so no result or /ps view cites a deleted file. */
+    const expireLogs = (files: readonly string[]) => {
+      for (const file of files) {
+        try {
+          fs.rmSync(file, { force: true });
+        } catch {
+          // Best effort: disposeAll still removes the complete session dir.
         }
-        for (const spillPath of entry.spillPaths) {
-          try {
-            fs.rmSync(spillPath, { force: true });
-          } catch {
-            // Best effort: disposeAll still removes the complete session dir.
+      }
+      for (const entry of entries.values()) {
+        for (const buf of [entry.stdoutBuf, entry.stderrBuf]) {
+          if (buf.spillPath !== undefined && files.includes(buf.spillPath)) {
+            buf.spillPath = undefined;
           }
         }
-        entry.stdoutBuf.spillPath = undefined;
-        entry.stderrBuf.spillPath = undefined;
-      });
+      }
+    };
 
     const pruneSettled = () => {
       if (entries.size <= MAX_TRACKED) return;
@@ -616,10 +553,9 @@ const makeManager = (timings: TerminalManagerTimings) =>
         );
       for (const entry of candidates) {
         if (entries.size <= MAX_TRACKED) break;
-        // Make the expired-ref fact visible before the async unlink starts.
-        rememberPrunedArchive(entry);
         entries.delete(entry.snapshot.id);
-        runCleanup(closeEntryScope(entry).pipe(Effect.andThen(removeEntrySpills(entry))));
+        // The log files stay: a result can still give their path.
+        runCleanup(closeEntryScope(entry));
       }
     };
 
@@ -707,6 +643,7 @@ const makeManager = (timings: TerminalManagerTimings) =>
       // complete archive keep their full buffer (it is the only copy).
       if (entry.stdoutBuf.archiveComplete) entry.stdoutBuf.compact(SETTLED_RETAINED_PER_STREAM);
       if (entry.stderrBuf.archiveComplete) entry.stderrBuf.compact(SETTLED_RETAINED_PER_STREAM);
+      expireLogs(logRetention.add(entry.spillPaths));
       pruneSettled();
     };
 
@@ -1301,87 +1238,6 @@ const makeManager = (timings: TerminalManagerTimings) =>
         );
       });
 
-    const readLog = (request: TerminalLogReadRequest) =>
-      Effect.suspend(
-        (): Effect.Effect<
-          TerminalLogReadResult,
-          UnknownTerminalError | TerminalLogUnavailableError
-        > => {
-          const entry = entries.get(request.id);
-          if (!entry) {
-            const tombstone = archiveTombstones.get(request.id);
-            if (tombstone) {
-              if (tombstone[request.stream].archived) {
-                return new TerminalLogUnavailableError({
-                  message: TERMINAL_ERRORS.expiredArchive(`${request.id}:${request.stream}`),
-                });
-              }
-              return new TerminalLogUnavailableError({
-                message: TERMINAL_ERRORS.smallArchive(`${request.id}:${request.stream}`),
-              });
-            }
-            return new UnknownTerminalError({
-              message: TERMINAL_ERRORS.unknownArchive(request.id),
-            });
-          }
-          const buffer = request.stream === "stdout" ? entry.stdoutBuf : entry.stderrBuf;
-          const spillPath = buffer.spillPath;
-          if (!spillPath) {
-            return new TerminalLogUnavailableError({
-              message: TERMINAL_ERRORS.unavailableArchive(`${request.id}:${request.stream}`),
-            });
-          }
-          const limit = Number.isFinite(request.limit)
-            ? Math.max(1, Math.min(MAX_TERMINAL_LOG_READ_BYTES, Math.floor(request.limit)))
-            : MAX_TERMINAL_LOG_READ_BYTES;
-          const meta = {
-            id: request.id,
-            stream: request.stream,
-            settled: entry.snapshot.status !== "running",
-            complete: buffer.archiveComplete === true,
-          };
-          const unreadable = () =>
-            new TerminalLogUnavailableError({
-              message: TERMINAL_ERRORS.unreadableArchive(`${request.id}:${request.stream}`),
-            });
-          if (request.mode === "search") {
-            const offset = Number.isFinite(request.offset)
-              ? Math.max(0, Math.floor(request.offset))
-              : 0;
-            return Effect.tryPromise({
-              // The AbortSignal Effect hands tryPromise aborts the streaming
-              // scan between chunks when the tool call is interrupted.
-              try: (signal) =>
-                searchLogFile(spillPath, {
-                  pattern: request.pattern,
-                  offset,
-                  limit,
-                  signal,
-                }).then((body) => ({ ...body, ...meta }) satisfies TerminalLogReadResult),
-              catch: unreadable,
-            });
-          }
-          return Effect.try({
-            try: () => {
-              const body =
-                request.mode === "tail"
-                  ? readLogTail(spillPath, limit)
-                  : request.mode === "auto"
-                    ? readLogAuto(spillPath, limit)
-                    : readLogPage(
-                        spillPath,
-                        Number.isFinite(request.offset)
-                          ? Math.max(0, Math.floor(request.offset))
-                          : 0,
-                        limit,
-                      );
-              return { ...body, ...meta } satisfies TerminalLogReadResult;
-            },
-            catch: unreadable,
-          });
-        },
-      );
-
     /** Kill one running entry: close the scope — whose finalizer marks the kill
      * at the signal point, terminates the tree, and force-settles —
      * in a DETACHED fiber. Once the flag is set the termination must actually
@@ -1425,8 +1281,6 @@ const makeManager = (timings: TerminalManagerTimings) =>
         Effect.ignore,
       );
       yield* Effect.sync(() => {
-        // Tombstones are session-scoped metadata; disposal must not retain them.
-        archiveTombstones.clear();
         const dir = spillDir;
         spillDir = null;
         if (dir) fs.rmSync(dir, { recursive: true, force: true });
@@ -1477,7 +1331,6 @@ const makeManager = (timings: TerminalManagerTimings) =>
       waitForSettlement,
       waitForAny,
       stop,
-      readLog,
       disposeAll,
       windowsJobSupport,
       view,

@@ -14,7 +14,7 @@ import * as path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { Effect } from "effect";
-import { TerminalLogUnavailableError, type TerminalSnapshot } from "../src/domain.ts";
+import type { TerminalSnapshot } from "../src/domain.ts";
 import { buildBashResult, buildTerminalResultMessage } from "../src/prompt.ts";
 import { MAX_RUNNING, MAX_TRACKED, SETTLED_RETAINED_PER_STREAM } from "../src/constants.ts";
 import {
@@ -999,61 +999,13 @@ test("pruning drops the oldest settled entries past MAX_TRACKED, never running o
     // The latest settled entries survive.
     assert.equal(remaining.includes(settledIds[settledIds.length - 1]), true);
     assert.ok(earliestSpillPaths.length > 0, "earliest archive was created");
+    // The history limit does not delete logs: a result can still give their path.
+    await new Promise((resolve) => setTimeout(resolve, 200));
     assert.equal(
-      await pollUntil(() => earliestSpillPaths.every((spillPath) => !fs.existsSync(spillPath))),
+      [...earliestSpillPaths, ...latestSpillPaths].every((spillPath) => fs.existsSync(spillPath)),
       true,
-      "pruning removed the earliest terminal's spill files",
+      "log files outlive the history limit",
     );
-    await assert.rejects(
-      runTool(
-        runtime,
-        manager.readLog({
-          id: settledIds[0],
-          stream: "stdout",
-          mode: "page",
-          offset: 0,
-          limit: 1,
-        }),
-      ),
-      (error: unknown) => {
-        assert.equal(error instanceof TerminalLogUnavailableError, true);
-        const message = error instanceof Error ? error.message : String(error);
-        assert.match(message, /32-entry retention cap/);
-        assert.match(message, /cannot be recovered/);
-        assert.match(message, /re-run the command/);
-        assert.doesNotMatch(message, /ENOENT/);
-        assert.doesNotMatch(message, /Unknown terminal id/);
-        return true;
-      },
-    );
-    await assert.rejects(
-      runTool(
-        runtime,
-        manager.readLog({
-          id: "bt-9999",
-          stream: "stdout",
-          mode: "page",
-          offset: 0,
-          limit: 1,
-        }),
-      ),
-      (error: unknown) => {
-        assert.equal(error instanceof Error, true);
-        assert.match(
-          error instanceof Error ? error.message : String(error),
-          /Unknown terminal id "bt-9999"; no terminal with that id is tracked in this session\./,
-        );
-        assert.equal(error instanceof TerminalLogUnavailableError, false);
-        return true;
-      },
-    );
-    if (latestSpillPaths.length > 0) {
-      assert.equal(
-        latestSpillPaths.every((spillPath) => fs.existsSync(spillPath)),
-        true,
-        "still-tracked terminal spill files remain available",
-      );
-    }
   });
 });
 
@@ -1167,7 +1119,7 @@ test("the spill file holds the complete capture when the settle hook fires, beyo
   });
 });
 
-test("advertised omitted byte ranges align with the displayed output", async () => {
+test("the displayed output is the start and end of the log at the given path", async () => {
   await withManager(async (manager, runtime) => {
     const lineCount = 120_000;
     const snap = await runTool(
@@ -1192,11 +1144,7 @@ process.exitCode = 1;
     assert.ok(failed.stdout.spillPath);
 
     const message = buildTerminalResultMessage(failed);
-    const range = /omitted bytes (\d+)-(\d+)/.exec(message);
-    assert.ok(range, "model output contains an omitted byte range");
-    const omittedStart = Number(range[1]);
-    const omittedEnd = Number(range[2]);
-    assert.ok(omittedEnd >= omittedStart);
+    assert.ok(message.includes(`full log: ${failed.stdout.spillPath}`));
 
     const section = /stdout:\n([\s\S]*?)\n\[stdout bounded head\+tail:/.exec(message);
     assert.ok(section, "model output contains a bounded stdout section");
@@ -1205,93 +1153,9 @@ process.exitCode = 1;
     const shownHead = section[1].slice(0, omitted.index);
     const shownTail = section[1].slice(omitted.index + omitted[0].length);
 
-    const file = fs.readFileSync(failed.stdout.spillPath);
-    assert.equal(
-      file.subarray(omittedEnd + 1).toString("utf8"),
-      shownTail,
-      "advertised range ends immediately before the displayed tail",
-    );
-    assert.equal(
-      file.subarray(0, omittedStart).toString("utf8").startsWith(shownHead),
-      true,
-      "displayed head is a prefix of the complete spill",
-    );
-  });
-});
-
-test("terminal_log_read pages a multi-byte archive without corrupting it", async () => {
-  await withManager(async (manager, runtime) => {
-    // Every line mixes 3-byte and 4-byte code points, so almost any byte
-    // offset a model picks lands inside a character.
-    const snap = await runTool(
-      runtime,
-      manager.start({
-        command: nodeCmd(
-          // biome-ignore lint/suspicious/noTemplateCurlyInString: placeholders are evaluated by the child node process, not here
-          'for (let i = 0; i < 4000; i++) console.log(`行${i}:${"漢".repeat(20)}🚀`);',
-        ),
-        title: "utf8-archive",
-        cwd,
-      }),
-    );
-    const { snap: done } = await settlement(manager, snap.id);
-    assert.ok(done.stdout.spillPath);
-    const file = fs.readFileSync(done.stdout.spillPath);
-    const read = (offset: number, limit: number) =>
-      runTool(
-        runtime,
-        manager.readLog({ id: snap.id, stream: "stdout", mode: "page", offset, limit }),
-      );
-
-    const emoji = file.indexOf(Buffer.from("🚀", "utf8"), 500);
-    assert.ok(emoji > 0);
-
-    // An offset inside a code point advances to the next boundary instead of
-    // decoding leading continuation bytes as replacement characters.
-    const midStart = await read(emoji + 1, 256);
-    assert.equal(midStart.offset, emoji + 4);
-    assert.equal(midStart.text.includes("\ufffd"), false);
-
-    // A window ending inside a code point stops at its lead byte.
-    const midEnd = await read(emoji - 60, 62);
-    assert.equal(midEnd.nextOffset, emoji);
-    assert.equal(midEnd.text.includes("\ufffd"), false);
-
-    // Paging with next_offset must be lossless across that boundary.
-    const next = await read(midEnd.nextOffset, 62);
-    assert.equal(
-      midEnd.text + next.text,
-      file.subarray(midEnd.offset, next.nextOffset).toString("utf8"),
-    );
-
-    // A longer run with a page size coprime to the code-point widths must
-    // reassemble the archive byte for byte.
-    let cursor = 300;
-    let reassembled = "";
-    for (let page = 0; page < 20; page++) {
-      const chunk = await read(cursor, 997);
-      assert.notEqual(chunk.nextOffset, cursor, "every page must advance the cursor");
-      reassembled += chunk.text;
-      cursor = chunk.nextOffset;
-    }
-    assert.equal(reassembled, file.subarray(300, cursor).toString("utf8"));
-    assert.equal(reassembled.includes("\ufffd"), false);
-
-    // A limit too small to hold one code point must still make progress
-    // rather than stall the model on a window it can never complete.
-    let tiny = emoji;
-    for (let step = 0; step < 4; step++) {
-      const chunk = await read(tiny, 1);
-      assert.notEqual(chunk.nextOffset, tiny);
-      tiny = chunk.nextOffset;
-    }
-
-    const eof = await read(file.length, 4_096);
-    assert.equal(eof.bytesRead, 0);
-    assert.equal(eof.size, file.length);
-    const beyond = await read(file.length + 5_000, 4_096);
-    assert.equal(beyond.offset, file.length);
-    assert.equal(beyond.bytesRead, 0);
+    const file = fs.readFileSync(failed.stdout.spillPath, "utf8");
+    assert.equal(file.endsWith(shownTail), true, "displayed tail is a suffix of the log");
+    assert.equal(file.startsWith(shownHead), true, "displayed head is a prefix of the log");
   });
 });
 
@@ -1400,7 +1264,7 @@ test("settled entries compact their buffers once the archive is complete", async
     assert.ok(done.stdout.truncatedBytes > 0, "compaction is reflected in the view");
     assert.ok(done.stdout.tail.endsWith("\nVERDICT\n"), "compaction kept the end of the output");
     assert.match(buildBashResult(done), /VERDICT/);
-    // The complete capture remains on disk for terminal_log_read.
+    // The complete capture remains on disk at the log path.
     assert.equal(fs.statSync(done.stdout.spillPath).size, 100 * 1024 + "\nVERDICT\n".length);
   });
 });

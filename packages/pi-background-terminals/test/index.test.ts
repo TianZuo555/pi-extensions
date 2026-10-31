@@ -164,16 +164,10 @@ test("cancellation during manager initialization prevents spawn and fallback", a
   }
 });
 
-test("extension overrides bash, adds log reading, and keeps the user /ps command", async () => {
+test("extension overrides bash, adds wait and stop, and keeps the user /ps command", async () => {
   const app = harness(backgroundTerminals);
   try {
-    assert.deepEqual(
-      [...app.tools.keys()],
-      ["bash", "terminal_log_read", "terminal_wait", "terminal_stop"],
-    );
-    assert.equal(app.tools.get("terminal_log_read").promptSnippet, "Read or search a terminal log");
-    assert.ok(app.tools.get("terminal_log_read").outputSchema);
-    assert.equal(app.tools.get("terminal_log_read").promptGuidelines, undefined);
+    assert.deepEqual([...app.tools.keys()], ["bash", "terminal_wait", "terminal_stop"]);
     assert.deepEqual([...app.commands.keys()], ["ps"]);
   } finally {
     await app.shutdown();
@@ -185,7 +179,6 @@ test("background tool metadata stays concise", async () => {
   try {
     const budgets = new Map([
       ["bash", 1_450],
-      ["terminal_log_read", 950],
       ["terminal_wait", 700],
       ["terminal_stop", 400],
     ]);
@@ -218,22 +211,11 @@ test("background tool metadata stays concise", async () => {
   }
 });
 
-test("terminal_log_read validates opaque refs and bounded pages", async () => {
+test("a truncated bash result gives the path of the full log", async () => {
   const app = harness();
   try {
-    const schema = app.tools.get("terminal_log_read").parameters;
-    assert.equal(Check(schema, { ref: "bt-1:stdout" }), true);
-    assert.equal(Check(schema, { ref: "bt-1:stdout", offset: 0, limit: 64 * 1024 }), true);
-    assert.equal(Check(schema, { ref: "bt-1:stdout", limit: 64 * 1024 + 1 }), false);
-    assert.equal(Check(schema, { ref: "bt-1:stdout", offset: -1 }), false);
-  } finally {
-    await app.shutdown();
-  }
-});
-
-test("terminal_log_read resolves an opaque ref from bash", async () => {
-  const app = harness();
-  try {
+    // The script makes the output: a 200 KB command line fails with E2BIG on
+    // Linux and is too long for the Windows command line.
     const result = await app.tools.get("bash").execute(
       "call-log-source",
       {
@@ -244,71 +226,9 @@ test("terminal_log_read resolves an opaque ref from bash", async () => {
       undefined,
       app.ctx,
     );
-    const ref = /archive ref (bt-[a-f0-9]{16}-\d+:stdout)/.exec(result.content[0].text)?.[1];
-    assert.ok(ref, result.content[0].text);
-
-    const page = await app.tools
-      .get("terminal_log_read")
-      .execute("call-log-read", { ref, offset: 0, limit: 1_024 }, undefined, undefined, app.ctx);
-    assert.match(page.content[0].text, /bytes 0-1023/);
-    assert.match(page.content[0].text, /settled: yes/);
-    assert.match(page.content[0].text, /complete: yes/);
-    assert.match(page.content[0].text, /0123456789/);
-    assert.equal(page.structuredContent.text.slice(0, 10), "0123456789");
-    assert.equal(page.structuredContent.nextOffset, 1024);
-    assert.equal(
-      "text" in page.details && page.details.text !== undefined,
-      false,
-      "page text must not be duplicated into details",
-    );
-  } finally {
-    await app.shutdown();
-  }
-});
-
-test("terminal_log_read is bounded by a per-run call budget", async () => {
-  const app = harness();
-  try {
-    const result = await app.tools.get("bash").execute(
-      "call-budget-source",
-      {
-        command: command('process.stdout.write("0123456789".repeat(20_000))'),
-        yield_time_ms: 30_000,
-      },
-      undefined,
-      undefined,
-      app.ctx,
-    );
-    const ref = /archive ref (bt-[a-f0-9]{16}-\d+:stdout)/.exec(result.content[0].text)?.[1];
-    assert.ok(ref, result.content[0].text);
-
-    const read = (id: string) =>
-      app.tools
-        .get("terminal_log_read")
-        .execute(id, { ref, offset: 0, limit: 1 }, undefined, undefined, app.ctx);
-
-    // A byte budget alone cannot stop this: eight one-byte reads spend eight
-    // bytes, so only a call budget bounds a polling loop.
-    for (let call = 0; call < 8; call++) {
-      const page = await read(`call-budget-${call}`);
-      assert.match(page.content[0].text, /of \d+/);
-      assert.equal(
-        "text" in page.details && page.details.text !== undefined,
-        false,
-        "page text must not be duplicated into details",
-      );
-    }
-    await assert.rejects(
-      () => read("call-budget-over"),
-      /budget exhausted for this agent run \(maximum 8 reads\)/,
-    );
-
-    // The budget is per agent run, not per session.
-    for (const handler of app.handlers.get("agent_start") ?? []) {
-      handler({}, app.ctx);
-    }
-    const afterReset = await read("call-budget-after-reset");
-    assert.match(afterReset.content[0].text, /of \d+/);
+    const file = /full log: (\S+)\]/.exec(result.content[0].text)?.[1];
+    assert.ok(file, result.content[0].text);
+    assert.equal(fs.readFileSync(file, "utf8"), "0123456789".repeat(20_000));
   } finally {
     await app.shutdown();
   }
@@ -1265,106 +1185,6 @@ test("a result held during a run is delivered when the run settles without a tur
   }
 });
 
-test("terminal_log_read accepts a bare id and defaults to head+tail on large logs", async () => {
-  const app = harness();
-  try {
-    const result = await app.tools.get("bash").execute(
-      "call-bare-ref-source",
-      {
-        command: command('process.stdout.write("0123456789".repeat(2_000))'),
-        yield_time_ms: 30_000,
-      },
-      undefined,
-      undefined,
-      app.ctx,
-    );
-    const id = result.details?.id as string;
-    assert.match(id, /^bt-[a-f0-9]{16}-\d+$/);
-
-    // A bare id resolves to stdout — no :stream suffix needed.
-    const small = await app.tools
-      .get("terminal_log_read")
-      .execute("call-bare-small", { ref: id }, undefined, undefined, app.ctx);
-    assert.equal(small.structuredContent.stream, "stdout");
-    assert.equal(small.structuredContent.mode, "head_tail");
-    assert.match(small.content[0].text, /head\+tail of 20000/);
-    assert.match(small.content[0].text, /bytes \d+-\d+ omitted/);
-
-    const paged = await app.tools
-      .get("terminal_log_read")
-      .execute("call-bare-paged", { ref: id, offset: 0, limit: 64 }, undefined, undefined, app.ctx);
-    assert.equal(paged.structuredContent.mode, "page");
-    assert.match(paged.content[0].text, /bytes 0-63/);
-  } finally {
-    await app.shutdown();
-  }
-});
-
-test("terminal_log_read tail conflicts with offset and pattern searches the whole log", async () => {
-  const app = harness();
-  try {
-    const result = await app.tools.get("bash").execute(
-      "call-search-source",
-      {
-        command: command(
-          'for (let i = 0; i < 500; i++) console.log(i === 250 ? "NEEDLE-here" : "line-" + i)',
-        ),
-        yield_time_ms: 30_000,
-      },
-      undefined,
-      undefined,
-      app.ctx,
-    );
-    const id = result.details?.id as string;
-    const read = app.tools.get("terminal_log_read");
-
-    await assert.rejects(
-      read.execute(
-        "call-tail-conflict",
-        { ref: id, tail: true, offset: 0 },
-        undefined,
-        undefined,
-        app.ctx,
-      ),
-      /tail cannot be combined with offset or pattern/,
-    );
-
-    const tailed = await read.execute(
-      "call-tail",
-      { ref: id, tail: true, limit: 64 },
-      undefined,
-      undefined,
-      app.ctx,
-    );
-    assert.equal(tailed.structuredContent.mode, "tail");
-    assert.match(tailed.content[0].text, /line-499/);
-
-    const searched = await read.execute(
-      "call-search",
-      { ref: id, pattern: "needle" },
-      undefined,
-      undefined,
-      app.ctx,
-    );
-    assert.equal(searched.structuredContent.mode, "search");
-    assert.equal(searched.structuredContent.matchCount, 1);
-    assert.match(searched.content[0].text, /@\d+: NEEDLE-here/);
-
-    await assert.rejects(
-      read.execute(
-        "call-bad-pattern",
-        { ref: id, pattern: "([open" },
-        undefined,
-        undefined,
-        app.ctx,
-      ),
-      /Invalid pattern/,
-    );
-  } finally {
-    await app.shutdown();
-  }
-});
-
 test("terminal_wait returns a settled result once and delivers no follow-up", async () => {
   const app = harness();
   try {
@@ -1865,6 +1685,9 @@ test("bash returns structuredContent on every managed result for Code Mode scrip
     // Pi's documented contract for scripts is 1 MiB in equal halves, not the
     // 64 KiB the settled in-memory view is compacted to for the model.
     assert.equal(Buffer.byteLength(bigSc.output as string), 1024 * 1024 + 35);
+    // As in Pi's built-in bash, a truncated result names the full log.
+    assert.equal(fs.statSync(bigSc.full_output_path as string).size, 3 * 1024 * 1024);
+    assert.equal("full_stderr_path" in bigSc, false);
   } finally {
     await app.shutdown();
   }
@@ -1886,6 +1709,7 @@ test("output that literally says bytes omitted is not marked truncated", async (
     );
     const sc = result.structuredContent as Record<string, unknown>;
     assert.equal(sc.truncated, false, "complete output must not read as truncated");
+    assert.equal("full_output_path" in sc, false);
     const output = sc.output as string;
     assert.ok(output.length > 1000);
     assert.ok(output.includes("bytes omitted"), "the phrase is present");
@@ -1922,6 +1746,8 @@ test("the 1 MiB structured cap covers stdout and stderr together", async () => {
     );
     // stderr still reaches the script, named rather than silently dropped.
     assert.match(output, /bytes omitted/);
+    assert.equal(fs.statSync(sc.full_stderr_path as string).size, chunk);
+    assert.equal("full_output_path" in sc, false, "stdout fit in the budget");
   } finally {
     await app.shutdown();
   }
@@ -1957,50 +1783,6 @@ test("structured bash output keeps 1 MiB in equal halves for scripts", async () 
     assert.ok(tailPart!.endsWith("B"), "tail ends at the end");
     // The marker states exactly how many bytes were dropped.
     assert.equal(Number(omitted), bytes - 1024 * 1024);
-  } finally {
-    await app.shutdown();
-  }
-});
-
-test("nested terminal_log_read calls are exempt from the per-run budgets", async () => {
-  const app = harness();
-  try {
-    const result = await app.tools.get("bash").execute(
-      "call-nested-source",
-      {
-        command: command('process.stdout.write("0123456789".repeat(2_000))'),
-        yield_time_ms: 30_000,
-      },
-      undefined,
-      undefined,
-      app.ctx,
-    );
-    const id = result.details?.id as string;
-    const read = app.tools.get("terminal_log_read");
-
-    // Ten nested reads — over the 8-call budget — all succeed.
-    for (let index = 1; index <= 10; index++) {
-      const callId = `script/${index}`;
-      markNested(app, callId, "terminal_log_read");
-      const page = await read.execute(
-        callId,
-        { ref: `${id}:stdout`, offset: 0, limit: 64 },
-        undefined,
-        undefined,
-        app.ctx,
-      );
-      assert.equal(page.structuredContent.mode, "page");
-    }
-
-    // And the untouched budget still serves a top-level read.
-    const after = await read.execute(
-      "call-after-nested",
-      { ref: `${id}:stdout`, offset: 0, limit: 64 },
-      undefined,
-      undefined,
-      app.ctx,
-    );
-    assert.equal(after.structuredContent.mode, "page");
   } finally {
     await app.shutdown();
   }

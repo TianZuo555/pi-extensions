@@ -95,7 +95,3 @@ export class ConcurrencyLimitError extends Data.TaggedError("ConcurrencyLimitErr
 export class UnknownTerminalError extends Data.TaggedError("UnknownTerminalError")<{
   readonly message: string;
 }> {}
-
-export class TerminalLogUnavailableError extends Data.TaggedError("TerminalLogUnavailableError")<{
-  readonly message: string;
-}> {}

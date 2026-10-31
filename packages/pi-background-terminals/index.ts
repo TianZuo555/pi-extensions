@@ -6,7 +6,6 @@
  * - bash: overrides Pi's built-in bash, returns final output when the command
  *   finishes promptly, otherwise returns a terminal id and notifies exactly
  *   once when it exits.
- * - terminal_log_read: bounded reads over a terminal's complete log.
  * - terminal_wait: blocks until a background terminal exits and returns its
  *   result instead of a later completion message — the sleep replacement.
  * - terminal_stop: stops a running terminal's process tree with a one-line
@@ -33,7 +32,6 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import {
   createBashToolDefinition,
-  formatSize,
   getAgentDir,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
@@ -57,23 +55,17 @@ import {
   PLAIN_SLEEP_GUARD_MIN_SECONDS,
   DEFAULT_TERMINAL_WAIT_SECONDS,
   MAX_TERMINAL_WAIT_SECONDS,
-  DEFAULT_TERMINAL_LOG_READ_BYTES,
-  MAX_TERMINAL_LOG_READ_BYTES,
-  TERMINAL_LOG_READ_RUN_BUDGET,
-  TERMINAL_LOG_READ_RUN_CALLS,
   BASH_STRUCTURED_OUTPUT_MAX_BYTES,
 } from "./src/constants.ts";
 import { readLogHeadTail } from "./src/log-read.ts";
 import {
   TerminalManager,
   type SettlementWaitResult,
-  type TerminalLogReadResult,
   type TerminalManagerShape,
 } from "./src/manager.ts";
 import {
   TERMINAL_ERRORS,
   foregroundFallbackWarning,
-  formatTerminalLogRead,
   duplicateCommandError,
   sleepWhileRunningError,
   stateOnlyCommandError,
@@ -87,10 +79,6 @@ import {
   buildTerminalWaitResult,
   deriveCommandTitle,
   describeTerminal,
-  TERMINAL_LOG_READ_OUTPUT_FIELD_DESCRIPTIONS,
-  TERMINAL_LOG_READ_PARAMETER_DESCRIPTIONS,
-  TERMINAL_LOG_READ_PROMPT_SNIPPET,
-  TERMINAL_LOG_READ_TOOL_DESCRIPTION,
   TERMINAL_STOP_PARAMETER_DESCRIPTIONS,
   TERMINAL_STOP_PROMPT_SNIPPET,
   TERMINAL_STOP_TEXT,
@@ -115,45 +103,6 @@ const SESSION_ENV_KEYS = [
   "PI_MODEL",
   "PI_REASONING_LEVEL",
 ] as const;
-
-const TerminalLogReadOutputSchema = Type.Object({
-  id: Type.String({ description: TERMINAL_LOG_READ_OUTPUT_FIELD_DESCRIPTIONS.id }),
-  stream: Type.Union([Type.Literal("stdout"), Type.Literal("stderr")], {
-    description: TERMINAL_LOG_READ_OUTPUT_FIELD_DESCRIPTIONS.stream,
-  }),
-  mode: Type.Union(
-    [Type.Literal("page"), Type.Literal("head_tail"), Type.Literal("tail"), Type.Literal("search")],
-    { description: TERMINAL_LOG_READ_OUTPUT_FIELD_DESCRIPTIONS.mode },
-  ),
-  offset: Type.Integer({ description: TERMINAL_LOG_READ_OUTPUT_FIELD_DESCRIPTIONS.offset }),
-  nextOffset: Type.Integer({ description: TERMINAL_LOG_READ_OUTPUT_FIELD_DESCRIPTIONS.nextOffset }),
-  bytesRead: Type.Integer({ description: TERMINAL_LOG_READ_OUTPUT_FIELD_DESCRIPTIONS.bytesRead }),
-  size: Type.Integer({ description: TERMINAL_LOG_READ_OUTPUT_FIELD_DESCRIPTIONS.size }),
-  settled: Type.Boolean({ description: TERMINAL_LOG_READ_OUTPUT_FIELD_DESCRIPTIONS.settled }),
-  complete: Type.Boolean({ description: TERMINAL_LOG_READ_OUTPUT_FIELD_DESCRIPTIONS.complete }),
-  text: Type.String({ description: TERMINAL_LOG_READ_OUTPUT_FIELD_DESCRIPTIONS.text }),
-  omittedStart: Type.Optional(
-    Type.Integer({ description: TERMINAL_LOG_READ_OUTPUT_FIELD_DESCRIPTIONS.omittedStart }),
-  ),
-  omittedEnd: Type.Optional(
-    Type.Integer({ description: TERMINAL_LOG_READ_OUTPUT_FIELD_DESCRIPTIONS.omittedEnd }),
-  ),
-  matchCount: Type.Optional(
-    Type.Integer({ description: TERMINAL_LOG_READ_OUTPUT_FIELD_DESCRIPTIONS.matchCount }),
-  ),
-  matches: Type.Optional(
-    Type.Array(
-      Type.Object({
-        offset: Type.Integer(),
-        text: Type.String(),
-      }),
-      { description: TERMINAL_LOG_READ_OUTPUT_FIELD_DESCRIPTIONS.matches },
-    ),
-  ),
-  pattern: Type.Optional(
-    Type.String({ description: TERMINAL_LOG_READ_OUTPUT_FIELD_DESCRIPTIONS.pattern }),
-  ),
-});
 
 const TERMINAL_WAIT_OUTPUT_SCHEMA = Type.Object({
   settled: Type.Array(
@@ -182,6 +131,12 @@ const TERMINAL_WAIT_OUTPUT_SCHEMA = Type.Object({
 const BASH_OUTPUT_SCHEMA = Type.Object({
   output: Type.String({ description: BASH_OUTPUT_FIELD_DESCRIPTIONS.output }),
   truncated: Type.Boolean({ description: BASH_OUTPUT_FIELD_DESCRIPTIONS.truncated }),
+  full_output_path: Type.Optional(
+    Type.String({ description: BASH_OUTPUT_FIELD_DESCRIPTIONS.full_output_path }),
+  ),
+  full_stderr_path: Type.Optional(
+    Type.String({ description: BASH_OUTPUT_FIELD_DESCRIPTIONS.full_stderr_path }),
+  ),
   exit_code: Type.Optional(Type.Integer({ description: BASH_OUTPUT_FIELD_DESCRIPTIONS.exit_code })),
   wall_time_seconds: Type.Number({
     description: BASH_OUTPUT_FIELD_DESCRIPTIONS.wall_time_seconds,
@@ -238,15 +193,6 @@ function bashDetails(value: unknown): BashResultDetails | undefined {
   return undefined;
 }
 
-function parseTerminalLogRef(ref: string) {
-  const match = /^(bt-[a-f0-9]{16}-\d+)(?::(stdout|stderr))?$/.exec(ref);
-  if (!match) return undefined;
-  return {
-    id: match[1],
-    stream: (match[2] ?? "stdout") as "stdout" | "stderr",
-  };
-}
-
 /**
  * One stream's contribution to `structuredContent.output`, at the Code Mode
  * budget rather than the model-facing one, bounded by the `budget` the caller
@@ -262,7 +208,7 @@ function parseTerminalLogRef(ref: string) {
 function structuredStream(
   view: OutputView,
   budget: number,
-): { text: string; truncated: boolean; spent: number } {
+): { text: string; truncated: boolean; spent: number; fullPath?: string } {
   const { spillPath, archiveComplete } = view;
   let text = view.text;
   let truncated = view.truncatedBytes > 0;
@@ -278,6 +224,9 @@ function structuredStream(
       // fall back to what memory still holds instead of failing the result.
     }
   }
+  // As in Pi's built-in bash, a truncated stream names its full log.
+  const fullPath =
+    truncated && spillPath !== undefined && fs.existsSync(spillPath) ? { fullPath: spillPath } : {};
   if (truncated && budget <= 0) {
     // No budget left for this stream at all: name what was dropped instead of
     // appending an unbounded in-memory view to an already-full output.
@@ -286,9 +235,15 @@ function structuredStream(
       text: bytes > 0 ? `[... ${bytes} bytes omitted ...]` : "",
       truncated: true,
       spent: 0,
+      ...fullPath,
     };
   }
-  return { text, truncated, spent: Math.min(Buffer.byteLength(text, "utf8"), budget) };
+  return {
+    text,
+    truncated,
+    spent: Math.min(Buffer.byteLength(text, "utf8"), budget),
+    ...fullPath,
+  };
 }
 
 /** Strict-JSON structured bash result for Code Mode scripts: optional keys
@@ -306,6 +261,8 @@ function bashStructuredContent(snap: TerminalSnapshot) {
   return {
     output,
     truncated: stdout.truncated || stderr.truncated,
+    ...(stdout.fullPath !== undefined ? { full_output_path: stdout.fullPath } : {}),
+    ...(stderr.fullPath !== undefined ? { full_stderr_path: stderr.fullPath } : {}),
     ...((snap.status === "done" || snap.status === "failed") && snap.exitCode !== undefined
       ? { exit_code: snap.exitCode }
       : {}),
@@ -398,8 +355,6 @@ export function createBackgroundTerminalsExtension(
     let sessionContext: ExtensionContext | undefined;
     let ui: ExtensionUIContext | undefined;
     let unsubStatus: (() => void) | undefined;
-    let terminalLogReadBytes = 0;
-    let terminalLogReadCalls = 0;
     const resultDelivery = createDeferredResultDelivery<TerminalSnapshot>();
     /** Paths the model wrote with edit/write while commands ran, so a
      * result can say it may predate them. */
@@ -414,15 +369,10 @@ export function createBackgroundTerminalsExtension(
     };
     /** Ids of tool calls made by a Code Mode script (any call whose
      * `tool_call` event carried a `parentToolCallId`). Nested results reach
-     * the script, not the model — budgets and result text adapt accordingly. */
+     * the script, not the model, so such a bash call waits for the exit. */
     const nestedCallIds = new Set<string>();
     /** Consumes the nested marker so a stale id can never mark a later call. */
     const takeNested = (toolCallId: string) => nestedCallIds.delete(toolCallId);
-
-    const resetTerminalLogBudget = () => {
-      terminalLogReadBytes = 0;
-      terminalLogReadCalls = 0;
-    };
 
     const getRuntime = () => (runtime ??= makeRuntime());
 
@@ -562,7 +512,6 @@ export function createBackgroundTerminalsExtension(
 
     pi.on("session_start", (_event, ctx) => {
       sessionContext = ctx;
-      resetTerminalLogBudget();
       if (ctx.hasUI) ui = ctx.ui;
     });
 
@@ -588,12 +537,8 @@ export function createBackgroundTerminalsExtension(
       runChanges.record(resolveToolPath(target, ctx.cwd), bound.manager.view.list());
     });
 
-    // One agent run can contain many model/tool turns. The terminal_log_read
-    // byte/call budget spans the whole run, then resets for the next
-    // user/follow-up run rather than per turn.
     pi.on("agent_start", () => {
       agentRunning = true;
-      resetTerminalLogBudget();
       nestedCallIds.clear();
     });
 
@@ -631,7 +576,6 @@ export function createBackgroundTerminalsExtension(
     pi.on("session_shutdown", async () => {
       sessionContext = undefined;
       agentRunning = false;
-      resetTerminalLogBudget();
       nestedCallIds.clear();
       runChanges.clear();
       resultBatchScheduler.clear();
@@ -1016,173 +960,6 @@ export function createBackgroundTerminalsExtension(
           content: [{ type: "text", text }],
           details,
           structuredContent: bashStructuredContent(snap),
-        };
-      },
-    });
-
-    pi.registerTool({
-      name: "terminal_log_read",
-      label: "terminal_log_read",
-      description: TERMINAL_LOG_READ_TOOL_DESCRIPTION,
-      promptSnippet: TERMINAL_LOG_READ_PROMPT_SNIPPET,
-      parameters: Type.Object({
-        ref: Type.String({
-          description: TERMINAL_LOG_READ_PARAMETER_DESCRIPTIONS.ref,
-        }),
-        offset: Type.Optional(
-          Type.Integer({
-            minimum: 0,
-            description: TERMINAL_LOG_READ_PARAMETER_DESCRIPTIONS.offset,
-          }),
-        ),
-        limit: Type.Optional(
-          Type.Integer({
-            minimum: 1,
-            maximum: MAX_TERMINAL_LOG_READ_BYTES,
-            description: TERMINAL_LOG_READ_PARAMETER_DESCRIPTIONS.limit,
-          }),
-        ),
-        tail: Type.Optional(
-          Type.Boolean({
-            description: TERMINAL_LOG_READ_PARAMETER_DESCRIPTIONS.tail,
-          }),
-        ),
-        pattern: Type.Optional(
-          Type.String({
-            description: TERMINAL_LOG_READ_PARAMETER_DESCRIPTIONS.pattern,
-          }),
-        ),
-      }),
-      outputSchema: TerminalLogReadOutputSchema,
-      executionMode: "sequential",
-      // One compact row: the page itself is for the model, and /ps remains the
-      // human viewer. Rendering a 64 KiB page into the transcript would bury it.
-      renderCall(args, theme, context) {
-        const ref = typeof args?.ref === "string" ? args.ref : "...";
-        const suffix =
-          typeof args?.pattern === "string"
-            ? ` /${args.pattern}/`
-            : args?.tail === true
-              ? " tail"
-              : typeof args?.offset === "number"
-                ? ` @${args.offset}`
-                : "";
-        const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-        text.setText(
-          `${theme.fg("toolTitle", theme.bold("terminal_log_read"))} ${theme.fg("accent", ref)}${theme.fg("dim", suffix)}`,
-        );
-        return text;
-      },
-      renderResult(result, _options, theme, context) {
-        const details = result.details as TerminalLogReadResult | undefined;
-        const text = (context.lastComponent as Text | undefined) ?? new Text("", 0, 0);
-        if (!details) {
-          // Show the actual failure (budget exhausted, unknown ref, expired
-          // archive), not a blanket "archive unavailable".
-          const message = result.content
-            .filter((part) => part.type === "text")
-            .map((part) => part.text)
-            .join("\n")
-            .split("\n")[0]
-            ?.trim();
-          text.setText(
-            `${theme.fg("error", "x")} ${theme.fg("error", message || "archive unavailable")}`,
-          );
-          return text;
-        }
-        const summary =
-          details.mode === "search"
-            ? `${details.matchCount ?? 0} matches`
-            : details.mode === "head_tail"
-              ? `head+tail of ${formatSize(details.size)}`
-              : `bytes ${details.offset}-${Math.max(details.offset, details.nextOffset - 1)} of ${formatSize(details.size)}`;
-        text.setText(
-          `${theme.fg("success", "■")} ${theme.fg("accent", `${details.id}:${details.stream}`)} ${theme.fg("muted", summary)}`,
-        );
-        return text;
-      },
-      async execute(toolCallId, params, signal) {
-        // Nested (Code Mode) calls are exempt: their output reaches the
-        // script, not the model context, so the run budgets do not apply.
-        const nested = takeNested(toolCallId);
-        const parsed = parseTerminalLogRef(params.ref);
-        if (!parsed) {
-          throw new Error(TERMINAL_ERRORS.invalidRef(params.ref));
-        }
-        const hasTail = params.tail === true;
-        const hasPattern = params.pattern !== undefined;
-        if (hasTail && (params.offset !== undefined || hasPattern)) {
-          throw new Error(TERMINAL_ERRORS.tailConflict);
-        }
-        let pattern: RegExp | undefined;
-        if (hasPattern) {
-          try {
-            pattern = new RegExp(params.pattern ?? "", "i");
-          } catch (error) {
-            throw new Error(
-              TERMINAL_ERRORS.invalidPattern(
-                error instanceof Error ? error.message : String(error),
-              ),
-            );
-          }
-        }
-        // Two budgets, because either one alone is escapable: bytes bound a
-        // firehose of full pages, calls bound a tiny-limit polling loop.
-        if (!nested && terminalLogReadCalls >= TERMINAL_LOG_READ_RUN_CALLS) {
-          throw new Error(TERMINAL_ERRORS.readCalls);
-        }
-        const remainingBytes = TERMINAL_LOG_READ_RUN_BUDGET - terminalLogReadBytes;
-        if (!nested && remainingBytes <= 0) {
-          throw new Error(TERMINAL_ERRORS.readBytes);
-        }
-        // Clamp to what is left rather than rejecting a request that exceeds
-        // it — a page read short of the cap is still useful to the model.
-        const limit = Math.min(
-          MAX_TERMINAL_LOG_READ_BYTES,
-          nested ? Number.POSITIVE_INFINITY : remainingBytes,
-          Math.max(1, Math.floor(params.limit ?? DEFAULT_TERMINAL_LOG_READ_BYTES)),
-        );
-        if (!nested) terminalLogReadCalls++;
-        const { runtime: toolRuntime, manager } = await getManager();
-        const request = pattern
-          ? { ...parsed, mode: "search" as const, pattern, offset: params.offset ?? 0, limit }
-          : hasTail
-            ? { ...parsed, mode: "tail" as const, limit }
-            : params.offset !== undefined
-              ? { ...parsed, mode: "page" as const, offset: params.offset, limit }
-              : { ...parsed, mode: "auto" as const, limit };
-        const result = await runTool(toolRuntime, manager.readLog(request), { signal });
-        if (!nested) terminalLogReadBytes += result.bytesRead;
-        return {
-          content: [{ type: "text", text: formatTerminalLogRead(result) }],
-          // The page text is already in content; repeating it here would store
-          // every read twice in the session file. Code-mode scripts read
-          // structuredContent instead of content, so the page lives there.
-          details: { ...result, text: undefined },
-          structuredContent: {
-            id: result.id,
-            stream: result.stream,
-            mode: result.mode,
-            offset: result.offset,
-            nextOffset: result.nextOffset,
-            bytesRead: result.bytesRead,
-            size: result.size,
-            settled: result.settled,
-            complete: result.complete,
-            text: result.text,
-            // Mode-specific fields are absent rather than undefined so the
-            // structured payload stays strict JSON.
-            ...(result.omittedStart !== undefined
-              ? { omittedStart: result.omittedStart, omittedEnd: result.omittedEnd }
-              : {}),
-            ...(result.matchCount !== undefined
-              ? {
-                  matchCount: result.matchCount,
-                  matches: result.matches ? [...result.matches] : [],
-                  pattern: result.pattern,
-                }
-              : {}),
-          },
         };
       },
     });

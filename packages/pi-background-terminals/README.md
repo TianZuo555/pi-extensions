@@ -20,14 +20,13 @@ the background. The model can continue its work while these commands run.
   one time only.
 - The `/ps` command shows all terminals and their full output.
 
-The model has four tools:
+The model has three tools:
 
 | Tool | Function |
 | --- | --- |
 | `bash` | Runs a command. Moves a long command to the background. |
 | `terminal_wait` | Waits until a background terminal stops. Returns the result. |
 | `terminal_stop` | Stops a background terminal and all of its child processes. |
-| `terminal_log_read` | Reads or searches the full log of a terminal. |
 
 ## The `bash` tool
 
@@ -88,7 +87,7 @@ result immediately. The model then continues in the same run.
 - If 8 commands run, a new call waits for a free slot. The calls start in the
   sequence that they arrive. If no slot becomes free in 10 seconds, the call
   fails.
-- The extension keeps the data of the last 32 terminals.
+- `/ps` shows the last 32 terminals.
 - The maximum `timeout` is approximately 2,147,483 seconds. This is the limit
   of a Node.js timer.
 
@@ -153,39 +152,21 @@ If the user stops a terminal in `/ps`, the model receives a message about it.
 This message comes with the next user prompt. It does not start a new agent
 run.
 
-## The `terminal_log_read` tool
+## Log files
 
-This tool reads the full log of a terminal. It does not control the process.
+The extension writes the full output of each stream to a log file. The model
+reads a log file with `read` or `grep`.
 
-| Parameter | Description |
-| --- | --- |
-| `ref` | The terminal ID. The default stream is stdout. Add `:stderr` to read stderr. |
-| `limit` | The maximum number of bytes to return. The default is 8 KiB. The maximum is 64 KiB. |
-| `offset` | The start byte of an exact page. To read the next page, use the returned `next_offset`. |
-| `tail` | Returns the last `limit` bytes. You cannot use `tail` with `offset` or `pattern`. |
-| `pattern` | A regular expression. The search ignores case. The tool returns each line that matches, with its byte offset. |
-
-- If you do not set `offset`, `tail`, or `pattern`, the tool returns the full
-  log when the log is not larger than `limit`. Otherwise, the tool returns the
-  start and the end of the log, and the byte range that it does not show.
-- A search shows a maximum of 300 characters for each line. If the matches do
-  not fit in `limit`, `next_offset` is the start of the first match that the
-  tool does not show. To continue the search, use this value as `offset`.
-- A search always shows the first match. If that line is larger than `limit`,
-  the tool cuts the line. Thus each search continues past its first match.
-- The search runs outside the main process. A pattern that would take very
-  long on a repetitive log stops after 15 s with an error instead of slowing
-  the session. Simplify the pattern, or narrow the range with `offset`.
-- All pages start and end at UTF-8 character boundaries. The pages connect
-  without errors. If `limit` is smaller than one character, the page contains
-  that full character.
-- For calls from the model, each agent run has a limit of 8 reads and 256 KiB.
-  This limit does not apply to calls from a Code Mode script or to Bash
-  commands.
-
-Each terminal ID contains a random runtime ID. An ID from before `/reload` or
-`/resume` cannot read the output of a different command. Such an ID is not
-available.
+- If a result does not show all output, it gives the path of the full log:
+  `full log: <path>`. While the command runs, the text is
+  `full log (still written): <path>`.
+- When a command moves to the background, the result gives the paths of its
+  stdout and stderr logs. The model can use them to examine a server.
+- The log files stay until the session ends. The extension then deletes them.
+- The extension keeps a maximum of 256 MiB of log files of stopped commands.
+  Past this limit, it deletes the oldest log files first. It does not delete
+  the log files of a command that runs, or of the newest stopped command.
+- A result does not give the path of a deleted log file.
 
 ## Use with Code Mode
 
@@ -203,11 +184,10 @@ script. The script has no timers.
 - `output` contains stdout and then stderr. It holds up to 1 MiB together,
   the same limit as the built-in tool. Longer output keeps its first and last
   512 KiB around a `[... N bytes omitted ...]` marker, and `truncated` is
-  true. To read the full log, use `terminal_log_read` with `terminal_id`.
-  A stream that is still running has no complete log file, so `output`
-  holds the bounded in-memory view instead.
-- The object does not contain `full_output_path`, because the log files are
-  private.
+  true. A stream that is still running has no complete log file, so
+  `output` holds the bounded in-memory view instead.
+- When stdout is truncated, `full_output_path` is the path of its full log.
+  When stderr is truncated, `full_stderr_path` is the path of its full log.
 - In a script, `bash` waits until the command stops. It does not use
   `yield_time_ms`. A script has no other work, and a background result goes to
   the model, not to the script.
@@ -221,10 +201,6 @@ script. The script has no timers.
   ID, the status, and the exit code of a terminal that stopped.
 - In a script, a failed terminal does not cause an exception in
   `terminal_wait`. Examine `status` instead.
-- In a script, `terminal_log_read` returns an object, for example with the
-  fields `text`, `nextOffset`, `mode`, and `matches`.
-- Reads from a script do not have the limit for each agent run. Their output
-  goes to the script, not to the model.
 - If the script ends before `terminal_wait` returns, the wait stops. The
   result then comes to the model as a usual message. No result is lost.
 - If a script receives a result from `terminal_wait`, only the script has that
@@ -300,8 +276,8 @@ path.
 - The extension writes the full output of each stream to a log file on the
   disk. The file has the mode `0600`, in a directory with the mode `0700`.
   Each file has a maximum of 256 MiB.
-- The extension deletes the log files of a terminal when it removes the
-  terminal from the history of 32 entries.
+- The log files stay until the session ends, with a total limit of 256 MiB.
+  Refer to [Log files](#log-files).
 - `/ps` reads the log file in a limited window. The window is 1 MiB at the
   end, and a maximum of 4 MiB when you scroll back.
 
@@ -310,8 +286,8 @@ path.
 - A `bash` result shows a maximum of 16 KiB of stdout and 8 KiB of stderr.
 - A completion message shows a maximum of 8 KiB of stdout and 4 KiB of stderr.
   After a failure or a timeout, it shows 16 KiB and 8 KiB.
-- If the tool does not show all output, the result gives a log reference. The
-  model can read the full log with `terminal_log_read`.
+- If the tool does not show all output, the result gives the path of the
+  full log.
 
 ### Changes made while a command ran
 

@@ -74,8 +74,8 @@ for (const shutdown of [false, true]) {
   });
 }
 
-test("archive identities never alias after runtime recreation", async () => {
-  let oldId = "";
+test("terminal ids and log paths never alias after runtime recreation", async () => {
+  let old: { id: string; log?: string } | undefined;
   for (const text of ["old", "new"]) {
     const runtime = createTerminalRuntime();
     try {
@@ -83,22 +83,12 @@ test("archive identities never alias after runtime recreation", async () => {
       const snap = await runtime.runPromise(
         manager.start({ command: `printf ${text}`, cwd: process.cwd(), title: text }),
       );
-      await runtime.runPromise(manager.waitForSettlement(snap.id, 5_000));
-      if (oldId) {
-        assert.notEqual(snap.id, oldId);
-        await assert.rejects(
-          runTool(
-            runtime,
-            manager.readLog({ id: oldId, stream: "stdout", mode: "page", offset: 0, limit: 64 }),
-          ),
-          /Unknown terminal id/,
-        );
+      const { snapshot } = await runtime.runPromise(manager.waitForSettlement(snap.id, 5_000));
+      if (old) {
+        assert.notEqual(snap.id, old.id);
+        assert.notEqual(snapshot.stdout.spillPath, old.log);
       }
-      const page = await runtime.runPromise(
-        manager.readLog({ id: snap.id, stream: "stdout", mode: "page", offset: 0, limit: 64 }),
-      );
-      assert.equal(page.text, text);
-      oldId = snap.id;
+      old = { id: snap.id, log: snapshot.stdout.spillPath };
     } finally {
       await runtime.dispose();
     }
