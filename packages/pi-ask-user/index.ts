@@ -9,7 +9,7 @@
 // to built-in dialogs; print/json modes report that no UI was available.
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { type Terminal, Text } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
 import {
   AskUserForm,
@@ -148,15 +148,31 @@ function validateQuestions(questions: AskUserQuestion[]): void {
   }
 }
 
-function showQuestions(
+// Pi reports OSC 7501 program status (read by Rex) as `blocked` for its
+// built-in dialogs only, not for ctx.ui.custom(). Report it for the form, then
+// restore the `working` status that Pi reported for the active run.
+async function showQuestions(
   ctx: AskUserContext,
   questions: AskUserQuestion[],
   signal: AbortSignal | undefined,
+  blockedLabel: string,
+  sessionName: () => string | undefined,
 ): Promise<AskUserSubmission | null> {
-  return ctx.ui.custom<AskUserSubmission | null>(
-    (tui, theme, keybindings, done) =>
-      new AskUserForm(tui, theme, keybindings, questions, done, signal),
-  );
+  let terminal: Terminal | undefined;
+  try {
+    return await ctx.ui.custom<AskUserSubmission | null>((tui, theme, keybindings, done) => {
+      terminal = tui.terminal;
+      terminal.setProgramStatus({
+        state: "blocked",
+        kind: "question",
+        app: "pi",
+        message: blockedLabel,
+      });
+      return new AskUserForm(tui, theme, keybindings, questions, done, signal);
+    });
+  } finally {
+    terminal?.setProgramStatus({ state: "working", app: "pi", message: sessionName() });
+  }
 }
 
 function optionDialogLabel(option: AskUserQuestion["options"][number], index: number): string {
@@ -310,7 +326,9 @@ export default function askUser(pi: ExtensionAPI): void {
         emitInputRequired(true);
         try {
           if (signal?.aborted) return reply({ kind: "cancelled" });
-          const submission = await showQuestions(ctx, questions, signal);
+          const submission = await showQuestions(ctx, questions, signal, blockedLabel, () =>
+            pi.getSessionName(),
+          );
           if (!submission) return reply(dismissedOrCancelled());
           return reply({ kind: "answered", answers: submission.answers }, submission);
         } finally {
