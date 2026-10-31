@@ -228,7 +228,7 @@ export default function (
 		// 被新安装接管时是无害空转；下一次 session_start 必须重装而不是
 		// 复用这套已失活的补丁。
 		installation = undefined;
-		compactModeHooks = undefined;
+		if (compactModeHooks === current.compactMode) compactModeHooks = undefined;
 		current.defaultMode.shutdown();
 		current.toolGrouping.shutdown();
 		current.disposeToolExpandedBackground();

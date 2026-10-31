@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+	AssistantMessageComponent,
 	ToolExecutionComponent,
 	initTheme,
 	UserMessageComponent,
@@ -12,6 +13,7 @@ import {
 import { Container, TuiAltScreen } from "@earendil-works/pi-tui";
 import claudeCodeStyleExtension from "../extensions/renderer/index.ts";
 import { ToolGroupComponent } from "../extensions/renderer/tool/grouping.ts";
+import { COMPACT_THINKING_PATCH_KEY } from "../extensions/utils/patch-keys.ts";
 
 initTheme("dark");
 
@@ -289,5 +291,39 @@ test("headless runtimes do not replace or shut down main TUI patches", async () 
 		await mainStyle.events.get("session_shutdown")?.({}, tuiCtx);
 		containerPrototype.addChild = originalContainerAdd;
 		toolPrototype.getCallRenderer = originalToolCallRenderer;
+	}
+});
+
+test("stale shutdown keeps the replacement compact-mode hook", async () => {
+	const runtimeA = runtime();
+	const runtimeB = runtime();
+	const ctx = {
+		mode: "tui",
+		hasUI: true,
+		ui: { theme: { fg: (_c: string, text: string) => text }, setStatus() {}, requestRender() {} },
+	} as any;
+	const assistantPrototype = AssistantMessageComponent.prototype as any;
+	const previousMode = config.mode;
+	try {
+		Object.assign(config, { mode: "compact" });
+		claudeCodeStyleExtension(runtimeA.pi as any);
+		await runtimeA.events.get("session_start")?.({}, ctx);
+		claudeCodeStyleExtension(runtimeB.pi as any);
+		await runtimeB.events.get("session_start")?.({}, ctx);
+		const replacementInstalled = assistantPrototype.updateContent;
+		await runtimeA.events.get("session_shutdown")?.({}, ctx);
+
+		// compact-thinking wraps on top; the replacement must reclaim the outer slot.
+		const wrapper = function (this: any, ...args: any[]) {
+			return replacementInstalled.apply(this, args);
+		};
+		(wrapper as any)[COMPACT_THINKING_PATCH_KEY] = true;
+		assistantPrototype.updateContent = wrapper;
+		await runtimeB.events.get("message_update")?.({ message: { role: "assistant" } }, ctx);
+		assert.equal(assistantPrototype.updateContent, replacementInstalled);
+	} finally {
+		await runtimeA.events.get("session_shutdown")?.({}, ctx);
+		await runtimeB.events.get("session_shutdown")?.({}, ctx);
+		Object.assign(config, { mode: previousMode });
 	}
 });
