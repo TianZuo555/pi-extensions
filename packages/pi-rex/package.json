@@ -1,0 +1,47 @@
+{
+  "name": "@tian.zuo/pi-rex",
+  "version": "0.0.0",
+  "description": "Tells the pi coding agent that it runs in a Rex terminal, like the Rex hook for Claude Code and Codex.",
+  "type": "module",
+  "keywords": [
+    "pi",
+    "pi-package",
+    "pi-extension",
+    "pi-coding-agent",
+    "rex"
+  ],
+  "author": "Tian Zuo",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TianZuo555/pi-extensions.git",
+    "directory": "packages/pi-rex"
+  },
+  "homepage": "https://github.com/TianZuo555/pi-extensions#pi-rex",
+  "bugs": {
+    "url": "https://github.com/TianZuo555/pi-extensions/issues"
+  },
+  "files": [
+    "index.ts",
+    "CHANGELOG.md"
+  ],
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "scripts": {
+    "check": "tsc --noEmit -p .",
+    "test": "node --test --experimental-strip-types test/*.test.ts"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@effect/language-service": "^0.87.5",
+    "typescript": "^7.0.2"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}
