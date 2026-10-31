@@ -1,6 +1,6 @@
 {
   "name": "@tian.zuo/pi-rex",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Tells the pi coding agent that it runs in a Rex terminal, like the Rex hook for Claude Code and Codex.",
   "type": "module",
   "keywords": [

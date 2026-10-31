@@ -1,5 +1,11 @@
 # @tian.zuo/pi-devin-acp
 
+## 0.5.3
+
+### Patch Changes
+
+- [#173](https://github.com/TianZuo555/pi-extensions/pull/173) [`dfabfeb`](https://github.com/TianZuo555/pi-extensions/commit/dfabfebca8c56255d27ecb4acc5f001109306feb) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Move the ACP imports to `@agentclientprotocol/sdk/unstable` and update the SDK from 1.9.0 to 2.0.0. SDK 2.0 makes the stable v1 schema the default entrypoint and removes the legacy connection classes; the unstable entrypoint is the one that still carries the fields this extension reads (`PromptResponse.usage`, `plan_update`, `plan_removed`). Devin's wire protocol is unchanged, so sessions, usage reporting, and plan rendering keep working.
+
 ## 0.5.2
 
 ### Patch Changes
