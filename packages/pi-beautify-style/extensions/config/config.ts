@@ -1,5 +1,4 @@
 import type { CompactThinkingConfig } from "../feature/compact-thinking.ts";
-import { DEFAULT_FOOTER_CHIP_LAYOUT } from "../feature/shell/footer-layout.ts";
 
 export type CompactStyleMode = "on" | "compact" | "off";
 
@@ -54,7 +53,12 @@ export type Config = {
 	expandedOutputMaxLines: number;
 	toolLabelClip: number;
 	useSummaryTitlesAsThinkingTitle: boolean;
-	previewLines: number;
+	/**
+	 * Max reasoning rows shown **while** a run streams; longer text scrolls inside the
+	 * window and the newest row stays at the bottom. A finished run hides the body
+	 * entirely (heading only) until `app.thinking.toggle` (ctrl+t) expands it.
+	 */
+	liveThinkingLines: number;
 	animationIntervalMs: number;
 	/** fullscreen：userMessage 正文首行滚出视口上沿后钉住，直到下一条指令接手。 */
 	stickyUserMessage: boolean;
@@ -65,7 +69,6 @@ export type Config = {
 	enableContextCommand: boolean;
 	enableAgentSummary: boolean;
 	enableWorkingMessage: boolean;
-	enableAliases: boolean;
 	/** markdown 转换：Mermaid 方言渲染、圈数字转半角括号。关掉让位给其他扩展。 */
 	enableMarkdownEnhance: boolean;
 	/** 输入框 `❯ ` 前缀（占左侧 2 列，颜色随 thinking/bash mode 联动）。 */
@@ -82,11 +85,11 @@ export type Config = {
 	/** 1 单位费用对应的显示币种数量。null 只换符号、不乘倍率。 */
 	footerCurrencyRate: number | null;
 	footerNerdIcons: boolean;
+	/** Session name and branch name cap, in characters. 0 = no cap. */
+	footerLabelClip: number;
 	footerGitStatsMode: FooterGitStatsMode;
+	/** 第三行的插件芯片里要隐藏的 `setStatus()` key。 */
 	footerHiddenKeys: string[];
-	footerLine1Keys: string[];
-	footerLine2Keys: string[];
-	footerLine3Keys: string[];
 };
 
 export const DIFF_VIEW_MODES: DiffViewMode[] = ["auto", "split", "unified"];
@@ -106,7 +109,7 @@ export const EXPANDED_INPUT_MAX_LINES_VALUES = ["5", "10", "20", "40", "80"];
 export const EXPANDED_OUTPUT_MAX_LINES_VALUES = ["10", "20", "40", "80", "120"];
 /** 工具摘要里 path/command 等输入的折叠字符数；0 = 只按可用宽度截断。 */
 export const TOOL_LABEL_CLIP_VALUES = ["0", "40", "60", "80", "100", "120", "160"];
-export const THINKING_PREVIEW_LINES_VALUES = ["0", "1", "3", "5", "10"];
+export const THINKING_LIVE_LINES_VALUES = ["1", "3", "5", "8", "10"];
 export const THINKING_ANIMATION_INTERVAL_VALUES = ["40", "60", "90", "120", "180"];
 /** Tools commonly excluded from ccstyle rendering. */
 export const EXCLUDE_RENDERER_CANDIDATES = [
@@ -136,7 +139,7 @@ export const DEFAULT_CONFIG: Config = {
 	expandedOutputMaxLines: 10,
 	toolLabelClip: 0,
 	useSummaryTitlesAsThinkingTitle: true,
-	previewLines: 3,
+	liveThinkingLines: 5,
 	animationIntervalMs: 90,
 	stickyUserMessage: true,
 	scrollButtonMode: "dock",
@@ -145,7 +148,6 @@ export const DEFAULT_CONFIG: Config = {
 	enableContextCommand: true,
 	enableAgentSummary: true,
 	enableWorkingMessage: true,
-	enableAliases: true,
 	enableMarkdownEnhance: true,
 	enableEditorPrefix: true,
 	enableCustomFooter: true,
@@ -155,23 +157,25 @@ export const DEFAULT_CONFIG: Config = {
 	footerCurrency: "USD",
 	footerCurrencyRate: null,
 	footerNerdIcons: true,
+	footerLabelClip: 16,
 	footerGitStatsMode: "working",
-	...DEFAULT_FOOTER_CHIP_LAYOUT,
+	footerHiddenKeys: [],
 };
 
 /**
- * Frozen render/feature constants.
+ * Source constants for the render and feature switches.
  *
- * This package has no runtime configuration: no `/ccstyle` command, no settings
- * panel, no JSON file. Every knob below is a source constant. Edit this file and
- * restart Pi to change behavior.
+ * This package has no runtime configuration surface: no `/ccstyle` command, no
+ * settings panel, no JSON file. The object is mutable only so tests can
+ * override fields; production code must treat it as read-only. Edit
+ * `DEFAULT_CONFIG` and restart Pi to change behavior.
  */
 export const config: Config = { ...DEFAULT_CONFIG };
 
 export function getCompactThinkingConfig(source: Config = config): CompactThinkingConfig {
 	return {
 		useSummaryTitlesAsThinkingTitle: source.useSummaryTitlesAsThinkingTitle,
-		previewLines: source.previewLines,
+		liveThinkingLines: source.liveThinkingLines,
 		animationIntervalMs: source.animationIntervalMs,
 	};
 }

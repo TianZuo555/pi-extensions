@@ -40,6 +40,7 @@
     ]
   },
   "scripts": {
+    "check": "tsc --noEmit -p .",
     "test": "node --test --experimental-strip-types test/*.test.ts"
   },
   "dependencies": {

@@ -764,7 +764,7 @@ test("lazy-proxy tui: fullscreen compact expanded round thinking hint expands in
 	};
 	installCompactThinking(pi, {
 		useSummaryTitlesAsThinkingTitle: false,
-		previewLines: 0,
+		liveThinkingLines: 0,
 		animationIntervalMs: 30,
 	});
 	emit("session_start", {}, thinkingCtx);
@@ -1174,7 +1174,7 @@ test("lazy-proxy tui: single click collapses thinking after preview rebuild", as
 	};
 	installCompactThinking(pi, {
 		useSummaryTitlesAsThinkingTitle: false,
-		previewLines: 3,
+		liveThinkingLines: 3,
 		animationIntervalMs: 30,
 	});
 	emit("session_start", {}, thinkingCtx);
@@ -1231,7 +1231,7 @@ test("lazy-proxy tui: thinking collapse targets the run under the pointer", asyn
 	};
 	installCompactThinking(pi, {
 		useSummaryTitlesAsThinkingTitle: false,
-		previewLines: 3,
+		liveThinkingLines: 3,
 		animationIntervalMs: 30,
 	});
 	emit("session_start", {}, thinkingCtx);
