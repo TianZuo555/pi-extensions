@@ -270,9 +270,10 @@ export interface TerminalReadModel {
 
 export interface TerminalManagerShape {
   start(options: StartOptions): Effect.Effect<TerminalSnapshot, SpawnError | ConcurrencyLimitError>;
+  /** Without `timeoutMs`, wait until the terminal settles. */
   waitForSettlement(
     id: string,
-    timeoutMs: number,
+    timeoutMs?: number,
   ): Effect.Effect<SettlementWaitResult, UnknownTerminalError>;
   readLog(
     request: TerminalLogReadRequest,
@@ -1135,7 +1136,7 @@ const makeManager = (timings: TerminalManagerTimings) =>
         );
       });
 
-    const waitForSettlement = (id: string, timeoutMs: number) =>
+    const waitForSettlement = (id: string, timeoutMs?: number) =>
       Effect.suspend((): Effect.Effect<SettlementWaitResult, UnknownTerminalError> => {
         const entry = entries.get(id);
         if (!entry) {
@@ -1173,7 +1174,6 @@ const makeManager = (timings: TerminalManagerTimings) =>
             settled: waiter.consumed || entry.snapshot.status !== "running",
           };
         });
-        const waitMs = Math.max(MIN_YIELD_TIME_MS, Math.min(MAX_YIELD_TIME_MS, timeoutMs));
 
         return Effect.sync(() => {
           let waiters = settlementWaiters.get(id);
@@ -1184,10 +1184,15 @@ const makeManager = (timings: TerminalManagerTimings) =>
           waiters.add(waiter);
         }).pipe(
           Effect.andThen(
-            Deferred.await(entry.settled).pipe(
-              Effect.timeoutOrElse({ duration: waitMs, orElse: () => Effect.void }),
-              Effect.andThen(finish),
-            ),
+            (timeoutMs === undefined
+              ? Deferred.await(entry.settled)
+              : Deferred.await(entry.settled).pipe(
+                  Effect.timeoutOrElse({
+                    duration: Math.max(MIN_YIELD_TIME_MS, Math.min(MAX_YIELD_TIME_MS, timeoutMs)),
+                    orElse: () => Effect.void,
+                  }),
+                )
+            ).pipe(Effect.andThen(finish)),
           ),
           Effect.ensuring(Effect.sync(removeWaiter)),
         );

@@ -944,8 +944,14 @@ export function createBackgroundTerminalsExtension(
           }
         }
 
+        // A Code Mode script has no other work and gets no follow-up, so its
+        // call waits for the exit. Esc or the script timeout still stops only
+        // this wait.
         const waitForSettlement = () =>
-          manager.waitForSettlement(started.id, params.yield_time_ms ?? DEFAULT_YIELD_TIME_MS);
+          manager.waitForSettlement(
+            started.id,
+            nested ? undefined : (params.yield_time_ms ?? DEFAULT_YIELD_TIME_MS),
+          );
         let waited: SettlementWaitResult | undefined;
         try {
           waited = await runTool(toolRuntime, waitForSettlement(), {
@@ -987,7 +993,6 @@ export function createBackgroundTerminalsExtension(
         }
 
         const text = buildBashResult(snap, {
-          nested,
           changedFiles: runChanges.changedDuring(snap.id),
         });
         const details: BashResultDetails = {

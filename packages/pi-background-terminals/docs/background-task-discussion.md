@@ -160,3 +160,13 @@ batch found an empty queue and reported "delivered earlier" before the model
 saw the result. This occurred in 63 of 66 such reports. During a run, the
 extension now keeps the results until `turn_end`. A `terminal_wait` in the
 batch returns them. Otherwise, one message at the turn boundary contains them.
+
+## Follow-up: `bash` in Code Mode runs in the foreground
+
+The same review found that 178 of 688 Code Mode scripts with `bash` ended
+while a command still ran. These scripts did not get the output. Only 13 of
+them checked the status or called `terminal_wait`. A script has no other work
+during the wait, and a background result goes to the model, not to the
+script. Thus a `bash` call from a script now waits until the command stops,
+and it does not use `yield_time_ms`. If Esc or the script timeout stops the
+wait, the command continues in the background as before.

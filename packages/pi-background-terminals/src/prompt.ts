@@ -104,7 +104,6 @@ export const TERMINAL_LOG_READ_OUTPUT_FIELD_DESCRIPTIONS = {
 
 export const TERMINAL_WAIT_TOOL_DESCRIPTION =
   "Block until a background terminal exits and return its result (it is not delivered again). Use instead of sleep when nothing else is left to do. " +
-  "In codemode, call it instead of sleep to use a yielded command's result in the same script. " +
   "Returns as soon as any listed terminal exits; the timeout or Esc ends the wait without stopping anything.";
 
 /** Field text on `terminal_wait` `outputSchema` (code-mode scripts, not the model). */
@@ -442,13 +441,11 @@ export function buildBashProgress(snap: TerminalSnapshot) {
   );
 }
 
-/** Result of the initial bash wait, whether final or yielded. `nested` marks a
- * call made by a Code Mode script: its follow-up cannot interrupt the script,
- * so the guidance points at collecting the result inside the script.
+/** Result of the initial bash wait, whether final or yielded.
  * `changedFiles` qualifies a final result only: a running command has none. */
 export function buildBashResult(
   snap: TerminalSnapshot,
-  options?: { nested?: boolean; changedFiles?: readonly string[] },
+  options?: { changedFiles?: readonly string[] },
 ) {
   // Always name the directory. A command sent to the wrong one usually still
   // exits 0, and the common mistake is assuming a cwd that was never set, so
@@ -456,9 +453,7 @@ export function buildBashResult(
   // Running terminals carry it via describeTerminal() instead.
   let text =
     snap.status === "running"
-      ? options?.nested === true
-        ? `Command is still running as background terminal ${snap.id}. Its result arrives after the calling script ends. To use it inside the script, call terminal_wait({ ids: ["${snap.id}"] }). Stop it with terminal_stop.\n${describeTerminal(snap)}`
-        : `Command is still running as background terminal ${snap.id}. Its result arrives automatically after a later tool call — keep working. If nothing else is left to do, call terminal_wait; never sleep or poll. Stop it with terminal_stop.\n${describeTerminal(snap)}`
+      ? `Command is still running as background terminal ${snap.id}. Its result arrives automatically after a later tool call — keep working. If nothing else is left to do, call terminal_wait; never sleep or poll. Stop it with terminal_stop.\n${describeTerminal(snap)}`
       : snap.status === "timed_out"
         ? `Command timed out after ${formatElapsed(snap)} in ${snap.cwd}.`
         : `Command finished in ${formatElapsed(snap)} (${formatExit(snap)}) in ${snap.cwd}.`;

@@ -1730,38 +1730,41 @@ function markNested(app: ReturnType<typeof harness>, toolCallId: string, toolNam
   }
 }
 
-test("a nested yielded bash result tells the script to collect it with terminal_wait", async () => {
+test("a Code Mode bash call waits for exit and ignores yield_time_ms", async () => {
   const app = harness();
   try {
+    // Session data: scripts lost 26% of their bash results to the
+    // background. A script has no other work, so it waits for the exit.
     markNested(app, "script/1", "bash");
     const nested = await app.tools.get("bash").execute(
       "script/1",
       {
-        command: command("setTimeout(() => {}, 1_500)"),
+        command: command('setTimeout(() => console.log("nested-done"), 1_500)'),
         yield_time_ms: 250,
       },
       undefined,
       undefined,
       app.ctx,
     );
-    assert.match(nested.content[0].text, /after the calling script ends/);
-    const id = nested.details?.id as string;
-    assert.ok(nested.content[0].text.includes(`terminal_wait({ ids: ["${id}"] })`));
+    assert.equal(nested.details?.status, "done");
+    assert.equal(nested.details?.yielded, false);
+    assert.equal(nested.structuredContent.exit_code, 0);
+    assert.match(nested.structuredContent.output, /nested-done/);
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    assert.equal(app.messages.length, 0, "the script got the result, so no follow-up");
 
-    // A top-level yield keeps the model-facing wording. (Distinct command
-    // text — an identical still-running command hits the duplicate guard.)
-    const top = await app.tools.get("bash").execute(
-      "call-top-yield",
-      {
-        command: command("setTimeout(() => {}, 1_500) // top-level"),
-        yield_time_ms: 250,
-      },
-      undefined,
-      undefined,
-      app.ctx,
-    );
+    // A top-level call still yields.
+    const top = await app.tools
+      .get("bash")
+      .execute(
+        "call-top-yield",
+        { command: command("setTimeout(() => {}, 1_500)"), yield_time_ms: 250 },
+        undefined,
+        undefined,
+        app.ctx,
+      );
+    assert.equal(top.details?.status, "running");
     assert.match(top.content[0].text, /after a later tool call — keep working/);
-    assert.doesNotMatch(top.content[0].text, /calling script ends/);
   } finally {
     await app.shutdown();
   }

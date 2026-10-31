@@ -44,7 +44,7 @@ warning is expected.
 | `timeout` | The maximum run time in seconds. At this time, the extension stops the full process tree. There is no default limit. |
 | `working_dir` | The directory for the command. The default is the session directory. A `cd` command alone has no effect on later calls. |
 | `title` | A short label for `/ps`. The default label comes from the command, without a `D=/path;` or `cd /path &&` prefix. |
-| `yield_time_ms` | The initial wait in milliseconds. The default is 10,000 ms. A value below 250 ms or above 300,000 ms changes to the nearest limit. |
+| `yield_time_ms` | The initial wait in milliseconds. The default is 10,000 ms. A value below 250 ms or above 300,000 ms changes to the nearest limit. A call from a Code Mode script does not use this value. |
 
 ### Sequence for each call
 
@@ -208,10 +208,12 @@ script. The script has no timers.
   holds the bounded in-memory view instead.
 - The object does not contain `full_output_path`, because the log files are
   private.
-- If a `bash` call in a script moves to the background, `status` is
-  `running`. The result comes to the model only after the script ends. To use
-  the result in the same script, call `tools.terminal_wait` with
-  `terminal_id`.
+- In a script, `bash` waits until the command stops. It does not use
+  `yield_time_ms`. A script has no other work, and a background result goes to
+  the model, not to the script.
+- If Esc or the script timeout stops this wait, the command continues in the
+  background. Its result then comes to the model as a usual message.
+- Start a server with a top-level `bash` call, not in a script.
 - A script can start more than 8 commands, for example with `Promise.all`.
   The extension runs a maximum of 8 at the same time. The other calls wait.
 - In a script, `terminal_wait` returns an object with the fields `settled`,
@@ -232,13 +234,11 @@ script. The script has no timers.
 Example:
 
 ```js
-const started = await tools.bash({ command: "pnpm test", yield_time_ms: 1000 });
-if (started.status === "running") {
-  const waited = await tools.terminal_wait({ ids: [started.terminal_id] });
-  text(waited.text);
-} else {
-  text(`exit ${started.exit_code}\n${started.output}`);
-}
+const [test, lint] = await Promise.all([
+  tools.bash({ command: "pnpm test" }),
+  tools.bash({ command: "pnpm lint" }),
+]);
+text(`test: exit ${test.exit_code}\nlint: exit ${lint.exit_code}`);
 ```
 
 ## Safety rules for commands
