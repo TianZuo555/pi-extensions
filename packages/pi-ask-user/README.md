@@ -52,7 +52,16 @@ stable `id` lets consumers correlate duplicate and concurrent requests:
 }
 ```
 
-Pi core has no native "blocked" status (only *working* while a tool call is in
+In the TUI, the form also reports `blocked` (`kind=question`, with the label as
+the message) through the terminal's OSC 7501 program status. Terminals such as
+[Rex](https://www.superlogical.com/rex/docs/build/program-status) show it on the
+tab and the session picker. Pi reports `blocked` only for its built-in
+`select`/`input`/`editor` dialogs, not for `ctx.ui.custom()` forms, so the tool
+reports it itself. When the form closes, it restores the `working` status that
+Pi reported for the run. Pi writes nothing when the terminal does not support
+OSC 7501.
+
+Pi's event bus has no "blocked" status (only *working* while a tool call is in
 flight vs *idle*), and can't distinguish an autonomous long-running tool from
 one waiting on a human. Pi 0.84.4+ emits its own `ui_prompt_start` /
 `ui_prompt_end` around `ctx.ui` prompts, but those carry no question label for
