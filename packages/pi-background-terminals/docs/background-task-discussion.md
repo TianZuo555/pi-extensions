@@ -170,3 +170,28 @@ during the wait, and a background result goes to the model, not to the
 script. Thus a `bash` call from a script now waits until the command stops,
 and it does not use `yield_time_ms`. If Esc or the script timeout stops the
 wait, the command continues in the background as before.
+
+## Follow-up: log paths replace `terminal_log_read`
+
+This decision replaces the earlier decision to keep `terminal_log_read`.
+Session data from 2026-10-15 to 2026-10-31 shows:
+
+- 275 results were truncated. After them, the model continued without more
+  output 196 times, ran the same command again 40 times, and read the log 19
+  times.
+- 15 of 50 `terminal_log_read` calls failed because of the read limit, a
+  terminal id, or options that do not go together.
+- 13 calls read a log while the command ran.
+
+A truncated result now gives the path of the full log, as the built-in Bash
+tool does with `full_output_path`. The model reads the file with `read` or
+`grep`. A yielded result gives the log paths, so the model can check a server.
+
+The lifetime of the log files is defined:
+
+- The files stay until the session ends.
+- The total size of the logs of stopped commands is at most 256 MiB. Past this
+  limit, the oldest files are deleted first.
+- The logs of running commands and of the newest stopped command are not
+  deleted.
+- A result does not give the path of a deleted file.

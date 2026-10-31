@@ -1,24 +1,19 @@
 /**
- * Pure file-based reads over a terminal's complete spill log.
- *
- * The manager resolves the model's opaque ref to a private path and delegates
- * here; nothing in this module knows about terminals. All windows are byte
- * addressed and snapped to UTF-8 code-point boundaries so paging with
- * `nextOffset` is byte-exact.
+ * Pure file-based reads over a terminal's complete spill log, for the Code
+ * Mode `output` field. Windows are byte addressed and snapped to UTF-8
+ * code-point boundaries.
  */
 
 import * as fs from "node:fs";
-import { fileURLToPath } from "node:url";
-import { Worker } from "node:worker_threads";
 import { codePointStart, completeCodePointEnd } from "./utf8.ts";
 
-export type LogReadMode = "page" | "head_tail" | "tail" | "search";
+export type LogReadMode = "page" | "head_tail";
 
 export interface LogReadBody {
   readonly mode: LogReadMode;
   readonly offset: number;
   readonly nextOffset: number;
-  /** Bytes of returned text — what the run budget charges. */
+  /** Bytes of returned text. */
   readonly bytesRead: number;
   readonly size: number;
   readonly text: string;
@@ -26,29 +21,7 @@ export interface LogReadBody {
   readonly omittedStart?: number;
   /** Byte after the omitted range (head_tail). */
   readonly omittedEnd?: number;
-  /** Matching lines found in the scanned range (search). */
-  readonly matchCount?: number;
-  /** Shown matching lines with line-start byte offsets (search). */
-  readonly matches?: ReadonlyArray<{ offset: number; text: string }>;
-  /** Search regex source (search). */
-  readonly pattern?: string;
 }
-
-export interface SearchLogOptions {
-  readonly pattern: RegExp;
-  readonly offset: number;
-  readonly limit: number;
-  /** Scan chunk size; injectable for tests. */
-  readonly chunkSizeBytes?: number;
-  /** Lines longer than this are tested on their prefix only. */
-  readonly maxLineBytes?: number;
-  /** Hard bound on the whole scan; injectable for tests. */
-  readonly timeoutMs?: number;
-  readonly signal?: AbortSignal;
-}
-
-const DEFAULT_SEARCH_CHUNK_BYTES = 64 * 1024;
-const DEFAULT_MAX_LINE_BYTES = 64 * 1024;
 
 function readWindow(filePath: string, start: number, length: number) {
   if (length <= 0) return Buffer.alloc(0);
@@ -92,37 +65,6 @@ export function readLogPage(filePath: string, offset: number, limit: number): Lo
     mode: "page",
     offset: readOffset,
     nextOffset: readOffset + bytes.length,
-    bytesRead: Buffer.byteLength(text),
-    size,
-    text,
-  };
-}
-
-/** The newest `limit` bytes, start-snapped to a code-point boundary. */
-export function readLogTail(filePath: string, limit: number): LogReadBody {
-  const size = fs.statSync(filePath).size;
-  let start = Math.max(0, size - limit);
-  const raw = readWindow(filePath, start, size - start);
-  const leading = start > 0 ? codePointStart(raw) : 0;
-  let bytes = raw.subarray(leading);
-  let offset = start + leading;
-  if (bytes.length === 0 && raw.length > 0) {
-    // The window sits entirely inside the final multi-byte code point (limit
-    // smaller than the sequence). Back up to its lead byte so tail still
-    // returns at least that code point.
-    const probeStart = Math.max(0, size - 4);
-    const probe = readWindow(filePath, probeStart, size - probeStart);
-    let lead = probe.length - 1;
-    while (lead > 0 && (probe[lead] & 0xc0) === 0x80) lead--;
-    start = probeStart + lead;
-    offset = start;
-    bytes = probe.subarray(lead);
-  }
-  const text = bytes.toString("utf8");
-  return {
-    mode: "tail",
-    offset,
-    nextOffset: size,
     bytesRead: Buffer.byteLength(text),
     size,
     text,
@@ -178,113 +120,4 @@ export function readLogHeadTail(filePath: string, limit: number): LogReadBody {
     omittedStart,
     omittedEnd,
   };
-}
-
-/**
- * The whole log when it fits `limit`; otherwise a startup head (one quarter)
- * plus the newest remainder, joined by an explicit omitted byte range.
- */
-export function readLogAuto(filePath: string, limit: number): LogReadBody {
-  const size = fs.statSync(filePath).size;
-  if (size <= limit) {
-    return readLogPage(filePath, 0, limit);
-  }
-  const headLength = Math.floor(limit / 4);
-  const head = headWindow(filePath, size, headLength);
-  const tailStart = size - Math.max(1, limit - head.length);
-  const tailRaw = readWindow(filePath, tailStart, size - tailStart);
-  const tailLead = codePointStart(tailRaw);
-  const tail = tailRaw.subarray(tailLead);
-  const omittedStart = head.length;
-  const omittedEnd = tailStart + tailLead;
-  const text =
-    head.toString("utf8") +
-    `\n[… bytes ${omittedStart}-${omittedEnd - 1} omitted …]\n` +
-    tail.toString("utf8");
-  return {
-    mode: "head_tail",
-    offset: 0,
-    nextOffset: size,
-    bytesRead: Buffer.byteLength(text),
-    size,
-    text,
-    omittedStart,
-    omittedEnd,
-  };
-}
-
-/**
- * Streaming case-insensitive line search from `offset` to the size observed
- * at scan start. Reads chunks (never the whole file — spills can be
- * 256 MiB), carries partial lines across chunk boundaries, and records each
- * match as `@<line-start-byte-offset>: <line>` with the line cut to 300
- * chars. The first match is always shown — cut to `limit` bytes on a UTF-8
- * boundary ending in `…` when needed — so `nextOffset` always advances past
- * `offset` and a capped continuation cannot loop. Collection stops when a
- * later match would exceed `limit` bytes; `matchCount` still counts the rest
- * so the caller knows how much was left out.
- *
- * The scan itself runs in a worker (see log-search-worker.mjs): the pattern
- * is a plain V8 RegExp, and a backtracking-heavy one such as `(a+)+b` can
- * spend unbounded time failing against a repetitive line — long enough that
- * the event loop, and with it the whole Pi session, appears to hang. The
- * abort signal cannot interrupt a running `RegExp.test`, so no amount of
- * between-chunk checks helps; only moving the scan off-thread does. A search
- * that outlives `SEARCH_TIMEOUT_MS` is terminated and fails with an
- * actionable error.
- */
-export const SEARCH_TIMEOUT_MS = 15_000;
-
-const SEARCH_WORKER_PATH = fileURLToPath(new URL("./log-search-worker.mjs", import.meta.url));
-
-export async function searchLogFile(
-  filePath: string,
-  options: SearchLogOptions,
-): Promise<LogReadBody> {
-  options.signal?.throwIfAborted();
-  const timeoutMs = Math.max(1, options.timeoutMs ?? SEARCH_TIMEOUT_MS);
-  const size = fs.statSync(filePath).size;
-  const request = {
-    filePath,
-    pattern: options.pattern,
-    offset: Math.min(Math.max(0, options.offset), size),
-    chunkSizeBytes: Math.max(1, options.chunkSizeBytes ?? DEFAULT_SEARCH_CHUNK_BYTES),
-    maxLineBytes: Math.max(1, options.maxLineBytes ?? DEFAULT_MAX_LINE_BYTES),
-    limit: options.limit,
-    size,
-  };
-
-  const worker = new Worker(SEARCH_WORKER_PATH);
-  // An in-flight search must never delay shutdown: if the session ends first,
-  // neither the worker nor the timeout timer should hold the event loop.
-  worker.unref();
-  return new Promise<LogReadBody>((resolve, reject) => {
-    const stop = (error: unknown) => {
-      clearTimeout(timer);
-      worker.terminate();
-      reject(error);
-    };
-    const timer = setTimeout(() => {
-      stop(
-        new Error(
-          `the pattern search stopped after ${timeoutMs / 1000}s without finishing — the pattern is likely too complex; simplify it or narrow the range with offset`,
-        ),
-      );
-    }, timeoutMs);
-    timer.unref?.();
-    const onAbort = () => stop(options.signal?.reason ?? new Error("search aborted"));
-    options.signal?.addEventListener("abort", onAbort, { once: true });
-    worker.on("message", (message: { ok: boolean; result?: LogReadBody; error?: string }) => {
-      clearTimeout(timer);
-      options.signal?.removeEventListener("abort", onAbort);
-      worker.terminate();
-      if (message.ok && message.result) resolve(message.result);
-      else reject(new Error(message.error ?? "log search failed"));
-    });
-    worker.on("error", (error) => stop(error));
-    worker.on("exit", (code) => {
-      if (code !== 0) stop(new Error(`log search worker exited with code ${code}`));
-    });
-    worker.postMessage(request);
-  });
 }
