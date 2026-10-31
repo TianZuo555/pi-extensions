@@ -36,6 +36,11 @@ test("bash metadata states the managed-shell contract concisely", () => {
   // (not sleeping or polling) is what delivers them.
   assert.match(BASH_TOOL_DESCRIPTION, /result arrives at a later tool call/);
   assert.match(BASH_TOOL_DESCRIPTION, /terminal_wait/);
+  // Session data: a 1 s yield_time_ms moved quick tests and builds to the
+  // background, and the model then called terminal_wait at once.
+  assert.doesNotMatch(BASH_TOOL_DESCRIPTION, /short yield_time_ms/);
+  assert.match(BASH_TOOL_DESCRIPTION, /Keep the default yield_time_ms/);
+  assert.match(BASH_PARAMETER_DESCRIPTIONS.yieldTimeMs, /servers and watchers/);
   // The classic footgun: `cmd &` dies with the shell, so servers need their
   // own call (which auto-yields).
   assert.match(BASH_TOOL_DESCRIPTION, /`cmd &` dies with its shell/);

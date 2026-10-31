@@ -51,8 +51,8 @@ const RESULT_STDERR_MAX_LINES = 20;
 export const BASH_TOOL_DESCRIPTION =
   "Run Bash in a fresh shell — no interactive stdin; use working_dir, not a standalone cd. " +
   "Returns output within the initial wait, else a background terminal id; its result arrives at a later tool call. " +
-  "For tests, builds, or similar tasks, use a short yield_time_ms if independent work remains. " +
-  "Continue that work while the command runs. " +
+  "Keep the default yield_time_ms for tests and builds; an early yield only adds a terminal_wait call. " +
+  "Continue independent work while it runs. " +
   "Use terminal_wait when you need the result or have no other work. " +
   "Do not use sleep or repeated log reads to wait for completion. " +
   "`cmd &` dies with its shell — give a server its own call instead. " +
@@ -66,7 +66,7 @@ export const BASH_PARAMETER_DESCRIPTIONS = {
   title: "/ps label; default derived from command.",
   workingDir:
     "Working directory for the command, relative to session cwd or absolute; default session cwd.",
-  yieldTimeMs: `Initial wait in ms; default ${DEFAULT_YIELD_TIME_MS}, clamped to ${MIN_YIELD_TIME_MS}-${MAX_YIELD_TIME_MS}.`,
+  yieldTimeMs: `Initial wait in ms; default ${DEFAULT_YIELD_TIME_MS}, clamped to ${MIN_YIELD_TIME_MS}-${MAX_YIELD_TIME_MS}. Lower it only for servers and watchers.`,
   timeout: "Hard runtime limit in seconds; no default.",
 };
 

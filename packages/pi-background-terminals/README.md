@@ -67,12 +67,16 @@ When a background command stops, the extension sends the result to the model.
 The model receives the result after its next tool call. This lets the model
 continue its work. If no agent run is active, the result starts a new run.
 
+During an agent run, the extension keeps each result until the current turn
+ends. Thus a `terminal_wait` call in that turn returns the result itself.
+
 The extension sends each result one time only. If commands stop at almost the
 same time, the extension sends one message for all of them:
 
 - It waits until no new result comes for 1,000 ms.
 - It does not wait more than 3,000 ms in total.
 - One message contains a maximum of 32 KiB.
+- During an agent run, one message contains all the results of the turn.
 
 If the model ends its run while a result waits, the extension sends that
 result immediately. The model then continues in the same run.

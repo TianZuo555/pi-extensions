@@ -134,3 +134,29 @@ Do not use sleep or repeated log reads to wait for completion.
 This change adds guidance. It does not change the default wait or the
 behavior of the log tool. The Windows path assertions remain a separate
 item for discussion.
+
+## Follow-up: session review of the yield and wait guidance
+
+A review of the Pi sessions from 2026-10-15 to 2026-10-31 found two problems.
+
+The first problem was in the instruction about a short `yield_time_ms`. In 149
+of 482 background terminals, the initial wait was 2 s or less. 70 of these
+commands stopped in 10 s or less, so the default wait would have returned
+their output. In 33 of them, the next call was `terminal_wait`, with no other
+work before it. The Bash tool description now includes this text:
+
+```text
+Keep the default yield_time_ms for tests and builds; an early yield only adds a terminal_wait call.
+Continue independent work while it runs.
+```
+
+The `yield_time_ms` parameter tells the agent to lower the value only for
+servers and watchers.
+
+The second problem was the result delivery during a run. The extension sent
+each result as a steer when the quiet window ended. Pi adds a steer to the
+context only after the current tool batch. Thus a `terminal_wait` in that
+batch found an empty queue and reported "delivered earlier" before the model
+saw the result. This occurred in 63 of 66 such reports. During a run, the
+extension now keeps the results until `turn_end`. A `terminal_wait` in the
+batch returns them. Otherwise, one message at the turn boundary contains them.

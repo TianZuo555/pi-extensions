@@ -528,11 +528,19 @@ export function createBackgroundTerminalsExtension(
       }
     };
 
-    const flushResults = () => {
+    const deliverPending = () => {
       const snaps = resultDelivery.drain();
       if (!deliverResults(snaps)) {
         for (const snap of snaps) resultDelivery.defer(snap);
       }
+    };
+    // Pi adds a steer to the context only after the current tool batch. A
+    // steer sent during the batch hides the result from a terminal_wait in
+    // that batch: the queue is empty, but the model has not seen the result.
+    // So while a run is active, results stay queued until turn_end.
+    let agentRunning = false;
+    const flushResults = () => {
+      if (!agentRunning) deliverPending();
     };
     const resultBatchScheduler = createCompletionBatchScheduler(flushResults);
     const scheduleResultFlush = () => {
@@ -584,6 +592,7 @@ export function createBackgroundTerminalsExtension(
     // byte/call budget spans the whole run, then resets for the next
     // user/follow-up run rather than per turn.
     pi.on("agent_start", () => {
+      agentRunning = true;
       resetTerminalLogBudget();
       nestedCallIds.clear();
     });
@@ -595,11 +604,24 @@ export function createBackgroundTerminalsExtension(
     pi.on("agent_before_settle", (event) => {
       if (event.outcome !== "completed" || resultDelivery.size() === 0) return;
       resultBatchScheduler.clear();
-      flushResults();
+      deliverPending();
     });
 
-    // Retry a batch whose delivery failed (results were re-deferred).
-    pi.on("agent_settled", scheduleResultFlush);
+    // Pi drains steers right after turn_end handlers, before the next model
+    // request. An aborted or failed turn ends the run, so its results wait
+    // for agent_settled instead.
+    pi.on("turn_end", (event) => {
+      const stop = event.message.role === "assistant" ? event.message.stopReason : undefined;
+      if (stop === "aborted" || stop === "error" || resultDelivery.size() === 0) return;
+      resultBatchScheduler.clear();
+      deliverPending();
+    });
+
+    // Deliver results held during the run, and retry a failed batch.
+    pi.on("agent_settled", () => {
+      agentRunning = false;
+      scheduleResultFlush();
+    });
 
     // /new, /resume, /fork, /reload, and quit all emit session_shutdown for
     // the old extension instance. Processes never survive a session
@@ -608,6 +630,7 @@ export function createBackgroundTerminalsExtension(
     // bounded so a wedged process cannot hang shutdown.
     pi.on("session_shutdown", async () => {
       sessionContext = undefined;
+      agentRunning = false;
       resetTerminalLogBudget();
       nestedCallIds.clear();
       runChanges.clear();
