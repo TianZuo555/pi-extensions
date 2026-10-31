@@ -12,8 +12,54 @@ import {
 	setMessageDisplayTheme,
 } from "../extensions/renderer/tool/message-display.ts";
 import { WriteExecutionMetadataStore } from "../extensions/renderer/tool/diff/index.ts";
+import { createCcstyleTool } from "../extensions/renderer/tool/ccstyle-tool.ts";
+import { visibleWidth } from "@earendil-works/pi-tui";
 
 initTheme("dark");
+
+test("ccstyle call paint cache stores the truncated line, so a hit stays in width", () => {
+	const previousMode = config.mode;
+	config.mode = "on";
+	const theme = { fg: (_color: string, text: string) => text } as any;
+	try {
+		const tool = createCcstyleTool(
+			{ name: "ask_user", label: "ask_user" },
+			new WriteExecutionMetadataStore(),
+			"ask_user",
+		);
+		const answers = Array.from({ length: 12 }, (_, index) => ({
+			questionIndex: index,
+			question: `q${index}`,
+			kind: "option",
+			answer: "x",
+		}));
+		const ctx = {
+			state: {},
+			toolCallId: "paint-cache-call",
+			isPartial: false,
+			executionStarted: false,
+			result: { details: { answers } },
+		} as any;
+		const call = tool.renderCall({ questions: [] }, theme, ctx);
+		for (let width = 1; width <= 40; width++) {
+			const first = call.render(width);
+			const second = call.render(width);
+			assert.deepEqual(
+				second,
+				first,
+				`width ${width}: a cache hit must return the same truncated line`,
+			);
+			for (const line of [...first, ...second]) {
+				assert.ok(
+					visibleWidth(line) <= width,
+					`width ${width}: rendered line is ${visibleWidth(line)} columns`,
+				);
+			}
+		}
+	} finally {
+		config.mode = previousMode;
+	}
+});
 
 test("ccstyle tool paint cache reuses lines until content or hover changes", () => {
 	const previousMode = config.mode;

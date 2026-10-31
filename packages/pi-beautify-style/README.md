@@ -37,9 +37,10 @@ pi -e ./packages/pi-beautify-style
   highlighting, and configurable collapse limits.
 - **Compact mode**: one summary line per assistant message, with per-round tool
   counts.
-- **Footer** with model, context, cache, token rate, cost, cwd, git status, MCP
-  count, and any other extension's `setStatus` chips. Rows and order are
-  configurable.
+- **Footer** in three fixed rows: builtin statistics (model, context, cache,
+  rate, cost), then location (cwd, session name, git), then every other
+  extension's `setStatus` chip, including `pi-usage` and the MCP count. Plugin
+  chips never crowd the first two rows.
 - **`/context`** to inspect context usage and preview the system prompt, memory,
   skills, and tool definitions.
 - **`@` references** to pull context from an earlier session or a running
@@ -54,12 +55,12 @@ The fork adapts upstream's renderers to the sibling packages:
 | Package | What changes |
 | --- | --- |
 | `@tian.zuo/pi-ask-user` | The `ask_user` card uses the same answer tree as upstream's `ask_user_question`, including `choice: { label, wasCustom }` answers, the question-count suffix, and custom ("Other") text. |
-| `@tian.zuo/pi-background-terminals` | `terminal_wait`, `terminal_stop`, and `terminal_log_read` get shell-style cards: the terminal id as the title payload, a live elapsed timer, and collapsed output. |
-| `@tian.zuo/pi-usage` | The footer treats `setStatus("usage")` as the usage chip. Upstream only recognized `pi-usage`/`localUsage`, so this package's chip used to stay empty. |
+| `@tian.zuo/pi-background-terminals` | Its `bash` and `terminal_wait`/`terminal_stop`/`terminal_log_read` tools use the same beautify card as every other tool: a live elapsed timer, and the terminal id in the title of the `terminal_*` cards. |
+| `@tian.zuo/pi-usage` | The footer treats `setStatus("usage")` as the usage chip on row 3. Upstream only recognized `pi-usage`/`localUsage`, so this package's chip used to stay empty. |
 
-`@tian.zuo/pi-token-speed` needs no integration: it publishes a normal
-`setStatus("token-speed")` chip, which the footer picks up automatically. If you
-prefer the built-in rate chip instead, disable one of the two.
+`@tian.zuo/pi-token-speed` needs no integration either: its
+`setStatus("token-speed")` text fills the footer's built-in rate chip instead of
+adding a second one.
 
 `@tian.zuo/pi-compact-output` is superseded by this package — its compact tool
 blocks and reasoning boxes are what this package renders. Do not run both.
@@ -68,7 +69,7 @@ blocks and reasoning boxes are what this package renders. Do not run both.
 
 There is none. This package ships no `/ccstyle` command, no settings panel, and
 no JSON file. Every knob — render mode, diff layout, footer chips, reasoning
-preview length — is a source constant in
+window height — is a source constant in
 [`extensions/config/config.ts`](./extensions/config/config.ts). Edit that file
 and restart Pi to change behavior.
 
@@ -76,6 +77,10 @@ and restart Pi to change behavior.
 > In fullscreen mode, click `click to show more` to expand a tool card, a
 > reasoning block, or a compact summary. Expanded cards show the full diff;
 > Input/Output past their line limit open a full preview.
+>
+> Reasoning streams in a five-row window and hides completely once the run
+> ends (`Thought for 8s · ctrl+t to expand`). Press `ctrl+t` to open every
+> finished reasoning block; press it again to hide them.
 
 > [!NOTE]
 > For Mermaid diagrams, set `markdown.mermaid` to `final` in

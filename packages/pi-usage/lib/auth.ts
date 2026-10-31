@@ -43,6 +43,7 @@ interface PiAuthEntry {
   type?: string;
   access?: string;
   refresh?: string;
+  enterpriseUrl?: string;
   key?: string;
   expires?: number;
 }
@@ -62,6 +63,8 @@ interface ProviderAuthRegistry {
 export interface ResolvedToken {
   token: string;
   source: string;
+  /** Copilot login domain, bound to this GitHub OAuth token in pi's auth store. */
+  enterpriseUrl?: string;
 }
 
 /**
@@ -289,8 +292,16 @@ export function hasCopilotLoginInfo(): boolean {
 
 /** Resolve the GitHub OAuth token used for Copilot usage. */
 export function resolveCopilotToken(): ResolvedToken | undefined {
-  const refresh = readPiAuth()["github-copilot"]?.refresh;
-  if (refresh) return { token: refresh, source: AUTH_FILE };
+  const entry = readPiAuth()["github-copilot"];
+  if (entry?.refresh) {
+    return {
+      token: entry.refresh,
+      source: AUTH_FILE,
+      ...(entry.enterpriseUrl === undefined ? {} : { enterpriseUrl: entry.enterpriseUrl }),
+    };
+  }
+  // An incomplete Enterprise login must not borrow another account's token.
+  if (entry?.enterpriseUrl !== undefined) return undefined;
 
   for (const name of COPILOT_TOKEN_ENV) {
     const value = process.env[name];
@@ -299,7 +310,10 @@ export function resolveCopilotToken(): ResolvedToken | undefined {
 
   try {
     const apps = JSON.parse(fs.readFileSync(COPILOT_APPS_FILE, "utf-8")) as Record<string, unknown>;
-    for (const entry of Object.values(apps)) {
+    for (const [account, entry] of Object.entries(apps)) {
+      // VS Code keys are <domain>:<account>. This fallback has no selected
+      // Enterprise realm, so only public GitHub credentials are eligible.
+      if (account.split(":", 1)[0]?.toLowerCase() !== "github.com") continue;
       const token = (entry as { oauth_token?: unknown })?.oauth_token;
       if (typeof token === "string" && token) {
         return { token, source: "~/.config/github-copilot/apps.json" };
