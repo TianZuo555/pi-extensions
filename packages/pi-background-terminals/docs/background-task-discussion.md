@@ -175,7 +175,6 @@ wait, the command continues in the background as before.
 
 This decision replaces the earlier decision to keep `terminal_log_read`.
 Session data from 2026-10-15 to 2026-10-31 shows:
-
 - 275 results were truncated. After them, the model continued without more
   output 196 times, ran the same command again 40 times, and read the log 19
   times.
@@ -188,7 +187,6 @@ tool does with `full_output_path`. The model reads the file with `read` or
 `grep`. A yielded result gives the log paths, so the model can check a server.
 
 The lifetime of the log files is defined:
-
 - The files stay until the session ends.
 - The total size of the logs of stopped commands is at most 256 MiB. Past this
   limit, the oldest files are deleted first.
