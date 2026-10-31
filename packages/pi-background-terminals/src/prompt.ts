@@ -51,8 +51,8 @@ const RESULT_STDERR_MAX_LINES = 20;
 export const BASH_TOOL_DESCRIPTION =
   "Run Bash in a fresh shell — no interactive stdin; use working_dir, not a standalone cd. " +
   "Returns output within the initial wait, else a background terminal id; its result arrives at a later tool call. " +
-  "For tests, builds, or similar tasks, use a short yield_time_ms if independent work remains. " +
-  "Continue that work while the command runs. " +
+  "Keep the default yield_time_ms for tests and builds; an early yield only adds a terminal_wait call. " +
+  "Continue independent work while it runs. " +
   "Use terminal_wait when you need the result or have no other work. " +
   "Do not use sleep or repeated log reads to wait for completion. " +
   "`cmd &` dies with its shell — give a server its own call instead. " +
@@ -66,7 +66,7 @@ export const BASH_PARAMETER_DESCRIPTIONS = {
   title: "/ps label; default derived from command.",
   workingDir:
     "Working directory for the command, relative to session cwd or absolute; default session cwd.",
-  yieldTimeMs: `Initial wait in ms; default ${DEFAULT_YIELD_TIME_MS}, clamped to ${MIN_YIELD_TIME_MS}-${MAX_YIELD_TIME_MS}.`,
+  yieldTimeMs: `Initial wait in ms; default ${DEFAULT_YIELD_TIME_MS}, clamped to ${MIN_YIELD_TIME_MS}-${MAX_YIELD_TIME_MS}. Lower it only for servers and watchers.`,
   timeout: "Hard runtime limit in seconds; no default.",
 };
 
@@ -104,7 +104,6 @@ export const TERMINAL_LOG_READ_OUTPUT_FIELD_DESCRIPTIONS = {
 
 export const TERMINAL_WAIT_TOOL_DESCRIPTION =
   "Block until a background terminal exits and return its result (it is not delivered again). Use instead of sleep when nothing else is left to do. " +
-  "In codemode, call it instead of sleep to use a yielded command's result in the same script. " +
   "Returns as soon as any listed terminal exits; the timeout or Esc ends the wait without stopping anything.";
 
 /** Field text on `terminal_wait` `outputSchema` (code-mode scripts, not the model). */
@@ -442,13 +441,11 @@ export function buildBashProgress(snap: TerminalSnapshot) {
   );
 }
 
-/** Result of the initial bash wait, whether final or yielded. `nested` marks a
- * call made by a Code Mode script: its follow-up cannot interrupt the script,
- * so the guidance points at collecting the result inside the script.
+/** Result of the initial bash wait, whether final or yielded.
  * `changedFiles` qualifies a final result only: a running command has none. */
 export function buildBashResult(
   snap: TerminalSnapshot,
-  options?: { nested?: boolean; changedFiles?: readonly string[] },
+  options?: { changedFiles?: readonly string[] },
 ) {
   // Always name the directory. A command sent to the wrong one usually still
   // exits 0, and the common mistake is assuming a cwd that was never set, so
@@ -456,9 +453,7 @@ export function buildBashResult(
   // Running terminals carry it via describeTerminal() instead.
   let text =
     snap.status === "running"
-      ? options?.nested === true
-        ? `Command is still running as background terminal ${snap.id}. Its result arrives after the calling script ends. To use it inside the script, call terminal_wait({ ids: ["${snap.id}"] }). Stop it with terminal_stop.\n${describeTerminal(snap)}`
-        : `Command is still running as background terminal ${snap.id}. Its result arrives automatically after a later tool call — keep working. If nothing else is left to do, call terminal_wait; never sleep or poll. Stop it with terminal_stop.\n${describeTerminal(snap)}`
+      ? `Command is still running as background terminal ${snap.id}. Its result arrives automatically after a later tool call — keep working. If nothing else is left to do, call terminal_wait; never sleep or poll. Stop it with terminal_stop.\n${describeTerminal(snap)}`
       : snap.status === "timed_out"
         ? `Command timed out after ${formatElapsed(snap)} in ${snap.cwd}.`
         : `Command finished in ${formatElapsed(snap)} (${formatExit(snap)}) in ${snap.cwd}.`;

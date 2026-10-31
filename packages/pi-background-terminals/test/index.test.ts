@@ -1174,6 +1174,97 @@ test("a result still in its quiet window is delivered before the run settles", a
   }
 });
 
+test("during a run, results wait for turn_end so a terminal_wait in the batch returns them", async () => {
+  const app = harness();
+  const emit = async (name: string, event: object) => {
+    for (const handler of app.handlers.get(name) ?? []) await handler(event, app.ctx);
+  };
+  try {
+    await emit("agent_start", { type: "agent_start" });
+    const start = (callId: string, text: string) =>
+      app.tools
+        .get("bash")
+        .execute(
+          callId,
+          { command: command(`setTimeout(() => console.log("${text}"), 300)`), yield_time_ms: 250 },
+          undefined,
+          undefined,
+          app.ctx,
+        );
+    const waited = await start("call-run-waited", "waited-out");
+    const steered = await start("call-run-steered", "steered-out");
+    const waitedId = waited.details?.id as string;
+    const steeredId = steered.details?.id as string;
+
+    // Past the quiet and maximum windows: a steer sent now would reach the
+    // model only after this tool batch, so the extension keeps the results.
+    await new Promise((resolve) => setTimeout(resolve, 3_500));
+    assert.equal(app.messages.length, 0, "results held while the run is active");
+
+    const wait = await app.tools
+      .get("terminal_wait")
+      .execute("call-run-wait", { ids: [waitedId] }, undefined, undefined, app.ctx);
+    assert.equal(wait.structuredContent.settled[0].id, waitedId);
+    assert.deepEqual(wait.structuredContent.alreadyReported, []);
+    assert.match(wait.structuredContent.text, /waited-out/);
+
+    // The turn boundary delivers the rest, once, as a steer.
+    await emit("turn_end", {
+      type: "turn_end",
+      message: { role: "assistant", stopReason: "toolUse" },
+      toolResults: [],
+    });
+    assert.equal(app.messages.length, 1);
+    assert.match(app.messages[0].message.content, new RegExp(steeredId));
+    assert.doesNotMatch(app.messages[0].message.content, new RegExp(waitedId));
+    assert.deepEqual(app.messages[0].options, { deliverAs: "steer", triggerTurn: true });
+    await emit("turn_end", {
+      type: "turn_end",
+      message: { role: "assistant", stopReason: "toolUse" },
+      toolResults: [],
+    });
+    assert.equal(app.messages.length, 1);
+  } finally {
+    await app.shutdown();
+  }
+});
+
+test("a result held during a run is delivered when the run settles without a turn_end", async () => {
+  const app = harness();
+  const emit = async (name: string, event: object) => {
+    for (const handler of app.handlers.get(name) ?? []) await handler(event, app.ctx);
+  };
+  try {
+    await emit("agent_start", { type: "agent_start" });
+    await app.tools.get("bash").execute(
+      "call-run-settle",
+      {
+        command: command('setTimeout(() => console.log("settle-out"), 300)'),
+        yield_time_ms: 250,
+      },
+      undefined,
+      undefined,
+      app.ctx,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 3_500));
+    assert.equal(app.messages.length, 0);
+
+    // An aborted turn does not take the result.
+    await emit("turn_end", {
+      type: "turn_end",
+      message: { role: "assistant", stopReason: "aborted" },
+      toolResults: [],
+    });
+    assert.equal(app.messages.length, 0);
+
+    await emit("agent_settled", { type: "agent_settled", aborted: true });
+    assert.equal(await pollUntil(() => app.messages.length === 1), true);
+    assert.match(app.messages[0].message.content, /settle-out/);
+  } finally {
+    await app.shutdown();
+  }
+});
+
 test("terminal_log_read accepts a bare id and defaults to head+tail on large logs", async () => {
   const app = harness();
   try {
@@ -1639,38 +1730,41 @@ function markNested(app: ReturnType<typeof harness>, toolCallId: string, toolNam
   }
 }
 
-test("a nested yielded bash result tells the script to collect it with terminal_wait", async () => {
+test("a Code Mode bash call waits for exit and ignores yield_time_ms", async () => {
   const app = harness();
   try {
+    // Session data: scripts lost 26% of their bash results to the
+    // background. A script has no other work, so it waits for the exit.
     markNested(app, "script/1", "bash");
     const nested = await app.tools.get("bash").execute(
       "script/1",
       {
-        command: command("setTimeout(() => {}, 1_500)"),
+        command: command('setTimeout(() => console.log("nested-done"), 1_500)'),
         yield_time_ms: 250,
       },
       undefined,
       undefined,
       app.ctx,
     );
-    assert.match(nested.content[0].text, /after the calling script ends/);
-    const id = nested.details?.id as string;
-    assert.ok(nested.content[0].text.includes(`terminal_wait({ ids: ["${id}"] })`));
+    assert.equal(nested.details?.status, "done");
+    assert.equal(nested.details?.yielded, false);
+    assert.equal(nested.structuredContent.exit_code, 0);
+    assert.match(nested.structuredContent.output, /nested-done/);
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    assert.equal(app.messages.length, 0, "the script got the result, so no follow-up");
 
-    // A top-level yield keeps the model-facing wording. (Distinct command
-    // text — an identical still-running command hits the duplicate guard.)
-    const top = await app.tools.get("bash").execute(
-      "call-top-yield",
-      {
-        command: command("setTimeout(() => {}, 1_500) // top-level"),
-        yield_time_ms: 250,
-      },
-      undefined,
-      undefined,
-      app.ctx,
-    );
+    // A top-level call still yields.
+    const top = await app.tools
+      .get("bash")
+      .execute(
+        "call-top-yield",
+        { command: command("setTimeout(() => {}, 1_500)"), yield_time_ms: 250 },
+        undefined,
+        undefined,
+        app.ctx,
+      );
+    assert.equal(top.details?.status, "running");
     assert.match(top.content[0].text, /after a later tool call — keep working/);
-    assert.doesNotMatch(top.content[0].text, /calling script ends/);
   } finally {
     await app.shutdown();
   }
