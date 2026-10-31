@@ -1,9 +1,8 @@
 # Background terminals implementation guide
 
 This document describes the invariants behind `@tian.zuo/pi-background-terminals`.
-The package overrides Pi's built-in `bash` model tool, adds the bounded
-read-only `terminal_log_read` tool, the `terminal_wait` and `terminal_stop`
-control tools, and one user command, `/ps`.
+The package overrides Pi's built-in `bash` model tool, adds the
+`terminal_wait` and `terminal_stop` control tools, and one user command, `/ps`.
 
 ## 1. Product contract
 
@@ -28,9 +27,8 @@ useful command title. Only a command that actually yields is presented as a
 compact background-terminal row; asynchronous completion rows also stay compact.
 `/ps` remains the complete invocation and human-facing output viewer.
 
-The model has no stdin or list tools. `terminal_log_read` reads bounded views
-of a terminal's complete log (whole/auto head+tail, exact page, newest tail, or
-a case-insensitive line search); it never controls a process. `terminal_wait`
+The model has no stdin, list, or log tools. A truncated result gives the path
+of the full log file, and the model reads it with `read` or `grep`. `terminal_wait`
 blocks until a listed terminal exits — or all running yielded terminals — and
 returns that result itself, consuming the settlement so no completion message
 follows. `terminal_stop` kills a running terminal's tree with the same consumed
@@ -75,8 +73,7 @@ quick work, then switch to compact id/status rendering only after a real yield
 (the `yielded` flag on the result's `details`). The collapsed render truncates;
 Ctrl+O `expanded` shows the full command and the complete captured preview.
 Rendering changes presentation only: the textual result still reaches the model.
-Private full-log paths never reach model-facing output;
-settled archives are addressed through opaque refs and `terminal_log_read`.
+A truncated result gives the full-log path (§12).
 
 ## 3. Safe fallback boundary
 
@@ -138,8 +135,8 @@ index.ts                    Pi boundary, bash override, tools, fallback, /ps
 src/command-shape.ts        Pre-spawn guards: state-only, duplicate, plain sleep
 src/constants.ts            Shared execution and output limits
 src/domain.ts               Snapshot/status/error types
-src/log-read.ts             Pure file reads over a spill log (page/auto/tail/search)
-src/log-search-worker.mjs   Plain-JS worker that runs the pattern scan off-thread
+src/log-read.ts             Pure head+tail read of a spill log for Code Mode output
+src/log-retention.ts        Session log retention with a total byte limit
 src/manager.ts              Effect service and process lifecycle
 src/output.ts               Bounded head+tail stream retention
 src/process-tracker.ts      Synchronous abnormal-exit process-tree safety net
@@ -184,7 +181,7 @@ A snapshot includes:
 - `totalBytes` and `truncatedBytes`;
 - optional private spill-file path for the human `/ps` viewer;
 - optional `archiveComplete`, true only after a clean stdio close and spill flush.
-  Model output uses an opaque archive reference and the `terminal_log_read` tool.
+  Model output gives the path while the file exists.
 
 ## 7. Execution flow
 
@@ -350,8 +347,9 @@ Esc-abort path, and error results alike — so a non-zero exit resolves to
 fields in Code Mode instead of rejecting. The shape mirrors Pi's built-in
 bash (`output`, `truncated`, `exit_code`, `wall_time_seconds`) plus
 `terminal_id` and `status`; `exit_code` is absent while the command runs and
-when a signal or timeout stopped it. There is no `full_output_path` — spill
-paths stay private; a script reads the full log with `terminal_log_read`.
+when a signal or timeout stopped it. A truncated stdout adds
+`full_output_path`, as the built-in does; a truncated stderr adds
+`full_stderr_path`.
 The foreground-fallback path passes the built-in's `structuredContent`
 through unchanged.
 
@@ -392,15 +390,11 @@ Pi's Code Mode runs tools inside a script via `ctx.executeTool`; every such
 nested call fires the `tool_call` event with `parentToolCallId` set and gets an
 id like `<parent>/<n>`. The extension listens for that event (never blocking
 the call) into a consume-once `nestedCallIds` set, cleared on `agent_start` and
-`session_shutdown`; `bash` and `terminal_log_read` consume it at the top of
-`execute`. Two behaviors adapt:
-
-- A nested `bash` call that yields gets different text: its completion
-  follow-up can only arrive after the calling script ends, so the result says
-  so and tells the script to collect it with `terminal_wait({ ids: [id] })`.
-- Nested `terminal_log_read` calls skip the per-run call/byte budgets —
-  their output reaches the script, not the model context, so the context-
-  protection budgets do not apply. Per-call `limit` bounds still hold.
+`session_shutdown`; `bash` consumes it at the top of `execute`. A nested `bash`
+call waits for the exit and does not use `yield_time_ms`: a script has no other
+work, and a background result goes to the model, not to the script. Esc or the
+script timeout still stops only the wait; the command then continues in the
+background and reports as usual.
 
 ## 10. Exactly-once completion delivery
 
@@ -418,8 +412,12 @@ TUI frame; non-TUI modes retain the diagnostic.
 
 Every unconsumed settlement starts or slides a 1,000 ms quiet deadline while the
 first result keeps one fixed 3,000 ms maximum deadline. Either deadline flushes
-whether or not the agent is busy: delivery is a steer, so holding a busy
-agent's result back would only delay it. `agent_before_settle` (outcome
+when no agent run is active. During a run (from `agent_start` to
+`agent_settled`), results stay queued until `turn_end`: Pi drains steers only
+after the tool batch, so a steer sent during the batch would hide the result
+from a `terminal_wait` in the same batch. The `turn_end` handler delivers the
+queue unless the turn was aborted or failed; `agent_settled` schedules any
+result still queued. `agent_before_settle` (outcome
 `completed`) flushes a group still inside its window immediately, so the run
 that is about to end continues with the result instead of settling and waking a
 separate run — which print/json mode would never do, since it exits on
@@ -457,8 +455,8 @@ A singleton keeps the existing message content and detail shape. A batch carries
 all compact terminal details in settlement order and allocates its 32 KiB
 content budget across results so every terminal summary survives truncation. Its
 message renderer shows one status line with the terminal count, aggregate
-outcomes, and a `/ps` hint. A busy agent receives the message after its current
-tool batch. An idle agent is woken when the quiet window closes. No model-driven
+outcomes, and a `/ps` hint. A busy agent receives the message at the end of its
+current turn. An idle agent is woken when the quiet window closes. No model-driven
 polling is required.
 
 ## 11. Head+tail output retention
@@ -549,62 +547,23 @@ chunk; subsequent child output is flow-controlled by Node.
 
 Settlement waits for spill streams to flush before publishing the final
 snapshot. The flush wait is bounded so a broken filesystem cannot leave a
-terminal permanently running. When the 32-entry registry prunes a settled
-terminal, its scope closes first and both owned spill files are then unlinked.
-Still-tracked snapshots therefore keep valid full-log paths while session disk
-usage remains bounded by retained history rather than command count. Model-facing
-bounded output never exposes those private paths; it emits an opaque stream
-reference only while the archive exists, with its completeness and omitted byte
-range. `terminal_log_read` serves at most 64 KiB per call, 256 KiB per agent
-run, and 8 reads per agent run, and reports `next_offset` without polling
-terminal status.
+terminal permanently running.
 
-### Model-facing archive reads
+### Log retention and model-facing paths
 
-`terminal_log_read` is the only model-facing path into a complete spill. It
-accepts a bare `bt-<runtime-id>-N` id (stdout) or the `id:stdout` / `id:stderr`
-ref, plus `offset`, `limit`, `tail`, and `pattern`. Mode selection: `pattern`
-runs a streaming case-insensitive line search over `[offset, size)` that
-carries partial lines across 64 KiB chunks, formats matches as
-`@<line-start-byte>: <line>` capped to 300 chars, stops collecting when a
-later match would exceed `limit` bytes while `matchCount` keeps counting —
-the first match is always shown, cut to `limit` bytes ending in `…` when
-needed, so `nextOffset` always advances past `offset`. `tail` returns the
-newest `limit` bytes; an explicit `offset` is an exact page; otherwise auto
-returns the whole log when it fits or a head+tail view naming the omitted
-byte range.
+The log files stay until the session ends; pruning the 32-entry registry does
+not delete them. `src/log-retention.ts` keeps at most 256 MiB
+(`MAX_LOG_RETENTION_BYTES`) of settled logs: at each settle it records the
+entry's files and returns the oldest ones past the limit. The manager deletes
+them and clears the `spillPath` of any tracked entry that pointed at them.
+Logs of running commands are not in the list, and the newest settled entry is
+never deleted in its own settle.
 
-The search runs in a worker thread (`src/log-search-worker.mjs`, plain JS —
-workers need a real file, like `win32-child.mjs`) under a 15 s hard timeout.
-The pattern is a plain V8 RegExp, and a backtracking-heavy one such as
-`(a+)+b` spends exponential time on a failing match against a repetitive
-line — measured at over 5 s for a 50-character line, effectively forever on
-the 64 KiB prefix a runaway line is tested against. The AbortSignal is only
-checked between chunks and cannot interrupt a running `RegExp.test`, so no
-amount of in-thread checking bounds the cost; the worker lets the tool
-terminate the scan and fail with an actionable error while the session stays
-responsive. The worker and its timeout timer are unref'd, so an in-flight
-search never delays shutdown.
-
-The manager resolves the id against the live session registry rather than
-exposing a filesystem path, and the pure read logic lives in `src/log-read.ts`.
-Each read returns `settled`, `complete`, the current file size, `next_offset`,
-and a `mode`; results are at most 64 KiB, and the extension permits 256 KiB
-and 8 archive reads per agent run. Both budgets are required: the byte budget
-bounds full-page firehosing, and the call budget bounds a `limit: 1` polling
-loop that would otherwise spend almost no bytes. Pruned entries return an
-expired/unavailable error. Every manager has a fresh random 64-bit runtime id;
-refs from a previous runtime cannot alias terminals after reload/resume.
-
-A byte offset chosen by the model can land inside a code point, so both window
-edges are snapped to UTF-8 boundaries before decoding: leading continuation
-bytes are skipped, and a trailing sequence the window cut short is excluded so
-the next page starts at its lead byte. A `limit` smaller than one code point
-expands to exactly that code point (at most 3 bytes over), so a page or tail
-read still decodes and the next page continues after it. `offset` and
-`next_offset` describe the snapped window, which makes paging with
-`next_offset` byte-exact rather than silently inserting replacement
-characters at every page boundary.
+A truncated model-facing section ends with `full log: <path>`, or
+`full log (still written): <path>` before the stream is complete. A yielded
+result adds `Logs: <stdout>, <stderr>` so the model can check a server. The
+path appears only while the file exists, so a deferred result never names a
+deleted log. The model reads the file with `read` or `grep`.
 
 ## 13. Process lifecycle and termination
 
@@ -674,10 +633,8 @@ The registry retains at most 32 live/settled entries for `/ps` and exposes them
 newest first. When over the limit it prunes settled entries oldest first —
 preferring entries that never yielded (quick commands that settled inside their
 initial wait) so a `ls`-heavy session cannot evict a real background terminal's
-archive. Running entries are never pruned. A bounded tombstone records that an
-archive ref expired so a later `terminal_log_read` reports expiry rather than
-an unknown id. Tombstones hold no path and keep no file alive; they are cleared
-on disposal.
+archive. Running entries are never pruned. Pruning closes the entry scope but
+keeps its log files (§12).
 
 ## 15. `/ps` UI
 
@@ -752,13 +709,15 @@ teardown sweep, preventing an unregistered survivor.
 
 The package test suite covers:
 
-- registration of the `bash` override, `terminal_log_read`, `terminal_wait`,
+- registration of the `bash` override, `terminal_wait`,
   `terminal_stop`, and `/ps`, including per-tool prompt-size budgets;
 - quick completion without a duplicate follow-up;
 - yielded completion with exactly one automatic delivery;
 - sliding quiet and maximum-hold batching deadlines, including cancellation;
-- quiet-window flushes independent of agent activity, fresh groups after a flush,
-  and before-settle delivery of a result still inside its quiet window;
+- quiet-window flushes while idle, results held until `turn_end` during a run
+  and returned by a `terminal_wait` in the batch, delivery at `agent_settled`,
+  fresh groups after a flush, and before-settle delivery of a result still
+  inside its quiet window;
 - synchronized yielded completions sharing one follow-up;
 - unchanged singleton messages and strict UTF-8 aggregate and marker budgets;
 - safe pre-spawn foreground fallback;
@@ -777,24 +736,22 @@ The package test suite covers:
 - pre-spawn cancellation preventing execution and fallback, including during initialization;
 - post-spawn abort leaving eventual completion deliverable;
 - redirected SIGTERM-resistant descendants reaped on natural exit and disposal;
-- archive refs from an old runtime rejected after recreation;
+- terminal ids and log paths that never alias after runtime recreation;
 - process-tree kill, pre-shell Windows job membership, reload-safe native FFI,
   SIGKILL escalation, and abnormal process-exit cleanup;
-- session disposal, spill-directory cleanup, and per-entry pruning cleanup;
+- session disposal, spill-directory cleanup, logs that outlive pruning, and the
+  total log retention limit;
 - output head stability, rolling tail, UTF-8 boundaries, and omission counts;
 - complete spill capture beyond the memory cap;
-- opaque archive references, bare-id and `id:stream` refs, `terminal_log_read`
-  auto head+tail / page / tail / search modes with byte-exact offsets and
-  limits, CRLF and chunk-boundary matching, abort-aware scanning,
-  settled/complete metadata, UTF-8-exact paging of a multi-byte archive,
-  per-run read budgets, and expired-entry errors;
+- full-log paths in truncated results, partial paths while a log is written,
+  log paths in yielded results, no path for a deleted log, and
+  `full_output_path` / `full_stderr_path` in Code Mode output;
 - `terminal_wait` returning a consumed settlement once (no follow-up),
   first-of-two races, timeout still-running results whose later exit IS
   delivered, queued pending results, the nothing-to-wait-for error (including
   `ids: []`), and `structuredContent` on both success and failed terminals;
-- Code Mode nesting: `tool_call`/`parentToolCallId` detection, nested yield
-  text pointing at `terminal_wait`, and nested log reads exempt from the
-  per-run budgets;
+- Code Mode nesting: `tool_call`/`parentToolCallId` detection and nested
+  `bash` calls that wait for the exit;
 - `terminal_stop` consuming its settlement (one-line result, no completion
   message), already-exited and unknown-id errors, and `/ps` kills delivered
   with `deliverAs: "nextTurn"`;

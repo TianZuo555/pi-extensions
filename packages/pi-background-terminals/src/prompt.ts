@@ -15,18 +15,12 @@ import {
   MAX_SLOT_WAIT_MS,
   MAX_YIELD_TIME_MS,
   MIN_YIELD_TIME_MS,
-  MAX_TRACKED,
   MAX_RUNTIME_TIMEOUT_SECONDS,
   MAX_SPILL_BYTES_PER_STREAM,
   PLAIN_SLEEP_GUARD_MIN_SECONDS,
   DEFAULT_TERMINAL_WAIT_SECONDS,
   MAX_TERMINAL_WAIT_SECONDS,
-  DEFAULT_TERMINAL_LOG_READ_BYTES,
-  MAX_TERMINAL_LOG_READ_BYTES,
-  TERMINAL_LOG_READ_RUN_BUDGET,
-  TERMINAL_LOG_READ_RUN_CALLS,
 } from "./constants.ts";
-import type { TerminalLogReadResult } from "./manager.ts";
 
 /** Output returned by the initial bash call. */
 export const BASH_STDOUT_MAX = 16 * 1024;
@@ -70,38 +64,6 @@ export const BASH_PARAMETER_DESCRIPTIONS = {
   timeout: "Hard runtime limit in seconds; no default.",
 };
 
-export const TERMINAL_LOG_READ_TOOL_DESCRIPTION =
-  "Read a background terminal log by id (stdout; id:stderr for stderr). Default: whole log if it fits limit, else head+tail with the omitted byte range. " +
-  "tail: newest bytes. pattern: case-insensitive regex over the whole log; returns matching lines with byte offsets. offset: exact page; continue with next_offset. Read-only.";
-export const TERMINAL_LOG_READ_PROMPT_SNIPPET = "Read or search a terminal log";
-
-export const TERMINAL_LOG_READ_PARAMETER_DESCRIPTIONS = {
-  ref: "Terminal id, or id:stdout / id:stderr.",
-  offset: "Start byte for an exact page or search.",
-  limit: `Max bytes returned; default ${DEFAULT_TERMINAL_LOG_READ_BYTES}, max ${MAX_TERMINAL_LOG_READ_BYTES}.`,
-  tail: "Return the newest limit bytes.",
-  pattern: "Case-insensitive regex; returns matching lines.",
-};
-
-/** Field text on `terminal_log_read` `outputSchema` (code-mode scripts, not the model). */
-export const TERMINAL_LOG_READ_OUTPUT_FIELD_DESCRIPTIONS = {
-  id: "Background terminal id.",
-  stream: "stdout or stderr.",
-  mode: "page, head_tail, tail, or search.",
-  offset: "Start byte of this page.",
-  nextOffset: "Byte to pass as offset for the next page.",
-  bytesRead: "Bytes in this page.",
-  size: "Total archive size in bytes.",
-  settled: "True when the command has exited.",
-  complete: "True when the archive has the full stream.",
-  text: "Page text. Empty when this range has no output.",
-  omittedStart: "First omitted byte (head_tail).",
-  omittedEnd: "Byte after the omitted range (head_tail).",
-  matchCount: "Matching lines from offset to the end of the log, shown or not (search).",
-  matches: "Shown matching lines with line-start byte offsets (search).",
-  pattern: "Search regex source (search).",
-};
-
 export const TERMINAL_WAIT_TOOL_DESCRIPTION =
   "Block until a background terminal exits and return its result (it is not delivered again). Use instead of sleep when nothing else is left to do. " +
   "Returns as soon as any listed terminal exits; the timeout or Esc ends the wait without stopping anything.";
@@ -118,12 +80,13 @@ export const TERMINAL_WAIT_OUTPUT_FIELD_DESCRIPTIONS = {
 export const BASH_OUTPUT_FIELD_DESCRIPTIONS = {
   output:
     "stdout, then stderr. Holds up to 1 MiB; longer output keeps its first and last 512 KiB around an omitted-bytes marker.",
-  truncated:
-    "True when output omits bytes. Read the full log with terminal_log_read and terminal_id.",
+  truncated: "True when output omits bytes.",
+  full_output_path: "Full stdout log, when stdout is truncated.",
+  full_stderr_path: "Full stderr log, when stderr is truncated.",
   exit_code:
     "Process exit code. Absent while the command runs, or when a signal or timeout stopped it.",
   wall_time_seconds: "Seconds since the command started.",
-  terminal_id: "Terminal id for terminal_wait, terminal_stop, and terminal_log_read.",
+  terminal_id: "Terminal id for terminal_wait and terminal_stop.",
   status: "running (moved to the background), done, failed, timed_out, or killed.",
 };
 export const TERMINAL_WAIT_PROMPT_SNIPPET = "Wait for a background terminal instead of sleeping";
@@ -159,26 +122,11 @@ export const TERMINAL_ERRORS = {
   runtimeTimeout: (ms: number) => `Command exceeded its ${ms}-ms runtime timeout`,
   unknownTerminal: (id: string, known: readonly string[]) =>
     `Unknown terminal id "${id}". Known: ${known.join(", ") || "none"}.`,
-  expiredArchive: (ref: string) =>
-    `Archive ${ref} expired when the terminal was pruned from the ${MAX_TRACKED}-entry retention cap. ` +
-    "It cannot be recovered. Work with the output already available or re-run the command.",
-  smallArchive: (ref: string) =>
-    `Archive ${ref} is unavailable; its output was small enough that the terminal result already contains all of it.`,
-  unknownArchive: (id: string) =>
-    `Unknown terminal id "${id}"; no terminal with that id is tracked in this session.`,
-  unavailableArchive: (ref: string) => `Archive ${ref} is unavailable.`,
-  unreadableArchive: (ref: string) => `Archive ${ref} could not be read.`,
-  invalidRef: (ref: string) =>
-    `Invalid terminal log ref "${ref}"; pass a terminal id (bt-<id>-<n>), optionally with :stdout or :stderr.`,
-  tailConflict: "tail cannot be combined with offset or pattern.",
-  invalidPattern: (message: string) => `Invalid pattern: ${message}`,
   waitNothing:
     "No background terminal is running and no result is pending; there is nothing to wait for.",
   waitAborted:
     "Wait interrupted; background terminals keep running and will report when they exit.",
   stopInterrupted: "Stop interrupted; termination continues in the background.",
-  readCalls: `terminal_log_read budget exhausted for this agent run (maximum ${TERMINAL_LOG_READ_RUN_CALLS} reads). Work with the output you already have; the user can inspect the full log with /ps.`,
-  readBytes: `terminal_log_read budget exhausted for this agent run (maximum ${TERMINAL_LOG_READ_RUN_BUDGET} bytes). Work with the output you already have; the user can inspect the full log with /ps.`,
   interrupted: "Operation was aborted.",
   initialWaitAborted: (id: string) =>
     `Initial wait aborted; ${id} continues in the background and will report when it exits.`,
@@ -206,27 +154,6 @@ export function changedFilesNote(relativePaths: readonly string[]) {
 
 export function foregroundFallbackWarning(reason: string) {
   return `[Managed bash unavailable before spawn; using Pi's foreground bash fallback — no auto-yield or /ps tracking for this call. Reason: ${reason.slice(0, 500)}]`;
-}
-
-export function formatTerminalLogRead(result: TerminalLogReadResult) {
-  const tail = `settled: ${result.settled ? "yes" : "no"}; complete: ${result.complete ? "yes" : "no"}; next_offset: ${result.nextOffset}`;
-  let header: string;
-  if (result.mode === "search") {
-    const shown = result.matches?.length ?? 0;
-    const total = result.matchCount ?? 0;
-    header =
-      `${result.id}:${result.stream} ${total} matches for /${result.pattern ?? ""}/` +
-      (shown < total ? ` (showing first ${shown})` : "") +
-      `; ${tail}`;
-  } else if (result.mode === "head_tail") {
-    header =
-      `${result.id}:${result.stream} head+tail of ${result.size} ` +
-      `(bytes ${result.omittedStart ?? 0}-${(result.omittedEnd ?? 0) - 1} omitted); ${tail}`;
-  } else {
-    const range = result.bytesRead === 0 ? "empty" : `${result.offset}-${result.nextOffset - 1}`;
-    header = `${result.id}:${result.stream} bytes ${range} of ${result.size}; ${tail}`;
-  }
-  return [header, result.text || "(empty)"].join("\n");
 }
 
 export function stateOnlyCommandError() {
@@ -297,32 +224,27 @@ export function describeTerminal(snap: TerminalSnapshot) {
 }
 
 /**
- * Bounded model-facing view that preserves both startup context and recent
- * output. The retained in-memory middle may already be omitted; an existing
- * spill file can be referred to through an opaque session-scoped archive id.
+ * The log file path, when the file still exists. A deferred result can keep
+ * the path of a log that the retention limit deleted.
  */
-/**
- * Return a model-safe, session-scoped reference without exposing the private
- * spill path. The existence check matters for deferred follow-ups: a settled
- * snapshot can outlive its entry in the manager's bounded history.
- */
-function archiveReference(
-  terminalId: string,
-  stream: "stdout" | "stderr",
-  view: TerminalSnapshot["stdout"],
-) {
+function logPath(view: TerminalSnapshot["stdout"]) {
   if (!view.spillPath) return undefined;
   try {
-    return existsSync(view.spillPath) ? `${terminalId}:${stream}` : undefined;
+    return existsSync(view.spillPath) ? view.spillPath : undefined;
   } catch {
     return undefined;
   }
 }
 
+/** Where the model reads the omitted part of one stream. */
+function fullLogNote(view: TerminalSnapshot["stdout"]) {
+  const file = logPath(view);
+  if (!file) return "full log unavailable";
+  return view.archiveComplete === true ? `full log: ${file}` : `full log (still written): ${file}`;
+}
+
 function outputSection(
   label: string,
-  terminalId: string,
-  stream: "stdout" | "stderr",
   view: TerminalSnapshot["stdout"],
   maxBytes: number,
   maxLines: number,
@@ -357,27 +279,13 @@ function outputSection(
 
   const shownBytes = start.outputBytes + end.outputBytes;
   const omittedBytes = Math.max(0, view.totalBytes - shownBytes);
-  const omittedStart = Math.min(view.totalBytes, start.outputBytes);
-  const tailSourceStart = view.totalBytes - Buffer.byteLength(endSource, "utf8");
-  let tailOffset = endSource.length - end.content.length;
-  while (tailOffset > 0 && !endSource.startsWith(end.content, tailOffset)) {
-    tailOffset--;
-  }
-  const omittedEnd = end.content
-    ? tailSourceStart + Buffer.byteLength(endSource.slice(0, tailOffset), "utf8")
-    : view.totalBytes;
   const parts = [start.content];
   if (omittedBytes > 0) {
     parts.push(`... ${formatSize(omittedBytes)} omitted ...`);
   }
   if (end.content) parts.push(end.content);
 
-  const archiveRef = archiveReference(terminalId, stream, view);
-  const omittedRange = omittedBytes > 0 ? `${omittedStart}-${omittedEnd - 1}` : "none";
-  const archive = archiveRef
-    ? `archive ref ${archiveRef} (complete: ${view.archiveComplete === true ? "yes" : "no"}, omitted bytes ${omittedRange}); recover via terminal_log_read(ref)`
-    : "complete archive unavailable to the model";
-  return `${label}:\n${parts.filter(Boolean).join("\n")}\n[${label} bounded head+tail: showing ${formatSize(shownBytes)} of ${formatSize(view.totalBytes)}. ${archive}]`;
+  return `${label}:\n${parts.filter(Boolean).join("\n")}\n[${label} bounded head+tail: showing ${formatSize(shownBytes)} of ${formatSize(view.totalBytes)}. ${fullLogNote(view)}]`;
 }
 
 function appendOutput(
@@ -388,24 +296,22 @@ function appendOutput(
   stderrBytes: number,
   stderrLines: number,
 ) {
-  text += `\n\n${outputSection("stdout", snap.id, "stdout", snap.stdout, stdoutBytes, stdoutLines)}`;
+  text += `\n\n${outputSection("stdout", snap.stdout, stdoutBytes, stdoutLines)}`;
   if (snap.stderr.totalBytes > 0) {
-    text += `\n\n${outputSection("stderr", snap.id, "stderr", snap.stderr, stderrBytes, stderrLines)}`;
+    text += `\n\n${outputSection("stderr", snap.stderr, stderrBytes, stderrLines)}`;
   }
   return text;
 }
 
-/** Marker-room estimate: the section's trailing bounded/archive line. */
+/** Marker-room estimate: the section's trailing bounded line with the log path. */
 const SECTION_OVERHEAD_BYTES = 320;
-/** Below this a section cannot show content; degrade to the archive pointer. */
+/** Below this a section cannot show content; degrade to the log path. */
 const MIN_SECTION_CONTENT_BYTES = 128;
 
-/** One output section hard-capped to a byte budget — degrades to the archive
- * ref rather than letting batch truncation cut it. */
+/** One output section hard-capped to a byte budget — degrades to the log
+ * path rather than letting batch truncation cut it. */
 function budgetedSection(
   label: string,
-  terminalId: string,
-  stream: "stdout" | "stderr",
   view: TerminalSnapshot["stdout"],
   maxBytes: number,
   maxLines: number,
@@ -413,20 +319,9 @@ function budgetedSection(
 ) {
   const contentBudget = sectionBudgetBytes - SECTION_OVERHEAD_BYTES;
   if (contentBudget < MIN_SECTION_CONTENT_BYTES) {
-    const archiveRef = archiveReference(terminalId, stream, view);
-    const pointer = archiveRef
-      ? `archive ref ${archiveRef} (complete: ${view.archiveComplete === true ? "yes" : "no"}); recover via terminal_log_read(ref)`
-      : "complete archive unavailable to the model";
-    return `${label}: (${formatSize(view.totalBytes)} omitted — ${pointer})`;
+    return `${label}: (${formatSize(view.totalBytes)} omitted — ${fullLogNote(view)})`;
   }
-  return outputSection(
-    label,
-    terminalId,
-    stream,
-    view,
-    Math.min(maxBytes, contentBudget),
-    maxLines,
-  );
+  return outputSection(label, view, Math.min(maxBytes, contentBudget), maxLines);
 }
 
 /** Streaming tool-row update while bash is still in its initial wait. */
@@ -441,6 +336,14 @@ export function buildBashProgress(snap: TerminalSnapshot) {
   );
 }
 
+/** A server or watcher keeps writing; its log is where the model checks it. */
+function runningLogsLine(snap: TerminalSnapshot) {
+  const files = [logPath(snap.stdout), logPath(snap.stderr)].filter(
+    (file): file is string => file !== undefined,
+  );
+  return files.length > 0 ? `\nLogs: ${files.join(", ")}` : "";
+}
+
 /** Result of the initial bash wait, whether final or yielded.
  * `changedFiles` qualifies a final result only: a running command has none. */
 export function buildBashResult(
@@ -453,7 +356,7 @@ export function buildBashResult(
   // Running terminals carry it via describeTerminal() instead.
   let text =
     snap.status === "running"
-      ? `Command is still running as background terminal ${snap.id}. Its result arrives automatically after a later tool call — keep working. If nothing else is left to do, call terminal_wait; never sleep or poll. Stop it with terminal_stop.\n${describeTerminal(snap)}`
+      ? `Command is still running as background terminal ${snap.id}. Its result arrives automatically after a later tool call — keep working. If nothing else is left to do, call terminal_wait; never sleep or poll. Stop it with terminal_stop.\n${describeTerminal(snap)}${runningLogsLine(snap)}`
       : snap.status === "timed_out"
         ? `Command timed out after ${formatElapsed(snap)} in ${snap.cwd}.`
         : `Command finished in ${formatElapsed(snap)} (${formatExit(snap)}) in ${snap.cwd}.`;
@@ -483,7 +386,7 @@ function terminalHow(snap: TerminalSnapshot) {
 
 /** Async completion follow-up injected only after bash yielded. A finite
  * `budgetBytes` (batched completions share one message) shrinks the output
- * windows inside outputSection so the summary and archive refs survive —
+ * windows inside outputSection so the summary and log paths survive —
  * truncating a fully assembled message would cut exactly those lines. */
 export function buildTerminalResultMessage(
   snap: TerminalSnapshot,
@@ -512,19 +415,17 @@ export function buildTerminalResultMessage(
   const remaining = Math.max(0, budgetBytes - Buffer.byteLength(text));
   const streamCount = 1 + (snap.stderr.totalBytes > 0 ? 1 : 0);
   if (remaining < SECTION_OVERHEAD_BYTES + MIN_SECTION_CONTENT_BYTES) {
-    // Not enough room for even one bounded window; keep the recovery pointer.
-    const refs = (["stdout", "stderr"] as const)
-      .map((stream) => archiveReference(snap.id, stream, snap[stream]))
-      .filter((ref): ref is string => ref !== undefined);
-    if (refs.length > 0) {
-      text += `\n\nOutput omitted; archive ref ${refs.join(", ")} — recover via terminal_log_read(ref).`;
-    }
+    // Not enough room for even one bounded window; keep the log paths.
+    const files = [logPath(snap.stdout), logPath(snap.stderr)].filter(
+      (file): file is string => file !== undefined,
+    );
+    if (files.length > 0) text += `\n\nOutput omitted; full log: ${files.join(", ")}.`;
     return truncateUtf8WithMarker(text, budgetBytes);
   }
   const perStream = Math.floor(remaining / streamCount);
-  text += `\n\n${budgetedSection("stdout", snap.id, "stdout", snap.stdout, stdoutBytes, stdoutLines, perStream)}`;
+  text += `\n\n${budgetedSection("stdout", snap.stdout, stdoutBytes, stdoutLines, perStream)}`;
   if (snap.stderr.totalBytes > 0) {
-    text += `\n\n${budgetedSection("stderr", snap.id, "stderr", snap.stderr, stderrBytes, stderrLines, perStream)}`;
+    text += `\n\n${budgetedSection("stderr", snap.stderr, stderrBytes, stderrLines, perStream)}`;
   }
   // Last-resort guard for accounting drift (marker line length varies).
   return truncateUtf8WithMarker(text, budgetBytes);
@@ -545,18 +446,14 @@ function truncateUtf8(value: string, maximumBytes: number) {
 export function truncateUtf8WithMarker(value: string, maximumBytes: number) {
   const byteLimit = Math.max(0, maximumBytes);
   if (Buffer.byteLength(value) <= byteLimit) return value;
-  // The model cannot run /ps — point it at the tool it can call.
-  const marker = truncateUtf8(
-    "\n[output truncated; read the full log via terminal_log_read(ref)]",
-    byteLimit,
-  );
+  const marker = truncateUtf8("\n[output truncated]", byteLimit);
   const contentBudget = byteLimit - Buffer.byteLength(marker);
   return truncateUtf8(value, contentBudget) + marker;
 }
 
 /** One follow-up for terminal completions that settle in the same quiet
  * window. Each terminal's share of the byte budget is enforced while its
- * message is built, so summaries and archive refs survive truncation.
+ * message is built, so summaries and log paths survive truncation.
  * `changedFiles` maps a terminal id to the files written while it ran. */
 export function buildTerminalResultBatchMessage(
   snaps: readonly TerminalSnapshot[],

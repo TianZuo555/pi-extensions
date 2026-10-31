@@ -14,8 +14,6 @@ import {
   buildTerminalResultMessage,
   deriveCommandTitle,
   MAX_COMPLETION_BATCH_CONTENT_BYTES,
-  TERMINAL_LOG_READ_PROMPT_SNIPPET,
-  TERMINAL_LOG_READ_TOOL_DESCRIPTION,
   truncateUtf8WithMarker,
 } from "../src/prompt.ts";
 
@@ -53,8 +51,6 @@ test("bash metadata states the managed-shell contract concisely", () => {
   assert.doesNotMatch(BASH_PARAMETER_DESCRIPTIONS.timeout, /maximum/i);
   assert.ok(BASH_TOOL_DESCRIPTION.length <= 850);
   assert.ok(BASH_PROMPT_SNIPPET.length <= 50);
-  assert.ok(TERMINAL_LOG_READ_TOOL_DESCRIPTION.length <= 400);
-  assert.ok(TERMINAL_LOG_READ_PROMPT_SNIPPET.length <= 32);
 });
 
 test("default titles expose work after repeated setup prefixes", () => {
@@ -119,6 +115,28 @@ test("yielded result points at terminal_wait and terminal_stop instead of pollin
   assert.match(text, /stdout:\nready/);
 });
 
+test("a yielded result gives the log path of a server that the model must check later", () => {
+  const spillDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-bt-yield-"));
+  const stdoutPath = path.join(spillDir, "bt-1.stdout.log");
+  const stderrPath = path.join(spillDir, "bt-1.stderr.log");
+  try {
+    fs.writeFileSync(stdoutPath, "ready\n");
+    fs.writeFileSync(stderrPath, "");
+    const text = buildBashResult(
+      snap({
+        status: "running",
+        settledAt: undefined,
+        exitCode: undefined,
+        stdout: view({ text: "ready\n", head: "ready\n", totalBytes: 6, spillPath: stdoutPath }),
+        stderr: view({ spillPath: stderrPath }),
+      }),
+    );
+    assert.ok(text.includes(`Logs: ${stdoutPath}, ${stderrPath}`));
+  } finally {
+    fs.rmSync(spillDir, { recursive: true, force: true });
+  }
+});
+
 test("every settled result names the directory the command actually ran in", () => {
   // The common wrong-directory mistake is assuming a cwd that was never set, so
   // the session cwd is exactly the case that must not be silent.
@@ -154,7 +172,7 @@ test("initial progress does not claim the command already yielded", () => {
   assert.doesNotMatch(text, /background terminal bt-1/);
 });
 
-test("model-facing output uses an opaque archive reference without leaking paths", () => {
+test("truncated output gives the path of the full log", () => {
   const head = `startup\n${"h".repeat(20 * 1024)}`;
   const tail = `${"t".repeat(20 * 1024)}\nlatest failure`;
   const totalBytes = 5 * 1024 * 1024;
@@ -183,15 +201,11 @@ test("model-facing output uses an opaque archive reference without leaking paths
     assert.match(text, /latest failure/);
     assert.match(text, /omitted/);
     assert.match(text, /bounded head\+tail/);
-    assert.match(text, /archive ref bt-1:stdout/);
-    assert.match(text, /terminal_log_read/);
-    assert.match(text, /complete: yes/);
-    assert.match(text, /omitted bytes \d+-\d+/);
-    assert.equal(text.includes(spillPath), false);
-    assert.equal(text.includes("Full log:"), false);
+    assert.ok(text.includes(`full log: ${spillPath}`));
+    assert.doesNotMatch(text, /terminal_log_read|archive ref/);
 
-    // Deferred snapshots can retain the old path after the manager prunes the
-    // entry. A missing archive must not become a model-visible dangling ref.
+    // A deferred snapshot can keep the path of a log that the retention limit
+    // deleted. A missing file must not become a dangling path.
     fs.rmSync(spillPath);
     const expired = buildBashResult(
       snap({
@@ -207,14 +221,14 @@ test("model-facing output uses an opaque archive reference without leaking paths
         }),
       }),
     );
-    assert.doesNotMatch(expired, /archive ref/);
-    assert.match(expired, /complete archive unavailable to the model/);
+    assert.equal(expired.includes(spillPath), false);
+    assert.match(expired, /full log unavailable/);
   } finally {
     fs.rmSync(spillDir, { recursive: true, force: true });
   }
 });
 
-test("archive completeness does not follow settlement status", () => {
+test("a log that is still written is marked as partial", () => {
   const text = buildTerminalResultMessage(
     snap({
       stdout: view({
@@ -228,7 +242,7 @@ test("archive completeness does not follow settlement status", () => {
       }),
     }),
   );
-  assert.match(text, /complete: no/);
+  assert.ok(text.includes(`full log (still written): ${process.execPath}`));
 });
 
 test("line-bounded output does not duplicate overlapping head and tail", () => {
@@ -339,11 +353,11 @@ test("batched completions retain every terminal summary within one bounded messa
   // end-truncating an assembled batch used to cut exactly these off the last
   // terminals.
   assert.equal((message.match(/stdout bounded head\+tail/g) ?? []).length, terminals.length);
-  // The model cannot run /ps; truncation must point at terminal_log_read.
+  // The model cannot run /ps.
   assert.doesNotMatch(message, /use \/ps/);
 });
 
-test("a tight batch budget keeps every archive ref and stderr pointer", () => {
+test("a tight batch budget keeps every log path and stderr pointer", () => {
   const spillDir = fs.mkdtempSync(path.join(os.tmpdir(), "pi-bt-batch-"));
   const spillPath = path.join(spillDir, "stdout.log");
   try {
@@ -371,12 +385,16 @@ test("a tight batch budget keeps every archive ref and stderr pointer", () => {
     const message = buildTerminalResultBatchMessage(terminals);
     assert.ok(Buffer.byteLength(message) <= MAX_COMPLETION_BATCH_CONTENT_BYTES);
     for (const terminal of terminals) {
-      assert.match(
-        message,
-        new RegExp(`archive ref ${terminal.id}:stdout`),
-        `${terminal.id} lost its archive ref`,
+      assert.ok(
+        message.includes(`Background terminal ${terminal.id} `),
+        `${terminal.id} lost its summary`,
       );
     }
+    assert.equal(
+      message.split(`full log: ${spillPath}`).length - 1,
+      terminals.length,
+      "each terminal keeps its log path",
+    );
     assert.match(message, /stderr/);
   } finally {
     fs.rmSync(spillDir, { recursive: true, force: true });
