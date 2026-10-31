@@ -214,23 +214,26 @@ test("background tool metadata stays concise", async () => {
 test("a truncated bash result gives the path of the full log", async () => {
   const app = harness();
   try {
-    const output = "0123456789".repeat(20_000);
-    const result = await app.tools
-      .get("bash")
-      .execute(
-        "call-log-source",
-        { command: command(`process.stdout.write("${output}")`), yield_time_ms: 30_000 },
-        undefined,
-        undefined,
-        app.ctx,
-      );
+    // The script makes the output: a 200 KB command line fails with E2BIG on
+    // Linux and is too long for the Windows command line.
+    const result = await app.tools.get("bash").execute(
+      "call-log-source",
+      {
+        command: command('process.stdout.write("0123456789".repeat(20_000))'),
+        yield_time_ms: 30_000,
+      },
+      undefined,
+      undefined,
+      app.ctx,
+    );
     const file = /full log: (\S+)\]/.exec(result.content[0].text)?.[1];
     assert.ok(file, result.content[0].text);
-    assert.equal(fs.readFileSync(file, "utf8"), output);
+    assert.equal(fs.readFileSync(file, "utf8"), "0123456789".repeat(20_000));
   } finally {
     await app.shutdown();
   }
 });
+
 test("renderers distinguish quick bash from actually yielded terminals", async () => {
   const app = harness();
   const theme = {
