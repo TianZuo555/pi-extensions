@@ -2,24 +2,25 @@
 //
 // The rendering stack under `extensions/` is vendored from
 // minuque/pi-cc-extensions (MIT, see ATTRIBUTION.md) so this repo owns it.
-// `lib/our-tools.ts` plus the small patches applied to the vendored sources
-// adapt it to the sibling packages here:
+// The small patches applied to the vendored sources adapt it to the sibling
+// packages here:
 //
-//   ask_user              → the upstream `ask_user_question` card (answer tree,
-//                           question count, custom answers)
-//   terminal_wait         → shell-like card with a live duration and id label
-//   terminal_stop
-//   terminal_log_read
-//   setStatus("usage")    → the footer usage chip (upstream only knew
-//                           `pi-usage`/`localUsage`)
+//   ask_user                 → the upstream `ask_user_question` card (answer
+//                              tree, question count, custom answers)
+//   bash, terminal_wait,     → the same beautify card as every other tool,
+//   terminal_stop,             with the terminal id and a live duration
+//   terminal_log_read          (pi-background-terminals)
+//   setStatus("usage")       → the footer usage chip (upstream only knew
+//                              `pi-usage`/`localUsage`)
+//   setStatus("token-speed") → the footer rate chip instead of a second chip
 //
-// Presentation only: no tool is registered, replaced, or executed differently.
+// In TUI sessions the package also overrides the `write` tool so rich diffs
+// can show the previous file content — it is not presentation only.
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { config } from "./extensions/config/config.ts";
 
 // shell
-import piAliases from "./extensions/feature/shell/aliases.ts";
 import { registerFlushDockedBash } from "./extensions/feature/shell/flush-docked-bash.ts";
 import customFooter from "./extensions/feature/shell/footer.ts";
 import { applyPromptEditor } from "./extensions/feature/shell/prompt-editor.ts";
@@ -38,7 +39,6 @@ import markdownEnhance from "./extensions/renderer/markdown-enhance.ts";
 
 export default function beautifyStyle(pi: ExtensionAPI): void {
   // shell chrome
-  if (config.enableAliases) piAliases(pi);
   registerFlushDockedBash(pi);
   if (config.enableWorkingMessage) workingMessage(pi);
   customFooter(pi);
@@ -63,19 +63,5 @@ export default function beautifyStyle(pi: ExtensionAPI): void {
 }
 
 // Public surface for tests and for anyone composing this with another TUI.
-export {
-  ASK_USER_TOOL_NAME,
-  BACKGROUND_TERMINAL_TOOLS,
-  askUserCountSuffix,
-  backgroundTerminalId,
-  behavesLikeShell,
-  hasAskUserAnswers,
-  isAskUserCancelled,
-  normalizeAnswers,
-  rendererAliasFor,
-  statusChipText,
-  terminalToolDetail,
-  terminalToolLineCount,
-} from "./lib/our-tools.ts";
 export { config, DEFAULT_CONFIG } from "./extensions/config/config.ts";
 export { isAskUserTool } from "./extensions/renderer/tool/ask-user-question.ts";
