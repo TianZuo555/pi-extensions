@@ -21,11 +21,11 @@ const GIT_IDENTITY = [
 	"commit.gpgsign=false",
 ] as const;
 
-// Git hooks export GIT_DIR and GIT_INDEX_FILE. Those would redirect these
-// commands into the developer's real repository, so drop them.
-const cleanGitEnv = Object.fromEntries(
-	Object.entries(process.env).filter(([key]) => !key.startsWith("GIT_")),
-);
+// Git hooks export GIT_DIR and GIT_INDEX_FILE. Those would redirect every git
+// command, including the code under test, into the developer's real repository.
+for (const key of Object.keys(process.env)) {
+	if (key.startsWith("GIT_")) delete process.env[key];
+}
 
 const templateRepo = (() => {
 	const dir = mkdtempSync(join(tmpdir(), "pi-footer-git-tpl-"));
@@ -39,7 +39,6 @@ const templateRepo = (() => {
 	const git = (...args: string[]) =>
 		execFileSync("git", args, {
 			cwd: dir,
-			env: cleanGitEnv,
 			encoding: "utf8",
 			stdio: ["ignore", "pipe", "pipe"],
 		}).trim();
@@ -75,14 +74,12 @@ export function repository(t: test.TestContext, initialBranch = "main") {
 	});
 	// clone 比 init+config+commit 快 ~3x，模板已带 source.txt 和首个 commit。
 	execFileSync("git", ["clone", "--quiet", "--local", "--no-hardlinks", tpl, cwd], {
-		env: cleanGitEnv,
 		encoding: "utf8",
 		stdio: ["ignore", "pipe", "pipe"],
 	});
 	const git = (...args: string[]) =>
 		execFileSync("git", [...GIT_IDENTITY, ...args], {
 			cwd,
-			env: cleanGitEnv,
 			encoding: "utf8",
 			stdio: ["ignore", "pipe", "pipe"],
 		}).trim();
