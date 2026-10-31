@@ -31,12 +31,13 @@ import {
 	FOOTER_GIT_KEY,
 	FOOTER_MODEL_KEY,
 	FOOTER_RATE_KEY,
+	FOOTER_LINE1_KEYS,
+	FOOTER_LINE2_KEYS,
+	LOCAL_USAGE_STATUS_KEY,
 	PI_USAGE_KEY,
-	isBuiltinFooterKey,
+	footerLine3Keys,
 	isSkippedFooterStatusKey,
-	resolveFooterChipLayout,
 	visibleFooterPluginTexts,
-	type FooterChipLayout,
 } from "./footer-layout.ts";
 import { createGitStatsRefresher, readGitStats, type GitStats } from "./git-stats.ts";
 import { MCP_STATUS_KEY, buildMcpChip } from "./mcp-chip.ts";
@@ -61,6 +62,18 @@ export function footerGlyphs(nerdIcons: boolean): { git: string; cache: string; 
 	return nerdIcons
 		? { git: FOOTER_NERD_ICON_GIT, cache: FOOTER_NERD_ICON_CACHE, mcp: FOOTER_NERD_ICON_MCP }
 		: { git: "", cache: "", mcp: "" };
+}
+
+/**
+ * 截断 session / 分支名，保留开头并以 `…` 收尾。
+ * 按字符数而不是显示宽度：两者都是短标签，尾部还有状态与统计要留位置。
+ * clip <= 0 不截断。
+ */
+export function clipFooterLabel(label: string, clip: number): string {
+	if (clip <= 0) return label;
+	const chars = Array.from(label);
+	if (chars.length <= clip) return label;
+	return `${chars.slice(0, clip).join("")}…`;
 }
 
 /**
@@ -154,19 +167,6 @@ function ownMcpChip(): string {
 	return cachedMcpChip && !cachedExtensionStatuses.has(MCP_STATUS_KEY) ? cachedMcpChip : "";
 }
 
-/** 面板用：当前 setStatus 文案 + 本包 pi-usage / MCP（无文案时为空字符串）。内置项由配置保证在列表里。 */
-export function getFooterStatusSnapshot(): Map<string, string> {
-	const out = new Map<string, string>();
-	for (const [key, text] of cachedExtensionStatuses) {
-		if (isSkippedFooterStatusKey(key) || isBuiltinFooterKey(key)) continue;
-		out.set(key, text);
-	}
-	out.set(PI_USAGE_KEY, cachedLocalUsageText);
-	const mcpChip = ownMcpChip();
-	if (mcpChip) out.set(MCP_STATUS_KEY, mcpChip);
-	return out;
-}
-
 function rememberExtensionStatuses(entries: Iterable<[string, string]>): void {
 	cachedExtensionStatuses.clear();
 	for (const [key, raw] of entries) {
@@ -179,18 +179,14 @@ function rememberExtensionStatuses(entries: Iterable<[string, string]>): void {
 function pluginTextsForRender(localUsageChip: string): Map<string, string> {
 	cachedLocalUsageText = stripAnsi(localUsageChip.replace(/[\r\n\t]+/g, " ").trim());
 	const texts = new Map<string, string>(cachedExtensionStatuses);
+	// 本仓库 @tian.zuo/pi-usage 用 `usage` 作 status key：折进 pi-usage 槽位，
+	// 单独成键会把同一份用量画成两个芯片。
+	const usageAlias = texts.get(LOCAL_USAGE_STATUS_KEY)?.trim() ?? "";
+	texts.delete(LOCAL_USAGE_STATUS_KEY);
 	if (cachedLocalUsageText) texts.set(PI_USAGE_KEY, cachedLocalUsageText);
+	else if (usageAlias) texts.set(PI_USAGE_KEY, usageAlias);
 	else texts.delete(PI_USAGE_KEY);
 	return texts;
-}
-
-function layoutFromConfig(): FooterChipLayout {
-	return {
-		footerHiddenKeys: config.footerHiddenKeys,
-		footerLine1Keys: config.footerLine1Keys,
-		footerLine2Keys: config.footerLine2Keys,
-		footerLine3Keys: config.footerLine3Keys,
-	};
 }
 
 let piUsageMod: any | null | undefined;
@@ -437,9 +433,13 @@ const createCustomFooterFactory =
 				footerData.getExtensionStatuses().entries() as Iterable<[string, string]>,
 			);
 			const pluginTexts = pluginTextsForRender(localUsageChip);
+			// MCP 是位置信息（和 cwd、分支同排），不进第三行的插件通道。
 			const mcpChip = ownMcpChip();
-			if (mcpChip) pluginTexts.set(MCP_STATUS_KEY, mcpChip);
-			const layout = resolveFooterChipLayout(layoutFromConfig(), [...pluginTexts.keys()]);
+			// pi-token-speed 与内置 rate 芯片同一信息：有 token-speed 状态时由它填
+			// rate 槽位，不再单列一个插件芯片。
+			const tokenSpeedText = pluginTexts.get("token-speed")?.trim() ?? "";
+			if (tokenSpeedText) pluginTexts.delete("token-speed");
+			const line3Keys = footerLine3Keys(config.footerHiddenKeys, pluginTexts);
 			const dimPlugin = (text: string) => colorUsageChip(theme, text);
 
 			const pctLabel = percent === null || percent === undefined ? "?" : `${Math.floor(percent)}%`;
@@ -464,12 +464,15 @@ const createCustomFooterFactory =
 				: "";
 
 			const gitColor = theme.getThinkingBorderColor("medium");
+			const clip = config.footerLabelClip;
 			let place = theme.fg("accent", cwdLabel);
 			const sessionName = ctx.sessionManager.getSessionName();
 			if (sessionName) {
-				place += theme.fg("muted", " in ") + theme.fg("success", sessionName);
+				place +=
+					theme.fg("muted", " in ") + theme.fg("success", clipFooterLabel(sessionName, clip));
 			}
 			const branch = footerData.getGitBranch();
+			const branchLabel = branch ? clipFooterLabel(branch, clip) : "";
 			let gitChip = "";
 			if (branch) {
 				const s = gitStats;
@@ -482,7 +485,7 @@ const createCustomFooterFactory =
 						theme.fg("success", `+${s.add}`) +
 						theme.fg("dim", "/") +
 						theme.fg("error", `−${s.del}`);
-				const gitLabel = glyphs.git ? `${glyphs.git} ${branch}` : branch;
+				const gitLabel = glyphs.git ? `${glyphs.git} ${branchLabel}` : branchLabel;
 				gitChip = gitColor(gitLabel) + stats;
 			}
 
@@ -496,25 +499,34 @@ const createCustomFooterFactory =
 					barGauge(percent ?? 0) + theme.fg("dim", ` ${pctLabel}/${fmt(contextWindow)}`),
 				],
 				[FOOTER_CACHE_KEY, cacheLabel ? theme.fg("dim", cacheLabel) : ""],
-				[FOOTER_RATE_KEY, rateLabel ? theme.fg("dim", rateLabel) : ""],
+				[
+					FOOTER_RATE_KEY,
+					tokenSpeedText
+						? dimPlugin(tokenSpeedText)
+						: rateLabel
+							? theme.fg("dim", rateLabel)
+							: "",
+				],
 				[FOOTER_COST_KEY, costChip],
 				[FOOTER_CWD_KEY, place],
 				[FOOTER_GIT_KEY, gitChip],
 			]);
 
-			const lineOf = (keys: readonly string[]) =>
+			// 第一行统计、第二行位置、第三行插件：行数固定，插件多了只挤第三行。
+			const builtinLine = (keys: readonly string[]) =>
 				joinChips(
 					keys
-						.filter((key) => !layout.footerHiddenKeys.includes(key))
-						.map((key) => {
-							if (isBuiltinFooterKey(key)) return builtinChips.get(key) ?? "";
-							const text = visibleFooterPluginTexts([key], [], pluginTexts)[0];
-							return text ? dimPlugin(text) : "";
-						}),
+						.filter((key) => !config.footerHiddenKeys.includes(key))
+						.map((key) => builtinChips.get(key) ?? ""),
 				);
-			const line1 = lineOf(layout.footerLine1Keys);
-			const line2 = lineOf(layout.footerLine2Keys);
-			const line3 = lineOf(layout.footerLine3Keys);
+			const line1 = builtinLine(FOOTER_LINE1_KEYS);
+			const line2 = joinChips([
+				builtinLine(FOOTER_LINE2_KEYS),
+				mcpChip ? colorUsageChip(theme, mcpChip) : "",
+			]);
+			const line3 = joinChips(
+				visibleFooterPluginTexts(line3Keys, pluginTexts).map((text) => dimPlugin(text)),
+			);
 
 			const fit = (line: string) => indentFooterLine(line, width, inputTextIndent());
 

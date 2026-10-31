@@ -28,9 +28,19 @@ export async function fetchProviderJson(
   timeoutMs: number,
   retryCount: number,
   secret: string,
+  redirect?: RequestRedirect,
 ): Promise<Record<string, unknown>> {
   return Effect.runPromise(
-    fetchProviderJsonEffect(url, token, extraHeaders, signal, timeoutMs, retryCount, secret),
+    fetchProviderJsonEffect(
+      url,
+      token,
+      extraHeaders,
+      signal,
+      timeoutMs,
+      retryCount,
+      secret,
+      redirect,
+    ),
     signal ? { signal } : undefined,
   );
 }
@@ -43,8 +53,17 @@ export function fetchProviderJsonEffect(
   timeoutMs: number,
   retryCount: number,
   secret: string,
+  redirect?: RequestRedirect,
 ): Effect.Effect<Record<string, unknown>, ProviderQueryError | Error> {
-  const once = fetchProviderJsonOnceEffect(url, token, extraHeaders, signal, timeoutMs, secret);
+  const once = fetchProviderJsonOnceEffect(
+    url,
+    token,
+    extraHeaders,
+    signal,
+    timeoutMs,
+    secret,
+    redirect,
+  );
   if (retryCount <= 0) return once;
   const policy = Schedule.addDelay(Schedule.recurs(retryCount), () =>
     Effect.succeed(Duration.millis(RETRY_DELAY_MS)),
@@ -65,6 +84,7 @@ function fetchProviderJsonOnceEffect(
   signal: AbortSignal | undefined,
   timeoutMs: number,
   secret: string,
+  redirect?: RequestRedirect,
 ): Effect.Effect<Record<string, unknown>, ProviderQueryError | Error> {
   return Effect.callback((resume, effectSignal) => {
     if (signal?.aborted || effectSignal.aborted) {
@@ -106,6 +126,7 @@ function fetchProviderJsonOnceEffect(
             ...extraHeaders,
           },
           signal: controller.signal,
+          ...(redirect ? { redirect } : {}),
         });
         const text = redact(await readBounded(response), secret);
         if (!response.ok) {
