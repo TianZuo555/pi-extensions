@@ -13,6 +13,8 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import {
 	getKeybindings,
+	isKeyRelease,
+	matchesKey,
 	truncateToWidth,
 	visibleWidth,
 	wrapTextWithAnsi,
@@ -34,14 +36,22 @@ import {
 	PROTOTYPE_ORIGINAL_KEY,
 } from "../utils/patch-keys.ts";
 // pi-tui 类型声明中 TUI 的 re-export 解析失败，本地用最小结构化类型（只用到 requestRender）。
-type RenderTui = { requestRender(force?: boolean): void };
+type RenderTui = {
+	requestRender(force?: boolean): void;
+	focusedComponent?: unknown;
+};
 
 // pi-coding-agent 的类型声明中 AssistantMessageComponent 仅能以 value 形式使用。
 type AssistantMessageComponentLike = InstanceType<typeof AssistantMessageComponent>;
 
 export type CompactThinkingConfig = {
 	useSummaryTitlesAsThinkingTitle: boolean;
-	previewLines: number;
+	/**
+	 * Max reasoning rows shown **while** a run streams. Longer text scrolls inside
+	 * the window; the newest row stays at the bottom. A finished run hides the body
+	 * entirely (heading only) until `app.thinking.toggle` (ctrl+t) expands it.
+	 */
+	liveThinkingLines: number;
 	animationIntervalMs: number;
 };
 
@@ -112,7 +122,7 @@ type PatchedPrototype = typeof AssistantMessageComponent.prototype & {
 // updateConfig 运行时更新），上游的配置文件读写已移除。
 const config: CompactThinkingConfig = {
 	useSummaryTitlesAsThinkingTitle: true,
-	previewLines: 3,
+	liveThinkingLines: 5,
 	animationIntervalMs: 90,
 };
 
@@ -163,8 +173,38 @@ function restoreDurationEntries(
 	}
 }
 
+const THINKING_TOGGLE_KEYBINDING = "app.thinking.toggle";
+const THINKING_TOGGLE_FALLBACK_KEY = "ctrl+t";
+
+/**
+ * 思考展开键。pi-tui 的 TUI_KEYBINDINGS 不含 app.thinking.toggle（它来自
+ * pi-coding-agent 的 APP_KEYBINDINGS），纯渲染/测试环境取不到时回退到 Pi 的默认值。
+ */
+function thinkingToggleKeys(): string[] {
+	try {
+		const keys = getKeybindings().getKeys(THINKING_TOGGLE_KEYBINDING as never);
+		return keys.length > 0 ? keys : [THINKING_TOGGLE_FALLBACK_KEY];
+	} catch {
+		return [THINKING_TOGGLE_FALLBACK_KEY];
+	}
+}
+
+/**
+ * 焦点是否在输入框上。只有 Pi 的 CustomEditor（含本扩展的 PromptEditor 子类）带
+ * `actionHandlers` Map；选择器、/tree、扩展弹框都没有，它们自己的 ctrl+t 要放行
+ * （例如 /tree 的 “hide tool results”）。焦点未建立（渲染测试）时按输入框处理。
+ */
+function isComposerFocused(tui: unknown): boolean {
+	const focused = (tui as RenderTui | undefined)?.focusedComponent as
+		| { actionHandlers?: unknown }
+		| null
+		| undefined;
+	if (!focused) return true;
+	return focused.actionHandlers instanceof Map;
+}
+
 function getThinkingToggleHint() {
-	const keys = getKeybindings().getKeys("app.thinking.toggle");
+	const keys = thinkingToggleKeys();
 	return keys.length > 0 ? `${keys.join("/")} to expand` : undefined;
 }
 
@@ -173,7 +213,7 @@ function thinkingExpandAction(): string | undefined {
 }
 
 // 只 wrap 尾部窗口；缓存未着色折行，着色放到取出时做，避免主题切换命中旧 ANSI。
-type PreviewCacheEntry = { lines: string[]; hiddenBefore: number };
+type PreviewCacheEntry = { lines: string[] };
 const previewCache = new Map<string, PreviewCacheEntry>();
 export const THINKING_PREVIEW_CACHE_MAX = 2_048;
 const PREVIEW_BUDGET_MIN_CHARS = 2_000;
@@ -251,18 +291,6 @@ export function thinkingExpandedWrapCacheSize(): number {
 	return expandedWrapCache.size;
 }
 
-/** 按可见宽度估算折行数，不走 Text 全量 wrap。无换行长段也能计到隐藏行。 */
-function countWrappedLines(text: string, contentWidth: number): number {
-	if (!text) return 0;
-	const width = Math.max(1, contentWidth);
-	let lines = 0;
-	for (const raw of text.replace(/\t/g, "   ").split(/\r\n|\r|\n/)) {
-		const w = visibleWidth(raw);
-		lines += w === 0 ? 1 : Math.ceil(w / width);
-	}
-	return lines;
-}
-
 function padPreviewLine(line: string, width: number, padding: number): string {
 	const left = padding > 0 ? " ".repeat(padding) : "";
 	const right = padding > 0 ? " ".repeat(padding) : "";
@@ -270,15 +298,17 @@ function padPreviewLine(line: string, width: number, padding: number): string {
 	return withMargins + " ".repeat(Math.max(0, width - visibleWidth(withMargins)));
 }
 
-function layoutThinkingPreview(
+/** Tail window: wrap the newest `maxLines` rows and drop the rest above them. */
+function layoutThinkingWindow(
 	text: string,
 	width: number,
 	padding: number,
-): { visible: string[]; hiddenLines: number } {
-	if (!text || config.previewLines <= 0) return { visible: [], hiddenLines: 0 };
+	maxLines: number,
+): string[] {
+	if (!text || maxLines <= 0) return [];
 	const contentWidth = Math.max(1, width - padding * 2);
 	const budget = Math.max(
-		width * (config.previewLines + PREVIEW_BUDGET_SLACK_LINES),
+		width * (maxLines + PREVIEW_BUDGET_SLACK_LINES),
 		PREVIEW_BUDGET_MIN_CHARS,
 	);
 	let source = text;
@@ -293,38 +323,44 @@ function layoutThinkingPreview(
 	const cacheKey = `${width}:${padding}:${cut}:${source}`;
 	let entry = getCachedPreview(cacheKey);
 	if (!entry) {
-		entry = {
-			lines: wrapTextWithAnsi(source.replace(/\t/g, "   "), contentWidth),
-			hiddenBefore: cut > 0 ? countWrappedLines(text.slice(0, cut), contentWidth) : 0,
-		};
+		entry = { lines: wrapTextWithAnsi(source.replace(/\t/g, "   "), contentWidth) };
 		cachePreview(cacheKey, entry);
 	}
-	const hiddenLines = entry.hiddenBefore + Math.max(0, entry.lines.length - config.previewLines);
-	const visible = hiddenLines > 0 ? entry.lines.slice(-config.previewLines) : entry.lines;
-	return { visible, hiddenLines };
+	return entry.lines.length > maxLines ? entry.lines.slice(-maxLines) : entry.lines;
 }
 
-function hiddenPreviewHint(
-	hiddenLines: number,
-	forceExpandHint = false,
-): { prefix: string; action: string; suffix: string } | undefined {
-	const action = thinkingExpandAction() ?? "";
-	if (hiddenLines > 0) {
-		const noun = hiddenLines === 1 ? "line" : "lines";
-		// 与其它提示同一套写法：小圆点连接，不用逗号和括号
-		return {
-			prefix: ` · ${hiddenLines} more ${noun}${action ? " · " : ""}`,
-			action,
-			suffix: "",
-		};
-	}
-	if (forceExpandHint && isToolTuiFullscreen()) {
-		return { prefix: " · ", action: "click to show more", suffix: "" };
-	}
-	return undefined;
+/**
+ * 收尾卡的展开提示。运行中正文自己就是入口，不需要提示；收尾后正文全部隐藏，
+ * 只用一行说明怎么打开。
+ */
+function collapsedThinkingHint(): { prefix: string; action: string; suffix: string } | undefined {
+	const action = thinkingExpandAction();
+	if (!action) return undefined;
+	return { prefix: " · ", action, suffix: "" };
 }
 
 const expandedThinking = new Set<string>();
+/** 全局展开时被单独收起的 run（点击收起）。与 Pi 的 thinkingVisibilityOverrides 同语义。 */
+const collapsedThinking = new Set<string>();
+
+/**
+ * 全局展开态：`app.thinking.toggle`（默认 ctrl+t）一次性展开所有收尾思考卡的全文，
+ * 之后新建的卡也跟着展开——与 Pi 自己那个持久开关同语义。
+ * 全局展开期间点单张卡收起，只收起那一张。
+ */
+let allThinkingExpanded = false;
+
+/** 测试与渲染层共用的只读查询。 */
+export function isAllThinkingExpanded(): boolean {
+	return allThinkingExpanded;
+}
+
+/** 设置全局展开态；`app.thinking.toggle` 与测试都走这里。 */
+export function setAllThinkingExpanded(expanded: boolean): void {
+	allThinkingExpanded = expanded;
+	collapsedThinking.clear();
+	expandedThinking.clear();
+}
 
 /** 折叠预览 + 展开全文。fullscreen 点击 hint 展开、展开卡单击整块收起（拖动选择文本时不收起）。 */
 export class ThinkingPreviewBlock implements Component {
@@ -336,12 +372,19 @@ export class ThinkingPreviewBlock implements Component {
 	private style: (text: string) => string;
 	private theme: Theme | undefined;
 	private hintHovered = false;
+	private streaming = false;
+	/** 运行中只记最后一帧的尾窗；收尾后正文全部隐藏，不再需要。 */
+	private liveMemo:
+		| { width: number; padding: number; text: string; maxLines: number; lines: string[] }
+		| undefined;
 	private collapsedMemo:
 		| {
 				width: number;
-				previewLines: number;
+				liveThinkingLines: number;
+				expanded: boolean;
 				hintHovered: boolean;
 				expandAction: string | undefined;
+				streaming: boolean;
 				lines: string[];
 		  }
 		| undefined;
@@ -354,6 +397,7 @@ export class ThinkingPreviewBlock implements Component {
 		style: (text: string) => string,
 		theme?: Theme,
 		runStartIndex = 0,
+		streaming = false,
 	) {
 		this.heading = heading;
 		this.text = text;
@@ -362,6 +406,7 @@ export class ThinkingPreviewBlock implements Component {
 		this.runStartIndex = runStartIndex;
 		this.style = style;
 		this.theme = theme;
+		this.streaming = streaming;
 	}
 
 	private paint(color: string, text: string): string {
@@ -371,16 +416,22 @@ export class ThinkingPreviewBlock implements Component {
 	}
 
 	/** 展开态按消息时间戳 + run 序号共享：面板重排/内容重建换掉实例后，
-	 *  布局里的旧实例与 render 的新实例同键，点谁都能展开。 */
+	 *  布局里的旧实例与 render 的新实例同键，点谁都能展开。
+	 *  全局展开优先，单卡收起可覆盖它。 */
 	get expanded(): boolean {
-		return expandedThinking.has(`${this.messageTimestamp}:${this.runStartIndex}`);
+		const key = `${this.messageTimestamp}:${this.runStartIndex}`;
+		if (collapsedThinking.has(key)) return false;
+		return allThinkingExpanded || expandedThinking.has(key);
 	}
 
 	setExpanded(expanded: boolean): void {
 		const key = `${this.messageTimestamp}:${this.runStartIndex}`;
-		if (expanded) expandedThinking.add(key);
-		else {
+		if (expanded) {
+			collapsedThinking.delete(key);
+			expandedThinking.add(key);
+		} else {
 			expandedThinking.delete(key);
+			if (allThinkingExpanded) collapsedThinking.add(key);
 			evictExpandedWraps(this.messageTimestamp, this.runStartIndex);
 		}
 		this.collapsedMemo = undefined;
@@ -391,10 +442,9 @@ export class ThinkingPreviewBlock implements Component {
 		this.hintHovered = hovered;
 	}
 
-	private headingLines(width: number, hiddenLines: number, padding: number): string[] {
-		const hint = this.expanded
-			? undefined
-			: hiddenPreviewHint(hiddenLines, Boolean(this.text) && config.previewLines <= 0);
+	private headingLines(width: number, padding: number): string[] {
+		// 收起态（收尾且未展开）只留标题 + 打开提示；运行中正文自己就是入口。
+		const hint = this.expanded || this.streaming ? undefined : collapsedThinkingHint();
 		if (!hint) return new Text(this.heading, padding, 0).render(width);
 		const rawHint = hint.prefix + hint.action + hint.suffix;
 		const contentWidth = Math.max(1, width - padding * 2);
@@ -411,27 +461,41 @@ export class ThinkingPreviewBlock implements Component {
 		).render(width);
 	}
 
-	private bodyLines(width: number, padding: number): { lines: string[]; hiddenLines: number } {
-		if (!this.text || (config.previewLines <= 0 && !this.expanded)) {
-			return { lines: [], hiddenLines: 0 };
+	/**
+	 * 运行中：只显示最新 `liveThinkingLines` 行，多出的行向上滚出窗口；不包卡片，
+	 * 也不受全局展开影响——正文一直在长，宽度/高度稳定才不闪。
+	 * 收尾后：正文全部隐藏，只剩标题与打开提示；ctrl+t / 点击展开看全文。
+	 */
+	private bodyLines(width: number, padding: number): string[] {
+		if (this.streaming) {
+			if (!this.text) return [];
+			const maxLines = config.liveThinkingLines;
+			const memo = this.liveMemo;
+			if (
+				memo &&
+				memo.width === width &&
+				memo.padding === padding &&
+				memo.text === this.text &&
+				memo.maxLines === maxLines
+			) {
+				return memo.lines;
+			}
+			const window = layoutThinkingWindow(this.text, width, padding, maxLines);
+			this.liveMemo = { width, padding, text: this.text, maxLines, lines: window };
+			return window;
 		}
-		if (this.expanded) {
-			return {
-				lines: wrapExpandedThinking(this.messageTimestamp, this.runStartIndex, this.text, width),
-				hiddenLines: 0,
-			};
-		}
-		const preview = layoutThinkingPreview(this.text, width, padding);
-		return { lines: preview.visible, hiddenLines: preview.hiddenLines };
+		if (!this.text || !this.expanded) return [];
+		return wrapExpandedThinking(this.messageTimestamp, this.runStartIndex, this.text, width);
 	}
 
 	render(width: number) {
-		if (this.expanded) {
+		// 展开卡只在收尾后出现：运行中的正文是不包卡片的滚动尾窗。
+		if (this.expanded && !this.streaming) {
 			const innerWidth = Math.max(1, width - 2);
 			const body = this.bodyLines(innerWidth, 0);
-			const heading = this.headingLines(innerWidth, 0, 0);
-			const inner = body.lines.length
-				? [...heading, ...body.lines.map((line) => this.style(line))]
+			const heading = this.headingLines(innerWidth, 0);
+			const inner = body.length
+				? [...heading, ...body.map((line) => this.style(line))]
 				: heading;
 			const bgFn =
 				this.theme && typeof this.theme.bg === "function"
@@ -448,26 +512,27 @@ export class ThinkingPreviewBlock implements Component {
 		const expandAction = thinkingExpandAction();
 		if (
 			this.collapsedMemo?.width === width &&
-			this.collapsedMemo.previewLines === config.previewLines &&
+			this.collapsedMemo.liveThinkingLines === config.liveThinkingLines &&
+			this.collapsedMemo.expanded === this.expanded &&
 			this.collapsedMemo.hintHovered === this.hintHovered &&
-			this.collapsedMemo.expandAction === expandAction
+			this.collapsedMemo.expandAction === expandAction &&
+			this.collapsedMemo.streaming === this.streaming
 		) {
 			return this.collapsedMemo.lines;
 		}
 
 		const body = this.bodyLines(width, this.padding);
-		const heading = this.headingLines(width, body.hiddenLines, this.padding);
-		const lines = body.lines.length
-			? [
-					...heading,
-					...body.lines.map((line) => padPreviewLine(this.style(line), width, this.padding)),
-				]
+		const heading = this.headingLines(width, this.padding);
+		const lines = body.length
+			? [...heading, ...body.map((line) => padPreviewLine(this.style(line), width, this.padding))]
 			: heading;
 		this.collapsedMemo = {
 			width,
-			previewLines: config.previewLines,
+			liveThinkingLines: config.liveThinkingLines,
+			expanded: this.expanded,
 			hintHovered: this.hintHovered,
 			expandAction,
+			streaming: this.streaming,
 			lines,
 		};
 		return lines;
@@ -475,6 +540,7 @@ export class ThinkingPreviewBlock implements Component {
 
 	invalidate() {
 		this.collapsedMemo = undefined;
+		this.liveMemo = undefined;
 	}
 }
 
@@ -644,14 +710,10 @@ function compactThinking(pi: ExtensionAPI) {
 		latestComponent = component;
 		latestComponentTimestamp = message.timestamp;
 
-		// Upstream deferred to Pi's own Thinking renderer whenever the user kept
-		// thinking visible, so previewLines only worked with hideThinkingBlock on.
-		// This package owns the collapsed reasoning card, so the preview setting
-		// decides instead: previewLines > 0 takes over, 0 leaves Pi's renderer.
-		if (!self.hideThinkingBlock && config.previewLines <= 0) {
-			originalUpdateContent.call(this, message, self.isStreaming);
-			return;
-		}
+		// This package always owns the reasoning card: the live body is a
+		// `liveThinkingLines`-tall tail window, and a finished run hides the body
+		// behind the heading until `app.thinking.toggle` expands it. Pi's own
+		// renderer would keep the whole body mounted after the run ends.
 
 		if (activeThinking?.messageTimestamp === message.timestamp) {
 			streamingComponents.add(component);
@@ -767,6 +829,7 @@ function compactThinking(pi: ExtensionAPI) {
 					thinkingBodyStyle,
 					activeTheme,
 					runStartIndex,
+					active,
 				),
 			);
 
@@ -991,6 +1054,21 @@ function compactThinking(pi: ExtensionAPI) {
 		finishThinking();
 	});
 
+	// ---- app.thinking.toggle（默认 ctrl+t）：展开/收起收尾思考卡的全文 ----
+
+	/**
+	 * Pi 的 ctrl+t 只翻转 `hideThinkingBlock`，那管的是 Pi 自己的思考渲染。
+	 * 本扩展接管渲染后它不再有可见效果，所以在这里把同一个键接过来。
+	 * 只在 TUI 且焦点是输入框时处理：overlay 弹框（选择器、编辑器）要拿到自己的 ctrl+t。
+	 */
+	function toggleThinkingExpansion(): void {
+		setAllThinkingExpanded(!allThinkingExpanded);
+		refreshMountedTranscript(activeTui);
+		activeTui?.requestRender?.(true);
+	}
+
+	let thinkingToggleUnsubscribe: (() => void) | undefined;
+
 	pi.on("session_start", (_event, ctx) => {
 		restoreDurationEntries(ctx.sessionManager.getBranch(), completedDurations);
 		activeTheme = ctx.ui.theme;
@@ -1003,6 +1081,20 @@ function compactThinking(pi: ExtensionAPI) {
 			activeTui = tui;
 			return { render: () => [], invalidate() {} };
 		});
+
+		// ctrl+t 在输入框链里被 app.thinking.toggle 占用，先于编辑器判断不成立；
+		// 用 onTerminalInput 在同一个键上先接管，只处理焦点在输入框的按键事件。
+		if (typeof ctx.ui?.onTerminalInput === "function") {
+			thinkingToggleUnsubscribe?.();
+			thinkingToggleUnsubscribe = ctx.ui.onTerminalInput((data: string) => {
+				if (isKeyRelease(data)) return undefined;
+				const keys = thinkingToggleKeys();
+				if (!keys.some((key) => matchesKey(data, key as never))) return undefined;
+				if (!isComposerFocused(activeTui)) return undefined;
+				toggleThinkingExpansion();
+				return { consume: true };
+			});
+		}
 
 		// pi 在 reload/resume 时先于 session_start 用原始原型重建聊天组件
 		// （rebuildChatFromMessages / renderCurrentSessionState）。由共享的
@@ -1020,6 +1112,9 @@ function compactThinking(pi: ExtensionAPI) {
 
 	pi.on("session_shutdown", (_event, ctx) => {
 		finishThinking();
+		thinkingToggleUnsubscribe?.();
+		thinkingToggleUnsubscribe = undefined;
+		allThinkingExpanded = false;
 		activeThinkingQuery = undefined;
 		activeThinkingStateQuery = undefined;
 		activeThinkingAnimationFrameQuery = undefined;
@@ -1034,6 +1129,7 @@ function compactThinking(pi: ExtensionAPI) {
 		completedDurations.clear();
 		streamingComponents.clear();
 		expandedThinking.clear();
+		collapsedThinking.clear();
 		clearThinkingPreviewCache();
 		if (ctx.mode === "tui") ctx.ui.setWidget(WIDGET_ID, undefined);
 

@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -47,22 +47,38 @@ function loadAgents(): AgentInfo[] {
 	const dir = getAgentDir();
 	if (!existsSync(dir)) return [];
 
-	return readdirSync(dir)
-		.filter((f) => f.endsWith(".md"))
-		.map((file) => {
-			const filePath = join(dir, file);
-			const content = readFileSync(filePath, "utf-8");
-			const fm = parseFrontmatter(content);
-			const name = file.replace(/\.md$/, "");
-			return {
-				name,
-				displayName: fm.display_name || name,
-				description: fm.description || "",
-				model: fm.model,
-				thinking: fm.thinking,
-				filePath,
-			};
+	let files: string[];
+	try {
+		files = readdirSync(dir);
+	} catch {
+		// An unreadable agents directory must not throw inside event handlers.
+		return [];
+	}
+	const agents: AgentInfo[] = [];
+	for (const file of files) {
+		if (!file.endsWith(".md")) continue;
+		const filePath = join(dir, file);
+		let content: string;
+		try {
+			if (!statSync(filePath).isFile()) continue;
+			content = readFileSync(filePath, "utf-8");
+		} catch {
+			// One bad entry (directory, broken symlink, unreadable file) is skipped,
+			// it must not abort the whole list.
+			continue;
+		}
+		const fm = parseFrontmatter(content);
+		const name = file.replace(/\.md$/, "");
+		agents.push({
+			name,
+			displayName: fm.display_name || name,
+			description: fm.description || "",
+			model: fm.model,
+			thinking: fm.thinking,
+			filePath,
 		});
+	}
+	return agents;
 }
 
 function extractMentionQuery(textBeforeCursor: string): string | undefined {
@@ -93,6 +109,19 @@ export function extractSubagentReferenceNames(text: string): string[] {
 
 export function subagentReferenceValue(name: string): string {
 	return `${SUBAGENT_REFERENCE_PREFIX}[${name}]`;
+}
+
+/**
+ * The delegation prompt tells the model to call the Agent tool; inject it only
+ * when the host actually provides one. getAllTools can throw before the tool
+ * registry is bound — treat that as absent.
+ */
+function hasAgentTool(pi: ExtensionAPI): boolean {
+	try {
+		return (pi.getAllTools?.() as any[] | undefined)?.some((tool) => tool?.name === "Agent") === true;
+	} catch {
+		return false;
+	}
 }
 
 export function createAgentAutocompleteProvider(
@@ -212,7 +241,7 @@ export default function agentAutocompleteExtension(pi: ExtensionAPI): void {
 		// Pi 1.2.0 custom events have no prompt. Older hosts omit messageType.
 		if (!("prompt" in event)) return;
 		const agents = getAgents();
-		if (agents.length === 0) return;
+		if (agents.length === 0 || !hasAgentTool(pi)) return;
 
 		const mentions: string[] = [];
 		for (const name of extractSubagentReferenceNames(event.prompt)) {

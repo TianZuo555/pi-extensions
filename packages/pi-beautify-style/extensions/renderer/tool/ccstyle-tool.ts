@@ -299,8 +299,13 @@ export function createCcstyleTool(
 					cachedWidth = width;
 					cachedIcon = icon;
 					// 路径按最终可用宽度中间截断，避免整行二次截断隐藏文件名。
-					cachedLine = `${lead}${icon} ${renderToolSummary(summary, mainWidth, theme.fg.bind(theme))}${extraStyled}`;
-					return [truncateToWidth(cachedLine, viewportWidth, "")];
+					// 缓存截断后的行：命中路径不再截断，必须与未命中路径返回同样的行。
+					cachedLine = truncateToWidth(
+						`${lead}${icon} ${renderToolSummary(summary, mainWidth, theme.fg.bind(theme))}${extraStyled}`,
+						viewportWidth,
+						"",
+					);
+					return [cachedLine];
 				},
 				invalidate() {
 					cachedLine = undefined;

@@ -1,13 +1,19 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { ToolExecutionComponent, initTheme } from "@earendil-works/pi-coding-agent";
+import {
+	AssistantMessageComponent,
+	ToolExecutionComponent,
+	initTheme,
+	UserMessageComponent,
+} from "@earendil-works/pi-coding-agent";
 import {
 	config,
 } from "../extensions/config/config.ts";
-import { Container } from "@earendil-works/pi-tui";
+import { Container, TuiAltScreen } from "@earendil-works/pi-tui";
 import claudeCodeStyleExtension from "../extensions/renderer/index.ts";
 import { ToolGroupComponent } from "../extensions/renderer/tool/grouping.ts";
+import { COMPACT_THINKING_PATCH_KEY } from "../extensions/utils/patch-keys.ts";
 
 initTheme("dark");
 
@@ -68,6 +74,9 @@ test("stale TUI shutdown leaves the replacement runtime active", async () => {
 		) as Record<string, Function>;
 		const patchKey = Symbol.for("pi.ccstyle.global-tool-render-patch");
 		const replacementPatch = (globalThis as any)[patchKey];
+		// 粘性补丁也是原型补丁；module 级释放曾按注册表停掉接管方的补丁。
+		const replacementMarker = (UserMessageComponent.prototype as any).render;
+		const replacementFrame = (TuiAltScreen.prototype as any).compositeScrollToEndIndicator;
 
 		await runtimeA.events.get("session_shutdown")?.({}, ctx);
 		assert.equal((globalThis as any)[patchKey], replacementPatch);
@@ -75,6 +84,16 @@ test("stale TUI shutdown leaves the replacement runtime active", async () => {
 		for (const name of containerMethods)
 			assert.equal(containerPrototype[name], replacementContainer[name]);
 		for (const name of toolMethods) assert.equal(toolPrototype[name], replacementTool[name]);
+		assert.equal(
+			(UserMessageComponent.prototype as any).render,
+			replacementMarker,
+			"stale shutdown keeps the replacement sticky marker patch",
+		);
+		assert.equal(
+			(TuiAltScreen.prototype as any).compositeScrollToEndIndicator,
+			replacementFrame,
+			"stale shutdown keeps the replacement sticky frame patch",
+		);
 
 		const parent = new Container() as any;
 		for (const name of ["read", "bash"]) {
@@ -91,6 +110,17 @@ test("stale TUI shutdown leaves the replacement runtime active", async () => {
 			parent.addChild(tool);
 		}
 		assert.ok(parent.children[0] instanceof ToolGroupComponent);
+
+		// 陈旧安装的引用已清：A 的下一个 session_start 重新装自己的补丁，
+		// 而不是复用一套已失活的 installation。
+		await runtimeA.events.get("session_start")?.({}, ctx);
+		assert.notEqual(
+			containerPrototype.addChild,
+			replacementContainer.addChild,
+			"the stale instance reinstalls its own grouping patch",
+		);
+		assert.notEqual(containerPrototype.addChild, originalContainer.addChild);
+		await runtimeA.events.get("session_shutdown")?.({}, ctx);
 
 		await runtimeB.events.get("session_shutdown")?.({}, ctx);
 		for (const name of containerMethods)
@@ -261,5 +291,39 @@ test("headless runtimes do not replace or shut down main TUI patches", async () 
 		await mainStyle.events.get("session_shutdown")?.({}, tuiCtx);
 		containerPrototype.addChild = originalContainerAdd;
 		toolPrototype.getCallRenderer = originalToolCallRenderer;
+	}
+});
+
+test("stale shutdown keeps the replacement compact-mode hook", async () => {
+	const runtimeA = runtime();
+	const runtimeB = runtime();
+	const ctx = {
+		mode: "tui",
+		hasUI: true,
+		ui: { theme: { fg: (_c: string, text: string) => text }, setStatus() {}, requestRender() {} },
+	} as any;
+	const assistantPrototype = AssistantMessageComponent.prototype as any;
+	const previousMode = config.mode;
+	try {
+		Object.assign(config, { mode: "compact" });
+		claudeCodeStyleExtension(runtimeA.pi as any);
+		await runtimeA.events.get("session_start")?.({}, ctx);
+		claudeCodeStyleExtension(runtimeB.pi as any);
+		await runtimeB.events.get("session_start")?.({}, ctx);
+		const replacementInstalled = assistantPrototype.updateContent;
+		await runtimeA.events.get("session_shutdown")?.({}, ctx);
+
+		// compact-thinking wraps on top; the replacement must reclaim the outer slot.
+		const wrapper = function (this: any, ...args: any[]) {
+			return replacementInstalled.apply(this, args);
+		};
+		(wrapper as any)[COMPACT_THINKING_PATCH_KEY] = true;
+		assistantPrototype.updateContent = wrapper;
+		await runtimeB.events.get("message_update")?.({ message: { role: "assistant" } }, ctx);
+		assert.equal(assistantPrototype.updateContent, replacementInstalled);
+	} finally {
+		await runtimeA.events.get("session_shutdown")?.({}, ctx);
+		await runtimeB.events.get("session_shutdown")?.({}, ctx);
+		Object.assign(config, { mode: previousMode });
 	}
 });

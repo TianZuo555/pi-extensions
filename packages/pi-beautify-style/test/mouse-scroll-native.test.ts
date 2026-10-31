@@ -311,7 +311,7 @@ test("one-row sticky prompt paints after native and wins clicks", (t) => {
 	const frame = realFrame(t);
 	config.stickyUserMessage = true;
 	setStickyPromptTheme(theme);
-	assert.equal(installStickyPromptFramePatch(), true);
+	assert.ok(installStickyPromptFramePatch());
 	t.after(() => {
 		disposeStickyPromptPatches();
 		setStickyPromptTheme(null);

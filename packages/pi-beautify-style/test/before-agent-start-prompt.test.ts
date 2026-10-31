@@ -7,12 +7,13 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import agentAutocompleteExtension from "../extensions/feature/reference/subagent.ts";
 import sessionReferenceExtension from "../extensions/feature/reference/index.ts";
 
-function install(extension: (pi: any) => void) {
+function install(extension: (pi: any) => void, tools: any[] = [{ name: "Agent" }]) {
 	const events = new Map<string, Function>();
 	extension({
 		on(name: string, handler: Function) {
 			events.set(name, handler);
 		},
+		getAllTools: () => tools,
 		events: { on: () => () => {} },
 		registerMessageRenderer() {},
 	});
@@ -40,6 +41,49 @@ test("a prompt without messageType still injects subagent references", async () 
 			{},
 		);
 		assert.match(result?.message?.content ?? "", /"coder" \(Coder\)/);
+	} finally {
+		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previous;
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("the delegation prompt is skipped when the host has no Agent tool", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-agent-noagent-"));
+	const previous = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = root;
+	mkdirSync(join(root, "agents"));
+	writeFileSync(join(root, "agents", "coder.md"), "---\ndisplay_name: Coder\n---\n");
+	try {
+		const events = install(agentAutocompleteExtension, []);
+		const result = await events.get("before_agent_start")?.(
+			{ prompt: "please ask @subagent:[coder]", systemPrompt: "base" },
+			{},
+		);
+		assert.equal(result, undefined, "no Agent tool means no delegation prompt");
+	} finally {
+		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previous;
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("a directory named *.md inside the agents dir is skipped, not thrown on", async () => {
+	const root = mkdtempSync(join(tmpdir(), "pi-agent-badentry-"));
+	const previous = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = root;
+	mkdirSync(join(root, "agents"));
+	writeFileSync(join(root, "agents", "good.md"), "---\ndisplay_name: Good\n---\n");
+	// A stray directory that matches the *.md filter used to throw EISDIR inside
+	// session_start/before_agent_start and abort the whole agent list.
+	mkdirSync(join(root, "agents", "bad.md"));
+	try {
+		const events = install(agentAutocompleteExtension);
+		const result = await events.get("before_agent_start")?.(
+			{ prompt: "please ask @subagent:[good]", systemPrompt: "base" },
+			{},
+		);
+		assert.match(result?.message?.content ?? "", /"good" \(Good\)/);
 	} finally {
 		if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
 		else process.env.PI_CODING_AGENT_DIR = previous;
