@@ -1,5 +1,15 @@
 # @tian.zuo/pi-usage
 
+## 0.5.1
+
+### Patch Changes
+
+- [#159](https://github.com/TianZuo555/pi-extensions/pull/159) [`02e2b2d`](https://github.com/TianZuo555/pi-extensions/commit/02e2b2dcb38eb2433f2ee20a6fde2939f75baac0) Thanks [@gpicron](https://github.com/gpicron)! - Use the GitHub Enterprise Cloud data-residency domain saved with Pi's Copilot OAuth credential when querying account usage, so `<tenant>.ghe.com` accounts can populate `/usage` and the footer meter. Keep public GitHub behavior and the existing credits/request labels.
+  
+  Reject invalid or unsupported Enterprise domains before sending credentials, do not follow Copilot usage redirects or replay failed requests on a different account domain, and restrict the VS Code public-token fallback to `github.com` accounts.
+
+- [#173](https://github.com/TianZuo555/pi-extensions/pull/173) [`5067811`](https://github.com/TianZuo555/pi-extensions/commit/506781181fdc1a9d5009278391312cdf8d47f6ae) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Move the runtime dependency to `effect@4.0.5` (from the `4.0.0-rc.117` release candidate), so installing this extension no longer pulls a pre-release Effect. `pi-usage` also picks up `playwriter@0.9.0` and `pi-web-search` `unpdf@1.9.1`. No API changes on the extension surface.
+
 ## 0.5.0
 
 ### Minor Changes
