@@ -39,7 +39,7 @@
     "check": "tsc --noEmit -p ."
   },
   "dependencies": {
-    "effect": "4.0.5"
+    "effect": "4.0.6"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
