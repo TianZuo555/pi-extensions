@@ -60,7 +60,7 @@
     "test:find": "pnpm --filter @tian.zuo/pi-find test",
     "changeset": "changeset",
     "changeset:status": "changeset status",
-    "version-packages": "changeset version",
+    "version-packages": "changeset version && biome format --write packages/*/CHANGELOG.md",
     "release": "changeset publish",
     "pack:check": "pnpm -r pack --dry-run"
   },
