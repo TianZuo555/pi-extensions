@@ -1,5 +1,12 @@
 packages:
   - "packages/*"
+  # Keep deprecated source for reference, but do not install, audit, test,
+  # check, pack, or release it as a workspace package.
+  - "!packages/pi-edit-safe"
+  - "!packages/pi-goal"
+  - "!packages/pi-subagents"
+  - "!packages/pi-todo"
+  - "!packages/pi-vscode-bridge"
 
 # Run package scripts through pnpm's bash-like shell so POSIX syntax such as
 # `FOO=1 node ...` also works on Windows (CI runs the test matrix there).
