@@ -134,6 +134,35 @@ test("narrow group headers truncate the title, never the expand hint", () => {
 	}
 });
 
+test("colored narrow headers never leave a partial escape behind the ellipsis", () => {
+	const hooks = installToolGrouping(() => true);
+	hooks.setTheme({
+		fg: (color: string, text: string) => `\x1b[${31 + (color.length % 6)}m${text}\x1b[0m`,
+	});
+	try {
+		const parent = new Container() as any;
+		parent.addChild(started("read", "ansi-read", { path: "src/a.ts" }));
+		parent.addChild(started("bash", "ansi-bash", { command: "npm test" }));
+		parent.addChild(started("grep", "ansi-grep", { pattern: "needle" }));
+		const group = parent.children[0] as ToolGroupComponent;
+		for (const width of [60, 45, 40]) {
+			const header = group.render(width)[1]!;
+			const unstyled = header.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
+			assert.ok(
+				!unstyled.includes("\x1b"),
+				`truncated header keeps no partial escape at ${width}: ${JSON.stringify(header)}`,
+			);
+			assert.ok(
+				unstyled.trimEnd().endsWith("click to show more"),
+				`hint stays whole at ${width}: ${unstyled}`,
+			);
+			assert.ok(visibleWidth(header) <= toolViewportWidth(width));
+		}
+	} finally {
+		hooks.shutdown();
+	}
+});
+
 test("collapsed groups preserve filenames for long cwd paths", () => {
 	const hooks = installToolGrouping(() => true);
 	try {
