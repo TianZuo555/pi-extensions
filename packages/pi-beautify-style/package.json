@@ -1,6 +1,6 @@
 {
   "name": "@tian.zuo/pi-beautify-style",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Claude Code-style TUI for the pi coding agent: tool cards, rich diffs, compact mode, footer chips, and integrations for this repo's ask-user, background-terminals, and usage extensions.",
   "type": "module",
   "keywords": [

@@ -1,5 +1,13 @@
 # @tian.zuo/pi-find
 
+## 0.6.2
+
+### Patch Changes
+
+- [#173](https://github.com/TianZuo555/pi-extensions/pull/173) [`5067811`](https://github.com/TianZuo555/pi-extensions/commit/506781181fdc1a9d5009278391312cdf8d47f6ae) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Move the runtime dependency to `effect@4.0.5` (from the `4.0.0-rc.117` release candidate), so installing this extension no longer pulls a pre-release Effect. `pi-usage` also picks up `playwriter@0.9.0` and `pi-web-search` `unpdf@1.9.1`. No API changes on the extension surface.
+
+- [#194](https://github.com/TianZuo555/pi-extensions/pull/194) [`25bf133`](https://github.com/TianZuo555/pi-extensions/commit/25bf133a557e40fff751d04d7d64d09be9f36000) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Keep the `output` parameter and result schema typed with pi 1.5. `@earendil-works/pi-ai` 1.5 no longer re-exports TypeBox, so the published `StringEnum` type made `Static` resolve to `unknown`. The tool now builds the same `{ type: "string", enum: [...] }` schema with a local `Type.Unsafe` helper. The emitted JSON Schema and tool behavior do not change.
+
 ## 0.6.1
 
 ### Patch Changes
