@@ -64,6 +64,12 @@ rex window rename -s "$REX_SESSION" WINDOW_ID LABEL
 
 A session is the parent. A tab is the child. pi names the session first. Then pi reads its window ID with `rex whoami --json`. It compares that ID with the window IDs of the session from `rex window ls`. The first tab takes the session label. A later tab gets its own label. pi keeps a label that already fits the work. If the rename fails, pi continues the task and does not show a message.
 
+## Known limits
+
+- The Rex CLI does not report whether a label is generated or set by hand. The extension decides from the tab count only. A session with one tab and a hand-set label can still lose that label.
+- The session rule reads one string from the Rex output: the paragraph that holds `rex session rename`. A change to that wording stops the removal.
+- The two instructions are prompt text. An agent can ignore them. The extension never runs a rename command itself.
+
 ## License
 
 [MIT](../../LICENSE) © Tian Zuo
