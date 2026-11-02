@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { afterEach, test } from "node:test";
+import { TAB_RENAME_INSTRUCTION } from "../lib/prompt.ts";
 import rexExtension from "../index.ts";
 
 type Handler = (event: unknown, ctx: unknown) => unknown;
 type ExecResult = { stdout: string; stderr: string; code: number; killed: boolean };
 
-function setup(result: ExecResult) {
+function setup(result: ExecResult, settings: unknown = {}) {
   const handlers = new Map<string, Handler>();
   const calls: { command: string; args: string[]; options: unknown }[] = [];
   const notices: string[] = [];
@@ -15,6 +16,7 @@ function setup(result: ExecResult) {
       calls.push({ command, args, options });
       return result;
     },
+    getSettings: () => settings,
   };
   rexExtension(pi as never);
   const ctx = { cwd: "/repo", ui: { notify: (message: string) => notices.push(message) } };
@@ -65,4 +67,41 @@ test("warns and adds no section when the rex command fails", async () => {
   await start();
   assert.deepEqual(sections(), {});
   assert.deepEqual(notices, ["rex session-start failed (exit 1): boom"]);
+});
+
+test("keeps tab naming off by default", async () => {
+  process.env.REX_SESSION = "s1";
+  const { start, sections } = setup(ok);
+  await start();
+  assert.deepEqual(sections(), { rex: "You're running in a Rex terminal." });
+});
+
+test("keeps tab naming off when rex.renameTab is false", async () => {
+  process.env.REX_SESSION = "s1";
+  const { start, sections } = setup(ok, { rex: { renameTab: false } });
+  await start();
+  assert.deepEqual(sections(), { rex: "You're running in a Rex terminal." });
+});
+
+test("appends the tab rename instruction when rex.renameTab is true", async () => {
+  process.env.REX_SESSION = "s1";
+  const { start, sections } = setup(ok, { rex: { renameTab: true } });
+  await start();
+  assert.deepEqual(sections(), {
+    rex: `You're running in a Rex terminal.\n\n${TAB_RENAME_INSTRUCTION}`,
+  });
+});
+
+test("ignores a rex setting that is not an object", async () => {
+  process.env.REX_SESSION = "s1";
+  const { start, sections } = setup(ok, { rex: "on" });
+  await start();
+  assert.deepEqual(sections(), { rex: "You're running in a Rex terminal." });
+});
+
+test("adds no section when the rex command prints nothing", async () => {
+  process.env.REX_SESSION = "s1";
+  const { start, sections } = setup({ stdout: "  \n", stderr: "", code: 0, killed: false });
+  await start();
+  assert.deepEqual(sections(), {});
 });
