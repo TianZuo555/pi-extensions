@@ -33,10 +33,10 @@ overrides:
   launch-editor: ^2.14.2
   # GHSA-5r4p-p66f-jhc7
   hono: ^4.13.13
-  "@earendil-works/pi-ai": ^1.4.0
-  "@earendil-works/pi-coding-agent": ^1.4.0
-  "@earendil-works/pi-tui": ^1.4.0
-  "@earendil-works/pi-agent-core": ^1.4.0
+  "@earendil-works/pi-ai": ^1.5.0
+  "@earendil-works/pi-coding-agent": ^1.5.0
+  "@earendil-works/pi-tui": ^1.5.0
+  "@earendil-works/pi-agent-core": ^1.5.0
 
 # Don't install package versions published less than 2 days ago (the
 # built-in default is 1 day). Applies to all deps including transitive

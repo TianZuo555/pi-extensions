@@ -46,6 +46,7 @@ const testExec: ExecFunction = (command, args, options) =>
           stderr: String(stderr ?? ""),
           code,
           killed: Boolean(error && "killed" in error && error.killed),
+          truncated: false,
         });
       },
     );
@@ -216,9 +217,10 @@ test("pushCurrentBranch forwards its abort signal to Git commands", async (t) =>
           stderr: "",
           code: 0,
           killed: false,
+          truncated: false,
         });
       }
-      return Promise.resolve({ stdout: "", stderr: "", code: 0, killed: false });
+      return Promise.resolve({ stdout: "", stderr: "", code: 0, killed: false, truncated: false });
     },
   } satisfies { root: string; exec: ExecFunction };
 

@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import type { ProgramStatus } from "@earendil-works/pi-tui";
 import askUser from "../index.ts";
 
 type RegisteredTool = {
@@ -28,24 +27,20 @@ function registeredTool(): RegisteredTool {
   return tool;
 }
 
-test("the TUI form reports blocked while open, then working again", async () => {
-  const statuses: ProgramStatus[] = [];
-  const tui = {
-    requestRender: () => {},
-    terminal: { setProgramStatus: (status: ProgramStatus) => statuses.push(status) },
-  };
+test("the TUI form reports blocked through ctx.ui.custom while open", async () => {
+  const tui = { requestRender: () => {}, terminal: {} };
+  let customOptions: unknown;
   const ctx = {
     mode: "tui",
     hasUI: true,
     ui: {
-      custom: (factory: (...args: unknown[]) => unknown) =>
-        new Promise((resolve) => {
+      custom: (factory: (...args: unknown[]) => unknown, options?: unknown) => {
+        customOptions = options;
+        return new Promise((resolve) => {
           factory(tui, {}, {}, resolve);
-          assert.deepEqual(statuses, [
-            { state: "blocked", kind: "question", app: "pi", message: "Pick a color" },
-          ]);
           resolve(null);
-        }),
+        });
+      },
     },
   };
 
@@ -57,8 +52,7 @@ test("the TUI form reports blocked while open, then working again", async () => 
     ctx,
   );
 
-  assert.deepEqual(statuses, [
-    { state: "blocked", kind: "question", app: "pi", message: "Pick a color" },
-    { state: "working", app: "pi", message: "fix-login" },
-  ]);
+  assert.deepEqual(customOptions, {
+    blocked: { kind: "question", message: "Pick a color" },
+  });
 });

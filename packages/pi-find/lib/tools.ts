@@ -1,9 +1,8 @@
 /** Tool registration for the small grep and find interfaces. */
 
-import { StringEnum } from "@earendil-works/pi-ai";
 import type { AgentToolResult, ExtensionAPI, Theme } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
-import { type Static, Type } from "typebox";
+import { type Static, type TUnsafe, Type } from "typebox";
 import {
   AUTO_CONTEXT_NOTICE,
   FILE_SIZE_LIMIT_NOTICE,
@@ -47,6 +46,14 @@ import {
 import { MAX_RECORD_BYTES } from "../src/stream.ts";
 import { type Notice, type NoticeId, withSearchLog } from "./debug.ts";
 import { boundedBody, fileRows, grepRows, resultText } from "./results.ts";
+
+/** Provider-friendly string enum: `{ type: "string", enum: [...] }`, typed as its values. */
+function stringEnum<T extends readonly string[]>(
+  values: T,
+  options?: { description?: string },
+): TUnsafe<T[number]> {
+  return Type.Unsafe<T[number]>({ type: "string", enum: [...values], ...options });
+}
 
 const notice = (id: NoticeId, text: string): Notice => ({ id, text });
 const texts = (notices: readonly Notice[]) => notices.map((entry) => entry.text);
@@ -102,7 +109,7 @@ export const GrepParams = Type.Object({
   path: Type.Optional(Type.String({ minLength: 1, description: GREP_PARAMETER_DESCRIPTIONS.path })),
   glob: Type.Optional(Type.String({ minLength: 1, description: GREP_PARAMETER_DESCRIPTIONS.glob })),
   output: Type.Optional(
-    StringEnum(["content", "files"] as const, { description: GREP_PARAMETER_DESCRIPTIONS.output }),
+    stringEnum(["content", "files"] as const, { description: GREP_PARAMETER_DESCRIPTIONS.output }),
   ),
   literal: Type.Optional(Type.Boolean({ description: GREP_PARAMETER_DESCRIPTIONS.literal })),
 });
@@ -124,7 +131,7 @@ const GrepMatchSchema = Type.Object({
 
 export const GrepOutputSchema = Type.Object({
   kind: Type.Literal("grep", { description: GREP_OUTPUT_FIELD_DESCRIPTIONS.kind }),
-  output: StringEnum(["content", "files"] as const, {
+  output: stringEnum(["content", "files"] as const, {
     description: GREP_OUTPUT_FIELD_DESCRIPTIONS.output,
   }),
   query: Type.String({ description: GREP_OUTPUT_FIELD_DESCRIPTIONS.query }),
