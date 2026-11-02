@@ -5,6 +5,12 @@
 export const REX_SECTION = "rex";
 
 /**
+ * Replaces the Rex session-naming paragraph when the session has more than one
+ * tab. A session is the parent of its tabs, so a later tab must not rename it.
+ */
+export const KEEP_SESSION_INSTRUCTION = `The session already has more than one tab. Do not rename the session. Do not run \`rex session rename\`. Keep the current session label.`;
+
+/**
  * Appended to the Rex session-start output when `rex.renameTab` is true.
  *
  * A session is the parent and a tab is the child: the first tab carries the

@@ -48,7 +48,11 @@ Rex gives each session and each tab a generated name. The agent can replace thes
 
 ### Session naming
 
-Session naming is always on. Rex supplies the naming instructions in the session-start output. The extension does not run `rex session rename`. No setting controls session naming.
+Session naming is on for a session with one tab. Rex supplies the naming instructions in the session-start output. The extension does not run `rex session rename`. No setting controls session naming.
+
+When the session has more than one tab, the extension removes the session-naming paragraph. It adds a second instruction instead: keep the session label and do not rename the session. A session is the parent of its tabs, so a tab must not rename the parent.
+
+The extension counts the tabs with `rex session inspect "$REX_SESSION" --json`. If that command fails, the Rex text stays unchanged.
 
 ### Tab naming
 
