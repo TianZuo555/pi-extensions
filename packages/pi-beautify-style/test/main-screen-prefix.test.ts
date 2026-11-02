@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { CURSOR_MARKER, TuiMainScreen } from "@earendil-works/pi-tui";
-import { installMainScreenDoRenderPatch } from "../extensions/utils/fullscreen-detect.ts";
+import { installMainScreenDoRenderPatch, recordEditorFrame } from "../extensions/utils/fullscreen-detect.ts";
 import { MAIN_SCREEN_DO_RENDER_PATCH, patchRegistry } from "../extensions/utils/patch-keys.ts";
 
 function createTerminal(columns: number, rows: number) {
@@ -141,7 +141,9 @@ test("正文在视口内收缩时，输入框停在原来的屏幕行", () => {
 	const tui = new TuiMainScreen(terminal as any, false, dir);
 	tui.setClearOnShrink(false);
 	const border = "─".repeat(40);
-	const dock = [border, `❯${CURSOR_MARKER}`, border, "footer"];
+	const editor = [border, `❯${CURSOR_MARKER}`, border];
+	const dock = [...editor, "footer"];
+	recordEditorFrame(editor);
 	let transcript = Array.from({ length: 6 }, (_, index) => `line-${index}`);
 	tui.addChild({
 		render: () => [...transcript, ...dock],
@@ -186,11 +188,12 @@ test("正文在视口内收缩时，输入框停在原来的屏幕行", () => {
 	}
 });
 
-test("没有输入框提示符时保持原生行为：帧直接收缩", () => {
+test("编辑器没渲染块时保持原生行为：帧直接收缩", () => {
 	const dir = mkdtempSync(join(tmpdir(), "pi-main-screen-"));
 	const terminal = createTerminal(40, 20);
 	const tui = new TuiMainScreen(terminal as any, false, dir);
 	tui.setClearOnShrink(false);
+	recordEditorFrame([]);
 	let transcript = Array.from({ length: 6 }, (_, index) => `line-${index}`);
 	tui.addChild({
 		render: () => [...transcript, "footer"],
@@ -203,6 +206,50 @@ test("没有输入框提示符时保持原生行为：帧直接收缩", () => {
 		transcript = transcript.slice(0, 2);
 		tui.renderNow();
 		assert.equal((tui as any).previousLines.length, totalBefore - 4, "不补空行");
+	} finally {
+		disposePatch();
+		tui.stop({ preserveScreen: true });
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("输入框里粘贴的提示符不会把空行插进编辑器", () => {
+	const dir = mkdtempSync(join(tmpdir(), "pi-main-screen-"));
+	const terminal = createTerminal(40, 20);
+	const tui = new TuiMainScreen(terminal as any, false, dir);
+	tui.setClearOnShrink(false);
+	const border = "─".repeat(40);
+	// 多行输入：用户粘贴的内容里就有一行像提示符，它排在真提示符下面。
+	const editor = [border, `❯${CURSOR_MARKER} first`, "  ❯ npm test", border];
+	const dock = [...editor, "footer"];
+	recordEditorFrame(editor);
+	let transcript = Array.from({ length: 6 }, (_, index) => `line-${index}`);
+	tui.addChild({
+		render: () => [...transcript, ...dock],
+		invalidate() {},
+	});
+	const disposePatch = installMainScreenDoRenderPatch();
+	try {
+		tui.renderNow();
+		const promptRow = plainLines((tui as any).previousLines).indexOf("❯ first");
+		const totalBefore = (tui as any).previousLines.length;
+		transcript = transcript.slice(0, 2);
+		tui.renderNow();
+		const after = plainLines((tui as any).previousLines);
+		const editorTop = after.indexOf("❯ first") - 1;
+		assert.equal((tui as any).previousLines.length, totalBefore, "整帧高度不变");
+		assert.equal(after.indexOf("❯ first"), promptRow, "真提示符停在原来的屏幕行");
+		assert.deepEqual(
+			after.slice(editorTop, editorTop + editor.length),
+			[border, "❯ first", "  ❯ npm test", border],
+			"编辑器整块不被空行劈开",
+		);
+		assert.deepEqual(
+			after.slice(editorTop - 4, editorTop),
+			["", "", "", ""],
+			"补出来的空行落在顶边框之上",
+		);
+		assert.equal((tui as any).hardwareCursorRow, promptRow, "光标跟着真提示符");
 	} finally {
 		disposePatch();
 		tui.stop({ preserveScreen: true });

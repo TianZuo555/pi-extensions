@@ -1,4 +1,5 @@
-import { TuiMainScreen } from "@earendil-works/pi-tui";
+import { stripVTControlCharacters } from "node:util";
+import { CURSOR_MARKER, TuiMainScreen } from "@earendil-works/pi-tui";
 import { MAIN_SCREEN_DO_RENDER_PATCH, patchRegistry } from "./patch-keys.ts";
 
 /**
@@ -26,21 +27,38 @@ type DockPad = { missing: number; insertAt: number };
 
 const DOCK_PAD_SLOT = Symbol("ccstyle-dock-pad");
 
-/** 输入框首行：PromptEditor 把首内容行的前两列换成 `❯ `。 */
-const PROMPT_LINE_RE = /^\s*❯/;
+/** 编辑器本帧渲染出的行（已归一化），`padDock` 靠它认出输入坞的起点。 */
+let editorFrame: string[] = [];
 
-function stripAnsi(line: string): string {
-	return line.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
+/** 比对用的行：去掉 SGR、OSC、光标标记与行尾空白（applyLineResets 会补 reset）。 */
+function normalizeFrameLine(line: string): string {
+	return stripVTControlCharacters(line).split(CURSOR_MARKER).join("").trimEnd();
 }
 
 /**
- * 输入坞（状态行、输入框、footer）的起始行：`❯` 所在行的上一行是输入框顶边框。
- * 找不到（自定义编辑器没有提示符）就不补，保持 Pi 原生行为。
+ * 记下编辑器这一帧渲染出的行。
+ *
+ * `padDock` 只认这块内容，不按 `❯` 之类的字形反查：多行输入里粘贴的
+ * `  ❯ npm test` 也像提示符，反查会把空行插进输入框中间，把输入框劈成两半。
+ * `PromptEditor.render` 每帧先写这里，patch 再读同一帧的块。
+ */
+export function recordEditorFrame(lines: readonly string[]): void {
+	editorFrame = lines.map(normalizeFrameLine);
+}
+
+/**
+ * 输入坞（状态行、输入框、footer）的起始行：编辑器整块在帧里的最底一次出现。
+ * 匹配整块而不是某一行，正文里重复的边框或提示符不会误伤；找不到（自定义
+ * 编辑器没走 PromptEditor）就不补，保持 Pi 原生行为。
  */
 function dockTopIndex(lines: string[]): number | undefined {
-	for (let index = lines.length - 1; index > 0; index--) {
-		if (!PROMPT_LINE_RE.test(stripAnsi(lines[index] ?? ""))) continue;
-		return index - 1;
+	const block = editorFrame;
+	if (block.length === 0 || block.length > lines.length) return undefined;
+	const plain = lines.map(normalizeFrameLine);
+	for (let start = plain.length - block.length; start >= 0; start--) {
+		let offset = 0;
+		while (offset < block.length && plain[start + offset] === block[offset]) offset++;
+		if (offset === block.length) return start;
 	}
 	return undefined;
 }
@@ -134,7 +152,7 @@ export function installMainScreenDoRenderPatch(): () => void {
 			const pad: DockPad | undefined = this?.[DOCK_PAD_SLOT];
 			delete this?.[DOCK_PAD_SLOT];
 			const adjusted =
-				patch.active && pad && cursorPos && Number(cursorPos.row) > pad.insertAt
+				patch.active && pad && cursorPos && Number(cursorPos.row) >= pad.insertAt
 					? { ...cursorPos, row: Number(cursorPos.row) + pad.missing }
 					: cursorPos;
 			return originalCursor?.call(this, adjusted, totalLines);
