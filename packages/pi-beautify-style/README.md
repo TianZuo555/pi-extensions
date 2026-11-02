@@ -41,6 +41,10 @@ pi -e ./packages/pi-beautify-style
   rate, cost), then location (cwd, session name, git), then every other
   extension's `setStatus` chip, including `pi-usage` and the MCP count. Plugin
   chips never crowd the first two rows.
+- **Fixed input box**: in regular TUI mode the input box keeps its screen row
+  when a block above it collapses — the reasoning window shrinking to
+  `Thought for …`, or a tool card closing. The freed rows become blank space at
+  the end of the transcript, and new output fills it again.
 - **`/context`** to inspect context usage and preview the system prompt, memory,
   skills, and tool definitions.
 - **`@` references** to pull context from an earlier session or a running
@@ -55,7 +59,7 @@ The fork adapts upstream's renderers to the sibling packages:
 | Package | What changes |
 | --- | --- |
 | `@tian.zuo/pi-ask-user` | The `ask_user` card uses the same answer tree as upstream's `ask_user_question`, including `choice: { label, wasCustom }` answers, the question-count suffix, and custom ("Other") text. |
-| `@tian.zuo/pi-background-terminals` | Its `bash` and `terminal_wait`/`terminal_stop`/`terminal_log_read` tools use the same beautify card as every other tool: a live elapsed timer, and the terminal id in the title of the `terminal_*` cards. |
+| `@tian.zuo/pi-background-terminals` | Its `bash` and `terminal_wait`/`terminal_stop` tools use the same beautify card as every other tool: a live elapsed timer, and the terminal id in the title of the `terminal_*` cards. |
 | `@tian.zuo/pi-usage` | The footer treats `setStatus("usage")` as the usage chip on row 3. Upstream only recognized `pi-usage`/`localUsage`, so this package's chip used to stay empty. |
 
 `@tian.zuo/pi-token-speed` needs no integration either: its

@@ -160,11 +160,7 @@ export const SHELL_TOOL_NAMES = new Set(["bash", "powershell", "pwsh", "sh", "zs
  * `@tian.zuo/pi-background-terminals` 的配套工具：不是 shell 本身，但入参/结果
  * 与 shell 同构（id + 输出正文），所以借用 shell 的摘要与计时路径。
  */
-export const BACKGROUND_TERMINAL_TOOL_NAMES = new Set([
-	"terminal_wait",
-	"terminal_stop",
-	"terminal_log_read",
-]);
+export const BACKGROUND_TERMINAL_TOOL_NAMES = new Set(["terminal_wait", "terminal_stop"]);
 
 /** 内置检索工具：pattern 缺失（无效调用）时保留 "…" 占位。 */
 const SEARCH_TOOL_NAMES = new Set(["grep", "find"]);
@@ -325,11 +321,7 @@ export function toolCallSummary(
 				? `${ids[0]} (+${ids.length - 1})`
 				: ids[0] || id;
 		const fallback =
-			name === "terminal_wait"
-				? "wait for terminals"
-				: name === "terminal_stop"
-					? "stop terminal"
-					: "read terminal log";
+			name === "terminal_wait" ? "wait for terminals" : "stop terminal";
 		return { main: title, detail: "", payload: clip(label || fallback) };
 	}
 	if (toolName === "read") {

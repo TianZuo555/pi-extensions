@@ -601,7 +601,7 @@ test("background-terminal tools get the ccstyle card like every other tool", () 
 		"Pi's own bash uses the ccstyle card",
 	);
 
-	for (const name of ["terminal_log_read", "terminal_wait", "terminal_stop"]) {
+	for (const name of ["terminal_wait", "terminal_stop"]) {
 		assert.equal(
 			preservesOriginalRenderer({ name, renderResult() {} }, name, undefined, []),
 			false,
