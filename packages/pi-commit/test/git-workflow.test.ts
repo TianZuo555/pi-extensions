@@ -35,6 +35,7 @@ const testExec = (command: string, args: string[], options?: { cwd?: string }) =
             stderr: String(stderr ?? ""),
             code,
             killed: Boolean(error && "killed" in error && error.killed),
+            truncated: false,
           });
         },
       );
