@@ -73,14 +73,15 @@ pnpm test            # extension test suites (deprecated packages excluded)
 ```
 
 The deprecated `pi-todo`, `pi-subagents`, `pi-edit-safe`, `pi-goal`, and
-`pi-vscode-bridge` packages declare no `test` script, so both local recursive
-runs and CI (full-suite and changed-package runs) skip their archived tests.
-These deprecated packages are not loaded by the root package, and
-`pi-vscode-bridge` is no longer compiled or packaged as a VS Code extension.
+`pi-vscode-bridge` packages remain as reference source but are excluded from
+the pnpm workspace. CI does not install or audit dependencies used only by
+these packages, run their package checks or tests, pack them, or publish them.
+The root TypeScript check also excludes their source and legacy re-export stubs. The root package does
+not load them; `pi-vscode-bridge` is not packaged as a VS Code extension.
 
-`pnpm run lint` skips the same five packages, so archived reference code cannot
-fail CI. Add a package to the `files.includes` negation list in `biome.json`
-when you deprecate it.
+`pnpm run lint` excludes the same five packages. When you deprecate another
+package, update the exclusions in `pnpm-workspace.yaml`, `tsconfig.json`, and
+`biome.json`.
 
 Try a single extension from a checkout:
 

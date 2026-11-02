@@ -3,12 +3,9 @@
 "@tian.zuo/pi-background-terminals": patch
 "@tian.zuo/pi-commit": patch
 "@tian.zuo/pi-find": patch
-"@tian.zuo/pi-goal": patch
 "@tian.zuo/pi-image-cache": patch
 "@tian.zuo/pi-repo-model": patch
 "@tian.zuo/pi-repo-skills": patch
-"@tian.zuo/pi-subagents": patch
-"@tian.zuo/pi-todo": patch
 "@tian.zuo/pi-token-speed": patch
 "@tian.zuo/pi-usage": patch
 "@tian.zuo/pi-web-search": patch
