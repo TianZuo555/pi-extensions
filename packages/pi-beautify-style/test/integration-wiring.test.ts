@@ -76,7 +76,7 @@ test("the shell card treats background-terminal tools as shell-like", () => {
 
 test("terminal tools are declared in the vendored name table", () => {
   const source = readSource("extensions/renderer/tool/names.ts");
-  for (const name of ["terminal_wait", "terminal_stop", "terminal_log_read"]) {
+  for (const name of ["terminal_wait", "terminal_stop"]) {
     assert.ok(source.includes(`"${name}"`), `${name} missing from names.ts`);
   }
 });

@@ -505,10 +505,16 @@ export class ToolGroupComponent extends Container {
 		const hint = `${fg("dim", "·")} ${fg(this.hintHovered ? "text" : "dim", hintText)}`;
 		const rowWidth = toolViewportWidth(width);
 		// 工具列表让位给展开提示：提示被截断的话，鼠标层要在行尾找 `click to show more`
-		// 就找不到，整张卡在窄宽度下点不开。名字截断后子行里仍能看全。
-		const head = ` ${fg(overallColor, "●")} ${label}: ${countText}`;
+		// 就找不到，整张卡在窄宽度下点不开。名字和计数截断后子行里仍能看全。
+		const dot = ` ${fg(overallColor, "●")} `;
 		const tail = ` ${hint}`;
-		const listRoom = rowWidth - visibleWidth(head) - visibleWidth(tail) - 3;
+		const tailWidth = visibleWidth(tail);
+		const headRoom = Math.max(0, rowWidth - tailWidth - visibleWidth(dot));
+		const headText = `${label}: ${countText}`;
+		const head =
+			dot +
+			(visibleWidth(headText) <= headRoom ? headText : headTruncateToWidth(headText, headRoom));
+		const listRoom = rowWidth - visibleWidth(head) - tailWidth - 3;
 		// 连一个工具名都放不下就不放列表：退化成 `· …` 只会把行撑爆。
 		const nameList =
 			names.size > 1 && listRoom >= 4

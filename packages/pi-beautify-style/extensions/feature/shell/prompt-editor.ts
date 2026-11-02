@@ -15,6 +15,7 @@
  */
 import { CustomEditor, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { config } from "../../config/config.ts";
+import { recordEditorFrame } from "../../utils/fullscreen-detect.ts";
 
 /** `❯ ` 固定 2 列：glyph + 尾随空格。 */
 const PROMPT_GLYPH = "❯";
@@ -43,6 +44,8 @@ export class PromptEditor extends CustomEditor {
 			if (lines.length > 2 && lines[1].startsWith("  ")) {
 				lines[1] = this.borderColor(PROMPT_GLYPH) + " " + lines[1].slice(2);
 			}
+			// regular 模式补丁按这一帧的块定位输入坞，不能按 `❯` 反查（用户可能粘贴提示符）。
+			recordEditorFrame(lines);
 			return lines;
 		} finally {
 			self.paddingX = saved;

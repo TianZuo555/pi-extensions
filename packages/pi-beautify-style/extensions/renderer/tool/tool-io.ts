@@ -61,6 +61,41 @@ export class ExpandedToolResultText {
 
 export type ToolIoSection = "input" | "output";
 
+/** 续行缩进最多占正文一半，且必须给正文留出这么多列。 */
+const HANG_INDENT_MIN_BODY = 8;
+
+/**
+ * 折行时保留源行缩进。
+ *
+ * pi-tui 的 `wrapTextWithAnsi` 在断行处吃掉行首空白，缩进的 stdout、JSON 和
+ * 嵌套列表续行会退回卡片左边，读起来像另一行。这里把缩进挂到每一行上；
+ * 缩进过深时截到正文一半，免得每行只剩一个字。
+ */
+function wrapOutputLine(
+	source: string,
+	width: number,
+	color: (text: string) => string,
+): string[] {
+	const indent = /^[ \t]*/.exec(source)?.[0].replace(/\t/g, "   ") ?? "";
+	const body = source.slice(indent.length);
+	if (!body) return [indent];
+	const hangWidth = Math.min(
+		indent.length,
+		Math.max(0, width - HANG_INDENT_MIN_BODY),
+		Math.floor(width / 2),
+	);
+	if (hangWidth <= 0) {
+		const parts = wrapTextWithAnsi(color(source), width);
+		return parts.length === 0 ? [color(source)] : parts;
+	}
+	const continuation = " ".repeat(hangWidth);
+	const parts = wrapTextWithAnsi(color(body), Math.max(1, width - hangWidth));
+	const wrapped = parts.length === 0 ? [color(body)] : parts;
+	// 所有行用同一个缩进：首行保留原文缩进，缩进过深时一并截到可用宽度内，
+	// 免得首行被车道线挤掉正文。
+	return wrapped.map((part) => continuation + part);
+}
+
 // Module-local token: /reload creates a fresh token, so stale view instances are
 // replaced instead of retaining their old render implementation.
 const EXPANDED_TOOL_IO_VIEW_GENERATION = Symbol("ccstyle-expanded-tool-io-view");
@@ -328,10 +363,9 @@ export class ExpandedToolIoView {
 					wrapped.push(...wrapInputLine(source, contentWidth, theme, this.inputCodeLine(index)));
 					continue;
 				}
-				const styled = theme.fg(bodyColor, source);
-				const parts = wrapTextWithAnsi(styled, contentWidth);
-				if (parts.length === 0) wrapped.push(styled);
-				else wrapped.push(...parts);
+				wrapped.push(
+					...wrapOutputLine(source, contentWidth, (text) => theme.fg(bodyColor, text)),
+				);
 			}
 			// Prefer source-line count so plain multi-line dumps always cap, even when
 			// theme/wrap measurements disagree slightly.
@@ -492,7 +526,7 @@ function bodyExceedsLineLimit(
 	for (const [index, source] of sourceLines.entries()) {
 		const parts = asInput
 			? wrapInputLine(source, contentWidth, theme, codeLine?.(index))
-			: wrapTextWithAnsi(theme.fg(bodyColor, source), contentWidth);
+			: wrapOutputLine(source, contentWidth, (text) => theme.fg(bodyColor, text));
 		total += Math.max(1, parts.length);
 		if (total > limit) return true;
 	}

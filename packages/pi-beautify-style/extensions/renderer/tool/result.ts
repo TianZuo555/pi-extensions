@@ -154,14 +154,32 @@ export function renderCollapsedToolResultToWidth(
 	);
 }
 
-/** 从头截断到宽度（保留开头、省略尾部），不插入 ANSI reset（背景卡片下安全）。 */
+/** 行首的一条终端序列（CSI 或 OSC）。截断时整条跳过，绝不拆到转义中间。 */
+const LEADING_SEQUENCE_RE = /^(?:\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07]*(?:\x07|\x1b\\))/;
+
+/**
+ * 从头截断到宽度（保留开头、省略尾部），不插入 ANSI reset（背景卡片下安全）。
+ * 带颜色的入参（组头计数）不会被切出 `\x1b[` 残段：序列只随被保留的字符进结果，
+ * 截断点之后没来得及生效的序列整体丢弃。
+ */
 export function headTruncateToWidth(text: string, width: number): string {
 	if (visibleWidth(text) <= width) return text;
 	if (width <= 1) return "…";
 	let left = "";
-	for (const char of Array.from(text)) {
+	let pending = "";
+	let offset = 0;
+	while (offset < text.length) {
+		const control = text.slice(offset).match(LEADING_SEQUENCE_RE)?.[0];
+		if (control) {
+			pending += control;
+			offset += control.length;
+			continue;
+		}
+		const char = String.fromCodePoint(text.codePointAt(offset)!);
 		if (visibleWidth(left + "…" + char) > width) break;
-		left += char;
+		left += pending + char;
+		pending = "";
+		offset += char.length;
 	}
 	return `${left}…`;
 }

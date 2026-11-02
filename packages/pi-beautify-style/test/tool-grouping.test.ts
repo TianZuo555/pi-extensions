@@ -7,8 +7,9 @@ import {
 	initTheme,
 } from "@earendil-works/pi-coding-agent";
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { Container, Spacer } from "@earendil-works/pi-tui";
+import { Container, Spacer, visibleWidth } from "@earendil-works/pi-tui";
 import { installToolGrouping, ToolGroupComponent } from "../extensions/renderer/tool/grouping.ts";
+import { toolViewportWidth } from "../extensions/renderer/tool/result.ts";
 import {
 	humanizeToolLabel,
 	renderToolSummary,
@@ -106,6 +107,57 @@ test("mixed tools group across three empty separators while edit/write and conte
 		parent.addChild(assistant);
 		parent.addChild(tool("bash", "after-content"));
 		assert.equal(parent.children.at(-1).toolCallId, "after-content");
+	} finally {
+		hooks.shutdown();
+	}
+});
+
+test("narrow group headers truncate the title, never the expand hint", () => {
+	const hooks = installToolGrouping(() => true);
+	try {
+		const parent = new Container() as any;
+		parent.addChild(started("read", "narrow-read", { path: "src/a.ts" }));
+		parent.addChild(started("bash", "narrow-bash", { command: "npm test" }));
+		parent.addChild(started("grep", "narrow-grep", { pattern: "needle" }));
+		const group = parent.children[0] as ToolGroupComponent;
+		for (const width of [60, 45]) {
+			const header = group.render(width)[1]!;
+			const plainHeader = header.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
+			assert.ok(
+				plainHeader.trimEnd().endsWith("click to show more"),
+				`hint stays whole at ${width}: ${plainHeader}`,
+			);
+			assert.equal(visibleWidth(header), toolViewportWidth(width));
+		}
+	} finally {
+		hooks.shutdown();
+	}
+});
+
+test("colored narrow headers never leave a partial escape behind the ellipsis", () => {
+	const hooks = installToolGrouping(() => true);
+	hooks.setTheme({
+		fg: (color: string, text: string) => `\x1b[${31 + (color.length % 6)}m${text}\x1b[0m`,
+	});
+	try {
+		const parent = new Container() as any;
+		parent.addChild(started("read", "ansi-read", { path: "src/a.ts" }));
+		parent.addChild(started("bash", "ansi-bash", { command: "npm test" }));
+		parent.addChild(started("grep", "ansi-grep", { pattern: "needle" }));
+		const group = parent.children[0] as ToolGroupComponent;
+		for (const width of [60, 45, 40]) {
+			const header = group.render(width)[1]!;
+			const unstyled = header.replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "");
+			assert.ok(
+				!unstyled.includes("\x1b"),
+				`truncated header keeps no partial escape at ${width}: ${JSON.stringify(header)}`,
+			);
+			assert.ok(
+				unstyled.trimEnd().endsWith("click to show more"),
+				`hint stays whole at ${width}: ${unstyled}`,
+			);
+			assert.ok(visibleWidth(header) <= toolViewportWidth(width));
+		}
 	} finally {
 		hooks.shutdown();
 	}
@@ -459,7 +511,8 @@ test("settled collapsed groups reuse the last render until inputs change", () =>
 		assert.match(themed.join("\n"), /<success>2<\/success> done/);
 
 		bash.updateResult({ content: [], isError: true });
-		const failed = group.render(160);
+		// 主题把 fg() 换成了 <tag> 标记： markup 计入宽度，窄一档就会截断计数。
+		const failed = group.render(220);
 		assert.notStrictEqual(failed, themed);
 		assert.match(failed.join("\n"), /<success>1<\/success> done/);
 		assert.match(failed.join("\n"), /<error>1<\/error> failed/);
