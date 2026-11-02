@@ -42,7 +42,7 @@
   },
   "dependencies": {
     "effect": "4.0.6",
-    "koffi": "^3.3.3"
+    "koffi": "^3.3.5"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
