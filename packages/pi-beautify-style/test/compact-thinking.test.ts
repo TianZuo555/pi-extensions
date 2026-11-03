@@ -598,6 +598,85 @@ test("completed run without duration never falls back to the loading label", () 
 	}
 });
 
+test("a leading markdown heading titles the card on any provider, mid-text headings do not", () => {
+	const dir = mkdtempSync(join(tmpdir(), "pi-compact-thinking-heading-"));
+	const previousDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = dir;
+	const { emit, pi } = runtime();
+	const ctx = themeCtx();
+	try {
+		installCompactThinking(pi, {
+			...config,
+			useSummaryTitlesAsThinkingTitle: true,
+			liveThinkingLines: 5,
+		});
+		emit("session_start", {}, ctx);
+
+		// Openai-completions providers send raw reasoning; a leading `## X` line is
+		// the only trustworthy heading, and it titles the card while it streams.
+		const active = {
+			role: "assistant",
+			api: "openai-completions",
+			timestamp: Date.now(),
+			content: [
+				{ type: "thinking", thinking: "## Plan\n\nRead the parser\n", thinkingSignature: "reasoning_content" },
+				{ type: "toolCall", name: "bash", arguments: {}, id: "c1" },
+			],
+		} as any;
+		emit("message_update", {
+			message: active,
+			assistantMessageEvent: { type: "thinking_start", contentIndex: 0 },
+		});
+		const liveComponent = new AssistantMessageComponent(active, true) as any;
+		liveComponent.updateContent(active);
+		const liveLines = renderText(liveComponent);
+		assert.ok(
+			liveLines.some((line) => /Plan/.test(line) && !line.includes("##")),
+			`live heading uses the markdown heading, got: ${JSON.stringify(liveLines)}`,
+		);
+		assert.ok(
+			!liveLines.some((line) => line.includes("## Plan")),
+			`the heading line leaves the preview body, got: ${JSON.stringify(liveLines)}`,
+		);
+		assert.ok(
+			liveLines.some((line) => line.includes("Read the parser")),
+			"the rest of the reasoning stays in the body",
+		);
+
+		// A `## status` line copied out of tool output mid-reasoning must not become
+		// the title (observed: `## main...origin/main`).
+		const quoted = {
+			role: "assistant",
+			api: "openai-completions",
+			timestamp: Date.now() + 1,
+			content: [
+				{
+					type: "thinking",
+					thinking: "Check the branch state\n\n## main...origin/main\n",
+					thinkingSignature: "reasoning_content",
+				},
+				{ type: "toolCall", name: "bash", arguments: {}, id: "c2" },
+			],
+		} as any;
+		const quotedComponent = new AssistantMessageComponent(quoted, true) as any;
+		quotedComponent.updateContent(quoted);
+		const quotedLines = renderText(quotedComponent);
+		assert.ok(
+			quotedLines.some((line) => line.includes("Thought") || line.includes("Thinking")),
+			`quoted heading is not a title, got: ${JSON.stringify(quotedLines)}`,
+		);
+		assert.ok(
+			!quotedLines.some((line) => line.trim().startsWith("main...origin/main")),
+			"the quoted line does not move into the heading",
+		);
+	} finally {
+		emit("session_shutdown", {}, ctx);
+		if (previousDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousDir;
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
 function previewMessage(thinking: string) {
 	return {
 		role: "assistant",

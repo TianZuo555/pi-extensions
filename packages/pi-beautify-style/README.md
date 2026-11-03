@@ -85,6 +85,11 @@ and restart Pi to change behavior.
 > Reasoning streams in a five-row window and hides completely once the run
 > ends (`Thought for 8s · ctrl+t to expand`). Press `ctrl+t` to open every
 > finished reasoning block; press it again to hide them.
+>
+> When the reasoning leads with a heading — `## Plan`, `**Plan**`, or an OpenAI
+> summary title — that heading becomes the card title while it streams, and stays
+> on the finished card (`Plan · Thought for 8s`). A heading copied out of tool
+> output mid-reasoning is ignored.
 
 > [!NOTE]
 > For Mermaid diagrams, set `markdown.mermaid` to `final` in

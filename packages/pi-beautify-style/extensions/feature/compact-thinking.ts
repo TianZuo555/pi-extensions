@@ -45,6 +45,11 @@ type RenderTui = {
 type AssistantMessageComponentLike = InstanceType<typeof AssistantMessageComponent>;
 
 export type CompactThinkingConfig = {
+	/**
+	 * Use a title that the reasoning leads with — an OpenAI Responses summary
+	 * heading or a leading `# Heading` / `**Bold**` line — as the card heading
+	 * instead of the `Thinking...` label. The title stays on the finished card.
+	 */
 	useSummaryTitlesAsThinkingTitle: boolean;
 	/**
 	 * Max reasoning rows shown **while** a run streams. Longer text scrolls inside
@@ -544,24 +549,53 @@ export class ThinkingPreviewBlock implements Component {
 	}
 }
 
-function parseSummaryPart(text: string): SummaryPart | undefined {
-	const match = /^\s*\*\*([^\n]+?)\*\*[ \t]*(?:\r?\n(?:\r?\n)?([\s\S]*))?\s*$/.exec(text);
-	if (!match) return undefined;
-	return { title: match[1].trim(), body: (match[2] ?? "").trim() };
+/**
+ * A title line is either `**Bold**` or an ATX heading (`#`..`######`), alone on its
+ * own line. Reasoning models label sections both ways; plain providers use neither.
+ */
+function matchTitleLine(line: string): string | undefined {
+	const bold = /^[ \t]*\*\*([^\n*]+?)\*\*[ \t]*$/.exec(line);
+	if (bold) return bold[1].trim();
+	const heading = /^[ \t]*#{1,6}[ \t]+([^\n]+?)[ \t]*$/.exec(line);
+	if (heading) return heading[1].trim();
+	return undefined;
 }
 
-function parseLatestStreamingSummary(text: string): SummaryPart | undefined {
-	// Providers do not consistently insert a blank line between streamed
-	// summary parts, so accept a bold title at the start of any source line.
-	const titlePattern = /(?:^|\r?\n)\s*\*\*([^\n*]+?)\*\*[ \t]*(?:\r?\n)?/g;
-	let latest: RegExpExecArray | undefined;
-	let match: RegExpExecArray | null;
-	while ((match = titlePattern.exec(text))) latest = match;
-	if (!latest) return parseSummaryPart(text);
+/**
+ * Title taken from the first non-empty line only. While text still streams, the
+ * trailing line can be a half-written heading (`## Pla`), so it is not trusted
+ * until a line break proves it complete.
+ */
+function parseLeadingTitle(text: string, streaming: boolean): SummaryPart | undefined {
+	const lines = text.split(/\r?\n/);
+	let index = 0;
+	while (index < lines.length && lines[index].trim() === "") index++;
+	if (index >= lines.length) return undefined;
+	if (streaming && index === lines.length - 1) return undefined;
+	const title = matchTitleLine(lines[index]);
+	if (!title) return undefined;
+	return { title, body: lines.slice(index + 1).join("\n").trim() };
+}
 
+function parseSummaryPart(text: string): SummaryPart | undefined {
+	return parseLeadingTitle(text, false);
+}
+
+function parseLatestTitle(text: string, streaming: boolean): SummaryPart | undefined {
+	// OpenAI Responses providers do not consistently insert a blank line between
+	// streamed summary parts, so a bold title can start on any source line. The
+	// newest title wins. Other providers use parseLeadingTitle: a mid-reasoning
+	// `## X` line is usually quoted output (`## main...origin/main`), not a title.
+	const lines = text.split(/\r?\n/);
+	let latestIndex = -1;
+	for (let i = 0; i < lines.length; i++) {
+		if (streaming && i === lines.length - 1) break;
+		if (matchTitleLine(lines[i])) latestIndex = i;
+	}
+	if (latestIndex < 0) return parseLeadingTitle(text, streaming);
 	return {
-		title: latest[1].trim(),
-		body: text.slice(latest.index + latest[0].length).trim(),
+		title: matchTitleLine(lines[latestIndex]) ?? "",
+		body: lines.slice(latestIndex + 1).join("\n").trim(),
 	};
 }
 
@@ -766,7 +800,7 @@ function compactThinking(pi: ExtensionAPI) {
 				if (!thinking) continue;
 				thinkingBlocks.push(thinking);
 
-				if (config.useSummaryTitlesAsThinkingTitle && isOpenAiResponsesMessage(message)) {
+				if (config.useSummaryTitlesAsThinkingTitle) {
 					const contentIsActive =
 						activeThinking?.messageTimestamp === message.timestamp &&
 						activeThinking.contentIndex === i;
@@ -774,13 +808,20 @@ function compactThinking(pi: ExtensionAPI) {
 					// completed summary parts. Prefer the live text so a newly arriving
 					// title immediately replaces the old one instead of appearing in its
 					// preview body. Once complete, the structured signature is canonical.
+					// OpenAI Responses concatenates several summary parts in one block, so
+					// only there does the newest title win; any other provider only gets a
+					// title from the leading line of its reasoning.
+					const titleFromText = (streaming: boolean) =>
+						isOpenAiResponsesMessage(message)
+							? (parseLatestTitle(thinking, streaming) ??
+								parseLeadingTitle(thinking, streaming))
+							: parseLeadingTitle(thinking, streaming);
+					const titleFromSignature = getLatestOpenAiSummary(
+						thinkingContent.thinkingSignature,
+					);
 					latestSummary = contentIsActive
-						? (parseLatestStreamingSummary(thinking) ??
-							getLatestOpenAiSummary(thinkingContent.thinkingSignature) ??
-							latestSummary)
-						: (getLatestOpenAiSummary(thinkingContent.thinkingSignature) ??
-							parseLatestStreamingSummary(thinking) ??
-							latestSummary);
+						? (titleFromText(true) ?? titleFromSignature ?? latestSummary)
+						: (titleFromSignature ?? titleFromText(false) ?? latestSummary);
 				}
 			}
 			const runEndIndex = i - 1;
@@ -813,10 +854,13 @@ function compactThinking(pi: ExtensionAPI) {
 					(durationText ? thinkingStyle(` · ${durationText}`) : "");
 			} else {
 				// Completed compact blocks use one provider-independent status line.
-				// 无时长记录（中断流/旧会话/entry 缺失或索引错位）时不回退到加载文案
-				// "Thinking..."：改用摘要标题或中性 "Thought"。
+				// A detected title stays in front of it, so the card keeps its identity
+				// after the run. 无时长记录（中断流/旧会话/entry 缺失或索引错位）时不回退到
+				// 加载文案 "Thinking..."：改用标题或中性 "Thought"。
+				const title = latestSummary?.title;
+				const status = durationText ? `Thought for ${durationText}` : undefined;
 				heading = thinkingStyle(
-					durationText ? `Thought for ${durationText}` : (latestSummary?.title ?? "Thought"),
+					title ? (status ? `${title} · ${status}` : title) : (status ?? "Thought"),
 				);
 			}
 			const previewSource = (latestSummary?.body ?? thinkingBlocks.join("\n\n")).trim();

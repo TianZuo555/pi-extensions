@@ -52,6 +52,12 @@ export type Config = {
 	expandedInputMaxLines: number;
 	expandedOutputMaxLines: number;
 	toolLabelClip: number;
+	/**
+	 * Title the reasoning card from a heading the reasoning leads with: an OpenAI
+	 * Responses summary heading, or a leading `# Heading` / `**Bold**` line. Other
+	 * providers get no title because their reasoning carries no reliable heading.
+	 * The title stays on the finished card (`Plan · Thought for 8s`).
+	 */
 	useSummaryTitlesAsThinkingTitle: boolean;
 	/**
 	 * Max reasoning rows shown **while** a run streams; longer text scrolls inside the
