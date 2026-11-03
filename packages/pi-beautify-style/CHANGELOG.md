@@ -1,5 +1,13 @@
 # @tian.zuo/pi-beautify-style
 
+## 0.3.0
+
+### Minor Changes
+
+- [#201](https://github.com/TianZuo555/pi-extensions/pull/201) [`fad61ea`](https://github.com/TianZuo555/pi-extensions/commit/fad61ea8cd833d5efc22c2e171507414f87e179a) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Use a leading `## Heading` (or `**Bold**` line) from the reasoning as the thinking card title on every provider, not only OpenAI Responses. The title shows while the reasoning streams and stays on the finished card (`Plan · Thought for 8s`). Headings quoted from tool output mid-reasoning are ignored.
+
+- [#201](https://github.com/TianZuo555/pi-extensions/pull/201) [`fad61ea`](https://github.com/TianZuo555/pi-extensions/commit/fad61ea8cd833d5efc22c2e171507414f87e179a) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Show the current reasoning step instead of `Thinking...` when the reasoning has no heading (DeepSeek, GLM, Kimi, and other `reasoning_content` models): `Step 3 · Check the CI config · 6s`. A step comes from an intent sentence (`Let me …`, `I'll …`, `让我…`), a lead such as `Plan:` or `Decision:`, or a rethink (`Actually, let me …`). Each label stays at least 800 ms, so fast thoughts do not flicker. The finished card keeps the last step and the count: `Check the CI config · Thought for 8s · 3 steps`.
+
 ## 0.2.0
 
 ### Minor Changes
