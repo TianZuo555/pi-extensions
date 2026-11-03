@@ -1,5 +1,11 @@
 # @tian.zuo/pi-rex
 
+## 0.1.1
+
+### Patch Changes
+
+- Ship `lib/` in the published package. Version 0.1.0 did not load: `index.ts` imports `./lib/rex-output.ts` and `./lib/prompt.ts`, but `files` left `lib/` out of the tarball.
+
 ## 0.1.0
 
 ### Minor Changes
