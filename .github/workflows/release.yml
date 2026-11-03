@@ -22,16 +22,43 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Pending changesets mean this run only opens or updates the release PR;
+  # nothing reaches npm, and the merged PR already passed CI. With no pending
+  # changesets, `changeset publish` runs.
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      publish: ${{ steps.plan.outputs.publish }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Detect pending changesets
+        id: plan
+        env:
+          DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+        run: |
+          if [ "${DRY_RUN}" = "true" ] || find .changeset -maxdepth 1 -type f -name '*.md' ! -name README.md | grep -q .; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
   # Publishing to npm is irreversible, and the Changesets release PR is opened
   # with the default GITHUB_TOKEN, so it never triggers `pull_request` CI.
-  # Gate every release on the full CI suite instead.
+  # Gate every publish on the full CI suite instead.
   verify:
+    needs: plan
+    if: needs.plan.outputs.publish == 'true'
     uses: ./.github/workflows/ci.yml
     with:
       full_suite: true
 
   release:
-    needs: verify
+    needs: [plan, verify]
+    # Runs after a passing verify, or without one when nothing is published.
+    if: ${{ !cancelled() && needs.plan.result == 'success' && (needs.verify.result == 'success' || (needs.verify.result == 'skipped' && needs.plan.outputs.publish != 'true')) }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
