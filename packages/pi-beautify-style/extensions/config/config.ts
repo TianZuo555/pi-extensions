@@ -54,9 +54,11 @@ export type Config = {
 	toolLabelClip: number;
 	/**
 	 * Title the reasoning card from a heading the reasoning leads with: an OpenAI
-	 * Responses summary heading, or a leading `# Heading` / `**Bold**` line. Other
-	 * providers get no title because their reasoning carries no reliable heading.
-	 * The title stays on the finished card (`Plan · Thought for 8s`).
+	 * Responses summary heading, or a leading `# Heading` / `**Bold**` line. Reasoning
+	 * without a heading shows its current step while it streams (`Step 3 · Check the
+	 * CI config`), taken from intent sentences such as `Let me …` or leads such as
+	 * `Plan:`. The title stays on the finished card (`Plan · Thought for 8s`, or
+	 * `Check the CI config · Thought for 8s · 3 steps`).
 	 */
 	useSummaryTitlesAsThinkingTitle: boolean;
 	/**

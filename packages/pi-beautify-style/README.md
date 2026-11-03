@@ -90,6 +90,13 @@ and restart Pi to change behavior.
 > summary title — that heading becomes the card title while it streams, and stays
 > on the finished card (`Plan · Thought for 8s`). A heading copied out of tool
 > output mid-reasoning is ignored.
+>
+> Raw reasoning with no heading (DeepSeek, GLM, Kimi, and other
+> `reasoning_content` models) shows its current step instead of `Thinking...`:
+> `Step 3 · Check the CI config · 6s`. A step comes from an intent sentence
+> (`Let me …`, `I'll …`, `让我…`), a lead such as `Plan:` or `Decision:`, or a
+> rethink (`Actually, let me …`). The finished card keeps the last step and the
+> count: `Check the CI config · Thought for 8s · 3 steps`.
 
 > [!NOTE]
 > For Mermaid diagrams, set `markdown.mermaid` to `final` in

@@ -677,6 +677,59 @@ test("a leading markdown heading titles the card on any provider, mid-text headi
 	}
 });
 
+test("raw reasoning without a title shows the current step, held against flicker", () => {
+	const dir = mkdtempSync(join(tmpdir(), "pi-compact-thinking-steps-"));
+	const previousDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = dir;
+	const { emit, pi } = runtime();
+	const ctx = themeCtx();
+	const realNow = Date.now;
+	let now = realNow();
+	Date.now = () => now;
+	try {
+		installCompactThinking(pi, { ...config, useSummaryTitlesAsThinkingTitle: true });
+		emit("session_start", {}, ctx);
+		const message = (thinking: string) =>
+			({
+				role: "assistant",
+				api: "openai-completions",
+				timestamp: 1000,
+				content: [{ type: "thinking", thinking, thinkingSignature: "reasoning_content" }],
+			}) as any;
+		const first = message("The user wants X.\n\nLet me check the CI config.\n");
+		emit("message_update", {
+			message: first,
+			assistantMessageEvent: { type: "thinking_start", contentIndex: 0 },
+		});
+		const component = new AssistantMessageComponent(first, true) as any;
+		component.updateContent(first);
+		const heading = () => renderText(component)[0];
+		assert.match(heading(), /^Step 1 · Check the CI config · /);
+
+		// A new step inside the hold window keeps the old label on screen.
+		const second = message("The user wants X.\n\nLet me check the CI config.\n\nLet me read the logs.\n");
+		now += 100;
+		component.updateContent(second);
+		assert.match(heading(), /^Step 1 · Check the CI config/);
+		now += 1000;
+		component.updateContent(second);
+		assert.match(heading(), /^Step 2 · Read the logs · /);
+
+		emit("message_update", {
+			message: second,
+			assistantMessageEvent: { type: "text_start", contentIndex: 1 },
+		});
+		component.updateContent(second);
+		assert.match(heading(), /^Read the logs · Thought for .+ · 2 steps/);
+	} finally {
+		Date.now = realNow;
+		emit("session_shutdown", {}, ctx);
+		if (previousDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousDir;
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
 function previewMessage(thinking: string) {
 	return {
 		role: "assistant",

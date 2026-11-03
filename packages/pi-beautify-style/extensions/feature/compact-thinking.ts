@@ -30,6 +30,12 @@ import {
 } from "../renderer/compact-mode.ts";
 import { refreshMountedTranscript } from "../renderer/transcript-refresh.ts";
 import {
+	formatStepCount,
+	formatThinkingStep,
+	parseThinkingSteps,
+	type ThinkingStep,
+} from "./thinking-steps.ts";
+import {
 	COMPACT_THINKING_OWNER,
 	COMPACT_THINKING_PATCH_KEY,
 	patchRegistry,
@@ -49,6 +55,9 @@ export type CompactThinkingConfig = {
 	 * Use a title that the reasoning leads with — an OpenAI Responses summary
 	 * heading or a leading `# Heading` / `**Bold**` line — as the card heading
 	 * instead of the `Thinking...` label. The title stays on the finished card.
+	 * Reasoning without a title shows its current step instead
+	 * (`Step 3 · Check the CI config`); the finished card keeps the last step and
+	 * the step count.
 	 */
 	useSummaryTitlesAsThinkingTitle: boolean;
 	/**
@@ -132,6 +141,8 @@ const config: CompactThinkingConfig = {
 };
 
 const DURATION_ENTRY_TYPE = "compact-thinking-duration";
+/** A live step label stays at least this long before the next one replaces it. */
+const STEP_LABEL_MIN_MS = 800;
 
 /** 当前激活 session 的只读查询委托（compact 渲染层使用）。 */
 type ThinkingDurationQuery = (messageTimestamp: number) => number | undefined;
@@ -690,6 +701,30 @@ function compactThinking(pi: ExtensionAPI) {
 	let animationFrame = 0;
 	let compactSummaryActive = false;
 	let patchInstalled = true;
+	/** Live step label on screen per run (`timestamp:runStartIndex`), for the flicker hold. */
+	const shownSteps = new Map<string, { label: string; count: number; shownAt: number }>();
+	let stepMemo: { text: string; streaming: boolean; steps: ThinkingStep[] } | undefined;
+
+	function stepsOf(text: string, streaming: boolean): ThinkingStep[] {
+		if (stepMemo?.text !== text || stepMemo.streaming !== streaming) {
+			stepMemo = { text, streaming, steps: parseThinkingSteps(text, streaming) };
+		}
+		return stepMemo.steps;
+	}
+
+	/** Keep the shown step for STEP_LABEL_MIN_MS so fast thoughts do not flicker. */
+	function heldStep(key: string, label: string, count: number) {
+		const now = Date.now();
+		const shown = shownSteps.get(key);
+		if (shown && shown.label !== label && now - shown.shownAt < STEP_LABEL_MIN_MS) return shown;
+		if (shown?.label === label) {
+			shown.count = count;
+			return shown;
+		}
+		const next = { label, count, shownAt: now };
+		shownSteps.set(key, next);
+		return next;
+	}
 
 	function thinkingStyle(text: string) {
 		return styleCompactThinkingText(text, activeTheme);
@@ -792,6 +827,8 @@ function compactThinking(pi: ExtensionAPI) {
 						(previous.type === "thinking" && previous.thinking.trim()),
 				);
 			const thinkingBlocks: string[] = [];
+			// Untrimmed text: a trailing newline proves the last sentence is complete.
+			const rawThinkingBlocks: string[] = [];
 			let latestSummary: SummaryPart | undefined;
 			for (; i < message.content.length; i++) {
 				const thinkingContent = message.content[i];
@@ -799,6 +836,7 @@ function compactThinking(pi: ExtensionAPI) {
 				const thinking = thinkingContent.thinking.trim();
 				if (!thinking) continue;
 				thinkingBlocks.push(thinking);
+				rawThinkingBlocks.push(thinkingContent.thinking);
 
 				if (config.useSummaryTitlesAsThinkingTitle) {
 					const contentIsActive =
@@ -842,8 +880,23 @@ function compactThinking(pi: ExtensionAPI) {
 			const durationMs = active ? elapsedMs : completedMs;
 			const durationText = durationMs === undefined ? undefined : formatThoughtDuration(durationMs);
 
+			const steps =
+				config.useSummaryTitlesAsThinkingTitle && !latestSummary
+					? stepsOf(rawThinkingBlocks.join("\n\n"), active)
+					: [];
+			const lastStep = steps.at(-1);
+
 			let heading: string;
-			if (active && latestSummary) {
+			if (active && lastStep) {
+				const shown = heldStep(
+					`${message.timestamp}:${runStartIndex}`,
+					formatThinkingStep(lastStep),
+					steps.length,
+				);
+				heading =
+					animatedText(`Step ${shown.count} · ${shown.label}`, thinkingStyle, true) +
+					(durationText ? thinkingStyle(` · ${durationText}`) : "");
+			} else if (active && latestSummary) {
 				heading =
 					animatedText(latestSummary.title, summaryTitleStyle, true) +
 					(durationText ? thinkingStyle(` · ${durationText}`) : "");
@@ -857,11 +910,14 @@ function compactThinking(pi: ExtensionAPI) {
 				// A detected title stays in front of it, so the card keeps its identity
 				// after the run. 无时长记录（中断流/旧会话/entry 缺失或索引错位）时不回退到
 				// 加载文案 "Thinking..."：改用标题或中性 "Thought"。
-				const title = latestSummary?.title;
-				const status = durationText ? `Thought for ${durationText}` : undefined;
-				heading = thinkingStyle(
-					title ? (status ? `${title} · ${status}` : title) : (status ?? "Thought"),
-				);
+				// Without a title, the last step names the card and the step count follows.
+				const title = latestSummary?.title ?? (lastStep && formatThinkingStep(lastStep));
+				const parts = [
+					title,
+					durationText ? `Thought for ${durationText}` : undefined,
+					lastStep ? formatStepCount(steps.length) : undefined,
+				].filter((part): part is string => Boolean(part));
+				heading = thinkingStyle(parts.length > 0 ? parts.join(" · ") : "Thought");
 			}
 			const previewSource = (latestSummary?.body ?? thinkingBlocks.join("\n\n")).trim();
 			self.contentContainer.addChild(
@@ -968,6 +1024,7 @@ function compactThinking(pi: ExtensionAPI) {
 			startedAt: Date.now(),
 		};
 		streamingComponents.clear();
+		shownSteps.clear();
 		animationFrame = 0;
 
 		// Depending on event-listener order, Pi may have rendered the empty
@@ -1003,6 +1060,7 @@ function compactThinking(pi: ExtensionAPI) {
 		} as DurationEntryData);
 
 		activeThinking = undefined;
+		shownSteps.clear();
 		stopAnimationTimerIfIdle();
 
 		const components = [...streamingComponents];
