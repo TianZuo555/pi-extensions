@@ -30,6 +30,12 @@ import {
 } from "../renderer/compact-mode.ts";
 import { refreshMountedTranscript } from "../renderer/transcript-refresh.ts";
 import {
+	formatStepCount,
+	formatThinkingStep,
+	parseThinkingSteps,
+	type ThinkingStep,
+} from "./thinking-steps.ts";
+import {
 	COMPACT_THINKING_OWNER,
 	COMPACT_THINKING_PATCH_KEY,
 	patchRegistry,
@@ -45,6 +51,14 @@ type RenderTui = {
 type AssistantMessageComponentLike = InstanceType<typeof AssistantMessageComponent>;
 
 export type CompactThinkingConfig = {
+	/**
+	 * Use a title that the reasoning leads with — an OpenAI Responses summary
+	 * heading or a leading `# Heading` / `**Bold**` line — as the card heading
+	 * instead of the `Thinking...` label. The title stays on the finished card.
+	 * Reasoning without a title shows its current step instead
+	 * (`Step 3 · Check the CI config`); the finished card keeps the last step and
+	 * the step count.
+	 */
 	useSummaryTitlesAsThinkingTitle: boolean;
 	/**
 	 * Max reasoning rows shown **while** a run streams. Longer text scrolls inside
@@ -127,6 +141,8 @@ const config: CompactThinkingConfig = {
 };
 
 const DURATION_ENTRY_TYPE = "compact-thinking-duration";
+/** A live step label stays at least this long before the next one replaces it. */
+const STEP_LABEL_MIN_MS = 800;
 
 /** 当前激活 session 的只读查询委托（compact 渲染层使用）。 */
 type ThinkingDurationQuery = (messageTimestamp: number) => number | undefined;
@@ -544,24 +560,53 @@ export class ThinkingPreviewBlock implements Component {
 	}
 }
 
-function parseSummaryPart(text: string): SummaryPart | undefined {
-	const match = /^\s*\*\*([^\n]+?)\*\*[ \t]*(?:\r?\n(?:\r?\n)?([\s\S]*))?\s*$/.exec(text);
-	if (!match) return undefined;
-	return { title: match[1].trim(), body: (match[2] ?? "").trim() };
+/**
+ * A title line is either `**Bold**` or an ATX heading (`#`..`######`), alone on its
+ * own line. Reasoning models label sections both ways; plain providers use neither.
+ */
+function matchTitleLine(line: string): string | undefined {
+	const bold = /^[ \t]*\*\*([^\n*]+?)\*\*[ \t]*$/.exec(line);
+	if (bold) return bold[1].trim();
+	const heading = /^[ \t]*#{1,6}[ \t]+([^\n]+?)[ \t]*$/.exec(line);
+	if (heading) return heading[1].trim();
+	return undefined;
 }
 
-function parseLatestStreamingSummary(text: string): SummaryPart | undefined {
-	// Providers do not consistently insert a blank line between streamed
-	// summary parts, so accept a bold title at the start of any source line.
-	const titlePattern = /(?:^|\r?\n)\s*\*\*([^\n*]+?)\*\*[ \t]*(?:\r?\n)?/g;
-	let latest: RegExpExecArray | undefined;
-	let match: RegExpExecArray | null;
-	while ((match = titlePattern.exec(text))) latest = match;
-	if (!latest) return parseSummaryPart(text);
+/**
+ * Title taken from the first non-empty line only. While text still streams, the
+ * trailing line can be a half-written heading (`## Pla`), so it is not trusted
+ * until a line break proves it complete.
+ */
+function parseLeadingTitle(text: string, streaming: boolean): SummaryPart | undefined {
+	const lines = text.split(/\r?\n/);
+	let index = 0;
+	while (index < lines.length && lines[index].trim() === "") index++;
+	if (index >= lines.length) return undefined;
+	if (streaming && index === lines.length - 1) return undefined;
+	const title = matchTitleLine(lines[index]);
+	if (!title) return undefined;
+	return { title, body: lines.slice(index + 1).join("\n").trim() };
+}
 
+function parseSummaryPart(text: string): SummaryPart | undefined {
+	return parseLeadingTitle(text, false);
+}
+
+function parseLatestTitle(text: string, streaming: boolean): SummaryPart | undefined {
+	// OpenAI Responses providers do not consistently insert a blank line between
+	// streamed summary parts, so a bold title can start on any source line. The
+	// newest title wins. Other providers use parseLeadingTitle: a mid-reasoning
+	// `## X` line is usually quoted output (`## main...origin/main`), not a title.
+	const lines = text.split(/\r?\n/);
+	let latestIndex = -1;
+	for (let i = 0; i < lines.length; i++) {
+		if (streaming && i === lines.length - 1) break;
+		if (matchTitleLine(lines[i])) latestIndex = i;
+	}
+	if (latestIndex < 0) return parseLeadingTitle(text, streaming);
 	return {
-		title: latest[1].trim(),
-		body: text.slice(latest.index + latest[0].length).trim(),
+		title: matchTitleLine(lines[latestIndex]) ?? "",
+		body: lines.slice(latestIndex + 1).join("\n").trim(),
 	};
 }
 
@@ -656,6 +701,30 @@ function compactThinking(pi: ExtensionAPI) {
 	let animationFrame = 0;
 	let compactSummaryActive = false;
 	let patchInstalled = true;
+	/** Live step label on screen per run (`timestamp:runStartIndex`), for the flicker hold. */
+	const shownSteps = new Map<string, { label: string; count: number; shownAt: number }>();
+	let stepMemo: { text: string; streaming: boolean; steps: ThinkingStep[] } | undefined;
+
+	function stepsOf(text: string, streaming: boolean): ThinkingStep[] {
+		if (stepMemo?.text !== text || stepMemo.streaming !== streaming) {
+			stepMemo = { text, streaming, steps: parseThinkingSteps(text, streaming) };
+		}
+		return stepMemo.steps;
+	}
+
+	/** Keep the shown step for STEP_LABEL_MIN_MS so fast thoughts do not flicker. */
+	function heldStep(key: string, label: string, count: number) {
+		const now = Date.now();
+		const shown = shownSteps.get(key);
+		if (shown && shown.label !== label && now - shown.shownAt < STEP_LABEL_MIN_MS) return shown;
+		if (shown?.label === label) {
+			shown.count = count;
+			return shown;
+		}
+		const next = { label, count, shownAt: now };
+		shownSteps.set(key, next);
+		return next;
+	}
 
 	function thinkingStyle(text: string) {
 		return styleCompactThinkingText(text, activeTheme);
@@ -758,29 +827,46 @@ function compactThinking(pi: ExtensionAPI) {
 						(previous.type === "thinking" && previous.thinking.trim()),
 				);
 			const thinkingBlocks: string[] = [];
+			// Untrimmed text: a trailing newline proves the last sentence is complete.
+			const rawThinkingBlocks: string[] = [];
 			let latestSummary: SummaryPart | undefined;
+			const responses = isOpenAiResponsesMessage(message);
 			for (; i < message.content.length; i++) {
 				const thinkingContent = message.content[i];
 				if (thinkingContent.type !== "thinking") break;
 				const thinking = thinkingContent.thinking.trim();
 				if (!thinking) continue;
 				thinkingBlocks.push(thinking);
+				rawThinkingBlocks.push(thinkingContent.thinking);
 
-				if (config.useSummaryTitlesAsThinkingTitle && isOpenAiResponsesMessage(message)) {
+				if (config.useSummaryTitlesAsThinkingTitle) {
 					const contentIsActive =
 						activeThinking?.messageTimestamp === message.timestamp &&
 						activeThinking.contentIndex === i;
+					// Raw reasoning: a block's leading title names the card and leaves that
+					// block's body. Every block of the run stays in the preview.
+					if (!responses) {
+						const leading = parseLeadingTitle(thinking, contentIsActive);
+						if (leading) {
+							latestSummary = leading;
+							thinkingBlocks[thinkingBlocks.length - 1] = leading.body;
+						}
+						continue;
+					}
 					// During streaming, thinkingSignature may contain only the previously
 					// completed summary parts. Prefer the live text so a newly arriving
 					// title immediately replaces the old one instead of appearing in its
 					// preview body. Once complete, the structured signature is canonical.
+					// OpenAI Responses concatenates several summary parts in one block, so
+					// the newest title wins and its summary body is the preview.
+					const titleFromText = (streaming: boolean) =>
+						parseLatestTitle(thinking, streaming) ?? parseLeadingTitle(thinking, streaming);
+					const titleFromSignature = getLatestOpenAiSummary(
+						thinkingContent.thinkingSignature,
+					);
 					latestSummary = contentIsActive
-						? (parseLatestStreamingSummary(thinking) ??
-							getLatestOpenAiSummary(thinkingContent.thinkingSignature) ??
-							latestSummary)
-						: (getLatestOpenAiSummary(thinkingContent.thinkingSignature) ??
-							parseLatestStreamingSummary(thinking) ??
-							latestSummary);
+						? (titleFromText(true) ?? titleFromSignature ?? latestSummary)
+						: (titleFromSignature ?? titleFromText(false) ?? latestSummary);
 				}
 			}
 			const runEndIndex = i - 1;
@@ -801,8 +887,23 @@ function compactThinking(pi: ExtensionAPI) {
 			const durationMs = active ? elapsedMs : completedMs;
 			const durationText = durationMs === undefined ? undefined : formatThoughtDuration(durationMs);
 
+			const steps =
+				config.useSummaryTitlesAsThinkingTitle && !latestSummary
+					? stepsOf(rawThinkingBlocks.join("\n\n"), active)
+					: [];
+			const lastStep = steps.at(-1);
+
 			let heading: string;
-			if (active && latestSummary) {
+			if (active && lastStep) {
+				const shown = heldStep(
+					`${message.timestamp}:${runStartIndex}`,
+					formatThinkingStep(lastStep),
+					steps.length,
+				);
+				heading =
+					animatedText(`Step ${shown.count} · ${shown.label}`, thinkingStyle, true) +
+					(durationText ? thinkingStyle(` · ${durationText}`) : "");
+			} else if (active && latestSummary) {
 				heading =
 					animatedText(latestSummary.title, summaryTitleStyle, true) +
 					(durationText ? thinkingStyle(` · ${durationText}`) : "");
@@ -813,13 +914,20 @@ function compactThinking(pi: ExtensionAPI) {
 					(durationText ? thinkingStyle(` · ${durationText}`) : "");
 			} else {
 				// Completed compact blocks use one provider-independent status line.
-				// 无时长记录（中断流/旧会话/entry 缺失或索引错位）时不回退到加载文案
-				// "Thinking..."：改用摘要标题或中性 "Thought"。
-				heading = thinkingStyle(
-					durationText ? `Thought for ${durationText}` : (latestSummary?.title ?? "Thought"),
-				);
+				// A detected title stays in front of it, so the card keeps its identity
+				// after the run. 无时长记录（中断流/旧会话/entry 缺失或索引错位）时不回退到
+				// 加载文案 "Thinking..."：改用标题或中性 "Thought"。
+				// Without a title, the last step names the card and the step count follows.
+				const title = latestSummary?.title ?? (lastStep && formatThinkingStep(lastStep));
+				const parts = [
+					title,
+					durationText ? `Thought for ${durationText}` : undefined,
+					lastStep ? formatStepCount(steps.length) : undefined,
+				].filter((part): part is string => Boolean(part));
+				heading = thinkingStyle(parts.length > 0 ? parts.join(" · ") : "Thought");
 			}
-			const previewSource = (latestSummary?.body ?? thinkingBlocks.join("\n\n")).trim();
+			const fullRun = thinkingBlocks.filter(Boolean).join("\n\n");
+			const previewSource = (responses ? (latestSummary?.body ?? fullRun) : fullRun).trim();
 			self.contentContainer.addChild(
 				new ThinkingPreviewBlock(
 					heading,
@@ -924,6 +1032,7 @@ function compactThinking(pi: ExtensionAPI) {
 			startedAt: Date.now(),
 		};
 		streamingComponents.clear();
+		shownSteps.clear();
 		animationFrame = 0;
 
 		// Depending on event-listener order, Pi may have rendered the empty
@@ -959,6 +1068,7 @@ function compactThinking(pi: ExtensionAPI) {
 		} as DurationEntryData);
 
 		activeThinking = undefined;
+		shownSteps.clear();
 		stopAnimationTimerIfIdle();
 
 		const components = [...streamingComponents];
