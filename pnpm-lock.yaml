@@ -71,8 +71,8 @@ importers:
         specifier: ^1.5.0
         version: 1.5.0(@aws-sdk/credential-provider-node@3.972.87)(@modelcontextprotocol/sdk@1.32.1(zod@4.6.7))(@smithy/signature-v4@5.7.4)(ws@8.22.0)(zod@4.6.7)
       effect:
-        specifier: 4.0.6
-        version: 4.0.6
+        specifier: 4.1.1
+        version: 4.1.1
       proper-lockfile:
         specifier: 4.1.2
         version: 4.1.2
@@ -123,8 +123,8 @@ importers:
         specifier: ^1.5.0
         version: 1.5.0
       effect:
-        specifier: 4.0.6
-        version: 4.0.6
+        specifier: 4.1.1
+        version: 4.1.1
       koffi:
         specifier: ^3.3.5
         version: 3.3.5
@@ -169,8 +169,8 @@ importers:
         specifier: ^1.5.0
         version: 1.5.0(@aws-sdk/credential-provider-node@3.972.87)(@modelcontextprotocol/sdk@1.32.1(zod@4.6.7))(@smithy/signature-v4@5.7.4)(ws@8.22.0)(zod@4.6.7)
       effect:
-        specifier: 4.0.6
-        version: 4.0.6
+        specifier: 4.1.1
+        version: 4.1.1
     devDependencies:
       '@effect/language-service':
         specifier: ^0.87.5
@@ -213,8 +213,8 @@ importers:
         specifier: ^1.5.0
         version: 1.5.0
       effect:
-        specifier: 4.0.6
-        version: 4.0.6
+        specifier: 4.1.1
+        version: 4.1.1
       semver:
         specifier: ^7.8.5
         version: 7.8.5
@@ -253,8 +253,8 @@ importers:
         specifier: ^1.5.0
         version: 1.5.0
       effect:
-        specifier: 4.0.6
-        version: 4.0.6
+        specifier: 4.1.1
+        version: 4.1.1
       minimatch:
         specifier: ^11.0.1
         version: 11.0.3
@@ -281,8 +281,8 @@ importers:
         specifier: ^1.5.0
         version: 1.5.0
       effect:
-        specifier: 4.0.6
-        version: 4.0.6
+        specifier: 4.1.1
+        version: 4.1.1
     devDependencies:
       '@effect/language-service':
         specifier: ^0.87.5
@@ -303,8 +303,8 @@ importers:
         specifier: ^1.5.0
         version: 1.5.0
       effect:
-        specifier: 4.0.6
-        version: 4.0.6
+        specifier: 4.1.1
+        version: 4.1.1
     devDependencies:
       '@effect/language-service':
         specifier: ^0.87.5
@@ -322,8 +322,8 @@ importers:
         specifier: ^1.5.0
         version: 1.5.0
       effect:
-        specifier: 4.0.6
-        version: 4.0.6
+        specifier: 4.1.1
+        version: 4.1.1
     devDependencies:
       '@effect/language-service':
         specifier: ^0.87.5
@@ -351,8 +351,8 @@ importers:
         specifier: ^1.5.0
         version: 1.5.0(@aws-sdk/credential-provider-node@3.972.87)(@modelcontextprotocol/sdk@1.32.1(zod@4.6.7))(@smithy/signature-v4@5.7.4)(ws@8.22.0)(zod@4.6.7)
       effect:
-        specifier: 4.0.6
-        version: 4.0.6
+        specifier: 4.1.1
+        version: 4.1.1
     devDependencies:
       '@effect/language-service':
         specifier: ^0.87.5
@@ -370,8 +370,8 @@ importers:
         specifier: ^1.5.0
         version: 1.5.0
       effect:
-        specifier: 4.0.6
-        version: 4.0.6
+        specifier: 4.1.1
+        version: 4.1.1
       playwriter:
         specifier: 0.9.0
         version: 0.9.0(@types/node@26.6.6)
@@ -398,8 +398,8 @@ importers:
         specifier: ^0.19.6
         version: 0.19.6
       effect:
-        specifier: 4.0.6
-        version: 4.0.6
+        specifier: 4.1.1
+        version: 4.1.1
       linkedom:
         specifier: ^0.18.14
         version: 0.18.14
@@ -1806,8 +1806,8 @@ packages:
   ee-first@1.1.1:
     resolution: {integrity: sha512-WMwm9LhRUo+WUaRN+vRuETqG89IgZphVSNkdFgeb6sS/E4OrDIN7t48CAewSHXc6C8lefD8KKfr5vY61brQlow==}
 
-  effect@4.0.6:
-    resolution: {integrity: sha512-Tc3mkzuLR6t6P9dhLt0D2GrxYtmU5td4XEJEiXCmILz53IRIfJyHsKZWjTA3xEjiwpNTtXBgI4iqYPxMztBDrw==}
+  effect@4.1.1:
+    resolution: {integrity: sha512-XYu65BrcmNqu5i7PPvP4dqL+R5ma37zIsfuSPjcn78mog+6e5PkilNg7Xo+pBpjXJYlWEIpH4j91tMrfW05CMw==}
 
   encodeurl@2.0.0:
     resolution: {integrity: sha512-Q0n9HRi4m6JuGIV1eFlmvJB7ZEVxu93IrMyiMsGC0lrMJMWzRgx6WGquyfQgZVb31vhGgXnfmPNNXmxnOkRBrg==}
@@ -4112,7 +4112,7 @@ snapshots:
 
   ee-first@1.1.1: {}
 
-  effect@4.0.6: {}
+  effect@4.1.1: {}
 
   encodeurl@2.0.0: {}
 
