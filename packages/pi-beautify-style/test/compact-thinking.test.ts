@@ -677,6 +677,50 @@ test("a leading markdown heading titles the card on any provider, mid-text headi
 	}
 });
 
+test("a leading title keeps every later raw reasoning block in the preview", () => {
+	const dir = mkdtempSync(join(tmpdir(), "pi-compact-thinking-multiblock-"));
+	const previousDir = process.env.PI_CODING_AGENT_DIR;
+	process.env.PI_CODING_AGENT_DIR = dir;
+	const { emit, pi } = runtime();
+	const ctx = themeCtx();
+	try {
+		installCompactThinking(pi, {
+			...config,
+			useSummaryTitlesAsThinkingTitle: true,
+			liveThinkingLines: 5,
+		});
+		emit("session_start", {}, ctx);
+		const message = {
+			role: "assistant",
+			api: "openai-completions",
+			timestamp: Date.now(),
+			content: [
+				{ type: "thinking", thinking: "## Plan\nInspect the config", thinkingSignature: "reasoning_content" },
+				{ type: "thinking", thinking: "The config reveals the problem", thinkingSignature: "reasoning_content" },
+			],
+		} as any;
+		emit("message_update", {
+			message,
+			assistantMessageEvent: { type: "thinking_start", contentIndex: 1 },
+		});
+		const component = new AssistantMessageComponent(message, true) as any;
+		component.updateContent(message);
+		const lines = renderText(component);
+		assert.match(lines[0], /^Plan/, `the first block titles the card, got: ${JSON.stringify(lines)}`);
+		assert.ok(lines.includes("Inspect the config"), `first body kept, got: ${JSON.stringify(lines)}`);
+		assert.ok(
+			lines.includes("The config reveals the problem"),
+			`later block kept, got: ${JSON.stringify(lines)}`,
+		);
+		assert.ok(!lines.some((line) => line.includes("## Plan")), "the title line leaves the body");
+	} finally {
+		emit("session_shutdown", {}, ctx);
+		if (previousDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+		else process.env.PI_CODING_AGENT_DIR = previousDir;
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
 test("raw reasoning without a title shows the current step, held against flicker", () => {
 	const dir = mkdtempSync(join(tmpdir(), "pi-compact-thinking-steps-"));
 	const previousDir = process.env.PI_CODING_AGENT_DIR;

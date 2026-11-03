@@ -830,6 +830,7 @@ function compactThinking(pi: ExtensionAPI) {
 			// Untrimmed text: a trailing newline proves the last sentence is complete.
 			const rawThinkingBlocks: string[] = [];
 			let latestSummary: SummaryPart | undefined;
+			const responses = isOpenAiResponsesMessage(message);
 			for (; i < message.content.length; i++) {
 				const thinkingContent = message.content[i];
 				if (thinkingContent.type !== "thinking") break;
@@ -842,18 +843,24 @@ function compactThinking(pi: ExtensionAPI) {
 					const contentIsActive =
 						activeThinking?.messageTimestamp === message.timestamp &&
 						activeThinking.contentIndex === i;
+					// Raw reasoning: a block's leading title names the card and leaves that
+					// block's body. Every block of the run stays in the preview.
+					if (!responses) {
+						const leading = parseLeadingTitle(thinking, contentIsActive);
+						if (leading) {
+							latestSummary = leading;
+							thinkingBlocks[thinkingBlocks.length - 1] = leading.body;
+						}
+						continue;
+					}
 					// During streaming, thinkingSignature may contain only the previously
 					// completed summary parts. Prefer the live text so a newly arriving
 					// title immediately replaces the old one instead of appearing in its
 					// preview body. Once complete, the structured signature is canonical.
 					// OpenAI Responses concatenates several summary parts in one block, so
-					// only there does the newest title win; any other provider only gets a
-					// title from the leading line of its reasoning.
+					// the newest title wins and its summary body is the preview.
 					const titleFromText = (streaming: boolean) =>
-						isOpenAiResponsesMessage(message)
-							? (parseLatestTitle(thinking, streaming) ??
-								parseLeadingTitle(thinking, streaming))
-							: parseLeadingTitle(thinking, streaming);
+						parseLatestTitle(thinking, streaming) ?? parseLeadingTitle(thinking, streaming);
 					const titleFromSignature = getLatestOpenAiSummary(
 						thinkingContent.thinkingSignature,
 					);
@@ -919,7 +926,8 @@ function compactThinking(pi: ExtensionAPI) {
 				].filter((part): part is string => Boolean(part));
 				heading = thinkingStyle(parts.length > 0 ? parts.join(" · ") : "Thought");
 			}
-			const previewSource = (latestSummary?.body ?? thinkingBlocks.join("\n\n")).trim();
+			const fullRun = thinkingBlocks.filter(Boolean).join("\n\n");
+			const previewSource = (responses ? (latestSummary?.body ?? fullRun) : fullRun).trim();
 			self.contentContainer.addChild(
 				new ThinkingPreviewBlock(
 					heading,
