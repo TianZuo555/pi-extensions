@@ -5,23 +5,26 @@
 export const REX_SECTION = "rex";
 
 /**
- * Replaces the Rex session-naming paragraph when the session has more than one
- * tab. A session is the parent of its tabs, so a later tab must not rename it.
+ * Replaces the Rex session-naming paragraph when automatic naming is on.
+ * The extension does the naming, so the agent must not compete with it.
  */
-export const KEEP_SESSION_INSTRUCTION = `The session already has more than one tab. Do not rename the session. Do not run \`rex session rename\`. Keep the current session label.`;
+export const AUTO_NAME_INSTRUCTION = `The session and tab names are set automatically. Do not run \`rex session rename\` or \`rex window rename\` unless the user asks.`;
 
 /**
- * Appended to the Rex session-start output when `rex.renameTab` is true.
- *
- * A session is the parent and a tab is the child: the first tab carries the
- * session label, later tabs get their own label.
+ * Asks the naming model for one tab label. The task text is the user's first
+ * prompt, trimmed by the caller.
  */
-export const TAB_RENAME_INSTRUCTION = `Name the tab (window) too. Do it in the same step as the session rename. Do not wait for the user to ask.
+export function namingPrompt(task: string): string {
+  return `Name the coding task below for a terminal label.
 
-A Rex session is the parent and a tab is the child. The first tab of a session takes the session label. A later tab gets its own label.
+Rules:
+- Reply with the label only. No quotes, no punctuation, no explanation.
+- Use 2 to 4 English words in lowercase, joined by hyphens.
+- Use ASCII letters and digits only.
+- Name the task or project, not the tool or the agent.
 
-1. Run \`rex whoami --json\` and read \`.window_id\`.
-2. Run \`rex window ls -s "$REX_SESSION" --json\` and sort the window IDs.
-3. If your window ID is the first ID, use the session label. If not, choose a label for the work in this tab. Use two to four lowercase words joined by hyphens.
-4. Rename with \`rex window rename -s "$REX_SESSION" WINDOW_ID LABEL\`.
-5. Keep a label that already fits the work. If the rename fails, continue the task and do not mention it.`;
+Task:
+<task>
+${task}
+</task>`;
+}

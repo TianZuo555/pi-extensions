@@ -5,54 +5,75 @@
 // in. Rex has no hook for pi, so this extension runs the same command and adds
 // its output to the system prompt as a `<rex>` section.
 //
-// Two additions on top of the Rex output:
-// - When the session has more than one tab, the session label is kept. A tab
-//   must not rename its parent session.
-// - Set `rex.renameTab` to true in the pi settings to also tell pi to name the
-//   Rex tab. Tab naming is off by default.
+// The extension also names the Rex tab and session. On the first user prompt of
+// a pi session it asks the current model for one short label, then runs
+// `rex window rename` and, for the first tab of a session, `rex session
+// rename`. Naming runs in the background, so the first response is not delayed.
+// Set `rex.autoName` to false to turn it off.
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { countWindows, stripSessionNaming } from "./lib/rex-output.ts";
-import { KEEP_SESSION_INSTRUCTION, REX_SECTION, TAB_RENAME_INSTRUCTION } from "./lib/prompt.ts";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { nameSession, REX_TIMEOUT_MS, type ExecResult } from "./lib/naming.ts";
+import { AUTO_NAME_INSTRUCTION, REX_SECTION } from "./lib/prompt.ts";
+import { stripSessionNaming } from "./lib/rex-output.ts";
 
-interface RexSettings {
-  renameTab?: boolean;
-}
+/** Timeout for the naming model call. */
+const NAMING_TIMEOUT_MS = 15000;
 
-/** Read `rex.renameTab`. Anything other than `true` keeps tab naming off. */
-function renameTabEnabled(pi: ExtensionAPI): boolean {
+/** Name one session and tab. `true` unless the user turns it off. */
+function autoNameEnabled(pi: ExtensionAPI): boolean {
   const rex = (pi.getSettings() as { rex?: unknown }).rex;
-  if (typeof rex !== "object" || rex === null) return false;
-  return (rex as RexSettings).renameTab === true;
+  if (typeof rex !== "object" || rex === null) return true;
+  return (rex as { autoName?: unknown }).autoName !== false;
 }
 
 /**
- * Count the tabs of the session. A missing answer keeps the Rex behavior, so a
- * failure never hides the session-naming instructions.
+ * Ask the session model for one label. Returns an empty string when the model
+ * is missing or the request fails.
  */
-async function countSessionWindows(
-  pi: ExtensionAPI,
-  session: string,
-  cwd: string,
-): Promise<number | undefined> {
-  const result = await pi.exec("rex", ["session", "inspect", session, "--json"], {
-    cwd,
-    timeout: 5000,
-  });
-  if (result.code !== 0) return undefined;
-  return countWindows(result.stdout);
+async function askModel(ctx: ExtensionContext, prompt: string): Promise<string> {
+  const model = ctx.model;
+  if (!model) return "";
+  try {
+    const message = await ctx.modelRegistry.complete(
+      model,
+      {
+        messages: [
+          { role: "user", content: [{ type: "text", text: prompt }], timestamp: Date.now() },
+        ],
+      },
+      {
+        maxTokens: 200,
+        reasoning: "minimal",
+        timeoutMs: NAMING_TIMEOUT_MS,
+        maxRetries: 0,
+        ...(ctx.signal ? { signal: ctx.signal } : {}),
+      },
+    );
+    if (message.stopReason === "error") return "";
+    return message.content
+      .filter((part) => part.type === "text")
+      .map((part) => part.text)
+      .join(" ")
+      .trim();
+  } catch {
+    return "";
+  }
 }
 
 export default function rexExtension(pi: ExtensionAPI): void {
   let context = "";
+  let autoName = true;
+  let naming: Promise<void> | undefined;
 
   pi.on("session_start", async (_event, ctx) => {
     context = "";
+    autoName = true;
+    naming = undefined;
     const session = process.env.REX_SESSION;
     if (!session) return;
     const result = await pi.exec("rex", ["__internal", "session-start", "--agent", "pi"], {
       cwd: ctx.cwd,
-      timeout: 5000,
+      timeout: REX_TIMEOUT_MS,
     });
     if (result.code !== 0) {
       ctx.ui.notify(
@@ -63,15 +84,25 @@ export default function rexExtension(pi: ExtensionAPI): void {
     }
     let output = result.stdout.trim();
     if (!output) return;
-    const windows = await countSessionWindows(pi, session, ctx.cwd);
-    if (windows !== undefined && windows > 1) {
-      output = `${stripSessionNaming(output)}\n\n${KEEP_SESSION_INSTRUCTION}`;
-    }
-    if (renameTabEnabled(pi)) output = `${output}\n\n${TAB_RENAME_INSTRUCTION}`;
+    autoName = autoNameEnabled(pi);
+    if (autoName) output = `${stripSessionNaming(output)}\n\n${AUTO_NAME_INSTRUCTION}`;
     context = output;
   });
 
-  pi.on("before_agent_start", (event) => {
+  pi.on("before_agent_start", (event, ctx) => {
     if (context) event.systemPromptOptions.sections[REX_SECTION] = context;
+    const session = process.env.REX_SESSION;
+    if (!context || !autoName || naming || !session) return;
+    if (event.messageType !== "user" || event.prompt.trim().length === 0) return;
+    naming = nameSession({
+      session,
+      cwd: ctx.cwd,
+      task: event.prompt,
+      exec: async (command, args, options): Promise<ExecResult> => {
+        const result = await pi.exec(command, args, options);
+        return { code: result.code, stdout: result.stdout };
+      },
+      ask: (prompt) => askModel(ctx, prompt),
+    }).catch(() => undefined);
   });
 }
