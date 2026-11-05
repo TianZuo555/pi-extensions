@@ -21,6 +21,7 @@ function setup(
   options: {
     whoami?: ExecResult;
     inspect?: ExecResult;
+    git?: ExecResult;
     state?: { label: string; windows: { window_id: string; label?: string }[] };
     label?: string;
     ask?: (prompt: string) => Promise<string>;
@@ -30,6 +31,7 @@ function setup(
   const prompts: string[] = [];
   const exec = async (command: string, args: string[]): Promise<ExecResult> => {
     calls.push({ command, args });
+    if (command === "git") return options.git ?? { code: 1, stdout: "" };
     if (args[0] === "whoami") return options.whoami ?? json({ window_id: WINDOW });
     if (args[0] === "session" && args[1] === "inspect") {
       return (
@@ -84,21 +86,23 @@ test("parseLabel rejects a reply that is not one label", () => {
 
 test("generated labels are told apart from hand-set labels", () => {
   assert.equal(isGeneratedSessionLabel("shy-strait"), true);
+  assert.equal(isGeneratedSessionLabel("Wrktree—pi-tian-extensions—docs/pi-layerfs-spec"), true);
   assert.equal(isGeneratedSessionLabel("fix-login-redirect"), false);
   assert.equal(isGeneratedSessionLabel("Window 0bbb"), false);
   assert.equal(isGeneratedWindowLabel("Window 629d2113"), true);
   assert.equal(isGeneratedWindowLabel("Tests"), false);
 });
 
-test("the first tab renames the session and its own tab", async () => {
+test("the first tab renames the session from the folder and its own tab from the task", async () => {
   const deps = setup();
   await run(deps);
   assert.deepEqual(
     deps.calls.map((call) => call.args),
     [
       ["whoami", "--json"],
+      ["worktree", "list", "--porcelain"],
       ["session", "inspect", SESSION, "--json"],
-      ["session", "rename", SESSION, "fix-login-redirect"],
+      ["session", "rename", SESSION, "repo"],
       ["window", "rename", "-s", SESSION, WINDOW, "fix-login-redirect"],
     ],
   );
@@ -117,10 +121,11 @@ test("a later tab renames only itself", async () => {
     }),
   });
   await run(deps);
+  const renames = deps.calls.filter(
+    (call) => call.args[0] === "window" && call.args[1] === "rename",
+  );
   assert.deepEqual(
-    deps.calls
-      .filter((call) => call.args[0] !== "whoami" && call.args[0] !== "session")
-      .map((call) => call.args),
+    renames.map((call) => call.args),
     [["window", "rename", "-s", SESSION, WINDOW, "fix-login-redirect"]],
   );
 });
@@ -155,7 +160,7 @@ test("does nothing when the session lookup fails", async () => {
   const deps = setup({ inspect: { code: 1, stdout: "" } });
   await run(deps);
   assert.equal(deps.prompts.length, 1);
-  assert.equal(deps.calls.length, 2);
+  assert.ok(!deps.calls.some((call) => call.args[0] === "session" && call.args[1] === "rename"));
 });
 
 test("does nothing when the current window is not in the session", async () => {
@@ -184,20 +189,27 @@ test("keeps labels set while the model runs", async () => {
   assert.ok(!deps.calls.some((call) => call.args[0] === "window" && call.args[1] === "rename"));
 });
 
-test("does nothing when the model fails", async () => {
+test("still renames the session when the model fails", async () => {
   const deps = setup({
     ask: async () => {
       throw new Error("boom");
     },
   });
   await run(deps);
-  assert.ok(!deps.calls.some((call) => call.args[0] === "session" && call.args[1] === "rename"));
+  assert.deepEqual(
+    deps.calls
+      .filter((call) => call.args[0] === "session" && call.args[1] === "rename")
+      .map((call) => call.args),
+    [["session", "rename", SESSION, "repo"]],
+  );
+  assert.ok(!deps.calls.some((call) => call.args[0] === "window" && call.args[1] === "rename"));
 });
 
-test("does nothing when the model reply is not a label", async () => {
+test("still renames the session when the model reply is not a label", async () => {
   const deps = setup({ ask: async () => "Fix the login redirect!" });
   await run(deps);
-  assert.ok(!deps.calls.some((call) => call.args[0] === "session" && call.args[1] === "rename"));
+  assert.ok(deps.calls.some((call) => call.args[0] === "session" && call.args[1] === "rename"));
+  assert.ok(!deps.calls.some((call) => call.args[0] === "window" && call.args[1] === "rename"));
 });
 
 test("trims the task before it asks the model", async () => {

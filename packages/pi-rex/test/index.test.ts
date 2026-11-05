@@ -160,7 +160,7 @@ test("adds no section when the rex command prints nothing", async () => {
   assert.deepEqual(sections(), {});
 });
 
-test("names the tab and the session on the first user prompt", async () => {
+test("names the session from the folder and the tab on the first prompt", async () => {
   process.env.REX_SESSION = "s1";
   const { calls, prompts, start, prompt } = setup();
   await start();
@@ -168,13 +168,13 @@ test("names the tab and the session on the first user prompt", async () => {
   await waitForRename(calls);
   assert.ok(prompts[0]?.includes("fix the login redirect"), prompts[0]);
   const renames = calls.filter(
-    (call) => call.args[0] !== "__internal" && call.args[0] !== "whoami",
+    (call) => call.command === "rex" && call.args[0] !== "__internal" && call.args[0] !== "whoami",
   );
   assert.deepEqual(
     renames.map((call) => call.args),
     [
       ["session", "inspect", "s1", "--json"],
-      ["session", "rename", "s1", "fix-login-redirect"],
+      ["session", "rename", "s1", "repo"],
       ["window", "rename", "-s", "s1", "window:02", "fix-login-redirect"],
     ],
   );
@@ -191,12 +191,13 @@ test("names only once per pi session", async () => {
   assert.equal(prompts.length, 1);
 });
 
-test("skips naming when the model reply is not a label", async () => {
+test("renames only the tab when the model reply is not a label", async () => {
   process.env.REX_SESSION = "s1";
   const { calls, start, prompt } = setup({ reply: "Fix the login redirect!" });
   await start();
   prompt("fix the login redirect");
   await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.ok(calls.some((call) => call.args[0] === "session" && call.args[1] === "rename"));
   assert.ok(!calls.some((call) => call.args[0] === "window" && call.args[1] === "rename"));
 });
 
