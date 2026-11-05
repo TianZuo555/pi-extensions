@@ -26,14 +26,15 @@ Run `rex skill setup` to install the skill. This extension does not install the 
 
 Rex gives each session and each tab a generated name. The extension replaces these names with task names. The agent does not run a rename command.
 
-On the first user prompt of a pi session, the extension makes one model call on the current session model. The call asks for a label: 2 to 4 lowercase English words, joined by hyphens. The call runs in the background, so the first response is not delayed. Then the extension runs:
+On the first user prompt of a pi session, the extension runs `rex whoami --json` as a cheap check that the Rex server answers. If it does, the extension makes one model call on the current session model. The call asks for a label: 2 to 4 lowercase English words, joined by hyphens. The call runs in the background, so the first response is not delayed. After the model replies, the extension reads the current labels and runs:
 
 ```bash
-rex whoami --json
 rex session inspect "$REX_SESSION" --json
 rex session rename "$REX_SESSION" LABEL      # first tab only
 rex window rename -s "$REX_SESSION" WINDOW_ID LABEL
 ```
+
+The labels are read after the model call. A rename made while the call runs wins.
 
 Rex orders tabs by ID, which comes from the creation time. The first tab carries the session label. A later tab gets its own label and never renames the parent session.
 

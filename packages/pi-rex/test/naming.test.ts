@@ -148,7 +148,7 @@ test("does nothing when whoami fails", async () => {
   const deps = setup({ whoami: { code: 1, stdout: "not json" } });
   await run(deps);
   assert.equal(deps.calls.length, 1);
-  assert.equal(deps.prompts.length, 1);
+  assert.equal(deps.prompts.length, 0);
 });
 
 test("does nothing when the session lookup fails", async () => {

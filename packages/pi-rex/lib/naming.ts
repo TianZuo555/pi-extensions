@@ -78,6 +78,12 @@ export async function nameSession(input: NameSessionInput): Promise<void> {
 
   const task = input.task.slice(0, MAX_TASK_LENGTH).trim();
   if (task.length === 0) return;
+
+  // Probe Rex before the model call, so a dead server costs no tokens. The
+  // window ID does not change while the tab lives.
+  const whoami = parseWhoami((await rex(["whoami", "--json"])).stdout);
+  if (!whoami) return;
+
   let label: string | undefined;
   try {
     label = parseLabel(await input.ask(namingPrompt(task)));
@@ -86,10 +92,8 @@ export async function nameSession(input: NameSessionInput): Promise<void> {
   }
   if (!label) return;
 
-  // Read the state after the model call. A user or the main agent can rename
+  // Read the labels after the model call. A user or the main agent can rename
   // while it runs, and those labels must win.
-  const whoami = parseWhoami((await rex(["whoami", "--json"])).stdout);
-  if (!whoami) return;
   const state = parseInspect((await rex(["session", "inspect", session, "--json"])).stdout);
   if (!state) return;
   const current = findWindow(state, whoami);
