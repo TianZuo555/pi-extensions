@@ -1,11 +1,13 @@
-// Orchestrates automatic Rex naming. The extension asks the session model for
-// one label, then renames the tab and, for the first tab, the session.
+// Orchestrates automatic Rex naming. The extension names the session after the
+// project folder, or after the worktree and its branch, and asks the session
+// model for one tab label.
 //
 // Every Rex call is best-effort: a failing command or model call leaves the
 // generated name in place and does not block the main agent run.
 
 import { namingPrompt } from "./prompt.ts";
 import { parseInspect, parseWhoami, type RexInspect, type RexWindow } from "./rex-output.ts";
+import { sessionLabel } from "./session-name.ts";
 
 /** Upper bound for the task text sent to the naming model. */
 export const MAX_TASK_LENGTH = 4000;
@@ -15,6 +17,9 @@ export const REX_TIMEOUT_MS = 5000;
 
 /** Default Rex session labels are two lowercase words, such as `shy-strait`. */
 const SESSION_LABEL = /^[a-z]+-[a-z]+$/;
+
+/** Worktree labels this extension writes, so a branch change can replace them. */
+const WORKTREE_LABEL = /^Wrktree—/;
 
 /** Default Rex tab labels are `Window <id suffix>`. */
 const WINDOW_LABEL = /^Window [0-9a-f]{4,}$/;
@@ -43,7 +48,7 @@ export interface NameSessionInput {
 
 /** A generated session label may be replaced. A hand-set label may not. */
 export function isGeneratedSessionLabel(label: string): boolean {
-  return SESSION_LABEL.test(label);
+  return SESSION_LABEL.test(label) || WORKTREE_LABEL.test(label);
 }
 
 /** A generated tab label may be replaced. A hand-set label may not. */
@@ -84,13 +89,16 @@ export async function nameSession(input: NameSessionInput): Promise<void> {
   const whoami = parseWhoami((await rex(["whoami", "--json"])).stdout);
   if (!whoami) return;
 
-  let label: string | undefined;
+  // The session label comes from the folder and the worktree, not the model.
+  // A model failure then still renames the session.
+  const nextSessionLabel = await sessionLabel(exec, cwd, REX_TIMEOUT_MS);
+
+  let tabLabel: string | undefined;
   try {
-    label = parseLabel(await input.ask(namingPrompt(task)));
+    tabLabel = parseLabel(await input.ask(namingPrompt(task)));
   } catch {
-    return;
+    tabLabel = undefined;
   }
-  if (!label) return;
 
   // Read the labels after the model call. A user or the main agent can rename
   // while it runs, and those labels must win.
@@ -99,11 +107,15 @@ export async function nameSession(input: NameSessionInput): Promise<void> {
   const current = findWindow(state, whoami);
   if (!current) return;
 
-  if (isGeneratedSessionLabel(state.label) && isFirstWindow(state, whoami)) {
-    await rex(["session", "rename", session, label]);
+  if (
+    state.label !== nextSessionLabel &&
+    isGeneratedSessionLabel(state.label) &&
+    isFirstWindow(state, whoami)
+  ) {
+    await rex(["session", "rename", session, nextSessionLabel]);
   }
-  if (current.label === undefined || isGeneratedWindowLabel(current.label)) {
-    await rex(["window", "rename", "-s", session, whoami, label]);
+  if (tabLabel && (current.label === undefined || isGeneratedWindowLabel(current.label))) {
+    await rex(["window", "rename", "-s", session, whoami, tabLabel]);
   }
 }
 

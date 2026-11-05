@@ -5,11 +5,12 @@
 // in. Rex has no hook for pi, so this extension runs the same command and adds
 // its output to the system prompt as a `<rex>` section.
 //
-// The extension also names the Rex tab and session. On the first user prompt of
-// a pi session it asks the current model for one short label, then runs
-// `rex window rename` and, for the first tab of a session, `rex session
-// rename`. Naming runs in the background, so the first response is not delayed.
-// Set `rex.autoName` to false to turn it off.
+// The extension also names the Rex session and tab. The session takes its name
+// from the project folder, or from the worktree and branch. On the first user
+// prompt of a pi session it asks the current model for one short tab label,
+// then runs `rex window rename` and, for the first tab of a session,
+// `rex session rename`. Naming runs in the background, so the first response is
+// not delayed. Set `rex.autoName` to false to turn it off.
 //
 // The extension also records the pi session of each Rex pane, so a shell hook
 // can resume pi in that pane after a Rex restart. See `lib/resume.ts`.
