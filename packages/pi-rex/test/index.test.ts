@@ -30,12 +30,13 @@ const INSPECT = {
 };
 
 function setup(options: { settings?: unknown; reply?: string; start?: ExecResult } = {}) {
-  const handlers = new Map<string, Handler>();
+  const handlers = new Map<string, Handler[]>();
   const calls: { command: string; args: string[]; options: unknown }[] = [];
   const prompts: string[] = [];
   const notices: string[] = [];
   const pi = {
-    on: (name: string, handler: Handler) => handlers.set(name, handler),
+    on: (name: string, handler: Handler) =>
+      handlers.set(name, [...(handlers.get(name) ?? []), handler]),
     exec: async (command: string, args: string[], execOptions: unknown) => {
       calls.push({ command, args, options: execOptions });
       if (args[0] === "__internal") return options.start ?? REX_START;
@@ -64,31 +65,29 @@ function setup(options: { settings?: unknown; reply?: string; start?: ExecResult
     },
   };
   rexExtension(pi as never);
-  const start = () => handlers.get("session_start")?.({ type: "session_start" }, ctx);
+  // Run every handler for the event, as pi does. Synchronous handlers finish
+  // before fire returns.
+  const fire = (name: string, event: unknown) =>
+    Promise.all((handlers.get(name) ?? []).map((handler) => handler(event, ctx)));
+  const start = () => fire("session_start", { type: "session_start" });
   const prompt = (text: string) =>
-    handlers.get("before_agent_start")?.(
-      {
-        type: "before_agent_start",
-        messageType: "user",
-        prompt: text,
-        systemPrompt: "",
-        systemPromptOptions: { sections: {} as Record<string, string> },
-      },
-      ctx,
-    );
-  const emit = (event: unknown) => handlers.get("before_agent_start")?.(event, ctx);
+    fire("before_agent_start", {
+      type: "before_agent_start",
+      messageType: "user",
+      prompt: text,
+      systemPrompt: "",
+      systemPromptOptions: { sections: {} as Record<string, string> },
+    });
+  const emit = (event: unknown) => fire("before_agent_start", event);
   const sections = () => {
     const event = { systemPromptOptions: { sections: {} as Record<string, string> } };
-    handlers.get("before_agent_start")?.(
-      {
-        type: "before_agent_start",
-        messageType: "user",
-        prompt: "",
-        systemPrompt: "",
-        systemPromptOptions: event.systemPromptOptions,
-      },
-      ctx,
-    );
+    fire("before_agent_start", {
+      type: "before_agent_start",
+      messageType: "user",
+      prompt: "",
+      systemPrompt: "",
+      systemPromptOptions: event.systemPromptOptions,
+    });
     return event.systemPromptOptions.sections;
   };
   return { calls, notices, prompts, start, prompt, emit, sections };

@@ -28,7 +28,7 @@ Each extension has its own package and its own README under
 | [pi-antigravity](packages/pi-antigravity/README.md) | `/agy`, `/agy-tasks`, `/agy-artifacts`, `/agy-usage` | Google Antigravity (`agy`) models inside pi via stream-json RPC. |
 | [pi-vscode-bridge (deprecated)](packages/pi-vscode-bridge/README.md) | `/vscode-connect` | Historical VS Code ref bridge; no longer recommended or actively developed. |
 | [pi-compact](packages/pi-compact/README.md) | intercepts `/compact` | GPT-6 Luna compaction: opaque Codex checkpoints or text summaries for new OpenAI OAuth. |
-| [pi-rex](packages/pi-rex/README.md) | system prompt section `<rex>` | Tells pi its Rex session and pane at session start, like the Rex hook for Claude Code and Codex. Optional tab naming with `rex.renameTab`. |
+| [pi-rex](packages/pi-rex/README.md) | system prompt section `<rex>` | Tells pi its Rex session and pane at session start, like the Rex hook for Claude Code and Codex. Names the Rex session and tab from the first prompt. Records each pane's pi session so a shell hook resumes pi after a Rex restart. |
 | [pi-devin-acp](packages/pi-devin-acp/README.md) | models `devin/*`, `/devin`, `/devin-<sub>` | Devin models inside pi by driving the Devin CLI as an ACP server. |
 
 ## Install
