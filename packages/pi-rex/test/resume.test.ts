@@ -21,24 +21,27 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-function setup(options: { mode?: string; sessionFile?: string } = {}) {
+function setup(options: { mode?: string; sessionFile?: string; cwd?: string } = {}) {
   const handlers = new Map<string, Handler>();
   const pi = { on: (name: string, handler: Handler) => handlers.set(name, handler) };
   const sessionFile = options.sessionFile ?? path.join(dir, "session.jsonl");
   const ctx = {
-    cwd: "/repo",
+    cwd: options.cwd ?? "/repo",
     mode: options.mode ?? "tui",
     sessionManager: { getSessionFile: () => sessionFile },
   };
   registerResume(pi as never, dir);
   const fire = (name: string, event: unknown = {}) => handlers.get(name)?.(event, ctx);
   const record = recordPath(dir, BLOCK);
+  if (!record) throw new Error("invalid test block ID");
   return { fire, record, sessionFile };
 }
 
 test("names the record after the block ID without the prefix", () => {
   assert.equal(recordPath("/agent", "block:01a1"), path.join("/agent", "rex-resume", "01a1"));
-  assert.equal(recordPath("/agent", "../x"), path.join("/agent", "rex-resume", "x"));
+  assert.equal(recordPath("/agent", "block:.."), undefined);
+  assert.equal(recordPath("/agent", "../x"), undefined);
+  assert.equal(recordPath("/agent", ""), undefined);
 });
 
 test("writes the directory and the resume command", async () => {
@@ -67,13 +70,21 @@ test("removes the record when the user quits", async () => {
 });
 
 test("keeps the record for a reload or a session switch", async () => {
-  for (const reason of ["reload", "new", "resume", "fork"]) {
+  for (const reason of ["reload", "resume", "fork"]) {
     const { fire, record, sessionFile } = setup();
     writeFileSync(sessionFile, "");
     await fire("session_start");
     await fire("session_shutdown", { reason });
     assert.ok(existsSync(record), reason);
   }
+});
+
+test("removes the record on /new before the next session starts", async () => {
+  const { fire, record, sessionFile } = setup();
+  writeFileSync(sessionFile, "");
+  await fire("session_start");
+  await fire("session_shutdown", { reason: "new" });
+  assert.ok(!existsSync(record));
 });
 
 test("keeps the record when a signal stops pi", async () => {
@@ -99,6 +110,13 @@ test("removes the previous record when the new session has no file yet", async (
   // `/new` starts a new extension runtime for a session with no file yet.
   const next = setup({ sessionFile: path.join(dir, "next.jsonl") });
   await next.fire("session_start");
+  assert.ok(!existsSync(record));
+});
+
+test("writes no record for a line break in the directory", async () => {
+  const { fire, record, sessionFile } = setup({ cwd: "/repo\nrm -rf /" });
+  writeFileSync(sessionFile, "");
+  await fire("session_start");
   assert.ok(!existsSync(record));
 });
 

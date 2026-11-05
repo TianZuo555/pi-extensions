@@ -60,7 +60,7 @@ pi
 /Users/you/.pi/agent/sessions/--Users-you-src-app--/2026-11-05T05-52-27-656Z_01a1....jsonl
 ```
 
-The record stays when pi stops because of SIGHUP or SIGTERM, or because the terminal is gone. A Rex restart does one of these. The record stays for `/reload`, `/new`, `/resume`, and `/fork`, and the next session writes its own record. The record is removed when you quit pi (Ctrl+D, Ctrl+C twice, `/quit`). Print, JSON, and RPC runs write no record. Until the session file exists, the pane has no record, so a restart right after `/new` does not reopen the previous session.
+The record stays when pi stops because of SIGHUP or SIGTERM, or because the terminal is gone. A Rex restart does one of these. The record stays for `/reload`, `/resume`, and `/fork`, and the next session writes its own record. `/new` removes the record until the new session has a file, so a restart right after `/new` does not reopen the previous session. The record is removed when you quit pi (Ctrl+D, Ctrl+C twice, `/quit`). Print, JSON, and RPC runs write no record.
 
 The extension cannot start a program in a Rex pane, so the shell must read the record. Add this hook to `~/.config/fish/config.fish` (or a file in `conf.d/`):
 
@@ -74,13 +74,15 @@ if status is-interactive; and set -q REX_BLOCK
         set -l file $agent_dir/rex-resume/(string replace -- 'block:' '' $REX_BLOCK)
         test -f $file; or return
         set -l record (cat $file)
+        test -n "$record[1]"; or return
+        cd -- $record[1]; or return
         rm -f $file
-        cd $record[1]; and $record[2..]
+        $record[2..]
     end
 end
 ```
 
-The hook runs once, before the first prompt, after the rest of the config is loaded. A new pane has a new block ID, so it has no record. Only a pane that Rex restored while pi ran in it has one. The hook removes the record before it starts pi, and pi writes a new one.
+The hook runs once, before the first prompt, after the rest of the config is loaded. A new pane has a new block ID, so it has no record. Only a pane that Rex restored while pi ran in it has one. The hook removes the record before it starts pi, and pi writes a new one. The hook always runs `pi --session <file>`: it does not restore the flags of the first launch, so a pane that ran `pi -e ./packages/pi-rex` resumes with plain `pi`.
 
 ## Settings
 
@@ -109,6 +111,8 @@ Any value other than `false` keeps automatic naming on.
 - The naming call uses the current session model. A reasoning model can spend part of the token budget before it writes the label.
 - The `<rex>` removal reads one string from the Rex output: the paragraph that holds `rex session rename`. A change to that wording stops the removal.
 - Resume needs the shell hook. Without it, the records do nothing.
+- The hook starts `pi --session <file>`, so it does not restore the flags of the first launch. A pane that ran `pi -e ./packages/pi-rex` resumes without the local extension.
+- A second interactive fish in the same pane, started while pi runs, also reads the record. It can start a second pi on the same session and remove the record; the next prompt in the first pi writes the record again.
 - When you close a pane while pi runs in it, pi gets SIGHUP and its record stays. The file is small, and Rex never reuses a block ID.
 - A pi started by the fish hook runs inside a prompt event, so Ctrl+Z may not suspend it.
 

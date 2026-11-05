@@ -9,9 +9,9 @@
 // The record is the working directory on line 1, then the command, one
 // argument per line. It stays when pi stops because of SIGHUP or SIGTERM, or
 // because the terminal is gone, which is what a Rex restart does. It is removed
-// when the user quits pi.
+// when the user quits pi, and when `/new` replaces the session.
 
-import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import {
   getAgentDir,
@@ -23,10 +23,14 @@ import {
 export const RESUME_DIR = "rex-resume";
 
 const SIGNALS = ["SIGHUP", "SIGTERM"] as const;
+/** A block ID becomes a file name, so accept a plain ID and not a path. */
+const BLOCK_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
-/** Record file for a Rex block, such as `block:01a1...`. */
-export function recordPath(agentDir: string, block: string): string {
-  return path.join(agentDir, RESUME_DIR, path.basename(block.replace(/^block:/, "")));
+/** Record file for a Rex block, such as `block:01a1...`. Undefined for a malformed ID. */
+export function recordPath(agentDir: string, block: string): string | undefined {
+  const id = block.replace(/^block:/, "");
+  if (!BLOCK_ID.test(id)) return undefined;
+  return path.join(agentDir, RESUME_DIR, id);
 }
 
 /** Record text: the working directory, then the resume command, one argument per line. */
@@ -47,12 +51,17 @@ export function registerResume(pi: ExtensionAPI, agentDir: string = getAgentDir(
   const save = (ctx: ExtensionContext): void => {
     if (!record) return;
     const session = ctx.sessionManager.getSessionFile();
-    if (!session || !existsSync(session)) {
+    // The hook runs the last lines as one command. A line break in a path
+    // would move the arguments, so write no record for such a path.
+    if (!session || !existsSync(session) || /[\r\n]/.test(ctx.cwd) || /[\r\n]/.test(session)) {
       rmSync(record, { force: true });
       return;
     }
     mkdirSync(path.dirname(record), { recursive: true });
-    writeFileSync(record, recordText(ctx.cwd, session));
+    // Write and rename, so a stop during the write cannot leave half a record.
+    const temp = `${record}.tmp`;
+    writeFileSync(temp, recordText(ctx.cwd, session));
+    renameSync(temp, record);
   };
 
   pi.on("session_start", (_event, ctx) => {
@@ -74,6 +83,8 @@ export function registerResume(pi: ExtensionAPI, agentDir: string = getAgentDir(
     // so onSignal, a later listener for the same signal, can set the flag.
     await new Promise((resolve) => setImmediate(resolve));
     for (const signal of SIGNALS) process.off(signal, onSignal);
-    if (event.reason === "quit" && !signaled) rmSync(record, { force: true });
+    // `/new` replaces the session, so the record must not reopen the old one.
+    if (event.reason === "new" || (event.reason === "quit" && !signaled))
+      rmSync(record, { force: true });
   });
 }
