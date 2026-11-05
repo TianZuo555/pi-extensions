@@ -21,13 +21,13 @@ afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
 
-function setup(options: { hasUI?: boolean; sessionFile?: string } = {}) {
+function setup(options: { mode?: string; sessionFile?: string } = {}) {
   const handlers = new Map<string, Handler>();
   const pi = { on: (name: string, handler: Handler) => handlers.set(name, handler) };
   const sessionFile = options.sessionFile ?? path.join(dir, "session.jsonl");
   const ctx = {
     cwd: "/repo",
-    hasUI: options.hasUI ?? true,
+    mode: options.mode ?? "tui",
     sessionManager: { getSessionFile: () => sessionFile },
   };
   registerResume(pi as never, dir);
@@ -91,11 +91,24 @@ test("keeps the record when a signal stops pi", async () => {
   }
 });
 
-test("writes nothing without a UI or outside Rex", async () => {
-  const noUi = setup({ hasUI: false });
-  writeFileSync(noUi.sessionFile, "");
-  await noUi.fire("session_start");
-  assert.ok(!existsSync(noUi.record));
+test("removes the previous record when the new session has no file yet", async () => {
+  const { fire, record, sessionFile } = setup();
+  writeFileSync(sessionFile, "");
+  await fire("session_start");
+  await fire("session_shutdown", { reason: "new" });
+  // `/new` starts a new extension runtime for a session with no file yet.
+  const next = setup({ sessionFile: path.join(dir, "next.jsonl") });
+  await next.fire("session_start");
+  assert.ok(!existsSync(record));
+});
+
+test("writes nothing outside the TUI or outside Rex", async () => {
+  for (const mode of ["rpc", "json", "print"]) {
+    const other = setup({ mode });
+    writeFileSync(other.sessionFile, "");
+    await other.fire("session_start");
+    assert.ok(!existsSync(other.record), mode);
+  }
 
   delete process.env.REX_BLOCK;
   const outside = setup();

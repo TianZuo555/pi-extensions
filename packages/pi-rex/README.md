@@ -51,7 +51,7 @@ Because the extension names the session, it removes the Rex naming paragraph fro
 
 Rex restores sessions, tabs, panes, and scrollback after a restart. Each pane keeps its block ID, but Rex starts a new shell in the pane, not pi. The extension records the pi session of each pane, so a shell hook can start pi again.
 
-When `REX_BLOCK` is set in interactive mode, the extension writes `~/.pi/agent/rex-resume/<block id>` (below `PI_CODING_AGENT_DIR` when it is set). It writes the record when a session starts and after each prompt, because pi creates the session file only after the first message. The record holds the working directory on line 1, then the command, one argument per line:
+When `REX_BLOCK` is set in TUI mode, the extension writes `~/.pi/agent/rex-resume/<block id>` (below `PI_CODING_AGENT_DIR` when it is set). It writes the record when a session starts and after each prompt, because pi creates the session file only after the first message. The record holds the working directory on line 1, then the command, one argument per line:
 
 ```text
 /Users/you/src/app
@@ -60,7 +60,7 @@ pi
 /Users/you/.pi/agent/sessions/--Users-you-src-app--/2026-11-05T05-52-27-656Z_01a1....jsonl
 ```
 
-The record stays when pi stops because of SIGHUP or SIGTERM, or because the terminal is gone. A Rex restart does one of these. The record stays for `/reload`, `/new`, `/resume`, and `/fork`, and the next session writes its own record. The record is removed when you quit pi (Ctrl+D, Ctrl+C twice, `/quit`). Print and RPC runs write no record.
+The record stays when pi stops because of SIGHUP or SIGTERM, or because the terminal is gone. A Rex restart does one of these. The record stays for `/reload`, `/new`, `/resume`, and `/fork`, and the next session writes its own record. The record is removed when you quit pi (Ctrl+D, Ctrl+C twice, `/quit`). Print, JSON, and RPC runs write no record. Until the session file exists, the pane has no record, so a restart right after `/new` does not reopen the previous session.
 
 The extension cannot start a program in a Rex pane, so the shell must read the record. Add this hook to `~/.config/fish/config.fish` (or a file in `conf.d/`):
 
@@ -69,7 +69,8 @@ if status is-interactive; and set -q REX_BLOCK
     function __rex_resume --on-event fish_prompt
         functions -e __rex_resume
         set -l agent_dir $HOME/.pi/agent
-        set -q PI_CODING_AGENT_DIR; and set agent_dir $PI_CODING_AGENT_DIR
+        # Expand ~ as pi does: fish does not expand it inside a variable.
+        set -q PI_CODING_AGENT_DIR; and set agent_dir (string replace -r -- '^~(?=/|$)' $HOME $PI_CODING_AGENT_DIR)
         set -l file $agent_dir/rex-resume/(string replace -- 'block:' '' $REX_BLOCK)
         test -f $file; or return
         set -l record (cat $file)

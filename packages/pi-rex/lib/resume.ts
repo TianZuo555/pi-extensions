@@ -42,20 +42,24 @@ export function registerResume(pi: ExtensionAPI, agentDir: string = getAgentDir(
   };
 
   // Pi writes the session file only after the first message, so save again
-  // after each prompt.
+  // after each prompt. Until then, remove the record: after `/new` it still
+  // names the previous session, which the hook must not reopen.
   const save = (ctx: ExtensionContext): void => {
     if (!record) return;
     const session = ctx.sessionManager.getSessionFile();
-    if (!session || !existsSync(session)) return;
+    if (!session || !existsSync(session)) {
+      rmSync(record, { force: true });
+      return;
+    }
     mkdirSync(path.dirname(record), { recursive: true });
     writeFileSync(record, recordText(ctx.cwd, session));
   };
 
   pi.on("session_start", (_event, ctx) => {
     const block = process.env.REX_BLOCK;
-    // Print and RPC runs inherit REX_BLOCK from the agent's shell, but they are
-    // not the agent of the pane.
-    record = block && ctx.hasUI ? recordPath(agentDir, block) : undefined;
+    // Print, JSON, and RPC runs inherit REX_BLOCK from the agent's shell, but
+    // they are not the agent of the pane. `hasUI` is also true in RPC mode.
+    record = block && ctx.mode === "tui" ? recordPath(agentDir, block) : undefined;
     if (!record) return;
     signaled = false;
     for (const signal of SIGNALS) process.on(signal, onSignal);
