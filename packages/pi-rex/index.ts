@@ -10,10 +10,14 @@
 // `rex window rename` and, for the first tab of a session, `rex session
 // rename`. Naming runs in the background, so the first response is not delayed.
 // Set `rex.autoName` to false to turn it off.
+//
+// The extension also records the pi session of each Rex pane, so a shell hook
+// can resume pi in that pane after a Rex restart. See `lib/resume.ts`.
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { nameSession, REX_TIMEOUT_MS, type ExecResult } from "./lib/naming.ts";
 import { AUTO_NAME_INSTRUCTION, REX_SECTION } from "./lib/prompt.ts";
+import { registerResume } from "./lib/resume.ts";
 import { stripSessionNaming } from "./lib/rex-output.ts";
 
 /** Timeout for the naming model call. */
@@ -64,6 +68,8 @@ export default function rexExtension(pi: ExtensionAPI): void {
   let context = "";
   let autoName = true;
   let naming: Promise<void> | undefined;
+
+  registerResume(pi);
 
   pi.on("session_start", async (_event, ctx) => {
     context = "";
