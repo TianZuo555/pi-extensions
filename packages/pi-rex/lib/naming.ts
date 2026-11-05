@@ -76,13 +76,6 @@ export async function nameSession(input: NameSessionInput): Promise<void> {
   const options = { cwd, timeout: REX_TIMEOUT_MS };
   const rex = (args: string[]) => exec("rex", args, options);
 
-  const whoami = parseWhoami((await rex(["whoami", "--json"])).stdout);
-  if (!whoami) return;
-  const state = parseInspect((await rex(["session", "inspect", session, "--json"])).stdout);
-  if (!state) return;
-  const current = findWindow(state, whoami);
-  if (!current) return;
-
   const task = input.task.slice(0, MAX_TASK_LENGTH).trim();
   if (task.length === 0) return;
   let label: string | undefined;
@@ -92,6 +85,15 @@ export async function nameSession(input: NameSessionInput): Promise<void> {
     return;
   }
   if (!label) return;
+
+  // Read the state after the model call. A user or the main agent can rename
+  // while it runs, and those labels must win.
+  const whoami = parseWhoami((await rex(["whoami", "--json"])).stdout);
+  if (!whoami) return;
+  const state = parseInspect((await rex(["session", "inspect", session, "--json"])).stdout);
+  if (!state) return;
+  const current = findWindow(state, whoami);
+  if (!current) return;
 
   if (isGeneratedSessionLabel(state.label) && isFirstWindow(state, whoami)) {
     await rex(["session", "rename", session, label]);

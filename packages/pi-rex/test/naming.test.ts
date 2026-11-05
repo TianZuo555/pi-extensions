@@ -21,6 +21,7 @@ function setup(
   options: {
     whoami?: ExecResult;
     inspect?: ExecResult;
+    state?: { label: string; windows: { window_id: string; label?: string }[] };
     label?: string;
     ask?: (prompt: string) => Promise<string>;
   } = {},
@@ -33,10 +34,12 @@ function setup(
     if (args[0] === "session" && args[1] === "inspect") {
       return (
         options.inspect ??
-        json({
-          label: options.label ?? "shy-strait",
-          windows: [{ window_id: WINDOW, label: "Window 0bbb" }],
-        })
+        json(
+          options.state ?? {
+            label: options.label ?? "shy-strait",
+            windows: [{ window_id: WINDOW, label: "Window 0bbb" }],
+          },
+        )
       );
     }
     return ok;
@@ -145,13 +148,13 @@ test("does nothing when whoami fails", async () => {
   const deps = setup({ whoami: { code: 1, stdout: "not json" } });
   await run(deps);
   assert.equal(deps.calls.length, 1);
-  assert.equal(deps.prompts.length, 0);
+  assert.equal(deps.prompts.length, 1);
 });
 
 test("does nothing when the session lookup fails", async () => {
   const deps = setup({ inspect: { code: 1, stdout: "" } });
   await run(deps);
-  assert.equal(deps.prompts.length, 0);
+  assert.equal(deps.prompts.length, 1);
   assert.equal(deps.calls.length, 2);
 });
 
@@ -163,7 +166,22 @@ test("does nothing when the current window is not in the session", async () => {
     }),
   });
   await run(deps);
-  assert.equal(deps.prompts.length, 0);
+  assert.equal(deps.prompts.length, 1);
+});
+
+test("keeps labels set while the model runs", async () => {
+  const state = { label: "shy-strait", windows: [{ window_id: WINDOW, label: "Window 0bbb" }] };
+  const deps = setup({
+    state,
+    ask: async () => {
+      state.label = "user-picked-label";
+      state.windows[0]!.label = "user-picked-tab";
+      return "fix-login-redirect";
+    },
+  });
+  await run(deps);
+  assert.ok(!deps.calls.some((call) => call.args[0] === "session" && call.args[1] === "rename"));
+  assert.ok(!deps.calls.some((call) => call.args[0] === "window" && call.args[1] === "rename"));
 });
 
 test("does nothing when the model fails", async () => {
