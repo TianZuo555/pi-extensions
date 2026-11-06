@@ -44,6 +44,9 @@ interface MutableAnswer {
 const OTHER_LABEL = "Other";
 const OTHER_DESCRIPTION = "type your own answer";
 
+/** Number keys that pick an option row; at most 5 options plus Other exist. */
+const NUMBER_KEYS = ["1", "2", "3", "4", "5", "6"] as const;
+
 function appendWrapped(lines: string[], width: number, prefix: string, text: string): void {
   const renderWidth = Math.max(1, width);
   const prefixWidth = visibleWidth(prefix);
@@ -191,9 +194,20 @@ export class AskUserForm implements Component, Focusable {
   }
 
   private selectCurrentOption(): void {
+    this.focusCurrentOption(this.currentOptionIndex(), false);
+  }
+
+  /**
+   * Answers the focused option row. The last row is Other: it opens the custom
+   * answer editor instead of answering. `autoAdvance` moves on after a real
+   * option, which is what a number key does.
+   */
+  private focusCurrentOption(optionIndex: number, autoAdvance: boolean): void {
     const question = this.currentQuestion();
     const answer = this.currentAnswer();
-    const optionIndex = this.currentOptionIndex();
+    if (optionIndex < 0 || optionIndex >= this.currentOptionCount()) return;
+
+    this.focusedOptionIndices[this.questionIndex] = optionIndex;
 
     if (optionIndex === question.options.length) {
       this.editMode = true;
@@ -206,9 +220,20 @@ export class AskUserForm implements Component, Focusable {
 
     answer.optionIndex = optionIndex;
     answer.customAnswer = undefined;
-
     this.warning = undefined;
+
+    if (autoAdvance) {
+      this.advanceOrSubmit();
+      return;
+    }
+
     this.refresh();
+  }
+
+  /** Returns the row number a key press picks, or undefined for other keys. */
+  private pickedOptionIndex(data: string): number | undefined {
+    const index = NUMBER_KEYS.findIndex((key) => matchesKey(data, key));
+    return index === -1 ? undefined : index;
   }
 
   private saveCustomAnswer(value: string): void {
@@ -315,6 +340,11 @@ export class AskUserForm implements Component, Focusable {
       this.cancel();
       return;
     }
+    const picked = this.pickedOptionIndex(data);
+    if (picked !== undefined) {
+      this.focusCurrentOption(picked, true);
+      return;
+    }
     if (this.keybindings.matches(data, "tui.select.up")) {
       this.moveOption(-1);
       return;
@@ -379,7 +409,9 @@ export class AskUserForm implements Component, Focusable {
       // Arrow marks the single selection (pi-native list style); brackets
       // would read as a multi-select checkbox.
       const selection = checked ? this.theme.fg("success", "→ ") : "  ";
-      const prefix = `${cursor}${selection}`;
+      // The number is the shortcut hint: pressing it picks that row.
+      const number = this.theme.fg(focused ? "accent" : "dim", `${optionIndex + 1}.`);
+      const prefix = `${cursor}${selection}${number} `;
       const label = isOther ? OTHER_LABEL : option.label;
       const description = isOther ? (answer.customAnswer ?? OTHER_DESCRIPTION) : option.description;
       const labelColor = focused ? "accent" : checked ? "text" : "muted";
@@ -405,11 +437,12 @@ export class AskUserForm implements Component, Focusable {
     }
 
     lines.push("");
+    const numberHelp = `1-${this.currentOptionCount()} pick`;
     const help = this.editMode
       ? "Enter save answer · Shift+Enter new line · Esc go back"
       : this.questions.length > 1
-        ? "←/→ question · ↑/↓ option · Space select · Enter next/submit · Esc dismiss"
-        : "↑/↓ option · Space select · Enter submit · Esc dismiss";
+        ? `←/→ question · ↑/↓ option · ${numberHelp} · Space select · Enter next/submit · Esc dismiss`
+        : `↑/↓ option · ${numberHelp} · Space select · Enter submit · Esc dismiss`;
     appendWrapped(lines, renderWidth, " ", this.theme.fg("dim", help));
     lines.push(border);
 

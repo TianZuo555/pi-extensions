@@ -36,6 +36,7 @@ function createForm(questions: AskUserQuestion[]) {
     requestRender: () => {
       renders++;
     },
+    terminal: { rows: 24, cols: 80 },
   } as unknown as TUI;
   const form = new AskUserForm(tui, createTheme(), createKeybindings(), questions, (submission) => {
     result = submission;
@@ -71,7 +72,7 @@ test("long questions and option descriptions wrap without clipping", () => {
   assert.ok(lines.every((line) => visibleWidth(line) <= 42));
   assert.match(lines.join("\n"), /QUESTION_END/);
   assert.match(lines.join("\n"), /DESCRIPTION_END/);
-  assert.match(lines.join("\n"), /› {3}Redis/);
+  assert.match(lines.join("\n"), /› {3}1\. Redis/);
   assert.doesNotMatch(lines.join("\n"), /\[/);
   assert.match(lines.join("\n"), /Space select/);
 });
@@ -96,12 +97,12 @@ test("left and right preserve answers while space selects and enter submits", ()
   form.handleInput("left");
 
   const firstQuestionAgain = form.render(80).join("\n");
-  assert.match(firstQuestionAgain, /→ Staging/);
+  assert.match(firstQuestionAgain, /→ 1\. Staging/);
   assert.doesNotMatch(firstQuestionAgain, /\[/);
   assert.match(firstQuestionAgain, /Question 1 of 2 · 2 answered/);
 
   form.handleInput("enter"); // next, preserving the second question's cursor/answer
-  assert.match(form.render(80).join("\n"), /→ Integration/);
+  assert.match(form.render(80).join("\n"), /→ 2\. Integration/);
   form.handleInput("enter"); // submit
 
   assert.deepEqual(getResult(), {
@@ -118,6 +119,87 @@ test("left and right preserve answers while space selects and enter submits", ()
       },
     ],
   });
+});
+
+test("number keys answer a question and advance to the next one", () => {
+  const { form, getResult } = createForm([
+    {
+      question: "Choose the deployment target",
+      options: [{ label: "Staging" }, { label: "Production" }],
+    },
+    {
+      question: "Choose the validation suite",
+      options: [{ label: "Unit" }, { label: "Integration" }, { label: "End-to-end" }],
+    },
+  ]);
+
+  const firstRender = form.render(80).join("\n");
+  assert.match(firstRender, /› {3}1\. Staging/);
+  assert.match(firstRender, /1-3 pick/);
+
+  form.handleInput("2"); // Production, then next question
+  const secondRender = form.render(80).join("\n");
+  assert.match(secondRender, /Question 2 of 2 · 1 answered/);
+  assert.doesNotMatch(secondRender, /→ \d+\./);
+
+  form.handleInput("1"); // Unit, then submit the completed form
+
+  assert.deepEqual(getResult(), {
+    answers: [
+      {
+        questionIndex: 1,
+        question: "Choose the deployment target",
+        choice: { label: "Production", optionIndex: 2, wasCustom: false },
+      },
+      {
+        questionIndex: 2,
+        question: "Choose the validation suite",
+        choice: { label: "Unit", optionIndex: 1, wasCustom: false },
+      },
+    ],
+  });
+});
+
+test("the Other row is numbered and opens the editor", () => {
+  const { form, getResult } = createForm([
+    {
+      question: "Choose a cache",
+      options: [{ label: "Redis" }, { label: "SQLite" }],
+    },
+  ]);
+
+  form.handleInput("3"); // Other
+  assert.match(form.render(80).join("\n"), /Your answer:/);
+
+  // Digits typed in the editor must reach the editor, not pick a row.
+  for (const character of "Keep 2 replicas") form.handleInput(character);
+  form.handleInput("\r");
+  assert.equal(getResult(), undefined);
+  assert.match(form.render(80).join("\n"), /→ 3\. Other — Keep 2 replicas/);
+
+  form.handleInput("enter");
+  assert.deepEqual(getResult()?.answers[0].choice, {
+    label: "Keep 2 replicas",
+    wasCustom: true,
+  });
+});
+
+test("numbers outside the option count are ignored", () => {
+  const { form, getResult, getRenderCount } = createForm([
+    {
+      question: "Choose one",
+      options: [{ label: "First" }, { label: "Second" }],
+    },
+  ]);
+
+  form.handleInput("7");
+
+  assert.equal(getResult(), undefined);
+  assert.equal(getRenderCount(), 0);
+  const rendered = form.render(80).join("\n");
+  assert.doesNotMatch(rendered, /→/);
+  assert.match(rendered, /› {3}1\. First/);
+  assert.match(rendered, /1-3 pick/);
 });
 
 test("selecting another option replaces the earlier choice", () => {
@@ -156,7 +238,7 @@ test("Other accepts an inline custom answer before form submission", () => {
   form.handleInput("\r");
 
   assert.equal(getResult(), undefined);
-  assert.match(form.render(80).join("\n"), /→ Other — Use the database directly/);
+  assert.match(form.render(80).join("\n"), /→ 3\. Other — Use the database directly/);
 
   form.handleInput("enter");
   assert.deepEqual(getResult()?.answers[0].choice, {

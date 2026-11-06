@@ -19,8 +19,11 @@ marked with a `→` arrow — single-selection list style, not a checkbox. A
 model-supplied Other-style option is refused rather than shown twice: the
 duplicate would otherwise reach the user with nothing reporting it back.
 
-Interactive controls:
+TUI form controls (other modes use pi's built-in dialogs):
 
+- `1`–`6` — pick the option with that number and advance to the next question,
+  or submit when the form is complete. The last number is the **Other** row:
+  it opens the custom-answer editor instead
 - `←` / `→` — switch questions while preserving answers
 - `↑` / `↓` — move between options
 - `Space` — select an option
