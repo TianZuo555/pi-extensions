@@ -2,11 +2,12 @@
 //
 // Interactive controls:
 //   ←/→ switch question · ↑/↓ move option · Space select
-//   Enter next/submit · Esc dismiss
+//   1-6 pick an option and advance · Enter next/submit · Esc dismiss
 //
 // Questions, labels, and descriptions are word-wrapped instead of truncated.
-// Each question always includes a free-form Other choice. RPC mode falls back
-// to built-in dialogs; print/json modes report that no UI was available.
+// Each question always includes a free-form Other choice, numbered after the
+// real options. RPC mode falls back to built-in dialogs; print/json modes
+// report that no UI was available.
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
