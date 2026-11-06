@@ -1,5 +1,13 @@
 # @tian.zuo/pi-rex
 
+## 0.3.0
+
+### Minor Changes
+
+- [#207](https://github.com/TianZuo555/pi-extensions/pull/207) [`9b6cf44`](https://github.com/TianZuo555/pi-extensions/commit/9b6cf44c29505b8c4fad9d874a6120514efd2d1c) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Name the Rex session after the project folder instead of a task label. A linked git worktree uses `Wrktree—<main repository folder>—<branch>`. The tab keeps the model-generated task label, and the session is renamed even when the model call fails.
+
+- [#206](https://github.com/TianZuo555/pi-extensions/pull/206) [`d128174`](https://github.com/TianZuo555/pi-extensions/commit/d128174b5f0938e1997e529af7f505b882e33bd8) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Resume pi in its Rex pane after a Rex restart. In TUI mode, the extension records the pi session of each Rex pane in `~/.pi/agent/rex-resume/<block id>`. The record stays when pi stops because of SIGHUP, SIGTERM, or a lost terminal, and for `/reload`, `/resume`, and `/fork`. It is removed when you quit pi and when `/new` replaces the session. A shell hook, shown in the README for fish, reads the record when Rex starts a new shell in the restored pane and runs `pi --session <file>`.
+
 ## 0.2.0
 
 ### Minor Changes
