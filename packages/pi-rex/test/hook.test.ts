@@ -53,13 +53,13 @@ test("reads PowerShell on Windows from PSModulePath", () => {
 test("puts the fish hook in conf.d below XDG_CONFIG_HOME", () => {
   assert.deepEqual(hookTarget("fish", fishContext()), { path: fishFile(), kind: "drop-in" });
   assert.deepEqual(hookTarget("fish", { env: { SHELL: "fish" }, home: "/home/you" }), {
-    path: "/home/you/.config/fish/conf.d/rex-resume.fish",
+    path: path.join("/home/you", ".config", "fish", "conf.d", "rex-resume.fish"),
     kind: "drop-in",
   });
 });
 
 test("puts the zsh hook in .zshrc, and follows ZDOTDIR", () => {
-  assert.equal(hookTarget("zsh", { home: "/home/you" }).path, "/home/you/.zshrc");
+  assert.equal(hookTarget("zsh", { home: "/home/you" }).path, path.join("/home/you", ".zshrc"));
   assert.equal(
     hookTarget("zsh", { env: { ZDOTDIR: path.join(dir, "zdot") }, home: "/home/you" }).path,
     path.join(dir, "zdot", ".zshrc"),
