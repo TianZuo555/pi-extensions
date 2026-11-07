@@ -9,6 +9,7 @@ type Handler = (event: unknown, ctx: unknown) => unknown;
 
 const BLOCK = "block:01a1-test";
 const SHELL = process.env.SHELL;
+const PS_MODULE_PATH = process.env.PSModulePath;
 let dir = "";
 
 beforeEach(() => {
@@ -17,6 +18,9 @@ beforeEach(() => {
   // Keep the hook install inside the temporary folder, and make the shell fish.
   process.env.XDG_CONFIG_HOME = dir;
   process.env.SHELL = "/opt/homebrew/bin/fish";
+  // Windows sets PSModulePath, which would install the PowerShell profile
+  // outside the temporary folder.
+  delete process.env.PSModulePath;
 });
 
 afterEach(() => {
@@ -24,6 +28,8 @@ afterEach(() => {
   delete process.env.XDG_CONFIG_HOME;
   if (SHELL === undefined) delete process.env.SHELL;
   else process.env.SHELL = SHELL;
+  if (PS_MODULE_PATH === undefined) delete process.env.PSModulePath;
+  else process.env.PSModulePath = PS_MODULE_PATH;
   rmSync(dir, { recursive: true, force: true });
 });
 

@@ -83,7 +83,11 @@ test("puts the bash hook in the file a login shell reads first", () => {
 test("puts the PowerShell hook in $PROFILE for the platform", () => {
   const home = path.join(dir, "home");
   assert.equal(
-    hookTarget("powershell", { env: { XDG_CONFIG_HOME: path.join(dir, "config") }, home }).path,
+    hookTarget("powershell", {
+      env: { XDG_CONFIG_HOME: path.join(dir, "config") },
+      home,
+      platform: "darwin",
+    }).path,
     path.join(dir, "config", "powershell", "profile.ps1"),
   );
   assert.equal(
@@ -153,6 +157,7 @@ test("creates the PowerShell profile with the block", () => {
   const context = {
     env: { SHELL: "/usr/bin/pwsh", XDG_CONFIG_HOME: path.join(dir, "config") },
     home: dir,
+    platform: "darwin" as const,
   };
   assert.deepEqual(installShellHook(context), { path: file, status: "created" });
   const text = readFileSync(file, "utf8");
