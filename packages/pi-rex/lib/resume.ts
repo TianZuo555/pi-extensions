@@ -3,8 +3,8 @@
 // Rex restores sessions, tabs, panes, and scrollback after a restart. Each
 // pane keeps its block ID, but Rex starts a new shell in it, not the program
 // that ran there. This module records the pi session of the pane in
-// `<agent dir>/rex-resume/<block id>`. A shell hook (see the README) reads the
-// record when a new shell starts in the pane and runs the command.
+// `<agent dir>/rex-resume/<block id>`, and installs the shell hook that reads
+// the record (see `lib/hook.ts`).
 //
 // The record is the working directory on line 1, then the command, one
 // argument per line. It stays when pi stops because of SIGHUP or SIGTERM, or
@@ -18,6 +18,8 @@ import {
   type ExtensionAPI,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import { installShellHook } from "./hook.ts";
+import { rexSetting } from "./settings.ts";
 
 /** Folder below the pi agent directory that holds one record per Rex pane. */
 export const RESUME_DIR = "rex-resume";
@@ -68,8 +70,18 @@ export function registerResume(pi: ExtensionAPI, agentDir: string = getAgentDir(
     const block = process.env.REX_BLOCK;
     // Print, JSON, and RPC runs inherit REX_BLOCK from the agent's shell, but
     // they are not the agent of the pane. `hasUI` is also true in RPC mode.
-    record = block && ctx.mode === "tui" ? recordPath(agentDir, block) : undefined;
+    record =
+      block && ctx.mode === "tui" && rexSetting(pi, "resume")
+        ? recordPath(agentDir, block)
+        : undefined;
     if (!record) return;
+    // The extension is the only part of the resume chain that runs on its own,
+    // so it installs the shell half too.
+    const hook = installShellHook();
+    if (hook && hook.status !== "kept") {
+      const verb = hook.status === "created" ? "installed" : "updated";
+      ctx.ui.notify(`pi-rex: ${verb} the resume hook ${hook.path}`, "info");
+    }
     signaled = false;
     for (const signal of SIGNALS) process.on(signal, onSignal);
     save(ctx);

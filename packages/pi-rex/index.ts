@@ -20,16 +20,10 @@ import { nameSession, REX_TIMEOUT_MS, type ExecResult } from "./lib/naming.ts";
 import { AUTO_NAME_INSTRUCTION, REX_SECTION } from "./lib/prompt.ts";
 import { registerResume } from "./lib/resume.ts";
 import { stripSessionNaming } from "./lib/rex-output.ts";
+import { rexSetting } from "./lib/settings.ts";
 
 /** Timeout for the naming model call. */
 const NAMING_TIMEOUT_MS = 15000;
-
-/** Name one session and tab. `true` unless the user turns it off. */
-function autoNameEnabled(pi: ExtensionAPI): boolean {
-  const rex = (pi.getSettings() as { rex?: unknown }).rex;
-  if (typeof rex !== "object" || rex === null) return true;
-  return (rex as { autoName?: unknown }).autoName !== false;
-}
 
 /**
  * Ask the session model for one label. Returns an empty string when the model
@@ -91,7 +85,7 @@ export default function rexExtension(pi: ExtensionAPI): void {
     }
     let output = result.stdout.trim();
     if (!output) return;
-    autoName = autoNameEnabled(pi);
+    autoName = rexSetting(pi, "autoName");
     if (autoName) output = `${stripSessionNaming(output)}\n\n${AUTO_NAME_INSTRUCTION}`;
     context = output;
   });
