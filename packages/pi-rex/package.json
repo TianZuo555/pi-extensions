@@ -1,6 +1,6 @@
 {
   "name": "@tian.zuo/pi-rex",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Tells the pi coding agent that it runs in a Rex terminal, names the Rex session after the project folder or worktree, names the tab from the first prompt, and resumes pi after a Rex restart.",
   "type": "module",
   "keywords": [
