@@ -28,7 +28,7 @@ export const BLOCK_START = "# >>> tian.zuo/pi-rex >>>";
 export const BLOCK_END = "# <<< tian.zuo/pi-rex <<<";
 
 /** Shells that get a hook. */
-export type Shell = "fish" | "zsh" | "bash";
+export type Shell = "fish" | "zsh" | "bash" | "powershell";
 
 const FISH_HOOK = `# Start pi again after the Rex server restarts this pane.
 # The pi-rex extension writes <agent dir>/rex-resume/<block id>.
@@ -92,11 +92,32 @@ case $- in
     ;;
 esac`;
 
+const POWERSHELL_HOOK = `# Start pi again after the Rex server restarts this pane.
+if ($env:REX_BLOCK) {
+  $dir = if ($env:PI_CODING_AGENT_DIR) {
+    $env:PI_CODING_AGENT_DIR -replace '^~(?=[\\\\/]|$)', $HOME
+  } else {
+    Join-Path $HOME '.pi/agent'
+  }
+  $file = Join-Path (Join-Path $dir 'rex-resume') ($env:REX_BLOCK -replace '^block:', '')
+  if (Test-Path -LiteralPath $file) {
+    $lines = @(Get-Content -LiteralPath $file)
+    if ($lines.Count -ge 2 -and (Test-Path -LiteralPath $lines[0])) {
+      $arguments = @()
+      if ($lines.Count -gt 2) { $arguments = @($lines[2..($lines.Count - 1)]) }
+      Set-Location -LiteralPath $lines[0]
+      Remove-Item -LiteralPath $file -Force
+      & $lines[1] @arguments
+    }
+  }
+}`;
+
 /** Hook source for each shell, below the marker or between the block markers. */
 export const HOOKS: Readonly<Record<Shell, string>> = {
   fish: FISH_HOOK,
   zsh: ZSH_HOOK,
   bash: BASH_HOOK,
+  powershell: POWERSHELL_HOOK,
 };
 
 /** What happened to the hook file. */
@@ -112,14 +133,27 @@ export type HookTarget = {
   readonly kind: "drop-in" | "block";
 };
 
+/** What this module reads from its surroundings. */
+export interface HookContext {
+  readonly env?: NodeJS.ProcessEnv;
+  readonly home?: string;
+  readonly platform?: NodeJS.Platform;
+}
+
 /** Shell of the pane, from `$SHELL`. Undefined for a shell without a hook. */
-export function detectShell(env: NodeJS.ProcessEnv = process.env): Shell | undefined {
+export function detectShell(context: HookContext = {}): Shell | undefined {
+  const env = context.env ?? process.env;
   // Windows paths use a backslash, which path.basename ignores on POSIX.
   const name = path
     .basename((env.SHELL ?? "").replace(/\\/g, "/"))
     .replace(/\.exe$/i, "")
     .toLowerCase();
   if (name === "fish" || name === "zsh" || name === "bash") return name;
+  if (name === "pwsh" || name === "powershell") return "powershell";
+  // A Windows pane has no SHELL. PowerShell exports PSModulePath to the
+  // programs it starts, and cmd.exe panes keep the one Windows sets.
+  if ((context.platform ?? process.platform) === "win32" && env.PSModulePath?.trim())
+    return "powershell";
   return undefined;
 }
 
@@ -137,11 +171,10 @@ function bashStartupFile(home: string): string {
 }
 
 /** File that holds the hook for a shell, and how the hook is kept there. */
-export function hookTarget(
-  shell: Shell,
-  env: NodeJS.ProcessEnv = process.env,
-  home: string = os.homedir(),
-): HookTarget {
+export function hookTarget(shell: Shell, context: HookContext = {}): HookTarget {
+  const env = context.env ?? process.env;
+  const home = context.home ?? os.homedir();
+  const platform = context.platform ?? process.platform;
   if (shell === "fish") {
     const configHome = env.XDG_CONFIG_HOME?.trim() || path.join(home, ".config");
     return { path: path.join(configHome, "fish", "conf.d", "rex-resume.fish"), kind: "drop-in" };
@@ -150,6 +183,14 @@ export function hookTarget(
     // Zsh reads .zshrc for interactive shells, and ZDOTDIR moves that file.
     const dotdir = env.ZDOTDIR?.trim() || home;
     return { path: path.join(dotdir, ".zshrc"), kind: "block" };
+  }
+  if (shell === "powershell") {
+    // PowerShell reads `$PROFILE.CurrentUserAllHosts`: Documents on Windows,
+    // and the config folder on macOS and Linux.
+    if (platform === "win32")
+      return { path: path.join(home, "Documents", "PowerShell", "profile.ps1"), kind: "block" };
+    const configHome = env.XDG_CONFIG_HOME?.trim() || path.join(home, ".config");
+    return { path: path.join(configHome, "powershell", "profile.ps1"), kind: "block" };
   }
   return { path: bashStartupFile(home), kind: "block" };
 }
@@ -173,13 +214,10 @@ export function upsertBlock(current: string, hook: string): string {
  * wrote it. Returns undefined for a shell without a hook, and when the write
  * fails.
  */
-export function installShellHook(
-  env: NodeJS.ProcessEnv = process.env,
-  home: string = os.homedir(),
-): HookInstall | undefined {
-  const shell = detectShell(env);
+export function installShellHook(context: HookContext = {}): HookInstall | undefined {
+  const shell = detectShell(context);
   if (!shell) return undefined;
-  const target = hookTarget(shell, env, home);
+  const target = hookTarget(shell, context);
   try {
     const current = existsSync(target.path) ? readFileSync(target.path, "utf8") : undefined;
     // A drop-in file without the marker belongs to the user.
