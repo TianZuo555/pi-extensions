@@ -66,29 +66,38 @@ if [[ -n \${REX_BLOCK:-} ]]; then
 fi`;
 
 const BASH_HOOK = `# Start pi again after the Rex server restarts this pane.
+# Keep this block POSIX: a desktop session can run .profile through /bin/sh.
 case $- in
   *i*)
-    if [ -n "\${REX_BLOCK:-}" ]; then
+    __rex_resume() {
+      [ -n "\${REX_BLOCK:-}" ] || return 0
       __rex_dir="\${PI_CODING_AGENT_DIR:-$HOME/.pi/agent}"
       case "$__rex_dir" in
         "~"/*) __rex_dir="$HOME/\${__rex_dir#\\~/}" ;;
       esac
       __rex_file="$__rex_dir/rex-resume/\${REX_BLOCK#block:}"
-      if [ -f "$__rex_file" ]; then
-        __rex_lines=()
-        while IFS= read -r __rex_line || [ -n "$__rex_line" ]; do
-          __rex_lines[\${#__rex_lines[@]}]="$__rex_line"
-        done < "$__rex_file"
-        if [ -n "\${__rex_lines[0]:-}" ] && cd -- "\${__rex_lines[0]}" 2>/dev/null; then
-          rm -f "$__rex_file"
-          __rex_cmd=("\${__rex_lines[@]:1}")
-          if [ \${#__rex_cmd[@]} -gt 0 ]; then
-            "\${__rex_cmd[@]}"
-          fi
+      [ -f "$__rex_file" ] || return 0
+      __rex_cwd=""
+      __rex_first=1
+      set --
+      while IFS= read -r __rex_line || [ -n "$__rex_line" ]; do
+        if [ "$__rex_first" = 1 ]; then
+          __rex_cwd="$__rex_line"
+          __rex_first=0
+        else
+          set -- "$@" "$__rex_line"
         fi
+      done < "$__rex_file"
+      [ -n "$__rex_cwd" ] || return 0
+      cd -- "$__rex_cwd" 2>/dev/null || return 0
+      rm -f "$__rex_file"
+      if [ "$#" -gt 0 ]; then
+        "$@"
       fi
-      unset __rex_dir __rex_file __rex_line __rex_lines __rex_cmd
-    fi
+    }
+    __rex_resume
+    unset -f __rex_resume
+    unset __rex_dir __rex_file __rex_cwd __rex_first __rex_line
     ;;
 esac`;
 
@@ -140,14 +149,19 @@ export interface HookContext {
   readonly platform?: NodeJS.Platform;
 }
 
-/** Shell of the pane, from `$SHELL`. Undefined for a shell without a hook. */
-export function detectShell(context: HookContext = {}): Shell | undefined {
-  const env = context.env ?? process.env;
+/** Shell file name from `$SHELL`, without a folder, a `.exe`, or a case difference. */
+function shellName(env: NodeJS.ProcessEnv): string {
   // Windows paths use a backslash, which path.basename ignores on POSIX.
-  const name = path
+  return path
     .basename((env.SHELL ?? "").replace(/\\/g, "/"))
     .replace(/\.exe$/i, "")
     .toLowerCase();
+}
+
+/** Shell of the pane, from `$SHELL`. Undefined for a shell without a hook. */
+export function detectShell(context: HookContext = {}): Shell | undefined {
+  const env = context.env ?? process.env;
+  const name = shellName(env);
   if (name === "fish" || name === "zsh" || name === "bash") return name;
   if (name === "pwsh" || name === "powershell") return "powershell";
   // A Windows pane has no SHELL. PowerShell exports PSModulePath to the
@@ -186,9 +200,12 @@ export function hookTarget(shell: Shell, context: HookContext = {}): HookTarget 
   }
   if (shell === "powershell") {
     // PowerShell reads `$PROFILE.CurrentUserAllHosts`: Documents on Windows,
-    // and the config folder on macOS and Linux.
-    if (platform === "win32")
-      return { path: path.join(home, "Documents", "PowerShell", "profile.ps1"), kind: "block" };
+    // and the config folder on macOS and Linux. Windows PowerShell 5.1 reads a
+    // different folder from PowerShell 7.
+    if (platform === "win32") {
+      const folder = shellName(env) === "powershell" ? "WindowsPowerShell" : "PowerShell";
+      return { path: path.join(home, "Documents", folder, "profile.ps1"), kind: "block" };
+    }
     const configHome = env.XDG_CONFIG_HOME?.trim() || path.join(home, ".config");
     return { path: path.join(configHome, "powershell", "profile.ps1"), kind: "block" };
   }

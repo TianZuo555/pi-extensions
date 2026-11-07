@@ -70,11 +70,14 @@ export function registerResume(pi: ExtensionAPI, agentDir: string = getAgentDir(
     const block = process.env.REX_BLOCK;
     // Print, JSON, and RPC runs inherit REX_BLOCK from the agent's shell, but
     // they are not the agent of the pane. `hasUI` is also true in RPC mode.
-    record =
-      block && ctx.mode === "tui" && rexSetting(pi, "resume")
-        ? recordPath(agentDir, block)
-        : undefined;
-    if (!record) return;
+    const file =
+      block !== undefined && ctx.mode === "tui" ? recordPath(agentDir, block) : undefined;
+    const enabled = file !== undefined && rexSetting(pi, "resume");
+    // Turning resume off in a live session must remove the record too, or the
+    // hook would reopen the session on the next Rex restart.
+    if (file !== undefined && !enabled) rmSync(file, { force: true });
+    record = enabled ? file : undefined;
+    if (record === undefined) return;
     // The extension is the only part of the resume chain that runs on its own,
     // so it installs the shell half too.
     const hook = installShellHook();
