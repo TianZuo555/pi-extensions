@@ -186,6 +186,18 @@ test("installs no hook for a shell without one", async () => {
   assert.deepEqual(notices, []);
 });
 
+test("removes the old record when resume is turned off", async () => {
+  const on = setup();
+  writeFileSync(on.sessionFile, "");
+  await on.fire("session_start");
+  assert.ok(existsSync(on.record));
+
+  // A reload after `rex.resume: false` must not leave a record behind.
+  const off = setup({ settings: { rex: { resume: false } } });
+  await off.fire("session_start");
+  assert.ok(!existsSync(on.record));
+});
+
 test("writes no record and no hook when resume is off", async () => {
   const { fire, record, sessionFile } = setup({ settings: { rex: { resume: false } } });
   writeFileSync(sessionFile, "");

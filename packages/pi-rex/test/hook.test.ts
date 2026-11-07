@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -94,6 +95,44 @@ test("puts the PowerShell hook in $PROFILE for the platform", () => {
     hookTarget("powershell", { home, platform: "win32" }).path,
     path.join(home, "Documents", "PowerShell", "profile.ps1"),
   );
+});
+
+test("uses the Windows PowerShell folder for powershell.exe", () => {
+  const home = path.join(dir, "home");
+  const target = (SHELL: string) =>
+    hookTarget("powershell", { env: { SHELL }, home, platform: "win32" }).path;
+  // PowerShell 7 and Windows PowerShell 5.1 read different profile folders.
+  assert.equal(
+    target("C:\\Program Files\\PowerShell\\7\\pwsh.exe"),
+    path.join(home, "Documents", "PowerShell", "profile.ps1"),
+  );
+  assert.equal(
+    target("C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe"),
+    path.join(home, "Documents", "WindowsPowerShell", "profile.ps1"),
+  );
+  // A Windows pane with no SHELL gets the PowerShell 7 folder.
+  assert.equal(
+    hookTarget("powershell", { env: { PSModulePath: "x" }, home, platform: "win32" }).path,
+    path.join(home, "Documents", "PowerShell", "profile.ps1"),
+  );
+});
+
+test("keeps the bash block free of bash-only syntax", () => {
+  // A desktop session can run .profile through /bin/sh, and sh must parse it.
+  for (const bashism of ["[[", "=(", "local ", "${#__rex"]) {
+    assert.ok(!HOOKS.bash.includes(bashism), bashism);
+  }
+});
+
+test("writes a bash block that a POSIX shell can parse", () => {
+  const home = path.join(dir, "home");
+  mkdirSync(home, { recursive: true });
+  writeFileSync(path.join(home, ".profile"), "export A=1\n");
+  installShellHook({ env: { SHELL: "/bin/bash" }, home });
+  const probe = spawnSync("sh", ["-n", path.join(home, ".profile")], { encoding: "utf8" });
+  // Windows has no sh, and the job that runs there covers the other checks.
+  if (probe.error !== undefined || probe.status === 127) return;
+  assert.equal(probe.status, 0, probe.stderr);
 });
 
 test("appends the marked block to a startup file", () => {
