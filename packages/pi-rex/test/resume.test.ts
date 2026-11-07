@@ -171,8 +171,9 @@ test("keeps a hook file the user wrote", async () => {
   assert.deepEqual(notices, []);
 });
 
-test("installs no hook outside fish", async () => {
-  process.env.SHELL = "/bin/bash";
+test("installs no hook for a shell without one", async () => {
+  // `sh` has no hook. A bash pane would get one in its startup file.
+  process.env.SHELL = "/bin/sh";
   const { fire, notices } = setup();
   await fire("session_start");
   assert.ok(!existsSync(hookFile()));
