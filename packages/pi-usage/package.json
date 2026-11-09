@@ -54,7 +54,7 @@
   },
   "dependencies": {
     "effect": "4.1.1",
-    "playwriter": "0.9.0"
+    "playwriter": "0.10.0"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*",
