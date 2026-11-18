@@ -44,7 +44,7 @@
   },
   "dependencies": {
     "effect": "4.1.1",
-    "minimatch": "^10.2.6"
+    "minimatch": "^11.0.5"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
