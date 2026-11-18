@@ -8,6 +8,7 @@ import {
   FILE_SIZE_LIMIT_NOTICE,
   FIND_OUTPUT_FIELD_DESCRIPTIONS,
   FIND_PARAMETER_DESCRIPTIONS,
+  FIND_PROMPT_GUIDELINES,
   FIND_PROMPT_SNIPPET,
   FIND_RESULT_LIMIT,
   FIND_TOOL_DESCRIPTION,
@@ -16,6 +17,7 @@ import {
   GREP_MATCH_FIELD_DESCRIPTIONS,
   GREP_OUTPUT_FIELD_DESCRIPTIONS,
   GREP_PARAMETER_DESCRIPTIONS,
+  GREP_PROMPT_GUIDELINES,
   GREP_PROMPT_SNIPPET,
   GREP_RESULT_LIMIT,
   GREP_TOOL_DESCRIPTION,
@@ -230,6 +232,7 @@ export function registerTools(pi: ExtensionAPI, runtime: SearchRuntimeInstance):
     label: "grep",
     description: GREP_TOOL_DESCRIPTION,
     promptSnippet: GREP_PROMPT_SNIPPET,
+    promptGuidelines: GREP_PROMPT_GUIDELINES,
     parameters: GrepParams,
     outputSchema: GrepOutputSchema,
 
@@ -356,6 +359,7 @@ export function registerTools(pi: ExtensionAPI, runtime: SearchRuntimeInstance):
     label: "find",
     description: FIND_TOOL_DESCRIPTION,
     promptSnippet: FIND_PROMPT_SNIPPET,
+    promptGuidelines: FIND_PROMPT_GUIDELINES,
     parameters: FindParams,
     outputSchema: FindOutputSchema,
 
