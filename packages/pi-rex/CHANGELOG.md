@@ -1,5 +1,15 @@
 # @tian.zuo/pi-rex
 
+## 0.4.0
+
+### Minor Changes
+
+- [#211](https://github.com/TianZuo555/pi-extensions/pull/211) [`6d55a59`](https://github.com/TianZuo555/pi-extensions/commit/6d55a595c99d06ad6a2bc9bd2ae2742d6df46083) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Install the shell hook that resumes pi after a Rex restart. On the first pi session inside a Rex pane, the extension writes the hook for `fish`, `zsh`, `bash`, or PowerShell, and changes only text it wrote itself. The new `rex.resume` setting turns the record and the hook off.
+
+### Patch Changes
+
+- [#212](https://github.com/TianZuo555/pi-extensions/pull/212) [`7b88eb3`](https://github.com/TianZuo555/pi-extensions/commit/7b88eb36e34534c79adf587a4623c2233d9dbd04) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Fix three problems in the resume hook install. The bash block now uses POSIX syntax, so a `/bin/sh` that reads `.profile` can parse it. The Windows PowerShell 5.1 profile goes to `Documents\WindowsPowerShell`. Turning `rex.resume` off removes the pane's record, so the hook does not reopen the session.
+
 ## 0.3.0
 
 ### Minor Changes
