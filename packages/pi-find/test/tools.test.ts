@@ -240,6 +240,8 @@ test("model-facing metadata stays concise and explains defaults and budgets", ()
   assert.match(FIND_PARAMETER_DESCRIPTIONS.pattern, /relative to the search root/);
   // The experiment variable: the guideline must name the shell command it replaces.
   assert.match(GREP_PROMPT_GUIDELINES.join(" "), /bash rg/);
+  // `find` rejects a file as `path`, so the guideline must send the glob to `pattern`.
+  assert.match(FIND_PROMPT_GUIDELINES.join(" "), /directory in path/);
 });
 
 test("result text keeps one blank line between sections", () => {

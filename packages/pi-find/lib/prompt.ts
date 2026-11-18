@@ -36,7 +36,7 @@ export const FIND_TOOL_DESCRIPTION =
 export const FIND_PROMPT_SNIPPET = "Find files with a glob";
 
 export const FIND_PROMPT_GUIDELINES = [
-  "find: use it for paths and grep for contents; pass a glob in path for an exact filename.",
+  "find: it locates paths, never contents; put the filename glob in pattern and a directory in path, and use grep for contents.",
 ];
 
 export const FIND_PARAMETER_DESCRIPTIONS = {
