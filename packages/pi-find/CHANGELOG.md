@@ -1,5 +1,11 @@
 # @tian.zuo/pi-find
 
+## 0.7.0
+
+### Minor Changes
+
+- [#219](https://github.com/TianZuo555/pi-extensions/pull/219) [`a65ef28`](https://github.com/TianZuo555/pi-extensions/commit/a65ef28e5e6a174251bdb78f47a496ceea77964a) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Add three model-facing guidelines that name the shell command each tool replaces: prefer `grep` over bash `rg` for content search, read the top match after one or two searches, and use `find` for paths while `grep` handles contents. The `find` line keeps the filename glob in `pattern` and a directory in `path`, because the tool rejects a file as `path`.
+
 ## 0.6.2
 
 ### Patch Changes
