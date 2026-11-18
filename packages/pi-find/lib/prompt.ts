@@ -13,6 +13,16 @@ export const GREP_TOOL_DESCRIPTION =
   "Search file contents by case-sensitive regex; respects .gitignore; skips hidden paths. Up to 100 lines or 200 files.";
 export const GREP_PROMPT_SNIPPET = "Search file contents with a regex";
 
+/**
+ * Behaviour rules only: the description and schema already carry syntax, and
+ * these lines are paid for in every request. Each line states when to reach
+ * for the tool instead of the shell command it competes with.
+ */
+export const GREP_PROMPT_GUIDELINES = [
+  "grep: prefer it over bash rg for content search; results name the file and line, ready for read.",
+  "grep: after 1-2 searches, read the top match instead of grepping again.",
+];
+
 export const GREP_PARAMETER_DESCRIPTIONS = {
   pattern: "Case-sensitive ripgrep regex; prefix (?i) to ignore case.",
   path: "File or directory; defaults to cwd; name hidden paths explicitly ('.github').",
@@ -24,6 +34,10 @@ export const GREP_PARAMETER_DESCRIPTIONS = {
 export const FIND_TOOL_DESCRIPTION =
   "Find files by case-insensitive glob; respects .gitignore; skips hidden paths. Up to 200 files.";
 export const FIND_PROMPT_SNIPPET = "Find files with a glob";
+
+export const FIND_PROMPT_GUIDELINES = [
+  "find: it locates paths, never contents; put the filename glob in pattern and a directory in path, and use grep for contents.",
+];
 
 export const FIND_PARAMETER_DESCRIPTIONS = {
   pattern:
