@@ -165,10 +165,13 @@ export default function candyEval(pi: ExtensionAPI): void {
         ctx.ui.notify(arg ? `probing ${arg}…` : "probing every Codex account…", "info");
         const { runs, accounts } = await probeRound(arg || undefined, undefined);
         const passed = runs.filter((run) => run.verdict === "ok").length;
-        ctx.ui.notify(
-          `candy-eval · ${accounts.length} account${accounts.length === 1 ? "" : "s"} · ${passed} answered 21\n${report(runs, dir)}`,
-          "info",
-        );
+        const failed = runs.filter((run) => run.verdict === "error").length;
+        const counts = [
+          `${accounts.length} account${accounts.length === 1 ? "" : "s"}`,
+          `${passed} answered 21`,
+        ];
+        if (failed > 0) counts.push(`${failed} failed`);
+        ctx.ui.notify(`candy-eval · ${counts.join(" · ")}\n${report(runs, dir)}`, "info");
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
         ctx.ui.notify(`candy eval failed: ${reason}`, "error");

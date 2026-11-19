@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { effortOf, modelOf, parseAccounts, parseIssuedKey, readReply } from "../lib/magpie.ts";
+import {
+  effortOf,
+  magpieFailure,
+  modelOf,
+  parseAccounts,
+  parseIssuedKey,
+  readReply,
+} from "../lib/magpie.ts";
 
 test("parseAccounts keeps the accounts magpie has on", () => {
   const stdout = JSON.stringify([
@@ -54,4 +61,19 @@ test("modelOf and effortOf take the environment, then their own default", () => 
   assert.equal(modelOf({ PI_CANDY_MODEL: "  " }), "codex/gpt-6.2-sol");
   assert.equal(effortOf({}), "high");
   assert.equal(effortOf({ PI_CANDY_EFFORT: "xhigh" }), "xhigh");
+});
+
+test("magpieFailure names what magpie said, not the command line", () => {
+  const refused = Object.assign(
+    new Error(
+      "Command failed: /Applications/magpie.app/Contents/MacOS/magpie gateway-key issue --ttl 10m --accounts codex/nobody@example.com --json",
+    ),
+    { stderr: '\n  magpie: Codex has no account "nobody@example.com"\n' },
+  );
+  assert.equal(magpieFailure(refused), 'magpie: Codex has no account "nobody@example.com"');
+  assert.match(
+    magpieFailure(new Error("Command failed: magpie status --json")),
+    /magpie exited with an error/u,
+  );
+  assert.equal(magpieFailure(new Error("boom")), "boom");
 });

@@ -88,6 +88,25 @@ export async function magpieBin(): Promise<string | undefined> {
   return undefined;
 }
 
+/** What magpie said when it refused, without the command line execFile puts
+ * in front of it. */
+export function magpieFailure(error: unknown): string {
+  const stderr = (error as { stderr?: unknown }).stderr;
+  if (typeof stderr === "string") {
+    const line = stderr
+      .split("\n")
+      .map((row) => row.trim())
+      .filter((row) => row !== "")
+      .at(-1);
+    if (line) return line.slice(0, 200);
+  }
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.startsWith("Command failed")) {
+    return "magpie exited with an error; run `magpie accounts codex` to check it";
+  }
+  return message.slice(0, 200);
+}
+
 /** The accounts to probe: every one magpie has switched on. */
 export function parseAccounts(stdout: string): Account[] {
   const parsed: unknown = JSON.parse(stdout);
@@ -161,7 +180,12 @@ export async function accountList(bin: string, agent = "codex"): Promise<Account
 export async function gatewayUrl(bin: string): Promise<string> {
   const override = process.env.PI_CANDY_GATEWAY?.trim();
   if (override) return override.replace(/\/+$/, "");
-  const { stdout } = await exec(bin, ["status", "--json"], { timeout: 15_000, maxBuffer: 1 << 20 });
+  let stdout: string;
+  try {
+    ({ stdout } = await exec(bin, ["status", "--json"], { timeout: 15_000, maxBuffer: 1 << 20 }));
+  } catch (error) {
+    throw new Error(magpieFailure(error));
+  }
   const status = JSON.parse(stdout) as { url?: unknown; running?: unknown };
   if (typeof status.url !== "string" || status.url === "") {
     throw new Error("magpie is not serving a gateway; start magpie, then probe again");
@@ -170,22 +194,26 @@ export async function gatewayUrl(bin: string): Promise<string> {
 }
 
 async function issueKey(bin: string, account: string, agent = "codex"): Promise<string> {
-  const { stdout } = await exec(
-    bin,
-    [
-      "gateway-key",
-      "issue",
-      "--ttl",
-      KEY_TTL,
-      "--name",
-      KEY_NAME,
-      "--accounts",
-      `${agent}/${account}`,
-      "--json",
-    ],
-    { timeout: 30_000, maxBuffer: 1 << 20 },
-  );
-  return parseIssuedKey(stdout);
+  try {
+    const { stdout } = await exec(
+      bin,
+      [
+        "gateway-key",
+        "issue",
+        "--ttl",
+        KEY_TTL,
+        "--name",
+        KEY_NAME,
+        "--accounts",
+        `${agent}/${account}`,
+        "--json",
+      ],
+      { timeout: 30_000, maxBuffer: 1 << 20 },
+    );
+    return parseIssuedKey(stdout);
+  } catch (error) {
+    throw new Error(magpieFailure(error));
+  }
 }
 
 function failure(
@@ -260,6 +288,6 @@ export async function probe(
     };
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
-    return failure(account, settings, reason.slice(0, 300), startedAt, at);
+    return failure(account, settings, reason.slice(0, 200), startedAt, at);
   }
 }

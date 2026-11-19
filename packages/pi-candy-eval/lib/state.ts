@@ -81,7 +81,7 @@ function fit(text: string, width: number): string {
 /** One probe, one line. */
 export function formatRun(run: ProbeRun): string {
   if (run.verdict === "error") {
-    return `${clockOf(run.at)}  ${fit(run.account, ACCOUNT_WIDTH)}  error  ${run.error ?? ""}`;
+    return `${clockOf(run.at)}  ${fit(run.account, ACCOUNT_WIDTH)}  error  ${fit(run.error ?? "", 100).trimEnd()}`;
   }
   const reasoning = run.reasoningTokens === undefined ? "?" : String(run.reasoningTokens);
   return [
