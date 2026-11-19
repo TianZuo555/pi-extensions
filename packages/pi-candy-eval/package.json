@@ -1,0 +1,50 @@
+{
+  "name": "@tian.zuo/pi-candy-eval",
+  "version": "0.1.0",
+  "description": "Run a candy reasoning probe against Codex accounts through the magpie gateway, to watch for a degraded model in the pi coding agent.",
+  "type": "module",
+  "keywords": [
+    "pi",
+    "pi-package",
+    "pi-extension",
+    "pi-coding-agent",
+    "codex",
+    "magpie",
+    "degradation",
+    "regression",
+    "eval"
+  ],
+  "author": "Tian Zuo",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TianZuo555/pi-extensions.git",
+    "directory": "packages/pi-candy-eval"
+  },
+  "homepage": "https://github.com/TianZuo555/pi-extensions#pi-candy-eval",
+  "bugs": {
+    "url": "https://github.com/TianZuo555/pi-extensions/issues"
+  },
+  "files": [
+    "index.ts",
+    "lib",
+    "README.md"
+  ],
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "scripts": {
+    "check": "tsc --noEmit -p .",
+    "test": "node --test --experimental-strip-types test/*.test.ts"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@effect/language-service": "^0.87.5",
+    "typescript": "^7.0.2"
+  }
+}
