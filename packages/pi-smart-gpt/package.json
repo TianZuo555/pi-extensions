@@ -1,0 +1,52 @@
+{
+  "name": "@tian.zuo/pi-smart-gpt",
+  "version": "0.1.0",
+  "description": "Test whether a Codex model got dumber: ask a fixed reasoning puzzle through the magpie gateway, and keep the answers and the reasoning tokens.",
+  "type": "module",
+  "keywords": [
+    "pi",
+    "pi-package",
+    "pi-extension",
+    "pi-coding-agent",
+    "codex",
+    "magpie",
+    "intelligence",
+    "iq-test",
+    "degradation",
+    "regression",
+    "eval"
+  ],
+  "author": "Tian Zuo",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/TianZuo555/pi-extensions.git",
+    "directory": "packages/pi-smart-gpt"
+  },
+  "homepage": "https://github.com/TianZuo555/pi-extensions#pi-smart-gpt",
+  "bugs": {
+    "url": "https://github.com/TianZuo555/pi-extensions/issues"
+  },
+  "files": [
+    "index.ts",
+    "lib",
+    "README.md"
+  ],
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "scripts": {
+    "check": "tsc --noEmit -p .",
+    "test": "node --test --experimental-strip-types test/*.test.ts"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "devDependencies": {
+    "@effect/language-service": "^0.87.5",
+    "typescript": "^7.0.2"
+  }
+}
