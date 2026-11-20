@@ -16,7 +16,7 @@ Each extension has its own package and its own README under
 | [pi-token-speed](packages/pi-token-speed/README.md) | `/tps` | Live tok/s meter in the footer plus an end-of-message summary. |
 | [pi-image-cache](packages/pi-image-cache/README.md) | `Ctrl+V`, `/images`, `/image-cache-clear` | Caches pasted images as `[Image#NNN]` and re-attaches them on send. |
 | [pi-ask-user](packages/pi-ask-user/README.md) | tool `ask_user` | Lets the model ask 1–5 single-choice questions in one form. |
-| [pi-candy-eval](packages/pi-candy-eval/README.md) | `/candy`, tool `candy_eval` | Probes Codex accounts with a fixed candy reasoning puzzle through magpie: answer, reasoning tokens and history per account. |
+| [pi-smart-gpt](packages/pi-smart-gpt/README.md) | `/smart`, tool `smart_gpt` | Tests whether a Codex model got dumber: a fixed reasoning puzzle through magpie, with the answer, reasoning tokens and history per account. |
 | [pi-usage](packages/pi-usage/README.md) | `/usage`, `/tokens` | Provider account usage (OpenAI via legacy Codex login, Copilot, Z.ai, DeepSeek, Xiaomi MiMo) plus a token/cost dashboard. |
 | [pi-background-terminals](packages/pi-background-terminals/README.md) | `/ps`, overrides tool `bash` | One no-stdin bash path: long commands yield to background and notify once. |
 | [pi-edit-safe (deprecated)](packages/pi-edit-safe/README.md) | overrides tool `edit` | Historical stricter edit override; use Pi’s built-in `edit` tool. |

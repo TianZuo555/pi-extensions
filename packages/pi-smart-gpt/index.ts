@@ -1,16 +1,17 @@
-// pi-candy-eval — ask Codex accounts a fixed reasoning puzzle, and keep the
-// answers, so a degraded upstream model shows up as a wrong answer or as
-// reasoning tokens far below the account's own history.
+// pi-smart-gpt — test whether a Codex account still answers as well as it used
+// to: ask a fixed reasoning puzzle, and keep the answers, so a degraded
+// upstream model shows up as a wrong answer or as reasoning tokens far below
+// the account's own history.
 //
 // There is no timer and no background work here (pi's extension contract starts
 // background resources only after a session begins, and this probe is
-// deliberate, not periodic): the tool and `/candy` run one round each, and the
-// runs live in ~/.pi/candy-eval/runs.jsonl.
+// deliberate, not periodic): the tool and `/smart` run one round each, and the
+// runs live in ~/.pi/smart-gpt/runs.jsonl.
 //
 // Routes: only magpie can pin a request to one account, so every probe issues a
 // ten-minute gateway key for that account and calls the gateway's chat endpoint.
 //
-// Quick try:  pi -e ./packages/pi-candy-eval
+// Quick try:  pi -e ./packages/pi-smart-gpt
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
@@ -25,21 +26,21 @@ import {
   type ProbeRun,
 } from "./lib/magpie.ts";
 import {
-  CANDY_PARAMETER_DESCRIPTIONS,
-  CANDY_PROMPT_GUIDELINES,
-  CANDY_PROMPT_SNIPPET,
-  CANDY_TOOL_DESCRIPTION,
+  SMART_PARAMETER_DESCRIPTIONS,
+  SMART_PROMPT_GUIDELINES,
+  SMART_PROMPT_SNIPPET,
+  SMART_TOOL_DESCRIPTION,
 } from "./lib/prompt.ts";
 import { appendRun, formatHistory, formatRun, lastRuns, medianOf, stateDir } from "./lib/state.ts";
 
 const HISTORY_ROWS = 10;
 const BASELINE_ROWS = 10;
 
-const CandyParams = Type.Object({
-  account: Type.Optional(Type.String({ description: CANDY_PARAMETER_DESCRIPTIONS.account })),
+const SmartParams = Type.Object({
+  account: Type.Optional(Type.String({ description: SMART_PARAMETER_DESCRIPTIONS.account })),
 });
 
-type CandyInput = Static<typeof CandyParams>;
+type SmartInput = Static<typeof SmartParams>;
 
 /** One round: every named account, or all that magpie has switched on. */
 async function probeRound(
@@ -49,7 +50,7 @@ async function probeRound(
   const bin = await magpieBin();
   if (!bin) {
     throw new Error(
-      "magpie is not installed: candy-eval needs its gateway to pin a request to one account",
+      "magpie is not installed: smart-gpt needs its gateway to pin a request to one account",
     );
   }
   const url = await gatewayUrl(bin);
@@ -91,29 +92,29 @@ function report(runs: ProbeRun[], dir: string): string {
 
 function usage(): string {
   return [
-    "candy-eval",
-    "  /candy            probe every switched-on Codex account now",
-    "  /candy <email>    probe one account",
-    `  /candy history    the last ${HISTORY_ROWS} runs`,
-    "  PI_CANDY_MODEL, PI_CANDY_EFFORT, PI_CANDY_GATEWAY, PI_CANDY_MAGPIE_BIN, PI_CANDY_STATE_DIR change the defaults",
+    "smart-gpt",
+    "  /smart            test every switched-on Codex account now",
+    "  /smart <email>    test one account",
+    `  /smart history    the last ${HISTORY_ROWS} runs`,
+    "  PI_SMART_MODEL, PI_SMART_EFFORT, PI_SMART_GATEWAY, PI_SMART_MAGPIE_BIN, PI_SMART_STATE_DIR change the defaults",
   ].join("\n");
 }
 
-export default function candyEval(pi: ExtensionAPI): void {
+export default function smartGpt(pi: ExtensionAPI): void {
   let busy = false;
 
   pi.registerTool({
-    name: "candy_eval",
-    label: "Candy eval",
-    description: CANDY_TOOL_DESCRIPTION,
-    promptSnippet: CANDY_PROMPT_SNIPPET,
-    promptGuidelines: CANDY_PROMPT_GUIDELINES,
-    parameters: CandyParams,
+    name: "smart_gpt",
+    label: "Smart GPT",
+    description: SMART_TOOL_DESCRIPTION,
+    promptSnippet: SMART_PROMPT_SNIPPET,
+    promptGuidelines: SMART_PROMPT_GUIDELINES,
+    parameters: SmartParams,
 
-    async execute(_toolCallId, params: CandyInput, signal, _onUpdate, _ctx) {
+    async execute(_toolCallId, params: SmartInput, signal, _onUpdate, _ctx) {
       if (busy) {
         return {
-          content: [{ type: "text" as const, text: "a candy probe is already running" }],
+          content: [{ type: "text" as const, text: "a smart-gpt probe is already running" }],
           details: { runs: [] },
         };
       }
@@ -127,7 +128,7 @@ export default function candyEval(pi: ExtensionAPI): void {
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
         return {
-          content: [{ type: "text" as const, text: `candy eval failed: ${reason}` }],
+          content: [{ type: "text" as const, text: `smart-gpt test failed: ${reason}` }],
           details: { runs: [] },
           isError: true,
         };
@@ -137,8 +138,8 @@ export default function candyEval(pi: ExtensionAPI): void {
     },
   });
 
-  pi.registerCommand("candy", {
-    description: "Probe Codex accounts with the candy puzzle: /candy [<email>|history]",
+  pi.registerCommand("smart", {
+    description: "Test Codex accounts with the reasoning puzzle: /smart [<email>|history]",
 
     handler: async (args, ctx) => {
       const arg = args.trim();
@@ -146,7 +147,7 @@ export default function candyEval(pi: ExtensionAPI): void {
 
       if (arg === "history") {
         ctx.ui.notify(
-          formatHistory(lastRuns(dir, HISTORY_ROWS), `candy-eval · ${modelOf()} · ${effortOf()}`),
+          formatHistory(lastRuns(dir, HISTORY_ROWS), `smart-gpt · ${modelOf()} · ${effortOf()}`),
           "info",
         );
         return;
@@ -156,13 +157,13 @@ export default function candyEval(pi: ExtensionAPI): void {
         return;
       }
       if (busy) {
-        ctx.ui.notify("a candy probe is already running", "info");
+        ctx.ui.notify("a smart-gpt probe is already running", "info");
         return;
       }
 
       busy = true;
       try {
-        ctx.ui.notify(arg ? `probing ${arg}…` : "probing every Codex account…", "info");
+        ctx.ui.notify(arg ? `testing ${arg}…` : "testing every Codex account…", "info");
         const { runs, accounts } = await probeRound(arg || undefined, undefined);
         const passed = runs.filter((run) => run.verdict === "ok").length;
         const failed = runs.filter((run) => run.verdict === "error").length;
@@ -171,10 +172,10 @@ export default function candyEval(pi: ExtensionAPI): void {
           `${passed} answered 21`,
         ];
         if (failed > 0) counts.push(`${failed} failed`);
-        ctx.ui.notify(`candy-eval · ${counts.join(" · ")}\n${report(runs, dir)}`, "info");
+        ctx.ui.notify(`smart-gpt · ${counts.join(" · ")}\n${report(runs, dir)}`, "info");
       } catch (error) {
         const reason = error instanceof Error ? error.message : String(error);
-        ctx.ui.notify(`candy eval failed: ${reason}`, "error");
+        ctx.ui.notify(`smart-gpt test failed: ${reason}`, "error");
       } finally {
         busy = false;
       }

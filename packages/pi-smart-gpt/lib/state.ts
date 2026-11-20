@@ -1,5 +1,5 @@
 // What each probe left behind: one JSON line per run under
-// ~/.pi/candy-eval/runs.jsonl, so a series survives reloads and sessions.
+// ~/.pi/smart-gpt/runs.jsonl, so a series survives reloads and sessions.
 //
 // Nothing here reads or writes the repository, and no key is ever stored.
 
@@ -10,9 +10,9 @@ import type { ProbeRun } from "./magpie.ts";
 
 const ACCOUNT_WIDTH = 32;
 
-/** Where the runs live: PI_CANDY_STATE_DIR, else ~/.pi/candy-eval. */
+/** Where the runs live: PI_SMART_STATE_DIR, else ~/.pi/smart-gpt. */
 export function stateDir(env: NodeJS.ProcessEnv = process.env): string {
-  return env.PI_CANDY_STATE_DIR?.trim() || path.join(os.homedir(), ".pi", "candy-eval");
+  return env.PI_SMART_STATE_DIR?.trim() || path.join(os.homedir(), ".pi", "smart-gpt");
 }
 
 export function runsFile(dir: string): string {
@@ -95,7 +95,7 @@ export function formatRun(run: ProbeRun): string {
 
 /** A series for one account, newest last, with its own baseline. */
 export function formatHistory(runs: ProbeRun[], title: string): string {
-  if (runs.length === 0) return `${title}\n  no runs yet — run /candy to record the first one`;
+  if (runs.length === 0) return `${title}\n  no runs yet — run /smart to record the first one`;
   const lines = [title];
   for (const run of runs) lines.push(`  ${formatRun(run)}`);
   const reasoning = runs

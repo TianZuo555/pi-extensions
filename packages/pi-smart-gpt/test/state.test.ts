@@ -17,7 +17,7 @@ import {
 } from "../lib/state.ts";
 
 function tempDir(): string {
-  return fs.mkdtempSync(path.join(os.tmpdir(), "pi-candy-eval-"));
+  return fs.mkdtempSync(path.join(os.tmpdir(), "pi-smart-gpt-"));
 }
 
 function run(at: string, answer: number | undefined, reasoning?: number): ProbeRun {
@@ -33,9 +33,9 @@ function run(at: string, answer: number | undefined, reasoning?: number): ProbeR
   };
 }
 
-test("stateDir honours PI_CANDY_STATE_DIR and defaults under ~/.pi", () => {
-  assert.equal(stateDir({ PI_CANDY_STATE_DIR: "/tmp/x" }), "/tmp/x");
-  assert.equal(stateDir({}), path.join(os.homedir(), ".pi", "candy-eval"));
+test("stateDir honours PI_SMART_STATE_DIR and defaults under ~/.pi", () => {
+  assert.equal(stateDir({ PI_SMART_STATE_DIR: "/tmp/x" }), "/tmp/x");
+  assert.equal(stateDir({}), path.join(os.homedir(), ".pi", "smart-gpt"));
 });
 
 test("runs round-trip through runs.jsonl", () => {

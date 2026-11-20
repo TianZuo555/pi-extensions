@@ -1,7 +1,7 @@
 {
-  "name": "@tian.zuo/pi-candy-eval",
+  "name": "@tian.zuo/pi-smart-gpt",
   "version": "0.1.0",
-  "description": "Run a candy reasoning probe against Codex accounts through the magpie gateway, to watch for a degraded model in the pi coding agent.",
+  "description": "Test whether a Codex model got dumber: ask a fixed reasoning puzzle through the magpie gateway, and keep the answers and the reasoning tokens.",
   "type": "module",
   "keywords": [
     "pi",
@@ -10,6 +10,8 @@
     "pi-coding-agent",
     "codex",
     "magpie",
+    "intelligence",
+    "iq-test",
     "degradation",
     "regression",
     "eval"
@@ -19,9 +21,9 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/TianZuo555/pi-extensions.git",
-    "directory": "packages/pi-candy-eval"
+    "directory": "packages/pi-smart-gpt"
   },
-  "homepage": "https://github.com/TianZuo555/pi-extensions#pi-candy-eval",
+  "homepage": "https://github.com/TianZuo555/pi-extensions#pi-smart-gpt",
   "bugs": {
     "url": "https://github.com/TianZuo555/pi-extensions/issues"
   },

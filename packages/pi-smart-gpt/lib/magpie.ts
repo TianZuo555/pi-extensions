@@ -12,7 +12,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { parseAnswer, type Verdict, verdictOf } from "./answer.ts";
-import { CANDY_PROMPT } from "./prompt.ts";
+import { PUZZLE_PROMPT } from "./prompt.ts";
 
 const exec = promisify(execFile);
 
@@ -21,11 +21,11 @@ export const DEFAULT_EFFORT = "high";
 export const DEFAULT_TIMEOUT_MS = 180_000;
 
 const KEY_TTL = "10m";
-const KEY_NAME = "candy-eval";
+const KEY_NAME = "smart-gpt";
 const MAX_TOKENS = 16_000;
 
 // `magpie` relies on PATH; the rest are where the script installer, Homebrew
-// and the signed macOS app put it. PI_CANDY_MAGPIE_BIN overrides discovery.
+// and the signed macOS app put it. PI_SMART_MAGPIE_BIN overrides discovery.
 const MAGPIE_BINARIES = [
   "magpie",
   path.join(os.homedir(), ".local", "bin", "magpie"),
@@ -61,20 +61,20 @@ export interface ProbeSettings {
   signal?: AbortSignal;
 }
 
-/** The model to ask: PI_CANDY_MODEL, else codex/gpt-6.2-sol. */
+/** The model to ask: PI_SMART_MODEL, else codex/gpt-6.2-sol. */
 export function modelOf(env: NodeJS.ProcessEnv = process.env): string {
-  return env.PI_CANDY_MODEL?.trim() || DEFAULT_MODEL;
+  return env.PI_SMART_MODEL?.trim() || DEFAULT_MODEL;
 }
 
-/** The thinking level: PI_CANDY_EFFORT, else high. Change it only if the
+/** The thinking level: PI_SMART_EFFORT, else high. Change it only if the
  * account's earlier runs are discarded with it: the level is the ruler. */
 export function effortOf(env: NodeJS.ProcessEnv = process.env): string {
-  return env.PI_CANDY_EFFORT?.trim() || DEFAULT_EFFORT;
+  return env.PI_SMART_EFFORT?.trim() || DEFAULT_EFFORT;
 }
 
 /** The magpie executable, or undefined when magpie is not installed. */
 export async function magpieBin(): Promise<string | undefined> {
-  const override = process.env.PI_CANDY_MAGPIE_BIN?.trim();
+  const override = process.env.PI_SMART_MAGPIE_BIN?.trim();
   const candidates = override ? [override] : MAGPIE_BINARIES;
   for (const candidate of candidates) {
     if (candidate.includes(path.sep) && !fs.existsSync(candidate)) continue;
@@ -176,9 +176,9 @@ export async function accountList(bin: string, agent = "codex"): Promise<Account
   return parseAccounts(stdout);
 }
 
-/** The gateway's address: PI_CANDY_GATEWAY, else what magpie reports. */
+/** The gateway's address: PI_SMART_GATEWAY, else what magpie reports. */
 export async function gatewayUrl(bin: string): Promise<string> {
-  const override = process.env.PI_CANDY_GATEWAY?.trim();
+  const override = process.env.PI_SMART_GATEWAY?.trim();
   if (override) return override.replace(/\/+$/, "");
   let stdout: string;
   try {
@@ -252,7 +252,7 @@ export async function probe(
       headers: { "content-type": "application/json", authorization: `Bearer ${key}` },
       body: JSON.stringify({
         model: settings.model,
-        messages: [{ role: "user", content: CANDY_PROMPT }],
+        messages: [{ role: "user", content: PUZZLE_PROMPT }],
         reasoning_effort: settings.effort,
         max_tokens: MAX_TOKENS,
         stream: false,

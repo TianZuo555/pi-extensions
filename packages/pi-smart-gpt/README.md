@@ -1,12 +1,12 @@
-# pi-candy-eval
+# pi-smart-gpt
 
-Ask Codex accounts a fixed reasoning puzzle through the [magpie](https://github.com/yetone/magpie) gateway, and keep the answers. A degraded upstream model shows up two ways: it gets the puzzle wrong, or it thinks far less than it used to.
+An intelligence test for Codex accounts. It asks a fixed reasoning puzzle through the [magpie](https://github.com/yetone/magpie) gateway and keeps the answers. A model that got dumber shows up two ways: it gets the puzzle wrong, or it thinks far less than it used to.
 
 There is no timer. The probe runs when you or the model ask for it, because pi starts background resources only after a session begins and a periodic probe is easy to leave running unnoticed.
 
 ## The puzzle
 
-Three flavours, two shapes each, and the shapes can be told apart by touch:
+The puzzle is the community candy test: three flavours, two shapes each, and the shapes can be told apart by touch.
 
 |        | apple | peach | watermelon |
 | ------ | ----- | ----- | ---------- |
@@ -18,7 +18,7 @@ The least number of sweets that guarantees a differently-shaped apple and peach 
 ## Install
 
 ```sh
-pi install npm:@tian.zuo/pi-candy-eval
+pi install npm:@tian.zuo/pi-smart-gpt
 ```
 
 It needs magpie, signed in to at least one Codex account: only magpie can send a request to one named account.
@@ -31,36 +31,36 @@ magpie status                # the gateway address, 127.0.0.1:3425 by default
 ## Use
 
 ```
-/candy              probe every switched-on Codex account now
-/candy <email>      probe one account
-/candy history      the last 10 runs, with the median reasoning tokens
+/smart              test every switched-on Codex account now
+/smart <email>      test one account
+/smart history      the last 10 runs, with the median reasoning tokens
 ```
 
-The `candy_eval` tool does the same for the model, for questions like "is this account degraded?".
+The `smart_gpt` tool does the same for the model, for questions like "is this account degraded?".
 
 Each probe:
 
 1. issues a ten-minute magpie gateway key held to that one account;
-2. asks the puzzle at `PI_CANDY_EFFORT`, default `high`;
+2. asks the puzzle at `PI_SMART_EFFORT`, default `high`;
 3. reads the answer from the reply's last line (`答案：N颗`), so a correct answer that also mentions 29 stays 21;
-4. appends the run — answer, verdict, reasoning tokens, latency — to `~/.pi/candy-eval/runs.jsonl`.
+4. appends the run — answer, verdict, reasoning tokens, latency — to `~/.pi/smart-gpt/runs.jsonl`.
 
 ## Reading the numbers
 
 - `21` is a pass. Any other answer is a miss, and `29` is the blind-candy answer.
 - Reasoning tokens vary about ±40% between runs of the same account at the same level. Compare the median of several runs, not one.
-- The thinking level is a ceiling, not a floor: an easy puzzle is answered in similar time at `low` and at `high`. Change `PI_CANDY_EFFORT` only if you accept that earlier runs are no longer comparable.
+- The thinking level is a ceiling, not a floor: an easy puzzle is answered in similar time at `low` and at `high`. Change `PI_SMART_EFFORT` only if you accept that earlier runs are no longer comparable.
 - The puzzle is public, so a model may answer 21 from memory. A pass is weaker evidence than a miss.
 
 ## Environment
 
 | Variable              | Default             | Meaning               |
 | --------------------- | ------------------- | --------------------- |
-| `PI_CANDY_MODEL`      | `codex/gpt-6.2-sol` | the model to ask      |
-| `PI_CANDY_EFFORT`     | `high`              | its thinking level    |
-| `PI_CANDY_GATEWAY`    | `magpie status`     | the gateway address   |
-| `PI_CANDY_MAGPIE_BIN` | discovered          | the magpie executable |
-| `PI_CANDY_STATE_DIR`  | `~/.pi/candy-eval`  | where the runs live   |
+| `PI_SMART_MODEL`      | `codex/gpt-6.2-sol` | the model to ask      |
+| `PI_SMART_EFFORT`     | `high`              | its thinking level    |
+| `PI_SMART_GATEWAY`    | `magpie status`     | the gateway address   |
+| `PI_SMART_MAGPIE_BIN` | discovered          | the magpie executable |
+| `PI_SMART_STATE_DIR`  | `~/.pi/smart-gpt`   | where the runs live   |
 
 ## Limits
 
@@ -72,7 +72,7 @@ Each probe:
 
 ```sh
 pnpm install
-pnpm --filter @tian.zuo/pi-candy-eval check
-pnpm --filter @tian.zuo/pi-candy-eval test
-pi -e ./packages/pi-candy-eval
+pnpm --filter @tian.zuo/pi-smart-gpt check
+pnpm --filter @tian.zuo/pi-smart-gpt test
+pi -e ./packages/pi-smart-gpt
 ```

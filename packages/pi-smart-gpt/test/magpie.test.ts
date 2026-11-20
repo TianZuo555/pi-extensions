@@ -57,10 +57,10 @@ test("readReply reads both content shapes and the usage", () => {
 
 test("modelOf and effortOf take the environment, then their own default", () => {
   assert.equal(modelOf({}), "codex/gpt-6.2-sol");
-  assert.equal(modelOf({ PI_CANDY_MODEL: "codex/gpt-6.1-terra" }), "codex/gpt-6.1-terra");
-  assert.equal(modelOf({ PI_CANDY_MODEL: "  " }), "codex/gpt-6.2-sol");
+  assert.equal(modelOf({ PI_SMART_MODEL: "codex/gpt-6.1-terra" }), "codex/gpt-6.1-terra");
+  assert.equal(modelOf({ PI_SMART_MODEL: "  " }), "codex/gpt-6.2-sol");
   assert.equal(effortOf({}), "high");
-  assert.equal(effortOf({ PI_CANDY_EFFORT: "xhigh" }), "xhigh");
+  assert.equal(effortOf({ PI_SMART_EFFORT: "xhigh" }), "xhigh");
 });
 
 test("magpieFailure names what magpie said, not the command line", () => {
