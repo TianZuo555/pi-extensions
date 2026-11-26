@@ -51,6 +51,12 @@ A hand-set label is kept. A one-word folder label, such as `repo`, is not recogn
 
 Because the extension names the session, it removes the Rex naming paragraph from the `<rex>` section. It adds one line instead: the names are automatic, and the agent must not rename them unless the user asks. This also overrides the `rex` skill rule that says to rename only when the user asks.
 
+## Program activity
+
+In a Rex TUI session, the extension reports the current Pi prompt to Rex through OSC 7501. Rex can then show the prompt while Pi is working and after the run finishes. The message is shortened to one safe line for the terminal activity view.
+
+Cancelled runs report `idle`. Completed runs report `done`. Final errors report `error`. Pi's own blocked status remains active while an extension dialog or login screen waits for the user. Set `PI_PROGRAM_STATUS=0` to disable the activity reports.
+
 ## Resume after a Rex restart
 
 Rex restores sessions, tabs, panes, and scrollback after a restart. Each pane keeps its block ID, but Rex starts a new shell in the pane, not pi. A dead process cannot start itself, so the work needs two parts. The extension records the pi session of each pane, and it writes a shell hook. The hook starts pi again in the restored pane.

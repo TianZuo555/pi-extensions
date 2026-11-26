@@ -15,7 +15,12 @@
 // The extension also records the pi session of each Rex pane, so a shell hook
 // can resume pi in that pane after a Rex restart. See `lib/resume.ts`.
 
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type {
+  AgentEndEvent,
+  ExtensionAPI,
+  ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
+import { createRexActivityReporter, summarizeActivity } from "./lib/activity.ts";
 import { nameSession, REX_TIMEOUT_MS, type ExecResult } from "./lib/naming.ts";
 import { AUTO_NAME_INSTRUCTION, REX_SECTION } from "./lib/prompt.ts";
 import { registerResume } from "./lib/resume.ts";
@@ -59,10 +64,25 @@ async function askModel(ctx: ExtensionContext, prompt: string): Promise<string> 
   }
 }
 
+function latestAssistantError(messages: AgentEndEvent["messages"]): string | undefined {
+  const assistant = [...messages].reverse().find((message) => message.role === "assistant");
+  if (assistant?.stopReason !== "error") return undefined;
+  return summarizeActivity(assistant.errorMessage ?? "Pi request failed");
+}
+
 export default function rexExtension(pi: ExtensionAPI): void {
+  const activity = createRexActivityReporter();
   let context = "";
   let autoName = true;
   let naming: Promise<void> | undefined;
+  let activityTask = "";
+  let activityError: string | undefined;
+
+  const sessionName = (ctx: ExtensionContext): string =>
+    ctx.sessionManager.getSessionName() ?? "pi";
+  const reportWorking = (ctx: ExtensionContext): void => {
+    activity.working(activityTask || sessionName(ctx));
+  };
 
   registerResume(pi);
 
@@ -70,6 +90,9 @@ export default function rexExtension(pi: ExtensionAPI): void {
     context = "";
     autoName = true;
     naming = undefined;
+    activityTask = "";
+    activityError = undefined;
+    activity.reset();
     const session = process.env.REX_SESSION;
     if (!session) return;
     const result = await pi.exec("rex", ["__internal", "session-start", "--agent", "pi"], {
@@ -91,6 +114,12 @@ export default function rexExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("before_agent_start", (event, ctx) => {
+    if (event.messageType === "user" && event.prompt.trim().length > 0) {
+      activityTask = summarizeActivity(event.prompt) || sessionName(ctx);
+      activityError = undefined;
+      reportWorking(ctx);
+    }
+
     if (context) event.systemPromptOptions.sections[REX_SECTION] = context;
     const session = process.env.REX_SESSION;
     if (!context || !autoName || naming || !session) return;
@@ -105,5 +134,28 @@ export default function rexExtension(pi: ExtensionAPI): void {
       },
       ask: (prompt) => askModel(ctx, prompt),
     }).catch(() => undefined);
+  });
+
+  pi.on("agent_start", (_event, ctx) => {
+    activityError = undefined;
+    reportWorking(ctx);
+  });
+
+  pi.on("agent_end", (event) => {
+    activityError = latestAssistantError(event.messages);
+  });
+
+  pi.on("ui_prompt_end", (_event, ctx) => {
+    if (!ctx.isIdle()) reportWorking(ctx);
+  });
+
+  pi.on("agent_settled", (event, ctx) => {
+    if (event.aborted) {
+      activity.idle();
+    } else if (activityError) {
+      activity.error(activityError);
+    } else {
+      activity.done(activityTask || sessionName(ctx));
+    }
   });
 }
