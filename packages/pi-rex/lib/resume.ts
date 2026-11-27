@@ -19,7 +19,7 @@ import {
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { installShellHook } from "./hook.ts";
-import { rexSetting } from "./settings.ts";
+import { rexResumeCommand, rexSetting } from "./settings.ts";
 
 /** Folder below the pi agent directory that holds one record per Rex pane. */
 export const RESUME_DIR = "rex-resume";
@@ -35,13 +35,27 @@ export function recordPath(agentDir: string, block: string): string | undefined 
   return path.join(agentDir, RESUME_DIR, id);
 }
 
+/** Pi-Bolt installs a stable launcher even when the running binary is named `pi-bin` or `pi`. */
+export function defaultResumeCommand(execPath = process.execPath): string {
+  const parts = execPath.toLowerCase().split(/[\\/]/);
+  const binary = parts.pop();
+  if (binary === "pi-bolt" || binary === "pi-bolt.exe" || binary === "pi-bin") {
+    return "pi-bolt";
+  }
+  if (binary === "pi" && parts.some((part) => part === ".pi-bolt" || part.startsWith("pi-bolt-"))) {
+    return "pi-bolt";
+  }
+  return "pi";
+}
+
 /** Record text: the working directory, then the resume command, one argument per line. */
-export function recordText(cwd: string, sessionFile: string): string {
-  return `${[cwd, "pi", "--session", sessionFile].join("\n")}\n`;
+export function recordText(cwd: string, sessionFile: string, command = "pi"): string {
+  return `${[cwd, command, "--session", sessionFile].join("\n")}\n`;
 }
 
 export function registerResume(pi: ExtensionAPI, agentDir: string = getAgentDir()): void {
   let record: string | undefined;
+  let resumeCommand = "pi";
   let signaled = false;
   const onSignal = (): void => {
     signaled = true;
@@ -62,7 +76,7 @@ export function registerResume(pi: ExtensionAPI, agentDir: string = getAgentDir(
     mkdirSync(path.dirname(record), { recursive: true });
     // Write and rename, so a stop during the write cannot leave half a record.
     const temp = `${record}.tmp`;
-    writeFileSync(temp, recordText(ctx.cwd, session));
+    writeFileSync(temp, recordText(ctx.cwd, session, resumeCommand));
     renameSync(temp, record);
   };
 
@@ -78,6 +92,7 @@ export function registerResume(pi: ExtensionAPI, agentDir: string = getAgentDir(
     if (file !== undefined && !enabled) rmSync(file, { force: true });
     record = enabled ? file : undefined;
     if (record === undefined) return;
+    resumeCommand = rexResumeCommand(pi) ?? defaultResumeCommand();
     // The extension is the only part of the resume chain that runs on its own,
     // so it installs the shell half too.
     const hook = installShellHook();

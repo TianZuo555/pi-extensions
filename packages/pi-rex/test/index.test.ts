@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { afterEach, test } from "node:test";
+import { beforeEach, test } from "node:test";
 import { AUTO_NAME_INSTRUCTION } from "../lib/prompt.ts";
 import rexExtension from "../index.ts";
 
@@ -29,7 +29,9 @@ const INSPECT = {
   windows: [{ window_id: "window:02", label: "Window 0bbb" }],
 };
 
-function setup(options: { settings?: unknown; reply?: string; start?: ExecResult } = {}) {
+function setup(
+  options: { settings?: unknown; reply?: string; start?: ExecResult; mode?: string } = {},
+) {
   const handlers = new Map<string, Handler[]>();
   const calls: { command: string; args: string[]; options: unknown }[] = [];
   const prompts: string[] = [];
@@ -48,6 +50,8 @@ function setup(options: { settings?: unknown; reply?: string; start?: ExecResult
   };
   const ctx = {
     cwd: "/repo",
+    mode: options.mode ?? "print",
+    sessionManager: { getSessionName: () => "Test session" },
     ui: { notify: (message: string) => notices.push(message) },
     model: { provider: "fake", id: "fake-model" },
     signal: undefined,
@@ -67,8 +71,8 @@ function setup(options: { settings?: unknown; reply?: string; start?: ExecResult
   rexExtension(pi as never);
   // Run every handler for the event, as pi does. Synchronous handlers finish
   // before fire returns.
-  const fire = (name: string, event: unknown) =>
-    Promise.all((handlers.get(name) ?? []).map((handler) => handler(event, ctx)));
+  const fire = (name: string, event: unknown, context: unknown = ctx) =>
+    Promise.all((handlers.get(name) ?? []).map((handler) => handler(event, context)));
   const start = () => fire("session_start", { type: "session_start" });
   const prompt = (text: string) =>
     fire("before_agent_start", {
@@ -90,7 +94,7 @@ function setup(options: { settings?: unknown; reply?: string; start?: ExecResult
     });
     return event.systemPromptOptions.sections;
   };
-  return { calls, notices, prompts, start, prompt, emit, sections };
+  return { calls, notices, prompts, fire, start, prompt, emit, sections };
 }
 
 /** Wait until the background naming work made a rename call. */
@@ -102,8 +106,9 @@ async function waitForRename(calls: { args: string[] }[]): Promise<void> {
   }
 }
 
-afterEach(() => {
+beforeEach(() => {
   delete process.env.REX_SESSION;
+  delete process.env.REX_BLOCK;
 });
 
 test("adds the Rex output and replaces the naming paragraph", async () => {
@@ -178,6 +183,58 @@ test("names the session from the folder and the tab on the first prompt", async 
       ["window", "rename", "-s", "s1", "window:02", "fix-login-redirect"],
     ],
   );
+});
+
+test("uses the full block ID for context and naming in a current Rex pane", async () => {
+  const block = "block:01a1-test";
+  process.env.REX_BLOCK = block;
+  const { calls, start, prompt, sections } = setup();
+  await start();
+  assert.ok(sections().rex?.includes(AUTO_NAME_INSTRUCTION));
+  await prompt("fix the login redirect");
+  await waitForRename(calls);
+  assert.deepEqual(
+    calls.slice(-3).map((call) => call.args),
+    [
+      ["session", "inspect", block, "--json"],
+      ["session", "rename", block, "repo"],
+      ["window", "rename", "-s", block, "window:02", "fix-login-redirect"],
+    ],
+  );
+});
+
+test("reports a run with a dialog and settles without reading a stale context", async (t) => {
+  process.env.REX_SESSION = "s1";
+  const tty = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
+  Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: true });
+  const programStatus = process.env.PI_PROGRAM_STATUS;
+  delete process.env.PI_PROGRAM_STATUS;
+  t.after(() => {
+    if (tty) Object.defineProperty(process.stdout, "isTTY", tty);
+    else Reflect.deleteProperty(process.stdout, "isTTY");
+    if (programStatus !== undefined) process.env.PI_PROGRAM_STATUS = programStatus;
+  });
+  const reports: string[] = [];
+  t.mock.method(process.stdout, "write", (data: string) => {
+    reports.push(data);
+    return true;
+  });
+  const { fire, start, emit } = setup({ mode: "tui", settings: { rex: { autoName: false } } });
+  await start();
+  await emit({ messageType: "custom", systemPromptOptions: { sections: {} } });
+  await fire("ui_prompt_start", {});
+  await fire("ui_prompt_end", {});
+  const staleContext = {
+    get sessionManager(): never {
+      throw new Error("stale Pi context");
+    },
+  };
+  await fire("agent_settled", { aborted: false }, staleContext);
+  await fire("session_shutdown", { reason: "reload" });
+  await fire("agent_settled", { aborted: false }, staleContext);
+  const states = reports.map((report) => report.match(/state=(\w+)/)?.[1]);
+  assert.deepEqual(states, ["working", "clear", "working", "done", "clear"]);
+  assert.match(reports[3] ?? "", /id=pi-prompt:app=pi:msg=VGVzdCBzZXNzaW9u/);
 });
 
 test("names only once per pi session", async () => {

@@ -15,7 +15,12 @@
 // The extension also records the pi session of each Rex pane, so a shell hook
 // can resume pi in that pane after a Rex restart. See `lib/resume.ts`.
 
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type {
+  AgentEndEvent,
+  ExtensionAPI,
+  ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
+import { createRexActivityReporter, summarizeActivity } from "./lib/activity.ts";
 import { nameSession, REX_TIMEOUT_MS, type ExecResult } from "./lib/naming.ts";
 import { AUTO_NAME_INSTRUCTION, REX_SECTION } from "./lib/prompt.ts";
 import { registerResume } from "./lib/resume.ts";
@@ -59,10 +64,30 @@ async function askModel(ctx: ExtensionContext, prompt: string): Promise<string> 
   }
 }
 
+function rexSessionSelector(): string | undefined {
+  return process.env.REX_SESSION || process.env.REX_BLOCK;
+}
+
+function latestAssistantError(messages: AgentEndEvent["messages"]): string | undefined {
+  const assistant = [...messages].reverse().find((message) => message.role === "assistant");
+  if (assistant?.stopReason !== "error") return undefined;
+  return summarizeActivity(assistant.errorMessage ?? "Pi request failed");
+}
+
 export default function rexExtension(pi: ExtensionAPI): void {
+  const activity = createRexActivityReporter();
   let context = "";
   let autoName = true;
   let naming: Promise<void> | undefined;
+  let activityEnabled = false;
+  let activityRunning = false;
+  let activityTask = "pi";
+  let activityError: string | undefined;
+  let openPrompts = 0;
+
+  const reportWorking = (): void => {
+    if (activityRunning && openPrompts === 0) activity.working(activityTask);
+  };
 
   registerResume(pi);
 
@@ -70,7 +95,12 @@ export default function rexExtension(pi: ExtensionAPI): void {
     context = "";
     autoName = true;
     naming = undefined;
-    const session = process.env.REX_SESSION;
+    activityRunning = false;
+    activityTask = "pi";
+    activityError = undefined;
+    openPrompts = 0;
+    const session = rexSessionSelector();
+    activityEnabled = Boolean(session) && ctx.mode === "tui";
     if (!session) return;
     const result = await pi.exec("rex", ["__internal", "session-start", "--agent", "pi"], {
       cwd: ctx.cwd,
@@ -91,8 +121,16 @@ export default function rexExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("before_agent_start", (event, ctx) => {
+    if (activityEnabled) {
+      const prompt = event.messageType === "user" ? summarizeActivity(event.prompt) : "";
+      activityTask = prompt || ctx.sessionManager.getSessionName() || "pi";
+      activityError = undefined;
+      activityRunning = true;
+      reportWorking();
+    }
+
     if (context) event.systemPromptOptions.sections[REX_SECTION] = context;
-    const session = process.env.REX_SESSION;
+    const session = rexSessionSelector();
     if (!context || !autoName || naming || !session) return;
     if (event.messageType !== "user" || event.prompt.trim().length === 0) return;
     naming = nameSession({
@@ -105,5 +143,45 @@ export default function rexExtension(pi: ExtensionAPI): void {
       },
       ask: (prompt) => askModel(ctx, prompt),
     }).catch(() => undefined);
+  });
+
+  pi.on("agent_start", () => {
+    activityError = undefined;
+    reportWorking();
+  });
+
+  pi.on("agent_end", (event) => {
+    if (activityRunning) activityError = latestAssistantError(event.messages);
+  });
+
+  pi.on("ui_prompt_start", () => {
+    if (!activityEnabled) return;
+    openPrompts += 1;
+    if (activityRunning) activity.clear();
+  });
+
+  pi.on("ui_prompt_end", () => {
+    if (openPrompts === 0) return;
+    openPrompts -= 1;
+    reportWorking();
+  });
+
+  pi.on("agent_settled", (event) => {
+    if (!activityRunning) return;
+    activityRunning = false;
+    if (event.aborted) {
+      activity.idle();
+    } else if (activityError) {
+      activity.error(activityError);
+    } else {
+      activity.done(activityTask);
+    }
+  });
+
+  pi.on("session_shutdown", (event) => {
+    activityEnabled = false;
+    activityRunning = false;
+    openPrompts = 0;
+    if (event.reason !== "quit") activity.clear();
   });
 }
