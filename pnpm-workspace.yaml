@@ -24,7 +24,7 @@ overrides:
   fast-uri: ^3.1.9
   "@hono/node-server": ^2.1.6
   qs: ^6.16.1
-  minimatch: ^11.0.1
+  minimatch: ^11.0.9
   glob: ^14.0.2
   # Security floors. Both arrive transitively (launch-editor via
   # @changesets/cli, hono via the pi runtime MCP SDK) and neither parent
@@ -32,7 +32,7 @@ overrides:
   # GHSA-587h-7wmj-h5pm / GHSA-698v-4r3x-3vcv / GHSA-r825-w8mm-5pxw
   launch-editor: ^2.14.2
   # GHSA-5r4p-p66f-jhc7
-  hono: ^4.13.16
+  hono: ^4.13.22
   "@earendil-works/pi-ai": ^1.6.1
   "@earendil-works/pi-coding-agent": ^1.6.1
   "@earendil-works/pi-tui": ^1.6.1
