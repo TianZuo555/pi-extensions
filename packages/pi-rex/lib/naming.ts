@@ -27,6 +27,7 @@ const WINDOW_LABEL = /^Window [0-9a-f]{4,}$/;
 export interface ExecResult {
   readonly code: number;
   readonly stdout: string;
+  readonly stderr?: string;
 }
 
 export type Exec = (

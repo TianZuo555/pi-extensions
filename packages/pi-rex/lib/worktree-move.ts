@@ -45,6 +45,36 @@ export interface MoveInput {
 export interface MoveOutput {
   readonly sessionId: string;
   readonly sessionLabel: string;
+  /** Labels of the Rex apps that now show the moved tab. */
+  readonly followed: readonly string[];
+  /** One message for each Rex app that refused to show the moved tab. */
+  readonly refused: readonly string[];
+}
+
+export interface RexApp {
+  readonly id: string;
+  readonly label: string;
+}
+
+/** Read the Rex apps from `rex client ls --json` output. CLI clients are not apps. */
+export function parseApps(json: string): RexApp[] {
+  let value: unknown;
+  try {
+    value = JSON.parse(json) as unknown;
+  } catch {
+    return [];
+  }
+  const clients = (value as { clients?: unknown } | null)?.clients;
+  if (!Array.isArray(clients)) return [];
+  const apps: RexApp[] = [];
+  for (const client of clients) {
+    if (typeof client !== "object" || client === null) continue;
+    const record = client as { client_id?: unknown; info?: { kind?: unknown; label?: unknown } };
+    if (typeof record.client_id !== "string" || record.info?.kind !== "app") continue;
+    const label = typeof record.info.label === "string" ? record.info.label : record.client_id;
+    apps.push({ id: record.client_id, label });
+  }
+  return apps;
 }
 
 /** Read `.session_id` and the first window from `rex new --json` output. */
@@ -116,6 +146,10 @@ export function resolveTarget(input: string, cwd: string): string {
  * Open a Rex session for the worktree and move this tab into it. The new
  * session starts with a shell tab, which the move makes extra, so close it.
  * A session that the move leaves without tabs is removed too.
+ *
+ * A Rex app keeps the session that it shows, so after the move it shows the
+ * old session. Each app that had the old session open goes to the moved tab.
+ * An app accepts this only when its Remote Control setting is on.
  */
 export async function moveTab(input: MoveInput): Promise<MoveOutput> {
   const { target, exec } = input;
@@ -124,6 +158,11 @@ export async function moveTab(input: MoveInput): Promise<MoveOutput> {
   const here = parseLocation((await rex(["whoami", "--json"])).stdout);
   if (!here) throw new Error("Rex does not answer, or it cannot find this tab.");
   const windowId = here.windowId;
+
+  // Read the apps before the move: a removed old session has no apps.
+  const apps = here.sessionId
+    ? parseApps((await rex(["client", "ls", "-s", here.sessionId, "--json"])).stdout)
+    : [];
 
   const label = await sessionLabel(exec, target, REX_TIMEOUT_MS);
   const created = await rex(["new", label, "--cwd", target, "--json"]);
@@ -141,7 +180,30 @@ export async function moveTab(input: MoveInput): Promise<MoveOutput> {
     const old = await rex(["session", "inspect", here.sessionId, "--json"]);
     if (old.code === 0 && isEmptySession(old.stdout)) await rex(["kill", here.sessionId]);
   }
-  return { sessionId: session.sessionId, sessionLabel: label };
+
+  const followed: string[] = [];
+  const refused: string[] = [];
+  for (const app of apps) {
+    const select = await rex([
+      "-C",
+      app.id,
+      "do",
+      "session.select",
+      `session_id=${session.sessionId}`,
+      `window_id=${windowId}`,
+    ]);
+    if (select.code === 0) {
+      followed.push(app.label);
+    } else {
+      const reason =
+        (select.stderr ?? "")
+          .trim()
+          .replace(/^Error:\s*/, "")
+          .replace(/[.\s]+$/, "") || `exit ${select.code}`;
+      refused.push(`${app.label}: ${reason}`);
+    }
+  }
+  return { sessionId: session.sessionId, sessionLabel: label, followed, refused };
 }
 
 /** Copy the conversation into a session for the worktree, then switch to it. */
@@ -190,7 +252,7 @@ export function registerWorktreeMove(pi: ExtensionAPI): void {
         target,
         exec: async (command, args, options) => {
           const result = await pi.exec(command, args, options);
-          return { code: result.code, stdout: result.stdout };
+          return { code: result.code, stdout: result.stdout, stderr: result.stderr };
         },
       });
       // A session ID set at start names the old session. Rex finds the
@@ -204,7 +266,7 @@ export function registerWorktreeMove(pi: ExtensionAPI): void {
         expandPromptTemplates: true,
       });
       return {
-        content: [{ type: "text", text: moveResult(target, moved.sessionLabel, ctx.cwd) }],
+        content: [{ type: "text", text: moveResult(target, moved, ctx.cwd) }],
         details: undefined,
         terminate: true,
       };

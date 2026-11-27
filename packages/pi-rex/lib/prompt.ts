@@ -23,8 +23,24 @@ export const WORKTREE_MOVE_GUIDELINES = [
 export const WORKTREE_PATH_DESCRIPTION = "Path of the worktree folder. The folder must exist.";
 
 /** Tool result after the tab moved. */
-export function moveResult(target: string, session: string, oldCwd: string): string {
-  return `Moved this tab to the Rex session "${session}". Pi switches to ${target} when this turn ends. End your turn now with one short status line. Do not run more commands in ${oldCwd}.`;
+export function moveResult(
+  target: string,
+  moved: { sessionLabel: string; followed: readonly string[]; refused: readonly string[] },
+  oldCwd: string,
+): string {
+  const lines = [`Moved this tab to the Rex session "${moved.sessionLabel}".`];
+  if (moved.followed.length > 0) {
+    lines.push(`These Rex apps now show the moved tab: ${moved.followed.join(", ")}.`);
+  }
+  if (moved.refused.length > 0) {
+    lines.push(
+      `These Rex apps still show the old session: ${moved.refused.join("; ")}. Tell the user to select the session "${moved.sessionLabel}" in Rex. To make Rex follow the tab next time, the user turns on Remote Control in Rex Settings > General.`,
+    );
+  }
+  lines.push(
+    `Pi switches to ${target} when this turn ends. End your turn now with one short status line. Do not run more commands in ${oldCwd}.`,
+  );
+  return lines.join("\n");
 }
 
 /** First user message in the worktree session. */

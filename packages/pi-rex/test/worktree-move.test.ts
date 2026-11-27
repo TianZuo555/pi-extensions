@@ -7,6 +7,7 @@ import type { ExecResult } from "../lib/naming.ts";
 import {
   isEmptySession,
   moveTab,
+  parseApps,
   parseNewSession,
   registerWorktreeMove,
   resolveTarget,
@@ -31,8 +32,20 @@ function folders() {
 }
 
 /** A fake exec that answers Rex and git, and records every call. */
+const APPS = {
+  clients: [
+    { client_id: "client:air", info: { kind: "app", label: "Air" } },
+    { client_id: "client:cli", info: { kind: "cli", name: "rex" } },
+  ],
+};
+
 function fakeExec(
-  overrides: { move?: ExecResult; created?: ExecResult; oldWindows?: unknown } = {},
+  overrides: {
+    move?: ExecResult;
+    created?: ExecResult;
+    oldWindows?: unknown;
+    select?: ExecResult;
+  } = {},
 ) {
   const calls: string[][] = [];
   const exec = async (command: string, args: string[]): Promise<ExecResult> => {
@@ -45,6 +58,8 @@ function fakeExec(
       return json({ session_id: "session:old", label: "old", windows });
     }
     if (args[0] === "new") return overrides.created ?? json(NEW_SESSION);
+    if (args[0] === "client" && args[1] === "ls") return json(APPS);
+    if (args[0] === "-C") return overrides.select ?? ok;
     if (args[0] === "window" && args[1] === "move") return overrides.move ?? ok;
     return ok;
   };
@@ -80,24 +95,55 @@ test("moveTab opens a session, moves this tab, and closes the shell tab", async 
   const { worktree } = folders();
   const { calls, exec } = fakeExec();
   const moved = await moveTab({ target: worktree, exec });
-  assert.deepEqual(moved, { sessionId: "session:new", sessionLabel: "repo-feature" });
+  assert.deepEqual(moved, {
+    sessionId: "session:new",
+    sessionLabel: "repo-feature",
+    followed: ["Air"],
+    refused: [],
+  });
   assert.deepEqual(
     calls.filter((call) => call[0] === "rex"),
     [
       ["rex", "whoami", "--json"],
+      ["rex", "client", "ls", "-s", "session:old", "--json"],
       ["rex", "new", "repo-feature", "--cwd", worktree, "--json"],
       ["rex", "window", "move", "window:me", "--to", "session:new", "--focus"],
       ["rex", "window", "close", "-s", "session:new", "window:shell"],
       ["rex", "session", "inspect", "session:old", "--json"],
+      [
+        "rex",
+        "-C",
+        "client:air",
+        "do",
+        "session.select",
+        "session_id=session:new",
+        "window_id=window:me",
+      ],
     ],
   );
+});
+
+test("moveTab reports a Rex app that refuses to follow the tab", async () => {
+  const { worktree } = folders();
+  const { exec } = fakeExec({
+    select: { code: 1, stdout: "", stderr: "Error: Turn on Remote Control.\n" },
+  });
+  const moved = await moveTab({ target: worktree, exec });
+  assert.deepEqual(moved.followed, []);
+  assert.deepEqual(moved.refused, ["Air: Turn on Remote Control"]);
+});
+
+test("parseApps keeps only Rex apps", () => {
+  assert.deepEqual(parseApps(JSON.stringify(APPS)), [{ id: "client:air", label: "Air" }]);
+  assert.deepEqual(parseApps("not json"), []);
+  assert.deepEqual(parseApps("{}"), []);
 });
 
 test("moveTab removes the old session when the move leaves it without tabs", async () => {
   const { worktree } = folders();
   const { calls, exec } = fakeExec({ oldWindows: null });
   await moveTab({ target: worktree, exec });
-  assert.deepEqual(calls.at(-1), ["rex", "kill", "session:old"]);
+  assert.ok(calls.some((call) => call.join(" ") === "rex kill session:old"));
 });
 
 test("isEmptySession reads null and empty window lists", () => {

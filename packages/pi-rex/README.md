@@ -116,16 +116,26 @@ The `path` parameter is the worktree folder. The folder must exist, so create th
 The tool does these steps:
 
 1. It runs `rex whoami --json` to find the current tab and the current session.
-2. It makes the session label from the worktree, as in [Session name](#session-name).
-3. It runs `rex new <label> --cwd <path> --json`. This command makes a new session with one shell tab.
-4. It runs `rex window move <tab> --to <session> --focus`. Pi continues to run during the move.
-5. It closes the shell tab of the new session.
-6. If the old session has no tabs, it removes the old session with `rex kill`.
-7. If `REX_SESSION` is set, it sets `REX_SESSION` to the new session ID.
-8. It starts the internal command `/rex-worktree-switch <path>`.
-9. It tells the agent to end the turn.
+2. It runs `rex client ls -s <session> --json` to find the Rex apps that have the current session open.
+3. It makes the session label from the worktree, as in [Session name](#session-name).
+4. It runs `rex new <label> --cwd <path> --json`. This command makes a new session with one shell tab.
+5. It runs `rex window move <tab> --to <session> --focus`. Pi continues to run during the move.
+6. It closes the shell tab of the new session.
+7. If the old session has no tabs, it removes the old session with `rex kill`.
+8. It tells each Rex app from step 2 to show the moved tab, with `rex -C <app> do session.select`.
+9. If `REX_SESSION` is set, it sets `REX_SESSION` to the new session ID.
+10. It starts the internal command `/rex-worktree-switch <path>`.
+11. It tells the agent to end the turn.
 
 If the move fails, the tool removes the new session. The tab stays in the old session.
+
+### Rex app view
+
+A Rex app continues to show the session that it showed before the move. Thus, without step 8, the tab goes out of view, and the app shows the old session.
+
+A Rex app does step 8 only when its Remote Control setting is on. To turn it on, open Rex Settings > General. If an app refuses, the tool result gives the name of the app and the reason. The agent then tells you to select the new session by hand.
+
+Rex does not tell which app shows the tab. Thus all Rex apps that have the old session open go to the moved tab. This includes the apps on your other computers.
 
 ### The session switch
 
