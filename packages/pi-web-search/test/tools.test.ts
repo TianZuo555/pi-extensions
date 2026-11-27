@@ -164,7 +164,7 @@ const theme = {
   },
 } as unknown as Theme;
 
-const render = (component: Component, width = 120): string[] => {
+const render = (component: Component, width = 120): readonly string[] => {
   const lines = component.render(width);
   for (const line of lines) {
     assert.ok(visibleWidth(line) <= width, `line exceeds width: ${line}`);
