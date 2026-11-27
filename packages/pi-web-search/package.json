@@ -54,7 +54,7 @@
     "defuddle": "^0.19.6",
     "effect": "4.1.1",
     "linkedom": "^0.18.14",
-    "unpdf": "^1.9.1"
+    "unpdf": "^2.1.0"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
