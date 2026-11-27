@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
 import test, { type TestContext } from "node:test";
 import { tmpdir } from "node:os";
-import { CustomEditor, initTheme, InteractiveMode } from "@earendil-works/pi-coding-agent";
+import {
+	CustomEditor,
+	initTheme,
+	InteractiveMode,
+	UserMessageComponent,
+} from "@earendil-works/pi-coding-agent";
 import {
 	Container,
 	getKeybindings,
@@ -22,6 +27,7 @@ import {
 import {
 	disposeStickyPromptPatches,
 	installStickyPromptFramePatch,
+	installStickyPromptMarkerPatch,
 	setStickyPromptTheme,
 } from "../extensions/renderer/mouse/sticky-prompt.ts";
 import { createLazyProxy } from "./fixtures/lazy-tui.ts";
@@ -107,8 +113,8 @@ function realFrame(t: TestContext) {
 	const original = renderer.scrollToEndIndicator;
 	const originalViewportInput = renderer.handleViewportInput;
 	renderer.altScreenActive = true;
-	// Deterministic frames, no terminal/timer loop. All layout/compositing/input code is real Pi.
-	renderer.requestRender = () => {};
+	// Drive frames manually while keeping Pi's render invalidation and input handling.
+	renderer.scheduleRender = () => {};
 	const tui = createLazyProxy(() => renderer);
 	const card = new Card();
 	const messages = new Container();
@@ -163,6 +169,7 @@ function realFrame(t: TestContext) {
 		setKeybindings(bindings);
 	});
 	const render = () => {
+		renderer.renderRequested = false;
 		renderer.doRender();
 		return renderer.getScreenLines() as string[];
 	};
@@ -230,6 +237,7 @@ test("native mode changes only the real native label and preserves host geometry
 	);
 
 	config.scrollButtonMode = "dock";
+	frame.renderer.requestRender();
 	frame.render();
 	assert.equal(
 		frame.renderer.scrollToEndIndicator,
@@ -237,13 +245,16 @@ test("native mode changes only the real native label and preserves host geometry
 		"dock uses main's overlay suppression",
 	);
 	config.scrollButtonMode = "native";
+	frame.renderer.requestRender();
 	assert.deepEqual(frame.render(), seeded.lines);
 
 	config.mode = "off";
+	frame.renderer.requestRender();
 	assert.deepEqual(frame.render(), baseline.lines, "ccstyle off restores Pi's original label");
 	const originalAfterOff = frame.renderer.scrollToEndIndicator;
 	assert.match(originalAfterOff(), /Jump to latest message/);
 	config.mode = "on";
+	frame.renderer.requestRender();
 	assert.deepEqual(frame.render(), seeded.lines);
 	assert.notEqual(frame.renderer.scrollToEndIndicator, originalAfterOff);
 	frame.render();
@@ -305,6 +316,22 @@ test("native indicator clears a pending card press and still yields to an overla
 	assert.deepEqual(overlayEvents, ["press"], "the overlay receives the indicator input first");
 	assert.equal(frame.scroll.isFollowingEnd, false);
 	handle.hide();
+});
+
+test("sticky prompt markers leave cached user message output intact", (t) => {
+	const frame = realFrame(t);
+	frame.install();
+	const message = new UserMessageComponent("pinned prompt");
+	const original = message.render(WIDTH);
+	const snapshot = [...original];
+	assert.ok(installStickyPromptMarkerPatch());
+	t.after(disposeStickyPromptPatches);
+	const marked = message.render(WIDTH);
+	assert.deepEqual(message.render(WIDTH), marked);
+	assert.equal(marked.join("\n").match(/\x1b_cc:[pP]\x07/g)?.length, 2);
+	assert.deepEqual(original, snapshot);
+	disposeStickyPromptPatches();
+	assert.deepEqual(message.render(WIDTH), snapshot);
 });
 
 test("one-row sticky prompt paints after native and wins clicks", (t) => {

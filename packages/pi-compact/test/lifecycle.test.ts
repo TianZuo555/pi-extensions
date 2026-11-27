@@ -35,11 +35,13 @@ test("successful compaction transmits custom instructions and yields a replayabl
   const result = await h.compact(event);
   assert(result?.compaction);
   assert.equal(h.payloads.length, 1);
-  assert.match(
-    String(h.payloads[0].instructions),
-    /Base system prompt.*compaction only:.*focus-sentinel/s,
-  );
-  assert.equal((h.payloads[0].input as JsonObject[]).at(-1)?.type, "compaction_trigger");
+  const request = h.payloads[0];
+  const input = request.input as JsonObject[];
+  // Pi 1.6 sends the system prompt as a developer message on this route.
+  const instructions =
+    request.instructions ?? input.find((item) => item.role === "developer")?.content;
+  assert.match(String(instructions), /Base system prompt.*compaction only:.*focus-sentinel/s);
+  assert.equal(input.at(-1)?.type, "compaction_trigger");
   const { summary, firstKeptEntryId, tokensBefore, details } = result.compaction;
   h.sm.appendCompaction(summary, firstKeptEntryId, tokensBefore, details, true);
   const payload = await replay(h);

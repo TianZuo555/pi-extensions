@@ -368,6 +368,7 @@ export function installStickyPromptMarkerPatch(): StickyPatch | null {
 	if (previous) previous.active = false;
 	const original =
 		previous && prototype.render === previous.installed ? previous.original : prototype.render;
+	const markedOutput = new WeakMap<readonly string[], readonly string[]>();
 	const patch: StickyPatch = {
 		active: true,
 		original,
@@ -375,10 +376,14 @@ export function installStickyPromptMarkerPatch(): StickyPatch | null {
 			const lines = original.call(this, width);
 			if (!patch.active || !isToolTuiFullscreen()) return lines;
 			if (!Array.isArray(lines) || lines.length === 0) return lines;
-			// 接在行尾：行首的 OSC133 前缀保持在下游的可剥离位置。
-			lines[0] += MESSAGE_START;
-			lines[lines.length - 1] += MESSAGE_END;
-			return lines;
+			const cached = markedOutput.get(lines);
+			if (cached) return cached;
+			// Keep Pi's cached lines intact and leave the OSC 133 prefix in place.
+			const marked = [...lines];
+			marked[0] += MESSAGE_START;
+			marked[marked.length - 1] += MESSAGE_END;
+			markedOutput.set(lines, marked);
+			return marked;
 		},
 	};
 	prototype.render = patch.installed;

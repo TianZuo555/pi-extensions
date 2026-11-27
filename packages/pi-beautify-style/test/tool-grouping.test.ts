@@ -453,7 +453,7 @@ test("off refresh ungroups, reload rescans existing tools, and stale shutdown pr
 	assert.equal(prototype.addChild, originalAdd);
 });
 
-test("pending and expanded groups bypass settled render caching", () => {
+test("pending groups repaint and expanded groups follow child render changes", () => {
 	const hooks = installToolGrouping(() => true);
 	try {
 		const parent = new Container() as any;
@@ -468,9 +468,16 @@ test("pending and expanded groups bypass settled render caching", () => {
 
 		read.updateResult({ content: [], isError: false });
 		bash.updateResult({ content: [], isError: false });
+		let childLines = ["original output"];
+		const bashLines = ["bash output"];
+		read.render = () => childLines;
+		bash.render = () => bashLines;
 		group.setExpanded(true);
 		const expanded = group.render(120);
-		assert.notStrictEqual(group.render(120), expanded, "expanded child output is not memoized");
+		assert.match(expanded.join("\n"), /original output/);
+		assert.strictEqual(group.render(120), expanded, "unchanged child output can be reused");
+		childLines = ["updated output"];
+		assert.match(group.render(120).join("\n"), /updated output/);
 	} finally {
 		hooks.shutdown();
 	}

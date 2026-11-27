@@ -184,12 +184,11 @@ export function codemodeCodeLines(
 }
 
 /**
- * 所以包一层 `() => { … }` 再取中间那一行。失败或没着色时退回原文。
+ * Highlight the statement in a function body and keep its line.
  */
 export function highlightCodeSummary(summary: string): string {
 	try {
-		const lines = highlightCode(`() => { ${summary} }`, "javascript");
-		const colored = lines[0]?.replace(/^\(\) => \{ /, "").replace(/ \}$/, "");
+		const [, colored] = highlightCode(`() => {\n${summary}\n}`, "javascript");
 		return colored && stripAnsi(colored) === summary ? colored : summary;
 	} catch {
 		return summary;

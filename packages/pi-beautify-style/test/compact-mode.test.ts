@@ -2052,7 +2052,7 @@ test("compact 展开面板留在摘要行原位，不跳到 write/edit 上方", 
 		bash.updateResult({ content: [{ type: "text", text: "line one" }], isError: false });
 		write.updateResult({ content: [], details: { diff: "+saved" }, isError: false });
 
-		const plain = (lines: string[]) =>
+		const plain = (lines: readonly string[]) =>
 			lines.map((line) =>
 				line.replace(/\x1b\[[0-?]*[ -\/]*[@-~]/g, "").replace(/\x1b\][^\x07]*\x07/g, ""),
 			);

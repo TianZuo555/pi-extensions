@@ -401,7 +401,7 @@ export class ThinkingPreviewBlock implements Component {
 				hintHovered: boolean;
 				expandAction: string | undefined;
 				streaming: boolean;
-				lines: string[];
+				lines: readonly string[];
 		  }
 		| undefined;
 
@@ -458,7 +458,7 @@ export class ThinkingPreviewBlock implements Component {
 		this.hintHovered = hovered;
 	}
 
-	private headingLines(width: number, padding: number): string[] {
+	private headingLines(width: number, padding: number): readonly string[] {
 		// 收起态（收尾且未展开）只留标题 + 打开提示；运行中正文自己就是入口。
 		const hint = this.expanded || this.streaming ? undefined : collapsedThinkingHint();
 		if (!hint) return new Text(this.heading, padding, 0).render(width);
