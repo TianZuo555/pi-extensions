@@ -1,7 +1,7 @@
 {
   "name": "@tian.zuo/pi-rex",
   "version": "0.4.0",
-  "description": "Tells the pi coding agent that it runs in a Rex terminal, reports prompt activity to Rex, names the Rex session after the project folder or worktree, names the tab from the first prompt, and resumes pi after a Rex restart.",
+  "description": "Tells the pi coding agent that it runs in a Rex terminal, reports prompt activity to Rex, names the Rex session and tab, and moves the agent into a git worktree with one tool.",
   "type": "module",
   "keywords": [
     "pi",
@@ -36,7 +36,8 @@
     "test": "node --test --experimental-strip-types test/*.test.ts"
   },
   "peerDependencies": {
-    "@earendil-works/pi-coding-agent": "*"
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
   },
   "devDependencies": {
     "@effect/language-service": "^0.87.5",

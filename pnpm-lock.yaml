@@ -337,6 +337,9 @@ importers:
       '@earendil-works/pi-coding-agent':
         specifier: ^1.6.1
         version: 1.6.1(@modelcontextprotocol/sdk@1.32.1(zod@4.6.7))(@smithy/signature-v4@5.7.4)(google-auth-library@10.9.1)(ws@8.22.0)(zod@4.6.7)
+      typebox:
+        specifier: '*'
+        version: 1.4.7
     devDependencies:
       '@effect/language-service':
         specifier: ^0.87.5

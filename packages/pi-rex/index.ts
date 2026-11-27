@@ -12,20 +12,26 @@
 // `rex session rename`. Naming runs in the background, so the first response is
 // not delayed. Set `rex.autoName` to false to turn it off.
 //
-// The extension also records the pi session of each Rex pane, so a shell hook
-// can resume pi in that pane after a Rex restart. See `lib/resume.ts`.
+// The extension also gives the agent one tool, `rex_worktree_move`, that moves
+// this Rex tab and the pi session into a git worktree. See
+// `lib/worktree-move.ts`.
+//
+// Rex starts pi again in a restored pane by itself. The extension removes the
+// resume hook that version 0.4 installed. See `lib/cleanup.ts`.
 
-import type {
-  AgentEndEvent,
-  ExtensionAPI,
-  ExtensionContext,
+import {
+  getAgentDir,
+  type AgentEndEvent,
+  type ExtensionAPI,
+  type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { createRexActivityReporter, summarizeActivity } from "./lib/activity.ts";
+import { removeLegacyResume } from "./lib/cleanup.ts";
 import { nameSession, REX_TIMEOUT_MS, type ExecResult } from "./lib/naming.ts";
 import { AUTO_NAME_INSTRUCTION, REX_SECTION } from "./lib/prompt.ts";
-import { registerResume } from "./lib/resume.ts";
 import { stripSessionNaming } from "./lib/rex-output.ts";
 import { rexSetting } from "./lib/settings.ts";
+import { registerWorktreeMove } from "./lib/worktree-move.ts";
 
 /** Timeout for the naming model call. */
 const NAMING_TIMEOUT_MS = 15000;
@@ -84,12 +90,13 @@ export default function rexExtension(pi: ExtensionAPI): void {
   let activityTask = "pi";
   let activityError: string | undefined;
   let openPrompts = 0;
+  let cleaned = false;
 
   const reportWorking = (): void => {
     if (activityRunning && openPrompts === 0) activity.working(activityTask);
   };
 
-  registerResume(pi);
+  registerWorktreeMove(pi);
 
   pi.on("session_start", async (_event, ctx) => {
     context = "";
@@ -102,6 +109,13 @@ export default function rexExtension(pi: ExtensionAPI): void {
     const session = rexSessionSelector();
     activityEnabled = Boolean(session) && ctx.mode === "tui";
     if (!session) return;
+    // Once per process, in the TUI only: a print run must not change files.
+    if (!cleaned && ctx.mode === "tui") {
+      cleaned = true;
+      for (const file of removeLegacyResume({ agentDir: getAgentDir() })) {
+        ctx.ui.notify(`pi-rex: removed the old resume hook from ${file}`, "info");
+      }
+    }
     const result = await pi.exec("rex", ["__internal", "session-start", "--agent", "pi"], {
       cwd: ctx.cwd,
       timeout: REX_TIMEOUT_MS,
