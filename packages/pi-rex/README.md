@@ -12,7 +12,7 @@ pi install npm:@tian.zuo/pi-rex
 
 `rex skill setup` writes a SessionStart hook for Claude Code and Codex. The hook tells the agent that it runs in a Rex terminal. The hook also supplies the session ID and the pane ID. Rex writes the skill for pi, but pi has no command hooks.
 
-This extension supplies the hook for pi. When a session starts and `REX_SESSION` is set, the extension runs this command:
+This extension supplies the hook for pi. At session start it uses `REX_SESSION` when available, or the full `REX_BLOCK` ID on current Rex versions. It runs this command:
 
 ```bash
 rex __internal session-start --agent pi
@@ -31,9 +31,10 @@ The session name is the current folder name, as-is. In a linked git worktree, th
 On the first user prompt of a pi session, the extension runs `rex whoami --json` as a cheap check that the Rex server answers. If it does, the extension reads the folder and worktree, then makes one model call on the current session model. The call asks for a tab label: 2 to 4 lowercase English words, joined by hyphens. The call runs in the background, so the first response is not delayed. After the model replies, the extension reads the current labels and runs:
 
 ```bash
-rex session inspect "$REX_SESSION" --json
-rex session rename "$REX_SESSION" SESSION_LABEL     # first tab only
-rex window rename -s "$REX_SESSION" WINDOW_ID TAB_LABEL
+selector=${REX_SESSION:-$REX_BLOCK}
+rex session inspect "$selector" --json
+rex session rename "$selector" SESSION_LABEL     # first tab only
+rex window rename -s "$selector" WINDOW_ID TAB_LABEL
 ```
 
 The session name does not depend on the model. If the model call fails or returns no label, the session is still renamed; only the tab keeps its old name.
@@ -55,7 +56,7 @@ Because the extension names the session, it removes the Rex naming paragraph fro
 
 In a Rex TUI session, the extension reports the current Pi prompt to Rex through OSC 7501. Rex can then show the prompt while Pi is working and after the run finishes. The message is shortened to one safe line for the terminal activity view.
 
-Cancelled runs report `idle`. Completed runs report `done`. Final errors report `error`. Pi's own blocked status remains active while an extension dialog or login screen waits for the user. Set `PI_PROGRAM_STATUS=0` to disable the activity reports.
+Cancelled runs report `idle`. Completed runs report `done`. Final errors report `error`. The prompt has its own status record (`pi-prompt`). Pi continues to report its root status, including blocked dialogs and login screens. Set `PI_PROGRAM_STATUS=0` to disable the activity reports.
 
 ## Resume after a Rex restart
 
@@ -87,7 +88,7 @@ The extension never creates `.bash_profile`, because that file would hide an exi
 
 The bash block uses POSIX syntax only. A desktop session can run `.profile` through `/bin/sh`, and that shell must parse the file even when it never starts pi.
 
-The hook runs when a new shell starts in a restored pane. A new pane has a new block ID, so it has no record and the hook does nothing. The hook removes the record before it starts pi, and pi writes a new one. The hook always runs `pi --session <file>`: it does not restore the flags of the first launch, so a pane that ran `pi -e ./packages/pi-rex` resumes with plain `pi`.
+The hook runs when a new shell starts in a restored pane. A new pane has a new block ID, so it has no record and the hook does nothing. The hook removes the record before it starts pi, and pi writes a new one. The hook runs the saved launcher with `--session <file>`. It uses `pi` for Pi and `pi-bolt` for recognized Pi-Bolt binaries. Set `rex.resumeCommand` to an executable name or an absolute path for a custom launcher.
 
 This is the fish hook the extension writes. The `zsh`, `bash`, and PowerShell hooks do the same work in the syntax of their shell.
 
@@ -117,10 +118,11 @@ A bash hook runs only in an interactive shell, so a script that sources `.profil
 
 The extension reads the `rex` section of the pi settings file. Add the section to `~/.pi/agent/settings.json`.
 
-| Key            | Type    | Default | Description                                                                                                                                |
-| -------------- | ------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `rex.autoName` | boolean | `true`  | Name the Rex session after the folder or worktree, and the tab from the first prompt. `false` keeps the Rex names and the Rex naming text. |
-| `rex.resume`   | boolean | `true`  | Record each pane's pi session, and write the fish hook that resumes pi after a Rex restart. `false` writes no record and no hook file.     |
+| Key                 | Type    | Default           | Description                                                                                                                                |
+| ------------------- | ------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `rex.autoName`      | boolean | `true`            | Name the Rex session after the folder or worktree, and the tab from the first prompt. `false` keeps the Rex names and the Rex naming text. |
+| `rex.resume`        | boolean | `true`            | Save the Pi session for each pane and install the shell hook. `false` disables resume.                                                     |
+| `rex.resumeCommand` | string  | `pi` or `pi-bolt` | Executable for resuming Pi. Use a single command name or path.                                                                             |
 
 Example:
 
@@ -133,7 +135,7 @@ Example:
 }
 ```
 
-Any value other than `false` keeps the feature on.
+For the boolean settings, only `false` disables the feature.
 
 ## Known limits
 
@@ -145,7 +147,7 @@ Any value other than `false` keeps the feature on.
 - Resume writes a hook for `fish`, `zsh`, `bash`, and PowerShell. A pane that runs `sh`, `cmd.exe`, or another shell starts no pi after a restart. The records still exist, so a shell hook you write by hand can use them.
 - The fish, zsh, and bash hooks ran in real shells. The PowerShell hook did not: it is written from the PowerShell syntax alone. A Windows pane needs `pi` on `PATH`, which is the `.cmd` shim that pi installs.
 - The extension writes the hook only in the TUI, inside a Rex pane. A machine that never starts pi in a Rex pane gets no hook file.
-- The hook starts `pi --session <file>`, so it does not restore the flags of the first launch. A pane that ran `pi -e ./packages/pi-rex` resumes without the local extension.
+- The hook passes only `--session <file>` to the saved command. A pane started with `pi -e ./packages/pi-rex` resumes without the local extension.
 - A second interactive fish in the same pane, started while pi runs, also reads the record. It can start a second pi on the same session and remove the record; the next prompt in the first pi writes the record again.
 - When you close a pane while pi runs in it, pi gets SIGHUP and its record stays. The file is small, and Rex never reuses a block ID.
 - A pi started by the fish hook runs inside a prompt event, so Ctrl+Z may not suspend it.

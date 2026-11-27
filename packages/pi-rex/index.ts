@@ -64,6 +64,10 @@ async function askModel(ctx: ExtensionContext, prompt: string): Promise<string> 
   }
 }
 
+function rexSessionSelector(): string | undefined {
+  return process.env.REX_SESSION || process.env.REX_BLOCK;
+}
+
 function latestAssistantError(messages: AgentEndEvent["messages"]): string | undefined {
   const assistant = [...messages].reverse().find((message) => message.role === "assistant");
   if (assistant?.stopReason !== "error") return undefined;
@@ -75,13 +79,14 @@ export default function rexExtension(pi: ExtensionAPI): void {
   let context = "";
   let autoName = true;
   let naming: Promise<void> | undefined;
-  let activityTask = "";
+  let activityEnabled = false;
+  let activityRunning = false;
+  let activityTask = "pi";
   let activityError: string | undefined;
+  let openPrompts = 0;
 
-  const sessionName = (ctx: ExtensionContext): string =>
-    ctx.sessionManager.getSessionName() ?? "pi";
-  const reportWorking = (ctx: ExtensionContext): void => {
-    activity.working(activityTask || sessionName(ctx));
+  const reportWorking = (): void => {
+    if (activityRunning && openPrompts === 0) activity.working(activityTask);
   };
 
   registerResume(pi);
@@ -90,10 +95,12 @@ export default function rexExtension(pi: ExtensionAPI): void {
     context = "";
     autoName = true;
     naming = undefined;
-    activityTask = "";
+    activityRunning = false;
+    activityTask = "pi";
     activityError = undefined;
-    activity.reset();
-    const session = process.env.REX_SESSION;
+    openPrompts = 0;
+    const session = rexSessionSelector();
+    activityEnabled = Boolean(session) && ctx.mode === "tui";
     if (!session) return;
     const result = await pi.exec("rex", ["__internal", "session-start", "--agent", "pi"], {
       cwd: ctx.cwd,
@@ -114,14 +121,16 @@ export default function rexExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("before_agent_start", (event, ctx) => {
-    if (event.messageType === "user" && event.prompt.trim().length > 0) {
-      activityTask = summarizeActivity(event.prompt) || sessionName(ctx);
+    if (activityEnabled) {
+      const prompt = event.messageType === "user" ? summarizeActivity(event.prompt) : "";
+      activityTask = prompt || ctx.sessionManager.getSessionName() || "pi";
       activityError = undefined;
-      reportWorking(ctx);
+      activityRunning = true;
+      reportWorking();
     }
 
     if (context) event.systemPromptOptions.sections[REX_SECTION] = context;
-    const session = process.env.REX_SESSION;
+    const session = rexSessionSelector();
     if (!context || !autoName || naming || !session) return;
     if (event.messageType !== "user" || event.prompt.trim().length === 0) return;
     naming = nameSession({
@@ -136,26 +145,43 @@ export default function rexExtension(pi: ExtensionAPI): void {
     }).catch(() => undefined);
   });
 
-  pi.on("agent_start", (_event, ctx) => {
+  pi.on("agent_start", () => {
     activityError = undefined;
-    reportWorking(ctx);
+    reportWorking();
   });
 
   pi.on("agent_end", (event) => {
-    activityError = latestAssistantError(event.messages);
+    if (activityRunning) activityError = latestAssistantError(event.messages);
   });
 
-  pi.on("ui_prompt_end", (_event, ctx) => {
-    if (!ctx.isIdle()) reportWorking(ctx);
+  pi.on("ui_prompt_start", () => {
+    if (!activityEnabled) return;
+    openPrompts += 1;
+    if (activityRunning) activity.clear();
   });
 
-  pi.on("agent_settled", (event, ctx) => {
+  pi.on("ui_prompt_end", () => {
+    if (openPrompts === 0) return;
+    openPrompts -= 1;
+    reportWorking();
+  });
+
+  pi.on("agent_settled", (event) => {
+    if (!activityRunning) return;
+    activityRunning = false;
     if (event.aborted) {
       activity.idle();
     } else if (activityError) {
       activity.error(activityError);
     } else {
-      activity.done(activityTask || sessionName(ctx));
+      activity.done(activityTask);
     }
+  });
+
+  pi.on("session_shutdown", (event) => {
+    activityEnabled = false;
+    activityRunning = false;
+    openPrompts = 0;
+    if (event.reason !== "quit") activity.clear();
   });
 }

@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, test } from "node:test";
-import { recordPath, recordText, registerResume } from "../lib/resume.ts";
+import { defaultResumeCommand, recordPath, recordText, registerResume } from "../lib/resume.ts";
 
 type Handler = (event: unknown, ctx: unknown) => unknown;
 
@@ -69,6 +69,40 @@ test("writes the directory and the resume command", async () => {
   await fire("session_start");
   assert.equal(readFileSync(record, "utf8"), recordText("/repo", sessionFile));
   assert.equal(recordText("/repo", "/s.jsonl"), "/repo\npi\n--session\n/s.jsonl\n");
+});
+
+test("recognizes Pi-Bolt launchers and compiled binaries", () => {
+  assert.equal(defaultResumeCommand("/opt/homebrew/bin/pi-bolt"), "pi-bolt");
+  assert.equal(defaultResumeCommand("C:\\Users\\me\\bin\\pi-bolt.exe"), "pi-bolt");
+  assert.equal(defaultResumeCommand("/opt/pi-bolt/pi-bin"), "pi-bolt");
+  assert.equal(defaultResumeCommand("/opt/pi-bolt-linux-x64/pi"), "pi-bolt");
+  assert.equal(defaultResumeCommand("/opt/bin/node"), "pi");
+  assert.equal(defaultResumeCommand("/opt/bin/pi"), "pi");
+});
+
+test("stores a custom launcher path as a single argument", async () => {
+  const launcher = path.join(dir, "custom launcher");
+  const { fire, record, sessionFile } = setup({ settings: { rex: { resumeCommand: launcher } } });
+  writeFileSync(sessionFile, "");
+  await fire("session_start");
+  assert.deepEqual(readFileSync(record, "utf8").split("\n"), [
+    "/repo",
+    launcher,
+    "--session",
+    sessionFile,
+    "",
+  ]);
+  await fire("session_shutdown", { reason: "quit" });
+});
+
+test("falls back to the default launcher for a multiline setting", async () => {
+  const { fire, record, sessionFile } = setup({
+    settings: { rex: { resumeCommand: "pi-bolt\n--extra" } },
+  });
+  writeFileSync(sessionFile, "");
+  await fire("session_start");
+  assert.equal(readFileSync(record, "utf8"), recordText("/repo", sessionFile));
+  await fire("session_shutdown", { reason: "quit" });
 });
 
 test("waits for the session file, then writes after the prompt", async () => {

@@ -1,12 +1,12 @@
 const CONTROL_CHARACTERS = /[\u0000-\u001f\u007f-\u009f]/g;
 const MAX_MESSAGE_BYTES = 192;
 
-type ActivityState = "idle" | "working" | "done" | "error";
+type ActivityState = "idle" | "working" | "done" | "error" | "clear";
 
 type Write = (data: string) => void;
 
 export interface RexActivityReporter {
-  reset(): void;
+  clear(): void;
   working(message: string): void;
   done(message: string): void;
   error(message: string): void;
@@ -32,20 +32,16 @@ export function summarizeActivity(text: string): string {
   return truncateUtf8(text.replace(CONTROL_CHARACTERS, " ").replace(/\s+/g, " ").trim());
 }
 
-/** Format a root-record OSC 7501 report for Rex and other supporting terminals. */
+/** Address a separate record so Pi can keep reporting its own root status. */
 export function formatRexActivityStatus(state: ActivityState, message?: string): string {
-  const pairs = [`state=${state}`, "app=pi"];
+  const pairs = [`state=${state}`, "id=pi-prompt", "app=pi"];
   const summary = message ? summarizeActivity(message) : "";
   if (summary) pairs.push(`msg=${Buffer.from(summary, "utf8").toString("base64")}`);
   return `\x1b]7501;${pairs.join(":")}\x1b\\`;
 }
 
 function canReportActivity(): boolean {
-  return (
-    Boolean(process.env.REX_SESSION) &&
-    process.env.PI_PROGRAM_STATUS !== "0" &&
-    process.stdout.isTTY === true
-  );
+  return process.env.PI_PROGRAM_STATUS !== "0" && process.stdout.isTTY === true;
 }
 
 export function createRexActivityReporter(
@@ -63,8 +59,8 @@ export function createRexActivityReporter(
   };
 
   return {
-    reset() {
-      lastReport = "";
+    clear() {
+      if (lastReport) report("clear");
     },
     working(message) {
       report("working", message);

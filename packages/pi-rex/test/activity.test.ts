@@ -9,7 +9,7 @@ import {
 test("formats a Rex working status with a base64 message", () => {
   assert.equal(
     formatRexActivityStatus("working", "fix the login redirect"),
-    "\u001b]7501;state=working:app=pi:msg=Zml4IHRoZSBsb2dpbiByZWRpcmVjdA==\u001b\\",
+    "\u001b]7501;state=working:id=pi-prompt:app=pi:msg=Zml4IHRoZSBsb2dpbiByZWRpcmVjdA==\u001b\\",
   );
 });
 
@@ -27,10 +27,15 @@ test("reports each changed status once", () => {
 
   reporter.working("task");
   reporter.working("task");
+  reporter.clear();
+  reporter.clear();
+  reporter.working("task");
   reporter.done("task");
   reporter.idle();
 
   assert.deepEqual(reports, [
+    formatRexActivityStatus("working", "task"),
+    formatRexActivityStatus("clear"),
     formatRexActivityStatus("working", "task"),
     formatRexActivityStatus("done", "task"),
     formatRexActivityStatus("idle"),
