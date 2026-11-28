@@ -20,7 +20,8 @@ export const WORKTREE_MOVE_GUIDELINES = [
 ];
 
 /** Description of the `path` parameter. */
-export const WORKTREE_PATH_DESCRIPTION = "Path of the worktree folder. The folder must exist.";
+export const WORKTREE_PATH_DESCRIPTION =
+  "Path of the worktree folder. A leading ~ is the home folder. The folder must exist.";
 
 /** Tool result after the tab moved. */
 export function moveResult(

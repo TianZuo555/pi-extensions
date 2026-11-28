@@ -6,7 +6,7 @@
 // generated name in place and does not block the main agent run.
 
 import { namingPrompt } from "./prompt.ts";
-import { parseInspect, parseWhoami, type RexInspect, type RexWindow } from "./rex-output.ts";
+import { parseInspect, parseLocation, type RexInspect, type RexWindow } from "./rex-output.ts";
 import { sessionLabel } from "./session-name.ts";
 
 /** Upper bound for the task text sent to the naming model. */
@@ -78,7 +78,7 @@ export function parseLabel(raw: string): string | undefined {
 
 /** Rename the current tab, and the session when this tab is the first one. */
 export async function nameSession(input: NameSessionInput): Promise<void> {
-  const { session, cwd, exec } = input;
+  const { cwd, exec } = input;
   const options = { cwd, timeout: REX_TIMEOUT_MS };
   const rex = (args: string[]) => exec("rex", args, options);
 
@@ -87,8 +87,14 @@ export async function nameSession(input: NameSessionInput): Promise<void> {
 
   // Probe Rex before the model call, so a dead server costs no tokens. The
   // window ID does not change while the tab lives.
-  const whoami = parseWhoami((await rex(["whoami", "--json"])).stdout);
-  if (!whoami) return;
+  const here = parseLocation((await rex(["whoami", "--json"])).stdout);
+  if (!here) return;
+  const whoami = here.windowId;
+  // Pin the renames to the session of this moment. A block ID follows the tab,
+  // so after `rex_worktree_move` it would name the worktree session, and the
+  // old folder label would replace the worktree label. In the old session the
+  // tab is gone, so the lookup below stops the renames.
+  const session = here.sessionId ?? input.session;
 
   // The session label comes from the folder and the worktree, not the model.
   // A model failure then still renames the session.

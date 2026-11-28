@@ -5,6 +5,7 @@ import path from "node:path";
 import { beforeEach, test } from "node:test";
 import type { ExecResult } from "../lib/naming.ts";
 import {
+  expandHome,
   isEmptySession,
   moveTab,
   parseApps,
@@ -79,6 +80,18 @@ test("parseNewSession reads the session and its first window", () => {
   assert.deepEqual(parseNewSession('{"session_id":"session:x"}'), { sessionId: "session:x" });
   assert.equal(parseNewSession("not json"), undefined);
   assert.equal(parseNewSession('{"initial_windows":[]}'), undefined);
+});
+
+test("expandHome expands a leading tilde only", () => {
+  assert.equal(expandHome("~", "/home/me"), "/home/me");
+  assert.equal(expandHome("~/work/repo", "/home/me"), path.join("/home/me", "work/repo"));
+  assert.equal(expandHome("repo/~", "/home/me"), "repo/~");
+  assert.equal(expandHome("~other/repo", "/home/me"), "~other/repo");
+});
+
+test("resolveTarget expands the home folder", () => {
+  const home = realpathSync(os.homedir());
+  assert.equal(resolveTarget("~", "/"), home);
 });
 
 test("resolveTarget accepts an existing other folder only", () => {

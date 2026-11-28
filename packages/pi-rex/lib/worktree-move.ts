@@ -11,6 +11,7 @@
 // system prompt, and context files for the worktree.
 
 import { realpathSync, statSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import {
   SessionManager,
@@ -27,7 +28,7 @@ import {
   WORKTREE_MOVE_GUIDELINES,
   WORKTREE_PATH_DESCRIPTION,
 } from "./prompt.ts";
-import { parseWhoami } from "./rex-output.ts";
+import { parseLocation } from "./rex-output.ts";
 import { sessionLabel } from "./session-name.ts";
 
 /** Name of the tool the agent calls. */
@@ -101,14 +102,6 @@ export function parseNewSession(
   };
 }
 
-/** Read `.window_id` and `.session_id` from `rex whoami --json` output. */
-export function parseLocation(json: string): { windowId: string; sessionId?: string } | undefined {
-  const windowId = parseWhoami(json);
-  if (!windowId) return undefined;
-  const sessionId = (JSON.parse(json) as { session_id?: unknown }).session_id;
-  return { windowId, ...(typeof sessionId === "string" && sessionId ? { sessionId } : {}) };
-}
-
 /** True when `rex session inspect --json` output shows a session without tabs. */
 export function isEmptySession(json: string): boolean {
   try {
@@ -122,9 +115,16 @@ export function isEmptySession(json: string): boolean {
   }
 }
 
+/** Expand a leading `~` to the home folder, as a shell does. */
+export function expandHome(input: string, home: string = os.homedir()): string {
+  if (input === "~") return home;
+  if (input.startsWith("~/") || input.startsWith("~\\")) return path.join(home, input.slice(2));
+  return input;
+}
+
 /** Resolve the tool argument to an existing folder. Throws a message for the model. */
 export function resolveTarget(input: string, cwd: string): string {
-  const absolute = path.resolve(cwd, input.trim());
+  const absolute = path.resolve(cwd, expandHome(input.trim()));
   let real: string;
   try {
     real = realpathSync(absolute);

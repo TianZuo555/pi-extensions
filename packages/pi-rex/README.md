@@ -51,18 +51,20 @@ The extension finds the worktree with `git worktree list --porcelain`. If git fa
 
 On the first user prompt of a pi session, the extension does these steps:
 
-1. It runs `rex whoami --json`. This is a fast check that the Rex server answers.
+1. It runs `rex whoami --json`. This is a fast check that the Rex server answers. The output also gives the tab ID and the session ID.
 2. It reads the folder and the worktree.
 3. It makes one model call on the current session model. The call asks for a tab label: 2 to 4 lowercase English words, with hyphens between the words.
 4. It reads the current labels.
 5. It runs the rename commands:
 
 ```bash
-selector=${REX_SESSION:-$REX_BLOCK}
-rex session inspect "$selector" --json
-rex session rename "$selector" SESSION_LABEL     # first tab only
-rex window rename -s "$selector" WINDOW_ID TAB_LABEL
+session=SESSION_ID     # .session_id from step 1
+rex session inspect "$session" --json
+rex session rename "$session" SESSION_LABEL     # first tab only
+rex window rename -s "$session" WINDOW_ID TAB_LABEL
 ```
+
+The extension uses the session ID from step 1, not `REX_BLOCK`. A block ID follows the tab to a different session. If `rex_worktree_move` moves the tab during the model call, the tab is not in the old session. Thus the extension renames nothing. If `rex whoami` gives no session ID, the extension uses `REX_SESSION`, or `REX_BLOCK` when `REX_SESSION` is not set.
 
 The model call runs in the background. Thus the first response does not wait for the call.
 
@@ -109,7 +111,7 @@ The tool has `codemode` exposure. Thus the model does not see the tool as a sepa
 await tools.rex_worktree_move({ path: "~/Workspace/worktrees/repo-feature" });
 ```
 
-The `path` parameter is the worktree folder. The folder must exist, so create the worktree first.
+The `path` parameter is the worktree folder. A leading `~` is the home folder. The folder must exist, so create the worktree first.
 
 ### Procedure
 

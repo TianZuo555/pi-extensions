@@ -51,6 +51,14 @@ export function parseInspect(json: string): RexInspect | undefined {
   return { label: record.label, windows };
 }
 
+/** Read `.window_id` and `.session_id` from `rex whoami --json` output. */
+export function parseLocation(json: string): { windowId: string; sessionId?: string } | undefined {
+  const windowId = parseWhoami(json);
+  if (!windowId) return undefined;
+  const sessionId = (parse(json) as { session_id?: unknown }).session_id;
+  return { windowId, ...(typeof sessionId === "string" && sessionId ? { sessionId } : {}) };
+}
+
 function parse(json: string): unknown {
   try {
     return JSON.parse(json) as unknown;
