@@ -1,5 +1,11 @@
 # @tian.zuo/pi-beautify-style
 
+## 0.3.1
+
+### Patch Changes
+
+- [#224](https://github.com/TianZuo555/pi-extensions/pull/224) [`80a696e`](https://github.com/TianZuo555/pi-extensions/commit/80a696ef7704e06a0f80f34060ae4da90f2e8f8a) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Support Pi 1.6 render lines in compact thinking previews, preserve codemode summary syntax colors, and keep sticky prompt markers out of Pi’s render cache.
+
 ## 0.3.0
 
 ### Minor Changes

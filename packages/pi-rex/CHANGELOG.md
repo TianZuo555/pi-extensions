@@ -1,5 +1,19 @@
 # @tian.zuo/pi-rex
 
+## 0.5.0
+
+### Minor Changes
+
+- [#222](https://github.com/TianZuo555/pi-extensions/pull/222) [`0f2572d`](https://github.com/TianZuo555/pi-extensions/commit/0f2572dee4b3d0729d6e18d13779dc2056cb85c7) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Report the current Pi prompt to Rex through OSC 7501 program activity. Rex now shows working, completed, cancelled, and failed Pi runs in its activity view.
+
+- [#228](https://github.com/TianZuo555/pi-extensions/pull/228) [`10e3e97`](https://github.com/TianZuo555/pi-extensions/commit/10e3e97006e36edd97e502830050a9a2604d0cd1) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Add the `rex_worktree_move` tool. The agent calls it from codemode after it creates a git worktree. The tool opens a Rex session for the worktree, moves only the agent pane into it, and names the pane after the feature. When the turn ends, pi switches to the worktree, and the pi process changes to the worktree folder. The conversation stays. Each Rex app that showed the old session goes to the moved pane, when its Remote Control setting is on.
+
+  Remove the resume feature, because Rex now starts pi again in a restored pane. The `rex.resume` and `rex.resumeCommand` settings are removed. In a Rex pane, the extension removes the old shell hook and the records in `~/.pi/agent/rex-resume`. It removes only text that it wrote.
+
+### Patch Changes
+
+- [#222](https://github.com/TianZuo555/pi-extensions/pull/222) [`0f2572d`](https://github.com/TianZuo555/pi-extensions/commit/0f2572dee4b3d0729d6e18d13779dc2056cb85c7) Thanks [@TianZuo555](https://github.com/TianZuo555)! - Use `REX_BLOCK` for Rex context, naming, and activity when `REX_SESSION` is absent.
+
 ## 0.4.0
 
 ### Minor Changes
