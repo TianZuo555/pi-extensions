@@ -219,3 +219,12 @@ test("trims the task before it asks the model", async () => {
   assert.ok(deps.prompts[0]?.includes("start xxx"), deps.prompts[0]);
   assert.ok(!deps.prompts[0]?.includes(" end"), deps.prompts[0]);
 });
+
+test("pins the renames to the session that whoami reports", async () => {
+  const deps = setup({ whoami: json({ window_id: WINDOW, session_id: "session:pinned" }) });
+  await run(deps);
+  const targets = deps.calls
+    .filter((call) => call.args[0] === "session" || call.args[0] === "window")
+    .map((call) => (call.args[0] === "window" ? call.args[3] : call.args[2]));
+  assert.deepEqual(targets, ["session:pinned", "session:pinned", "session:pinned"]);
+});

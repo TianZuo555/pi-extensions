@@ -51,6 +51,52 @@ export function parseInspect(json: string): RexInspect | undefined {
   return { label: record.label, windows };
 }
 
+export interface RexLocation {
+  readonly windowId: string;
+  readonly sessionId?: string;
+  readonly blockId?: string;
+}
+
+/** Read `.window_id`, `.session_id`, and `.block_id` from `rex whoami --json` output. */
+export function parseLocation(json: string): RexLocation | undefined {
+  const windowId = parseWhoami(json);
+  if (!windowId) return undefined;
+  const value = parse(json) as { session_id?: unknown; block_id?: unknown };
+  const text = (field: unknown): string | undefined =>
+    typeof field === "string" && field.length > 0 ? field : undefined;
+  const sessionId = text(value.session_id);
+  const blockId = text(value.block_id);
+  return { windowId, ...(sessionId ? { sessionId } : {}), ...(blockId ? { blockId } : {}) };
+}
+
+export interface RexWindowLayout {
+  readonly label?: string;
+  /** IDs of the panes in the window, from every layer. */
+  readonly blocks: readonly string[];
+}
+
+/** Read one window and its panes from `rex session inspect --json` output. */
+export function parseWindowLayout(json: string, windowId: string): RexWindowLayout | undefined {
+  const value = parse(json) as { windows?: unknown } | undefined;
+  if (!Array.isArray(value?.windows)) return undefined;
+  const window = value.windows.find(
+    (entry: unknown) =>
+      typeof entry === "object" &&
+      entry !== null &&
+      (entry as { window_id?: unknown }).window_id === windowId,
+  ) as { label?: unknown; layers?: unknown } | undefined;
+  if (!window) return undefined;
+  const blocks: string[] = [];
+  for (const layer of Array.isArray(window.layers) ? window.layers : []) {
+    const entries = (layer as { blocks?: unknown } | null)?.blocks;
+    for (const block of Array.isArray(entries) ? entries : []) {
+      const id = (block as { block_id?: unknown } | null)?.block_id;
+      if (typeof id === "string") blocks.push(id);
+    }
+  }
+  return { ...(typeof window.label === "string" ? { label: window.label } : {}), blocks };
+}
+
 function parse(json: string): unknown {
   try {
     return JSON.parse(json) as unknown;
