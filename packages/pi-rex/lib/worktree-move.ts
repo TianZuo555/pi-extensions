@@ -1,7 +1,7 @@
 // Move the running pi agent into a git worktree.
 //
 // The agent calls one tool, `rex_worktree_move`, after it creates a worktree.
-// The tool opens a Rex session for the worktree and moves this Rex tab into it.
+// The tool opens a Rex session for the worktree and moves this Rex pane into it.
 // Pi keeps running during the move, so the conversation stays.
 //
 // The move alone does not change the folder pi works in. Only a command
@@ -19,16 +19,17 @@ import {
   type ExtensionCommandContext,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
-import type { Exec } from "./naming.ts";
+import type { Exec, ExecResult } from "./naming.ts";
 import { REX_TIMEOUT_MS } from "./naming.ts";
 import {
   continuePrompt,
   moveResult,
   WORKTREE_MOVE_DESCRIPTION,
   WORKTREE_MOVE_GUIDELINES,
+  PANE_LABEL_DESCRIPTION,
   WORKTREE_PATH_DESCRIPTION,
 } from "./prompt.ts";
-import { parseLocation } from "./rex-output.ts";
+import { parseLocation, parseWindowLayout, type RexWindowLayout } from "./rex-output.ts";
 import { sessionLabel } from "./session-name.ts";
 
 /** Name of the tool the agent calls. */
@@ -41,14 +42,47 @@ export interface MoveInput {
   /** Absolute path of the worktree. */
   readonly target: string;
   readonly exec: Exec;
+  /** Pane label from the agent: the feature name. */
+  readonly label?: string;
+}
+
+/** Longest pane label. Rex shows the label in the pane title. */
+export const MAX_PANE_LABEL = 40;
+
+/** Clean a pane label to one short line. Undefined when nothing is left. */
+export function cleanPaneLabel(raw: string | undefined): string | undefined {
+  const label = (raw ?? "").replace(/\s+/g, " ").trim().slice(0, MAX_PANE_LABEL).trim();
+  return label.length > 0 ? label : undefined;
+}
+
+/**
+ * Pane label: the feature name from the agent, else the worktree branch, else
+ * the folder name. A feature branch usually has the feature name.
+ */
+export async function paneLabel(exec: Exec, target: string, label?: string): Promise<string> {
+  const given = cleanPaneLabel(label);
+  if (given) return given;
+  try {
+    const branch = await exec("git", ["branch", "--show-current"], {
+      cwd: target,
+      timeout: REX_TIMEOUT_MS,
+    });
+    const name = branch.code === 0 ? cleanPaneLabel(branch.stdout) : undefined;
+    if (name) return name;
+  } catch {
+    // Use the folder name.
+  }
+  return cleanPaneLabel(path.basename(target)) ?? "pi";
 }
 
 export interface MoveOutput {
   readonly sessionId: string;
   readonly sessionLabel: string;
-  /** Labels of the Rex apps that now show the moved tab. */
+  /** New label of the moved pane, when Rex accepted the rename. */
+  readonly paneLabel?: string;
+  /** Labels of the Rex apps that now show the moved pane. */
   readonly followed: readonly string[];
-  /** One message for each Rex app that refused to show the moved tab. */
+  /** One message for each Rex app that refused to show the moved pane. */
   readonly refused: readonly string[];
 }
 
@@ -143,39 +177,66 @@ export function resolveTarget(input: string, cwd: string): string {
 }
 
 /**
- * Open a Rex session for the worktree and move this tab into it. The new
- * session starts with a shell tab, which the move makes extra, so close it.
- * A session that the move leaves without tabs is removed too.
+ * Open a Rex session for the worktree and move this pane into it.
+ *
+ * Rex moves only whole tabs to another session. When the tab of this pane has
+ * other panes, the pane first goes to a new tab of its own in the old session.
+ * The other panes stay where they are. The new session starts with a shell
+ * tab, which the move makes extra, so close it. A session that the move leaves
+ * without tabs is removed too.
  *
  * A Rex app keeps the session that it shows, so after the move it shows the
- * old session. Each app that had the old session open goes to the moved tab.
+ * old session. Each app that had the old session open goes to the moved pane.
  * An app accepts this only when its Remote Control setting is on.
  */
-export async function moveTab(input: MoveInput): Promise<MoveOutput> {
+export async function movePane(input: MoveInput): Promise<MoveOutput> {
   const { target, exec } = input;
   const rex = (args: string[]) => exec("rex", args, { cwd: target, timeout: REX_TIMEOUT_MS });
 
   const here = parseLocation((await rex(["whoami", "--json"])).stdout);
-  if (!here) throw new Error("Rex does not answer, or it cannot find this tab.");
-  const windowId = here.windowId;
+  if (!here) throw new Error("Rex does not answer, or it cannot find this pane.");
 
-  // Read the apps before the move: a removed old session has no apps.
-  const apps = here.sessionId
-    ? parseApps((await rex(["client", "ls", "-s", here.sessionId, "--json"])).stdout)
-    : [];
+  // Read the apps and the layout before the move: a removed old session has
+  // no apps.
+  let layout: RexWindowLayout | undefined;
+  let apps: RexApp[] = [];
+  if (here.sessionId) {
+    apps = parseApps((await rex(["client", "ls", "-s", here.sessionId, "--json"])).stdout);
+    const state = await rex(["session", "inspect", here.sessionId, "--json"]);
+    if (state.code === 0) layout = parseWindowLayout(state.stdout, here.windowId);
+  }
 
   const label = await sessionLabel(exec, target, REX_TIMEOUT_MS);
   const created = await rex(["new", label, "--cwd", target, "--json"]);
   const session = created.code === 0 ? parseNewSession(created.stdout) : undefined;
   if (!session) throw new Error(`rex new failed (exit ${created.code}).`);
 
+  let windowId = here.windowId;
+  if (here.sessionId && here.blockId && layout && layout.blocks.length > 1) {
+    try {
+      windowId = await detachPane(rex, here.sessionId, here.blockId, layout.label);
+    } catch (error) {
+      // Do not leave an empty session behind.
+      await rex(["kill", session.sessionId]);
+      throw error;
+    }
+  }
+
   const moved = await rex(["window", "move", windowId, "--to", session.sessionId, "--focus"]);
   if (moved.code !== 0) {
-    // Do not leave an empty session behind.
     await rex(["kill", session.sessionId]);
     throw new Error(`rex window move failed (exit ${moved.code}).`);
   }
   if (session.windowId) await rex(["window", "close", "-s", session.sessionId, session.windowId]);
+
+  // Name the pane after the feature. A failed rename does not stop the move.
+  let renamed: string | undefined;
+  if (here.blockId) {
+    const name = await paneLabel(exec, target, input.label);
+    const result = await rex(["block", "rename", "-s", session.sessionId, here.blockId, name]);
+    if (result.code === 0) renamed = name;
+  }
+
   if (here.sessionId) {
     const old = await rex(["session", "inspect", here.sessionId, "--json"]);
     if (old.code === 0 && isEmptySession(old.stdout)) await rex(["kill", here.sessionId]);
@@ -203,7 +264,58 @@ export async function moveTab(input: MoveInput): Promise<MoveOutput> {
       refused.push(`${app.label}: ${reason}`);
     }
   }
-  return { sessionId: session.sessionId, sessionLabel: label, followed, refused };
+  return {
+    sessionId: session.sessionId,
+    sessionLabel: label,
+    ...(renamed ? { paneLabel: renamed } : {}),
+    followed,
+    refused,
+  };
+}
+
+/**
+ * Give a pane a tab of its own in its session, and return the new tab. The
+ * new tab starts with a shell pane. The pane goes next to that shell pane,
+ * then the shell pane closes. The new tab keeps the label of the old tab.
+ */
+async function detachPane(
+  rex: (args: string[]) => Promise<ExecResult>,
+  sessionId: string,
+  blockId: string,
+  label: string | undefined,
+): Promise<string> {
+  const opened = await rex([
+    "window",
+    "new",
+    "-s",
+    sessionId,
+    ...(label ? [label] : []),
+    "--focus=false",
+    "--json",
+  ]);
+  const tab = opened.code === 0 ? parseNewWindow(opened.stdout) : undefined;
+  if (!tab) throw new Error(`rex window new failed (exit ${opened.code}).`);
+  const moved = await rex(["move", "-s", sessionId, blockId, "right", tab.blockId]);
+  if (moved.code !== 0) {
+    await rex(["window", "close", "-s", sessionId, tab.windowId]);
+    throw new Error(`rex move failed (exit ${moved.code}).`);
+  }
+  await rex(["block", "close", "-s", sessionId, tab.blockId]);
+  return tab.windowId;
+}
+
+/** Read `.window_id` and the first block from `rex window new --json` output. */
+export function parseNewWindow(json: string): { windowId: string; blockId: string } | undefined {
+  let value: unknown;
+  try {
+    value = JSON.parse(json) as unknown;
+  } catch {
+    return undefined;
+  }
+  const record = value as { window_id?: unknown; block_ids?: unknown } | null;
+  const blockId = Array.isArray(record?.block_ids) ? record.block_ids[0] : undefined;
+  if (typeof record?.window_id !== "string" || typeof blockId !== "string") return undefined;
+  return { windowId: record.window_id, blockId };
 }
 
 /** Copy the conversation into a session for the worktree, then switch to it. */
@@ -224,11 +336,46 @@ export async function switchToWorktree(
     return;
   }
   const prompt = continuePrompt(target, sessionName);
-  await ctx.switchSession(next, {
-    withSession: async (replaced) => {
-      await replaced.sendUserMessage(prompt);
-    },
-  });
+  // Pi builds the new runtime from the session cwd, but it does not change the
+  // folder of the process. An extension that reads process.cwd() would stay in
+  // the old folder. Change it before the switch, so the new extension
+  // instances see the worktree at session start.
+  const previous = enterFolder(target);
+  let cancelled = true;
+  try {
+    cancelled = (
+      await ctx.switchSession(next, {
+        withSession: async (replaced) => {
+          await replaced.sendUserMessage(prompt);
+        },
+      })
+    ).cancelled;
+  } finally {
+    // An extension can cancel the switch. Pi then stays in the old session.
+    if (cancelled && previous !== undefined) {
+      try {
+        enterFolder(previous);
+      } catch {
+        // The old folder is gone. Stay in the worktree.
+      }
+    }
+  }
+}
+
+/**
+ * Change the folder of the process and `PWD`, as `cd` does. Returns the old
+ * folder, or undefined when the old folder is gone.
+ */
+export function enterFolder(folder: string): string | undefined {
+  let previous: string | undefined;
+  try {
+    previous = process.cwd();
+  } catch {
+    previous = undefined;
+  }
+  process.chdir(folder);
+  process.env.PWD = folder;
+  return previous;
 }
 
 export function registerWorktreeMove(pi: ExtensionAPI): void {
@@ -240,7 +387,10 @@ export function registerWorktreeMove(pi: ExtensionAPI): void {
     label: "Rex Worktree Move",
     description: WORKTREE_MOVE_DESCRIPTION,
     promptGuidelines: WORKTREE_MOVE_GUIDELINES,
-    parameters: Type.Object({ path: Type.String({ description: WORKTREE_PATH_DESCRIPTION }) }),
+    parameters: Type.Object({
+      path: Type.String({ description: WORKTREE_PATH_DESCRIPTION }),
+      label: Type.Optional(Type.String({ description: PANE_LABEL_DESCRIPTION })),
+    }),
     exposure: "codemode",
     executionMode: "sequential",
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
@@ -248,8 +398,9 @@ export function registerWorktreeMove(pi: ExtensionAPI): void {
         throw new Error("Pi does not run in a Rex terminal.");
       }
       const target = resolveTarget(params.path, ctx.cwd);
-      const moved = await moveTab({
+      const moved = await movePane({
         target,
+        ...(params.label !== undefined ? { label: params.label } : {}),
         exec: async (command, args, options) => {
           const result = await pi.exec(command, args, options);
           return { code: result.code, stdout: result.stdout, stderr: result.stderr };

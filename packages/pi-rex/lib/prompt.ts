@@ -11,11 +11,11 @@ export const REX_SECTION = "rex";
 export const AUTO_NAME_INSTRUCTION = `The session and tab names are set automatically. Do not run \`rex session rename\` or \`rex window rename\` unless the user asks.`;
 
 /** Description of the `rex_worktree_move` tool. */
-export const WORKTREE_MOVE_DESCRIPTION = `Move this pi agent into a git worktree, with the conversation. The tool opens a Rex session for the worktree, moves this Rex tab into it, and switches pi to the worktree when the current turn ends. After the switch, the tools, the system prompt, and the context files are for the worktree.`;
+export const WORKTREE_MOVE_DESCRIPTION = `Move this pi agent into a git worktree, with the conversation. The tool opens a Rex session for the worktree, moves this Rex pane into it (other panes of the tab stay), and switches pi to the worktree when the current turn ends. After the switch, the tools, the system prompt, and the context files are for the worktree.`;
 
 /** Rules for the `rex_worktree_move` tool. */
 export const WORKTREE_MOVE_GUIDELINES = [
-  "Call rex_worktree_move immediately after you create a git worktree for a task, instead of `rex new` and `rex window move`.",
+  "Call rex_worktree_move immediately after you create a git worktree for a task, instead of `rex new` and `rex window move`. Set `label` to the short feature name.",
   "After rex_worktree_move succeeds, end your turn with one short status line. Do not run more commands in the old folder. The next turn starts in the worktree.",
 ];
 
@@ -23,19 +23,29 @@ export const WORKTREE_MOVE_GUIDELINES = [
 export const WORKTREE_PATH_DESCRIPTION =
   "Path of the worktree folder. A leading ~ is the home folder. The folder must exist.";
 
-/** Tool result after the tab moved. */
+/** Description of the `label` parameter. */
+export const PANE_LABEL_DESCRIPTION =
+  "Short name of the feature that you work on in the worktree, such as pin-theme. The tool gives this name to the moved Rex pane. Without it, the pane gets the name of the worktree branch.";
+
+/** Tool result after the pane moved. */
 export function moveResult(
   target: string,
-  moved: { sessionLabel: string; followed: readonly string[]; refused: readonly string[] },
+  moved: {
+    sessionLabel: string;
+    paneLabel?: string;
+    followed: readonly string[];
+    refused: readonly string[];
+  },
   oldCwd: string,
 ): string {
-  const lines = [`Moved this tab to the Rex session "${moved.sessionLabel}".`];
+  const lines = [`Moved this pane to the Rex session "${moved.sessionLabel}".`];
+  if (moved.paneLabel) lines.push(`Renamed this pane to "${moved.paneLabel}".`);
   if (moved.followed.length > 0) {
-    lines.push(`These Rex apps now show the moved tab: ${moved.followed.join(", ")}.`);
+    lines.push(`These Rex apps now show the moved pane: ${moved.followed.join(", ")}.`);
   }
   if (moved.refused.length > 0) {
     lines.push(
-      `These Rex apps still show the old session: ${moved.refused.join("; ")}. Tell the user to select the session "${moved.sessionLabel}" in Rex. To make Rex follow the tab next time, the user turns on Remote Control in Rex Settings > General.`,
+      `These Rex apps still show the old session: ${moved.refused.join("; ")}. Tell the user to select the session "${moved.sessionLabel}" in Rex. To make Rex follow the pane next time, the user turns on Remote Control in Rex Settings > General.`,
     );
   }
   lines.push(

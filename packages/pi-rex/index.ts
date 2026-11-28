@@ -13,7 +13,7 @@
 // not delayed. Set `rex.autoName` to false to turn it off.
 //
 // The extension also gives the agent one tool, `rex_worktree_move`, that moves
-// this Rex tab and the pi session into a git worktree. See
+// this Rex pane and the pi session into a git worktree. See
 // `lib/worktree-move.ts`.
 //
 // Rex starts pi again in a restored pane by itself. The extension removes the
